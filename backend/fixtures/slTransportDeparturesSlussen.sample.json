@@ -1,0 +1,85 @@
+{
+  "departures": [
+    {
+      "destination": "Hjorthagen",
+      "direction_code": 2,
+      "direction": "Sofia",
+      "via": null,
+      "state": "ATSTOP",
+      "display": "Nu",
+      "scheduled": "2026-07-04T17:33:00",
+      "expected": "2026-07-04T17:34:21",
+      "journey": {
+        "id": 2026070408514,
+        "state": "NORMALPROGRESS",
+        "prediction_state": "NORMAL"
+      },
+      "stop_area": { "id": 11002, "name": "Slussen", "type": "BUSTERM" },
+      "stop_point": { "id": 11013, "name": "Slussen", "designation": "C" },
+      "line": { "id": 57, "designation": "57", "transport_authority_id": 1, "transport_mode": "BUS" },
+      "deviations": []
+    },
+    {
+      "destination": "Hagsätra",
+      "direction_code": 2,
+      "direction": "Hagsätra",
+      "via": null,
+      "state": "EXPECTED",
+      "display": "Nu",
+      "scheduled": "2026-07-04T17:33:36",
+      "expected": "2026-07-04T17:35:53",
+      "journey": {
+        "id": 2026070410688,
+        "state": "NORMALPROGRESS",
+        "prediction_state": "NORMAL"
+      },
+      "stop_area": { "id": 1011, "name": "Slussen", "type": "METROSTN" },
+      "stop_point": { "id": 1012, "name": "Slussen", "designation": "4" },
+      "line": { "id": 19, "designation": "19", "transport_authority_id": 1, "transport_mode": "METRO", "group_of_lines": "Tunnelbanans gröna linje" },
+      "deviations": []
+    },
+    {
+      "destination": "Norra Bantorget",
+      "direction_code": 1,
+      "direction": "Norra Bantorget",
+      "via": null,
+      "state": "EXPECTED",
+      "display": "3 min",
+      "scheduled": "2026-07-04T17:36:00",
+      "expected": "2026-07-04T17:38:00",
+      "journey": {
+        "id": 2026070409911,
+        "state": "NORMALPROGRESS",
+        "prediction_state": "NORMAL"
+      },
+      "stop_area": { "id": 11002, "name": "Slussen", "type": "BUSTERM" },
+      "stop_point": { "id": 11014, "name": "Slussen", "designation": "D" },
+      "line": { "id": 3, "designation": "3", "transport_authority_id": 1, "transport_mode": "BUS" },
+      "deviations": [
+        {
+          "importance_level": 5,
+          "consequence": "INFORMATION",
+          "message": "Hållplats Norra Bantorget (1) inställd på grund av framkomlighetsproblem"
+        }
+      ]
+    }
+  ],
+  "stop_deviations": [
+    {
+      "id": 11593006,
+      "importance_level": 2,
+      "message": "Kommande: Mellan 6 juli och 26 juli är Gröna linjen avstängd mellan Odenplan och S:t Eriksplan pga tunnelbanans utbyggnad. Läs mer på sl.se.",
+      "scope": {
+        "stop_areas": [
+          { "id": 1131, "href": "null/stop-areas/1131", "name": "Odenplan", "type": "METROSTN" }
+        ],
+        "stop_points": [
+          { "id": 1011, "href": "null/stop-points/1011", "name": "Slussen", "designation": "1" }
+        ],
+        "lines": [
+          { "id": 17, "href": "null/transport-authorities/1/lines/17", "designation": "17", "transport_authority_id": 1, "transport_mode": "METRO", "group_of_lines": "Tunnelbanans gröna linje" }
+        ]
+      }
+    }
+  ]
+}

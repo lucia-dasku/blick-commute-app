@@ -1,0 +1,108 @@
+[versions]
+# Verified current-stable during the 2026-07-28 AGP-9-built-in-Kotlin migration pass —
+# see android/README.md. AGP 9.2.1 is the patch release fixing a documented R8
+# ClassNotFoundException regression in 9.2.0. Kotlin is pinned to 2.3.10 to match the
+# Kotlin version AGP 9.2.x's built-in-Kotlin support bundles by default (per AGP's own
+# fixed-issues notes); this matters because the Compose compiler plugin below is
+# version-locked 1:1 to the actual Kotlin compiler in use. KSP moved to an independent
+# version scheme starting at 2.3.0 (no longer "{kotlinVersion}-{kspVersion}"); 2.3.9 is
+# KSP's latest stable release and 2.3.1+ added explicit AGP 9.0/built-in-Kotlin support.
+# Hilt/Dagger MUST be 2.59+: the Hilt Gradle plugin has no AGP 9 support at all before
+# that release (it fails applying with "Android BaseExtension not found" — see
+# github.com/google/dagger/issues/4944 and the Dagger 2.59 release notes, which state
+# AGP 9 is now a requirement for the Hilt Gradle plugin as of that version). 2.59.2 is
+# pinned specifically since it additionally fixes two more AGP-9-specific bugs found
+# after 2.59's initial support landed (a classpath-transform issue and slow incremental
+# builds from HiltSyncTask).
+agp = "9.2.1"
+kotlin = "2.3.10"
+composeBom = "2026.06.00"
+hilt = "2.59.2"
+ksp = "2.3.9"
+
+# OkHttp is declared explicitly (not left as a transitive dependency of Retrofit):
+# Retrofit's own Gradle module metadata does not expose okhttp3 classes (MediaType,
+# etc.) on consumers' compile classpaths, so code that imports them directly — like
+# NetworkModule.kt's `toMediaType()` call — needs this declared here. Pinned to 4.12.0,
+# the last 4.x release, rather than the current 5.x line: per Retrofit's own changelog,
+# Retrofit only upgrades its OkHttp baseline to 4.12 in the unreleased 3.0.0 milestone
+# ("Upgrade to OkHttp 4.12 (from 3.14)"), and OkHttp 5.0 (2025-07-02) made real breaking
+# changes (split JVM/Android artifacts, non-null Response.body, MockWebServer package
+# changes) that Retrofit 2.11.0 was never verified against.
+okhttp = "4.12.0"
+
+# Not individually re-verified against the registry at scaffold time; bump via this
+# catalog as needed. None of these affect the compileSdk/targetSdk/minSdk decisions,
+# which were explicitly verified (see android/README.md).
+coreKtx = "1.15.0"
+lifecycle = "2.9.1"
+activityCompose = "1.10.1"
+navigationCompose = "2.8.9"
+room = "2.8.1"
+datastore = "1.1.2"
+kotlinxSerialization = "1.7.3"
+kotlinxCoroutines = "1.9.0"
+retrofit = "2.11.0"
+
+junit = "4.13.2"
+androidxTestExtJunit = "1.2.1"
+espressoCore = "3.6.1"
+mockk = "1.13.13"
+kotlinxCoroutinesTest = "1.9.0"
+
+[libraries]
+androidx-core-ktx = { group = "androidx.core", name = "core-ktx", version.ref = "coreKtx" }
+androidx-lifecycle-runtime-ktx = { group = "androidx.lifecycle", name = "lifecycle-runtime-ktx", version.ref = "lifecycle" }
+androidx-lifecycle-viewmodel-ktx = { group = "androidx.lifecycle", name = "lifecycle-viewmodel-ktx", version.ref = "lifecycle" }
+androidx-lifecycle-viewmodel-compose = { group = "androidx.lifecycle", name = "lifecycle-viewmodel-compose", version.ref = "lifecycle" }
+androidx-lifecycle-runtime-compose = { group = "androidx.lifecycle", name = "lifecycle-runtime-compose", version.ref = "lifecycle" }
+androidx-activity-compose = { group = "androidx.activity", name = "activity-compose", version.ref = "activityCompose" }
+
+androidx-compose-bom = { group = "androidx.compose", name = "compose-bom", version.ref = "composeBom" }
+androidx-compose-ui = { group = "androidx.compose.ui", name = "ui" }
+androidx-compose-ui-graphics = { group = "androidx.compose.ui", name = "ui-graphics" }
+androidx-compose-ui-tooling = { group = "androidx.compose.ui", name = "ui-tooling" }
+androidx-compose-ui-tooling-preview = { group = "androidx.compose.ui", name = "ui-tooling-preview" }
+androidx-compose-material3 = { group = "androidx.compose.material3", name = "material3" }
+androidx-compose-material-icons-core = { group = "androidx.compose.material", name = "material-icons-core" }
+androidx-navigation-compose = { group = "androidx.navigation", name = "navigation-compose", version.ref = "navigationCompose" }
+
+androidx-room-runtime = { group = "androidx.room", name = "room-runtime", version.ref = "room" }
+androidx-room-ktx = { group = "androidx.room", name = "room-ktx", version.ref = "room" }
+androidx-room-compiler = { group = "androidx.room", name = "room-compiler", version.ref = "room" }
+androidx-room-testing = { group = "androidx.room", name = "room-testing", version.ref = "room" }
+
+androidx-datastore-preferences = { group = "androidx.datastore", name = "datastore-preferences", version.ref = "datastore" }
+
+hilt-android = { group = "com.google.dagger", name = "hilt-android", version.ref = "hilt" }
+hilt-compiler = { group = "com.google.dagger", name = "hilt-android-compiler", version.ref = "hilt" }
+hilt-navigation-compose = { group = "androidx.hilt", name = "hilt-navigation-compose", version = "1.2.0" }
+
+retrofit-core = { group = "com.squareup.retrofit2", name = "retrofit", version.ref = "retrofit" }
+# First-party artifact, not the old com.jakewharton.retrofit:retrofit2-kotlinx-serialization-converter:1.0.0
+# one: per Retrofit's own changelog, this exact converter (same code, unchanged) was
+# adopted into Retrofit itself starting at 2.10.0 under this coordinate. The old
+# jakewharton artifact (last published 2021) only ships a legacy .pom, no Gradle Module
+# Metadata (.module) file, and its classes silently failed to land on the Kotlin compile
+# classpath under AGP 9's stricter variant-aware dependency resolution — Gradle "resolved"
+# the dependency coordinate fine (so the build never failed at that stage) but
+# `retrofit2.converter.kotlinx.serialization.asConverterFactory` was still an unresolved
+# reference at actual compile time. This first-party artifact ships proper module
+# metadata and is versioned in lockstep with retrofit-core above.
+retrofit-kotlinx-serialization-converter = { group = "com.squareup.retrofit2", name = "converter-kotlinx-serialization", version.ref = "retrofit" }
+okhttp = { group = "com.squareup.okhttp3", name = "okhttp", version.ref = "okhttp" }
+kotlinx-serialization-json = { group = "org.jetbrains.kotlinx", name = "kotlinx-serialization-json", version.ref = "kotlinxSerialization" }
+kotlinx-coroutines-android = { group = "org.jetbrains.kotlinx", name = "kotlinx-coroutines-android", version.ref = "kotlinxCoroutines" }
+
+junit = { group = "junit", name = "junit", version.ref = "junit" }
+androidx-test-ext-junit = { group = "androidx.test.ext", name = "junit", version.ref = "androidxTestExtJunit" }
+androidx-espresso-core = { group = "androidx.test.espresso", name = "espresso-core", version.ref = "espressoCore" }
+mockk = { group = "io.mockk", name = "mockk", version.ref = "mockk" }
+kotlinx-coroutines-test = { group = "org.jetbrains.kotlinx", name = "kotlinx-coroutines-test", version.ref = "kotlinxCoroutinesTest" }
+
+[plugins]
+android-application = { id = "com.android.application", version.ref = "agp" }
+kotlin-compose = { id = "org.jetbrains.kotlin.plugin.compose", version.ref = "kotlin" }
+kotlin-serialization = { id = "org.jetbrains.kotlin.plugin.serialization", version.ref = "kotlin" }
+ksp = { id = "com.google.devtools.ksp", version.ref = "ksp" }
+hilt = { id = "com.google.dagger.hilt.android", version.ref = "hilt" }

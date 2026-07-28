@@ -1,0 +1,134 @@
+import org.jetbrains.kotlin.gradle.dsl.JvmTarget
+
+plugins {
+    alias(libs.plugins.android.application)
+    alias(libs.plugins.kotlin.compose)
+    alias(libs.plugins.kotlin.serialization)
+    alias(libs.plugins.ksp)
+    alias(libs.plugins.hilt)
+}
+
+android {
+    namespace = "se.blick.app"
+
+    // Pinned to concrete current-stable numbers verified during scaffolding
+    // (2026-07-27) — see android/README.md for sources. Not left as "latest stable".
+    compileSdk = 36
+
+    defaultConfig {
+        applicationId = "se.blick.app"
+        minSdk = 26
+        targetSdk = 36
+        versionCode = 1
+        versionName = "0.1.0"
+
+        testInstrumentationRunner = "androidx.test.runner.AndroidJUnitRunner"
+
+        // Backend base URL, overridable via the `BLICK_BACKEND_BASE_URL` Gradle property
+        // (gradle.properties, local.properties, -P flag, or CI secret) — see
+        // NetworkModule.kt and android/README.md "Pointing at a deployed backend".
+        //
+        // Defaults to the actual deployed backend (not a placeholder): a 2026-07-28
+        // production incident traced a "no stops found" bug all the way back to this
+        // defaulting to an intentionally-unreachable placeholder host, which silently
+        // meant "every build that doesn't explicitly set a machine-local Gradle property
+        // talks to nothing" — including, in practice, every build run from Android
+        // Studio's Run button, since Gradle-property overrides are easy to lose track of
+        // across machines/IDE syncs. The override still exists for local development
+        // against a non-production backend (e.g. `./gradlew assembleDebug
+        // -PBLICK_BACKEND_BASE_URL=http://10.0.2.2:8787/` for a locally-run backend).
+        val backendBaseUrl = (project.findProperty("BLICK_BACKEND_BASE_URL") as String?)
+            ?: "https://blick-backend.vercel.app/"
+        buildConfigField("String", "BACKEND_BASE_URL", "\"$backendBaseUrl\"")
+    }
+
+    buildTypes {
+        release {
+            isMinifyEnabled = false
+            proguardFiles(getDefaultProguardFile("proguard-android-optimize.txt"), "proguard-rules.pro")
+        }
+    }
+
+    compileOptions {
+        sourceCompatibility = JavaVersion.VERSION_17
+        targetCompatibility = JavaVersion.VERSION_17
+    }
+
+    buildFeatures {
+        compose = true
+        buildConfig = true
+    }
+
+    testOptions {
+        unitTests.isIncludeAndroidResources = true
+        // Without this, any Android SDK stub called from JVM unit tests (e.g.
+        // android.util.Log.e, used in RoutineCreateViewModel's search-error path) throws
+        // "Method ... not mocked" instead of running — this makes such stubs return a
+        // harmless default (0/null/false) instead, matching the standard Android testing
+        // guidance for plain unit tests that don't use Robolectric.
+        unitTests.isReturnDefaultValues = true
+    }
+
+    packaging {
+        resources {
+            excludes += "/META-INF/{AL2.0,LGPL2.1}"
+        }
+    }
+}
+
+kotlin {
+    compilerOptions {
+        jvmTarget.set(JvmTarget.JVM_17)
+    }
+}
+
+ksp {
+    // Exports Room's generated schema JSON on every build, so schema changes are
+    // reviewable in version control and Room can validate migrations against a
+    // concrete schema history instead of only the current @Database definition.
+    arg("room.schemaLocation", "$projectDir/schemas")
+}
+
+dependencies {
+    implementation(libs.androidx.core.ktx)
+    implementation(libs.androidx.lifecycle.runtime.ktx)
+    implementation(libs.androidx.lifecycle.viewmodel.ktx)
+    implementation(libs.androidx.lifecycle.viewmodel.compose)
+    implementation(libs.androidx.lifecycle.runtime.compose)
+    implementation(libs.androidx.activity.compose)
+
+    implementation(platform(libs.androidx.compose.bom))
+    implementation(libs.androidx.compose.ui)
+    implementation(libs.androidx.compose.ui.graphics)
+    implementation(libs.androidx.compose.ui.tooling.preview)
+    implementation(libs.androidx.compose.material3)
+    implementation(libs.androidx.compose.material.icons.core)
+    implementation(libs.androidx.navigation.compose)
+    debugImplementation(libs.androidx.compose.ui.tooling)
+
+    implementation(libs.androidx.room.runtime)
+    implementation(libs.androidx.room.ktx)
+    ksp(libs.androidx.room.compiler)
+
+    implementation(libs.androidx.datastore.preferences)
+
+    implementation(libs.hilt.android)
+    ksp(libs.hilt.compiler)
+    implementation(libs.hilt.navigation.compose)
+
+    implementation(libs.retrofit.core)
+    implementation(libs.retrofit.kotlinx.serialization.converter)
+    implementation(libs.okhttp)
+    implementation(libs.kotlinx.serialization.json)
+    implementation(libs.kotlinx.coroutines.android)
+
+    testImplementation(libs.junit)
+    testImplementation(libs.mockk)
+    testImplementation(libs.kotlinx.coroutines.test)
+    testImplementation(libs.androidx.room.testing)
+
+    androidTestImplementation(libs.androidx.test.ext.junit)
+    androidTestImplementation(libs.androidx.espresso.core)
+    androidTestImplementation(libs.androidx.room.testing)
+    androidTestImplementation(libs.kotlinx.coroutines.test)
+}

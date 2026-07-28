@@ -1,0 +1,6 @@
+# Repo-wide ignores; each subproject also has its own more specific .gitignore.
+.DS_Store
+Thumbs.db
+*.log
+.vscode/
+.idea/

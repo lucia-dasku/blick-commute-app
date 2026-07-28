@@ -1,0 +1,26 @@
+*.iml
+.gradle/
+/local.properties
+/.idea/
+.DS_Store
+/build
+/captures
+.externalNativeBuild
+.cxx
+local.properties
+/app/build
+/app/release
+*.apk
+*.aab
+*.keystore
+*.jks
+.kotlin/
+keystore.properties
+key.properties
+secrets.properties
+
+# Machine-local Gradle daemon JVM auto-provisioning pin (written by Gradle's
+# updateDaemonJvm mechanism, e.g. via Android Studio's own sync) — points at a
+# Foojay-resolved JDK 21, which is unrelated to and would conflict with this project's
+# deliberately documented JDK 17 build requirement (see android/README.md). Never commit.
+gradle-daemon-jvm.properties

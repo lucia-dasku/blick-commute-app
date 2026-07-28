@@ -1,0 +1,57 @@
+[
+  {
+    "version": 2,
+    "created": "2026-07-22T20:10:49.01+02:00",
+    "modified": "2026-07-22T20:10:49.01+02:00",
+    "deviation_case_id": 12090430,
+    "publish": {
+      "from": "2026-07-31T10:30:00.000+02:00",
+      "upto": "2026-08-05T19:30:00.000+02:00"
+    },
+    "priority": { "importance_level": 2, "influence_level": 3, "urgency_level": 1 },
+    "message_variants": [
+      {
+        "header": "3 augusti stängs en utgång vid Slussen",
+        "details": "Vid Slussen stängs utgången närmast Södermalmstorg och pendelbåtarna permanent måndag den 3 augusti, i samband med renoveringen av Ryssgården.\nVi hänvisar till Slussens övriga entréer.\n",
+        "scope_alias": "Tunnelbanans röda linje 13, 14; tunnelbanans gröna linje 17, 18, 19",
+        "language": "sv"
+      }
+    ],
+    "scope": {
+      "stop_areas": [
+        { "id": 1011, "name": "Slussen", "type": "METROSTN", "transport_authority": 1 }
+      ],
+      "lines": [
+        { "id": 18, "transport_authority": 1, "designation": "18", "transport_mode": "METRO", "name": "Gröna linjen", "group_of_lines": "tunnelbanans gröna linje" },
+        { "id": 17, "transport_authority": 1, "designation": "17", "transport_mode": "METRO", "name": "Gröna linjen", "group_of_lines": "tunnelbanans gröna linje" }
+      ]
+    }
+  },
+  {
+    "version": 1,
+    "created": "2026-07-27T20:12:47.15+02:00",
+    "modified": "2026-07-27T20:12:47.15+02:00",
+    "deviation_case_id": 12130484,
+    "publish": {
+      "from": "2026-07-27T20:12:47.140+02:00",
+      "upto": "2026-07-28T05:07:00.000+02:00"
+    },
+    "priority": { "importance_level": 5, "influence_level": 5, "urgency_level": 1 },
+    "message_variants": [
+      {
+        "header": "L401 försenat avgång med 5 minuter",
+        "details": "L401 avgång från Ekstubben är 5 minuter försenad p g a Bro öppning.",
+        "scope_alias": "Buss 401",
+        "language": "sv"
+      }
+    ],
+    "scope": {
+      "stop_areas": [
+        { "id": 44000, "name": "Slussen", "type": "BUSTERM", "transport_authority": 1 }
+      ],
+      "lines": [
+        { "id": 401, "transport_authority": 1, "designation": "401", "transport_mode": "BUS" }
+      ]
+    }
+  }
+]

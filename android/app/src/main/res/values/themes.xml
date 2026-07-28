@@ -1,0 +1,7 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <!-- Base theme is applied by Compose's MaterialTheme (see ui/theme/Theme.kt); this
+         entry only satisfies the manifest's android:theme reference before Compose
+         content is set, avoiding a flash of an unstyled system default theme. -->
+    <style name="Theme.Blick" parent="android:Theme.Material.Light.NoActionBar" />
+</resources>

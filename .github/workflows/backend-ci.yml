@@ -1,0 +1,49 @@
+name: Backend CI
+
+# Deliberately no `paths:` filter on the push trigger: this repository is kept as a
+# single root commit that gets amended and force-pushed rather than accumulating
+# history, so consecutive pushes never share a common ancestor. GitHub computes
+# path-filtered push triggers by diffing the old and new commit, which is undefined
+# across unrelated histories — in practice it silently evaluates to "no match" and the
+# workflow never fires at all (see android-ci.yml for the same note). Running
+# unconditionally on every push is the only trigger that reliably works given that
+# convention; a manual workflow_dispatch is also provided as a fallback.
+
+on:
+  push:
+  pull_request:
+  workflow_dispatch:
+
+defaults:
+  run:
+    working-directory: backend
+
+jobs:
+  validate:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+          cache: "npm"
+          cache-dependency-path: backend/package-lock.json
+
+      - name: Install dependencies
+        run: npm ci
+
+      - name: Typecheck
+        run: npm run typecheck
+
+      - name: Lint
+        run: npm run lint
+
+      - name: Test
+        run: npm test
+
+      - name: Build
+        run: npm run build
+
+      - name: Audit (fails on known vulnerabilities)
+        run: npm audit --audit-level=moderate

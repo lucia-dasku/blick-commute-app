@@ -1,0 +1,40 @@
+<?xml version="1.0" encoding="utf-8"?>
+<manifest xmlns:android="http://schemas.android.com/apk/res/android">
+
+    <!--
+        Deliberately minimal permission set for the MVP (see docs/api-contract.md §16
+        of the project documentation and the "Privacy and security" principle):
+        no GPS/location, no accounts, no advertising ID.
+        POST_NOTIFICATIONS is required on API 33+ to show the commute notification;
+        the app requests it at runtime during routine setup, matching the documented
+        "Initial setup" flow.
+    -->
+    <uses-permission android:name="android.permission.POST_NOTIFICATIONS" />
+    <uses-permission android:name="android.permission.INTERNET" />
+
+    <application
+        android:name=".BlickApplication"
+        android:allowBackup="false"
+        android:icon="@mipmap/ic_launcher"
+        android:label="@string/app_name"
+        android:supportsRtl="true"
+        android:theme="@style/Theme.Blick">
+
+        <activity
+            android:name=".MainActivity"
+            android:exported="true"
+            android:theme="@style/Theme.Blick">
+            <intent-filter>
+                <action android:name="android.intent.action.MAIN" />
+                <category android:name="android.intent.category.LAUNCHER" />
+            </intent-filter>
+        </activity>
+
+        <!--
+            Notification and scheduling are represented by interfaces only in this
+            scaffold (see notification/RoutineNotifier.kt, scheduling/RoutineScheduler.kt).
+            No BroadcastReceiver, foreground Service, or AlarmManager registration exists
+            yet — that is deliberately out of scope until those interfaces are implemented.
+        -->
+    </application>
+</manifest>
