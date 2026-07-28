@@ -73,9 +73,10 @@ the wrong thing. In practice this backfired — a 2026-07-28 incident traced a "
 found" bug in the app all the way back to a build (run from Android Studio's Run button)
 that never picked up the Gradle property override and silently fell back to that
 placeholder, which is a much easier mistake to make across machines/IDE syncs than to
-notice. The "fail loudly" goal is now instead served by the app itself surfacing real
-network error messages (see `RoutineCreateViewModel`'s `searchErrorMessage`) rather than
-by making the default backend unreachable.
+notice. The "fail loudly" goal is now instead served by the app itself surfacing a visible
+(friendly, not raw-exception) failure state on a real network error (see
+`RoutineCreateViewModel`'s `searchFailed`/`directionsFailed`/`saveFailed`) rather than by
+making the default backend unreachable.
 
 ### Redeploying the backend
 

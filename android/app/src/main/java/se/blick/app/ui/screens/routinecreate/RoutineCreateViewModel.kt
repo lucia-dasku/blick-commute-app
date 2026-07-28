@@ -7,6 +7,7 @@ import dagger.hilt.android.lifecycle.HiltViewModel
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.ExperimentalCoroutinesApi
 import kotlinx.coroutines.FlowPreview
+import kotlinx.coroutines.Job
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
@@ -26,6 +27,8 @@ import java.time.DayOfWeek
 import java.time.LocalTime
 import javax.inject.Inject
 
+private const val LOG_TAG = "RoutineCreateViewModel"
+
 enum class RoutineCreateStep {
     STOP, TRANSPORT_MODE, DIRECTION, SCHEDULE
 }
@@ -36,21 +39,30 @@ enum class RoutineCreateStep {
  * "direction" into a single selectable [DirectionOption] already (see that interface's
  * doc comment on its live-departures-window limitation), so this wizard has one selection
  * step for both rather than two.
+ *
+ * Every network-backed step (stop search, direction lookup, save) distinguishes a
+ * genuine "nothing here"/success result from an actual failure (network/server/
+ * deserialization error), rethrows [CancellationException] rather than swallowing it, and
+ * exposes only a boolean failure flag to the UI — never the raw exception message, class
+ * name, or any hostname — which the UI turns into a fixed, friendly string. The real
+ * exception is always logged via [Log.e] for developers. See the 2026-07-28 production
+ * incident (a real backend outage that looked identical to "no stops found" because
+ * errors were being silently swallowed into empty results) for why this distinction
+ * matters everywhere in this file, not just in the one place it was first noticed.
  */
 data class RoutineCreateUiState(
     val step: RoutineCreateStep = RoutineCreateStep.STOP,
     val siteQuery: String = "",
     val isSearching: Boolean = false,
     val siteResults: List<Site> = emptyList(),
-    // Non-null only when the last search attempt threw (network/server failure), as
-    // distinct from a search that succeeded but matched nothing. Shown to the user
-    // verbatim — this app isn't shipped yet, and a real message here is far more useful
-    // for diagnosing setup problems (wrong backend URL, unreachable server, etc.) than a
-    // misleading "No stops found".
-    val searchErrorMessage: String? = null,
+    val searchFailed: Boolean = false,
     val selectedSite: Site? = null,
     val isLoadingDirections: Boolean = false,
-    val directionsError: Boolean = false,
+    // A successful lookup that legitimately found zero lines/directions currently running
+    // (see DirectionOptionsSource's live-departures-window limitation) — as distinct from...
+    val directionsEmpty: Boolean = false,
+    // ...a lookup that threw (network/server/deserialization failure).
+    val directionsFailed: Boolean = false,
     val directionOptions: List<DirectionOption> = emptyList(),
     val availableTransportModes: List<TransportMode> = emptyList(),
     val selectedTransportMode: TransportMode? = null,
@@ -60,6 +72,7 @@ data class RoutineCreateUiState(
     val endTime: LocalTime = LocalTime.of(9, 0),
     val name: String = "",
     val isSaving: Boolean = false,
+    val saveFailed: Boolean = false,
 ) {
     val hasSelectedDays: Boolean get() = activeDays.isNotEmpty()
 
@@ -82,52 +95,107 @@ class RoutineCreateViewModel @Inject constructor(
     private val _uiState = MutableStateFlow(RoutineCreateUiState())
     val uiState: StateFlow<RoutineCreateUiState> = _uiState.asStateFlow()
 
-    private val queryFlow = MutableStateFlow("")
+    /**
+     * `retryToken` exists purely so [retryStopSearch] can force [collectLatest] to re-run
+     * the exact same query: `distinctUntilChanged()` compares the whole [SearchRequest],
+     * so bumping the token makes an otherwise-identical resubmission look "different"
+     * without weakening the dedup for ordinary typing.
+     */
+    private data class SearchRequest(val query: String, val retryToken: Int = 0)
+
+    private val queryFlow = MutableStateFlow(SearchRequest(""))
 
     /** Once the user edits the suggested name themselves, stop overwriting it on re-selection. */
     private var nameManuallyEdited = false
+
+    /**
+     * Guards against a stale direction-lookup response (site A) overwriting a more recent
+     * one (site B, or a retry of A) after the two race — [selectSite] used to launch each
+     * lookup independently with no relationship to previous ones, so an old, slow request
+     * completing after a newer one had already resolved could silently resurrect stale
+     * options/errors or move the wizard forward with the wrong site's data. [directionsJob]
+     * stops the old coroutine outright (saving the wasted work); [directionsRequestId] is
+     * the actual correctness guarantee — checked before every state update inside the
+     * lookup so a stale completion is a no-op even in the rare case cancellation doesn't
+     * land before the old call's result arrives.
+     */
+    private var directionsJob: Job? = null
+    private var directionsRequestId = 0
+
+    private fun cancelInFlightDirectionsRequest() {
+        directionsRequestId++
+        directionsJob?.cancel()
+        directionsJob = null
+    }
 
     init {
         viewModelScope.launch {
             queryFlow
                 .debounce(300)
                 .distinctUntilChanged()
-                .collectLatest { query ->
-                    if (query.isBlank()) {
-                        _uiState.update {
-                            it.copy(siteResults = emptyList(), isSearching = false, searchErrorMessage = null)
-                        }
-                        return@collectLatest
-                    }
-                    _uiState.update { it.copy(isSearching = true, searchErrorMessage = null) }
-                    try {
-                        val results = stopRepository.searchStops(query)
-                        _uiState.update { it.copy(siteResults = results, isSearching = false) }
-                    } catch (e: CancellationException) {
-                        // A newer query superseded this one (collectLatest) — not a real
-                        // failure, must propagate for structured concurrency to work.
-                        throw e
-                    } catch (e: Exception) {
-                        Log.e("RoutineCreateViewModel", "Stop search failed for query '$query'", e)
-                        _uiState.update {
-                            it.copy(
-                                siteResults = emptyList(),
-                                isSearching = false,
-                                searchErrorMessage = e.message ?: e::class.simpleName ?: "Unknown error",
-                            )
-                        }
-                    }
-                }
+                .collectLatest { request -> performSearch(request.query) }
+        }
+    }
+
+    private suspend fun performSearch(query: String) {
+        if (query.isBlank()) {
+            _uiState.update { it.copy(siteResults = emptyList(), isSearching = false, searchFailed = false) }
+            return
+        }
+        _uiState.update { it.copy(isSearching = true, searchFailed = false) }
+        try {
+            val results = stopRepository.searchStops(query)
+            _uiState.update { it.copy(siteResults = results, isSearching = false, searchFailed = false) }
+        } catch (e: CancellationException) {
+            // A newer query (or a retry) superseded this one (collectLatest) — not a real
+            // failure, must propagate for structured concurrency to work.
+            throw e
+        } catch (e: Exception) {
+            Log.e(LOG_TAG, "Stop search failed for query '$query'", e)
+            _uiState.update { it.copy(siteResults = emptyList(), isSearching = false, searchFailed = true) }
         }
     }
 
     fun onSiteQueryChanged(query: String) {
-        _uiState.update { it.copy(siteQuery = query) }
-        queryFlow.value = query
+        cancelInFlightDirectionsRequest()
+        _uiState.update {
+            it.copy(
+                siteQuery = query,
+                // A previous site selection/direction lookup (in progress, empty, or
+                // failed) must never obscure a new search — see the 2026-07-28 review that
+                // caught this: typing a new query used to leave the stale direction-error
+                // UI on screen indefinitely, hiding the new search's own results.
+                selectedSite = null,
+                isLoadingDirections = false,
+                directionsEmpty = false,
+                directionsFailed = false,
+                directionOptions = emptyList(),
+                availableTransportModes = emptyList(),
+                selectedTransportMode = null,
+                selectedDirection = null,
+            )
+        }
+        queryFlow.update { it.copy(query = query) }
+    }
+
+    /** Retries the current query even though it hasn't changed (see [SearchRequest]). */
+    fun retryStopSearch() {
+        queryFlow.update { it.copy(retryToken = it.retryToken + 1) }
     }
 
     fun selectSite(site: Site) {
-        if (_uiState.value.selectedSite?.siteId == site.siteId) return
+        // No same-site early return here on purpose: after navigating back to STOP and
+        // selecting the same stop again, the direction lookup must actually re-run (or at
+        // least be re-attempted) rather than silently doing nothing — see the 2026-07-28
+        // review. Re-selecting is cheap (one network call) and always correct; skipping it
+        // was an incorrect optimization that made "back, then reselect" look broken.
+        //
+        // Cancel/invalidate whatever direction request was previously in flight (a
+        // different site, or an earlier attempt at this same one via retryDirections)
+        // BEFORE starting this one — see the class doc on directionsJob/directionsRequestId
+        // for why both a cancel and a generation check are needed.
+        cancelInFlightDirectionsRequest()
+        val requestId = directionsRequestId
         _uiState.update {
             it.copy(
                 selectedSite = site,
@@ -135,33 +203,46 @@ class RoutineCreateViewModel @Inject constructor(
                 selectedDirection = null,
                 directionOptions = emptyList(),
                 availableTransportModes = emptyList(),
-                directionsError = false,
+                directionsEmpty = false,
+                directionsFailed = false,
                 isLoadingDirections = true,
             )
         }
-        viewModelScope.launch {
-            val options = runCatching { directionOptionsSource.getDirectionOptions(site.siteId) }.getOrNull()
-            if (options.isNullOrEmpty()) {
-                _uiState.update { it.copy(isLoadingDirections = false, directionsError = true) }
-            } else {
-                _uiState.update {
-                    it.copy(
-                        isLoadingDirections = false,
-                        directionOptions = options,
-                        availableTransportModes = options.map { option -> option.transportMode }.distinct(),
-                        step = RoutineCreateStep.TRANSPORT_MODE,
-                    )
+        directionsJob = viewModelScope.launch {
+            try {
+                val options = directionOptionsSource.getDirectionOptions(site.siteId)
+                // A newer selectSite/retryDirections call superseded this one while it was
+                // in flight — its result is stale even if cancellation didn't pre-empt it.
+                if (requestId != directionsRequestId) return@launch
+                if (options.isEmpty()) {
+                    _uiState.update { it.copy(isLoadingDirections = false, directionsEmpty = true) }
+                } else {
+                    _uiState.update {
+                        it.copy(
+                            isLoadingDirections = false,
+                            directionOptions = options,
+                            availableTransportModes = options.map { option -> option.transportMode }.distinct(),
+                            step = RoutineCreateStep.TRANSPORT_MODE,
+                        )
+                    }
                 }
+            } catch (e: CancellationException) {
+                throw e
+            } catch (e: Exception) {
+                if (requestId != directionsRequestId) return@launch
+                Log.e(LOG_TAG, "Failed to load direction options for site ${site.siteId}", e)
+                _uiState.update { it.copy(isLoadingDirections = false, directionsFailed = true) }
             }
         }
     }
 
-    /** Lets the user retry after an empty/failed direction lookup without re-typing the search. */
+    /**
+     * Re-runs the direction lookup for the currently selected site. Used by both the
+     * "empty" and "failed" direction states — the retry action is the same lookup either
+     * way, only the message shown for each differs.
+     */
     fun retryDirections() {
-        _uiState.value.selectedSite?.let { site ->
-            _uiState.update { it.copy(selectedSite = null) }
-            selectSite(site)
-        }
+        _uiState.value.selectedSite?.let { site -> selectSite(site) }
     }
 
     fun selectTransportMode(mode: TransportMode) {
@@ -217,31 +298,49 @@ class RoutineCreateViewModel @Inject constructor(
         return true
     }
 
+    /**
+     * Persists the routine. Re-entrant-safe (an already-in-flight save is a no-op, not a
+     * second concurrent write) and never leaves [RoutineCreateUiState.isSaving] stuck on
+     * `true` — success, failure, and cancellation all reset it. [onSaved] is only called
+     * after the repository call actually completes successfully; a failure surfaces
+     * [RoutineCreateUiState.saveFailed] instead (see [save]'s own caller for the retry
+     * action, which is just calling [save] again — rebuilding the same [CommuteRoutine]
+     * from current state is naturally idempotent-enough to retry).
+     */
     fun save(onSaved: () -> Unit) {
         val state = _uiState.value
+        if (state.isSaving) return
         val site = state.selectedSite ?: return
         val direction = state.selectedDirection ?: return
         if (!state.canSave) return
 
-        _uiState.update { it.copy(isSaving = true) }
+        _uiState.update { it.copy(isSaving = true, saveFailed = false) }
         viewModelScope.launch {
-            routineRepository.save(
-                CommuteRoutine(
-                    name = state.name,
-                    siteId = site.siteId,
-                    siteName = site.name,
-                    transportMode = direction.transportMode,
-                    lineId = direction.lineId,
-                    lineDesignation = direction.lineDesignation,
-                    directionCode = direction.directionCode,
-                    destinationLabel = direction.destinationLabel,
-                    activeDays = state.activeDays,
-                    startTime = state.startTime,
-                    endTime = state.endTime,
-                ),
-            )
-            _uiState.update { it.copy(isSaving = false) }
-            onSaved()
+            try {
+                routineRepository.save(
+                    CommuteRoutine(
+                        name = state.name,
+                        siteId = site.siteId,
+                        siteName = site.name,
+                        transportMode = direction.transportMode,
+                        lineId = direction.lineId,
+                        lineDesignation = direction.lineDesignation,
+                        directionCode = direction.directionCode,
+                        destinationLabel = direction.destinationLabel,
+                        activeDays = state.activeDays,
+                        startTime = state.startTime,
+                        endTime = state.endTime,
+                    ),
+                )
+                _uiState.update { it.copy(isSaving = false, saveFailed = false) }
+                onSaved()
+            } catch (e: CancellationException) {
+                _uiState.update { it.copy(isSaving = false) }
+                throw e
+            } catch (e: Exception) {
+                Log.e(LOG_TAG, "Failed to save routine", e)
+                _uiState.update { it.copy(isSaving = false, saveFailed = true) }
+            }
         }
     }
 }

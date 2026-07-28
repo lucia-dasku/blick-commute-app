@@ -2,6 +2,7 @@
 
 package se.blick.app.ui.screens.routinecreate
 
+import androidx.activity.compose.BackHandler
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
@@ -70,12 +71,18 @@ fun RoutineCreateScreen(
 ) {
     val uiState by viewModel.uiState.collectAsStateWithLifecycle()
 
+    // Shared by the toolbar's back arrow AND the system Back button/gesture, so both
+    // navigate the wizard step-by-step identically instead of the system gesture exiting
+    // the whole screen regardless of step (see the 2026-07-28 review).
+    val handleBack: () -> Unit = { if (!viewModel.back()) onDone() }
+    BackHandler(onBack = handleBack)
+
     Scaffold(
         topBar = {
             TopAppBar(
                 title = { Text(stepTitle(uiState.step)) },
                 navigationIcon = {
-                    IconButton(onClick = { if (!viewModel.back()) onDone() }) {
+                    IconButton(onClick = handleBack) {
                         Icon(Icons.AutoMirrored.Filled.ArrowBack, contentDescription = stringResource(R.string.action_back))
                     }
                 },
@@ -94,7 +101,8 @@ fun RoutineCreateScreen(
                         uiState = uiState,
                         onQueryChanged = viewModel::onSiteQueryChanged,
                         onSelectSite = viewModel::selectSite,
-                        onRetry = viewModel::retryDirections,
+                        onRetryStopSearch = viewModel::retryStopSearch,
+                        onRetryDirections = viewModel::retryDirections,
                     )
                     RoutineCreateStep.TRANSPORT_MODE -> TransportModeStep(
                         uiState = uiState,
@@ -133,7 +141,8 @@ private fun StopStep(
     uiState: RoutineCreateUiState,
     onQueryChanged: (String) -> Unit,
     onSelectSite: (Site) -> Unit,
-    onRetry: () -> Unit,
+    onRetryStopSearch: () -> Unit,
+    onRetryDirections: () -> Unit,
 ) {
     Column(Modifier.fillMaxSize()) {
         OutlinedTextField(
@@ -155,7 +164,21 @@ private fun StopStep(
                     ),
                 )
             }
-            uiState.directionsError -> Column {
+            // A real failure (network/server/deserialization) loading directions for the
+            // selected site — distinct from directionsEmpty below, which is a successful
+            // lookup that legitimately found nothing running right now.
+            uiState.directionsFailed -> Column {
+                Text(
+                    stringResource(
+                        R.string.routine_create_directions_failed_error,
+                        uiState.selectedSite?.name.orEmpty(),
+                    ),
+                    color = MaterialTheme.colorScheme.error,
+                )
+                Spacer(Modifier.height(8.dp))
+                Button(onClick = onRetryDirections) { Text(stringResource(R.string.routine_create_retry)) }
+            }
+            uiState.directionsEmpty -> Column {
                 Text(
                     stringResource(
                         R.string.routine_create_no_departures_error,
@@ -163,13 +186,20 @@ private fun StopStep(
                     ),
                 )
                 Spacer(Modifier.height(8.dp))
-                Button(onClick = onRetry) { Text(stringResource(R.string.routine_create_retry)) }
+                Button(onClick = onRetryDirections) { Text(stringResource(R.string.routine_create_retry)) }
             }
             uiState.isSearching -> CenteredMessage { CircularProgressIndicator() }
-            uiState.searchErrorMessage != null -> Text(
-                stringResource(R.string.routine_create_search_error, uiState.searchErrorMessage),
-                color = MaterialTheme.colorScheme.error,
-            )
+            // Fixed, friendly copy only — never the raw exception/hostname/class name (see
+            // RoutineCreateUiState's class doc). Has its own "Try again" wired to
+            // retryStopSearch(), never to the unrelated retryDirections().
+            uiState.searchFailed -> Column {
+                Text(
+                    stringResource(R.string.routine_create_search_error),
+                    color = MaterialTheme.colorScheme.error,
+                )
+                Spacer(Modifier.height(8.dp))
+                Button(onClick = onRetryStopSearch) { Text(stringResource(R.string.routine_create_retry)) }
+            }
             uiState.siteResults.isEmpty() && uiState.siteQuery.isNotBlank() ->
                 Text(stringResource(R.string.routine_create_no_results))
             else -> LazyColumn {
@@ -289,9 +319,18 @@ private fun ScheduleStep(
             modifier = Modifier.fillMaxWidth(),
         )
 
+        if (uiState.saveFailed) {
+            Spacer(Modifier.height(8.dp))
+            Text(
+                stringResource(R.string.routine_create_save_error),
+                color = MaterialTheme.colorScheme.error,
+                style = MaterialTheme.typography.bodySmall,
+            )
+        }
+
         Spacer(Modifier.height(24.dp))
         Button(onClick = onSave, enabled = uiState.canSave, modifier = Modifier.fillMaxWidth()) {
-            Text(stringResource(R.string.routine_create_save))
+            Text(stringResource(if (uiState.saveFailed) R.string.routine_create_retry else R.string.routine_create_save))
         }
     }
 

@@ -1,5 +1,7 @@
 package se.blick.app.ui.screens.routinecreate
 
+import kotlinx.coroutines.CancellationException
+import kotlinx.coroutines.CompletableDeferred
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.ExperimentalCoroutinesApi
 import kotlinx.coroutines.flow.Flow
@@ -41,6 +43,7 @@ class RoutineCreateViewModelTest {
     }
 
     private val fruangen = Site(siteId = 9145, name = "Fruängen", note = null, lat = 59.28, lon = 17.96, stopAreaIds = listOf(9145))
+    private val slussen = Site(siteId = 9192, name = "Slussen", note = null, lat = 59.32, lon = 18.07, stopAreaIds = listOf(9192))
     private val busOption = DirectionOption(
         lineId = 705,
         lineDesignation = "705",
@@ -56,6 +59,8 @@ class RoutineCreateViewModelTest {
         destinationLabel = "T-Centralen",
     )
 
+    // ---- StopRepository fakes ----
+
     private class FakeStopRepository(private val sitesByQuery: Map<String, List<Site>> = emptyMap()) : StopRepository {
         var lastQuery: String? = null
         override suspend fun searchStops(query: String): List<Site> {
@@ -64,12 +69,31 @@ class RoutineCreateViewModelTest {
         }
     }
 
-    /** Regression fixture: a search backend failure must surface as an error, not as a
-     * silent "no results" (see the 2026-07-28 production incident where this exact
-     * masking made a real backend outage indistinguishable from a genuine empty search). */
+    /** Always throws — for testing the pure failure path. */
     private class FailingStopRepository(private val message: String) : StopRepository {
         override suspend fun searchStops(query: String): List<Site> = throw RuntimeException(message)
     }
+
+    /** Always throws a real [CancellationException] — must propagate, not become searchFailed. */
+    private class CancellingStopRepository : StopRepository {
+        override suspend fun searchStops(query: String): List<Site> = throw CancellationException("test cancellation")
+    }
+
+    /** Fails while [shouldFail] is true, succeeds with [resultsByQuery] once flipped off —
+     * for testing "failed, then retried successfully" flows without a second fake. */
+    private class ToggleableStopRepository(
+        var shouldFail: Boolean,
+        private val resultsByQuery: Map<String, List<Site>> = emptyMap(),
+    ) : StopRepository {
+        var callCount = 0
+        override suspend fun searchStops(query: String): List<Site> {
+            callCount++
+            if (shouldFail) throw RuntimeException("boom")
+            return resultsByQuery[query] ?: emptyList()
+        }
+    }
+
+    // ---- DirectionOptionsSource fakes ----
 
     private class FakeDirectionOptionsSource(
         private val optionsBySite: Map<Long, List<DirectionOption>> = emptyMap(),
@@ -80,6 +104,45 @@ class RoutineCreateViewModelTest {
             return optionsBySite[siteId] ?: emptyList()
         }
     }
+
+    /** Always throws — a real backend/network failure, distinct from a legitimately empty result. */
+    private class FailingDirectionOptionsSource : DirectionOptionsSource {
+        override suspend fun getDirectionOptions(siteId: Long): List<DirectionOption> = throw RuntimeException("boom")
+    }
+
+    /** Always throws a real [CancellationException] — must propagate, not become directionsFailed. */
+    private class CancellingDirectionOptionsSource : DirectionOptionsSource {
+        override suspend fun getDirectionOptions(siteId: Long): List<DirectionOption> =
+            throw CancellationException("test cancellation")
+    }
+
+    /**
+     * Each call suspends on its own [CompletableDeferred], indexed by call order (not by
+     * siteId — a retry of the SAME site must get its own independent, separately
+     * controllable slot). Lets tests resolve calls out of order to reproduce a slow
+     * request completing after a newer one has already superseded it.
+     */
+    private class ControllableDirectionOptionsSource : DirectionOptionsSource {
+        private val pending = mutableListOf<CompletableDeferred<List<DirectionOption>>>()
+        val callCount: Int get() = pending.size
+
+        override suspend fun getDirectionOptions(siteId: Long): List<DirectionOption> {
+            val deferred = CompletableDeferred<List<DirectionOption>>()
+            pending += deferred
+            return deferred.await()
+        }
+
+        /** Resolves the call at [callIndex] (0-indexed, in call order) successfully. */
+        fun complete(callIndex: Int, result: List<DirectionOption>) {
+            pending[callIndex].complete(result)
+        }
+
+        fun completeWithError(callIndex: Int, error: Throwable) {
+            pending[callIndex].completeExceptionally(error)
+        }
+    }
+
+    // ---- RoutineRepository fakes ----
 
     private class FakeRoutineRepository : RoutineRepository {
         val saved = mutableListOf<CommuteRoutine>()
@@ -97,11 +160,87 @@ class RoutineCreateViewModelTest {
         override suspend fun pauseForDate(id: String, date: LocalDate) = Unit
     }
 
+    /** Always throws on save — for testing the pure save-failure path. */
+    private class FailingRoutineRepository : RoutineRepository {
+        var saveCallCount = 0
+        override fun observeAll(): Flow<List<CommuteRoutine>> = MutableStateFlow(emptyList())
+        override suspend fun getById(id: String): CommuteRoutine? = null
+        override suspend fun save(routine: CommuteRoutine) {
+            saveCallCount++
+            throw RuntimeException("save failed")
+        }
+        override suspend fun delete(id: String) = Unit
+        override suspend fun pauseForDate(id: String, date: LocalDate) = Unit
+    }
+
+    /** Always throws a real [CancellationException] from save — must propagate, not become saveFailed. */
+    private class CancellingRoutineRepository : RoutineRepository {
+        override fun observeAll(): Flow<List<CommuteRoutine>> = MutableStateFlow(emptyList())
+        override suspend fun getById(id: String): CommuteRoutine? = null
+        override suspend fun save(routine: CommuteRoutine): Unit = throw CancellationException("test cancellation")
+        override suspend fun delete(id: String) = Unit
+        override suspend fun pauseForDate(id: String, date: LocalDate) = Unit
+    }
+
+    /** Fails while [shouldFail] is true, succeeds once flipped off — for "failed, then retried
+     * successfully" save flows. */
+    private class ToggleableRoutineRepository(var shouldFail: Boolean) : RoutineRepository {
+        val saved = mutableListOf<CommuteRoutine>()
+        private val state = MutableStateFlow<List<CommuteRoutine>>(emptyList())
+        override fun observeAll(): Flow<List<CommuteRoutine>> = state
+        override suspend fun getById(id: String): CommuteRoutine? = state.value.find { it.id == id }
+        override suspend fun save(routine: CommuteRoutine) {
+            if (shouldFail) throw RuntimeException("boom")
+            saved += routine
+            state.value = state.value + routine
+        }
+        override suspend fun delete(id: String) {
+            state.value = state.value.filterNot { it.id == id }
+        }
+        override suspend fun pauseForDate(id: String, date: LocalDate) = Unit
+    }
+
+    /** Suspends on [save] until [release] is called — for proving overlapping save() calls
+     * only persist once. */
+    private class SlowRoutineRepository : RoutineRepository {
+        val saved = mutableListOf<CommuteRoutine>()
+        var callCount = 0
+        private val state = MutableStateFlow<List<CommuteRoutine>>(emptyList())
+        private val gate = CompletableDeferred<Unit>()
+        override fun observeAll(): Flow<List<CommuteRoutine>> = state
+        override suspend fun getById(id: String): CommuteRoutine? = null
+        override suspend fun save(routine: CommuteRoutine) {
+            callCount++
+            gate.await()
+            saved += routine
+        }
+        override suspend fun delete(id: String) = Unit
+        override suspend fun pauseForDate(id: String, date: LocalDate) = Unit
+        fun release() {
+            gate.complete(Unit)
+        }
+    }
+
     private fun viewModel(
         stops: StopRepository = FakeStopRepository(mapOf("Fru" to listOf(fruangen))),
         directions: DirectionOptionsSource = FakeDirectionOptionsSource(mapOf(9145L to listOf(busOption, metroOption))),
         routines: RoutineRepository = FakeRoutineRepository(),
     ) = RoutineCreateViewModel(stops, directions, routines)
+
+    /** Selects [fruangen], advances past its (successful, non-empty) direction lookup, sets
+     * a valid direction/schedule so [RoutineCreateUiState.canSave] is true. Shared setup for
+     * the save()-focused tests. */
+    private fun RoutineCreateViewModel.advanceToSaveReady() {
+        selectSite(fruangen)
+        dispatcher.scheduler.advanceUntilIdle()
+        selectTransportMode(TransportMode.METRO)
+        selectDirection(metroOption)
+        toggleDay(DayOfWeek.MONDAY)
+        setStartTime(LocalTime.of(7, 0))
+        setEndTime(LocalTime.of(9, 0))
+    }
+
+    // ---- Stop search ----
 
     @Test
     fun `starts on the stop step with no results`() = runTest(dispatcher) {
@@ -124,29 +263,86 @@ class RoutineCreateViewModelTest {
     }
 
     @Test
-    fun `a failed search surfaces the error message instead of an empty result`() = runTest(dispatcher) {
+    fun `a failed search surfaces a failure flag instead of an empty result`() = runTest(dispatcher) {
         val vm = viewModel(stops = FailingStopRepository("Unable to resolve host"))
 
         vm.onSiteQueryChanged("Fru")
         dispatcher.scheduler.advanceUntilIdle()
 
         assertTrue(vm.uiState.value.siteResults.isEmpty())
-        assertEquals("Unable to resolve host", vm.uiState.value.searchErrorMessage)
+        assertTrue(vm.uiState.value.searchFailed)
         assertFalse(vm.uiState.value.isSearching)
     }
 
     @Test
-    fun `a later successful search clears a previous error`() = runTest(dispatcher) {
-        val vm = viewModel(stops = FailingStopRepository("boom"))
+    fun `a cancellation while searching is not converted into searchFailed`() = runTest(dispatcher) {
+        val vm = viewModel(stops = CancellingStopRepository())
+
         vm.onSiteQueryChanged("Fru")
         dispatcher.scheduler.advanceUntilIdle()
-        assertEquals("boom", vm.uiState.value.searchErrorMessage)
 
-        vm.onSiteQueryChanged("")
+        assertFalse(vm.uiState.value.searchFailed)
+    }
+
+    @Test
+    fun `retryStopSearch retries the same query and can succeed after a prior failure`() = runTest(dispatcher) {
+        val stops = ToggleableStopRepository(shouldFail = true, resultsByQuery = mapOf("Fru" to listOf(fruangen)))
+        val vm = viewModel(stops = stops)
+
+        vm.onSiteQueryChanged("Fru")
+        dispatcher.scheduler.advanceUntilIdle()
+        assertTrue(vm.uiState.value.searchFailed)
+        assertTrue(vm.uiState.value.siteResults.isEmpty())
+        assertEquals(1, stops.callCount)
+
+        stops.shouldFail = false
+        vm.retryStopSearch()
         dispatcher.scheduler.advanceUntilIdle()
 
-        assertEquals(null, vm.uiState.value.searchErrorMessage)
+        assertFalse(vm.uiState.value.searchFailed)
+        assertEquals(listOf(fruangen), vm.uiState.value.siteResults)
+        assertEquals(2, stops.callCount)
     }
+
+    @Test
+    fun `a later successful search clears a previous error`() = runTest(dispatcher) {
+        // Regression: this used to "pass" by only clearing the query to blank, which never
+        // exercises the repository at all and proves nothing about real recovery.
+        val stops = ToggleableStopRepository(shouldFail = true, resultsByQuery = mapOf("Centralen" to listOf(fruangen)))
+        val vm = viewModel(stops = stops)
+
+        vm.onSiteQueryChanged("Fru")
+        dispatcher.scheduler.advanceUntilIdle()
+        assertTrue(vm.uiState.value.searchFailed)
+
+        stops.shouldFail = false
+        vm.onSiteQueryChanged("Centralen")
+        dispatcher.scheduler.advanceUntilIdle()
+
+        assertFalse(vm.uiState.value.searchFailed)
+        assertEquals(listOf(fruangen), vm.uiState.value.siteResults)
+        assertEquals(2, stops.callCount)
+    }
+
+    // ---- New query resets stale selection/direction state ----
+
+    @Test
+    fun `changing the query after a direction failure clears the stale direction state`() = runTest(dispatcher) {
+        val vm = viewModel(directions = FailingDirectionOptionsSource())
+
+        vm.selectSite(fruangen)
+        dispatcher.scheduler.advanceUntilIdle()
+        assertTrue(vm.uiState.value.directionsFailed)
+
+        vm.onSiteQueryChanged("New query")
+
+        assertFalse(vm.uiState.value.directionsFailed)
+        assertFalse(vm.uiState.value.directionsEmpty)
+        assertFalse(vm.uiState.value.isLoadingDirections)
+        assertEquals(null, vm.uiState.value.selectedSite)
+    }
+
+    // ---- Direction loading ----
 
     @Test
     fun `selecting a site loads direction options and advances to the transport mode step`() = runTest(dispatcher) {
@@ -160,14 +356,136 @@ class RoutineCreateViewModelTest {
     }
 
     @Test
-    fun `selecting a site with no live departures shows an error and stays on the stop step`() = runTest(dispatcher) {
+    fun `an exception loading directions sets directionsFailed, not directionsEmpty`() = runTest(dispatcher) {
+        val vm = viewModel(directions = FailingDirectionOptionsSource())
+
+        vm.selectSite(fruangen)
+        dispatcher.scheduler.advanceUntilIdle()
+
+        assertEquals(RoutineCreateStep.STOP, vm.uiState.value.step)
+        assertTrue(vm.uiState.value.directionsFailed)
+        assertFalse(vm.uiState.value.directionsEmpty)
+    }
+
+    @Test
+    fun `a successful lookup with zero directions sets directionsEmpty, not directionsFailed`() = runTest(dispatcher) {
         val vm = viewModel(directions = FakeDirectionOptionsSource(emptyMap()))
 
         vm.selectSite(fruangen)
         dispatcher.scheduler.advanceUntilIdle()
 
         assertEquals(RoutineCreateStep.STOP, vm.uiState.value.step)
-        assertTrue(vm.uiState.value.directionsError)
+        assertTrue(vm.uiState.value.directionsEmpty)
+        assertFalse(vm.uiState.value.directionsFailed)
+    }
+
+    @Test
+    fun `a cancellation while loading directions is not converted into directionsFailed`() = runTest(dispatcher) {
+        val vm = viewModel(directions = CancellingDirectionOptionsSource())
+
+        vm.selectSite(fruangen)
+        dispatcher.scheduler.advanceUntilIdle()
+
+        assertFalse(vm.uiState.value.directionsFailed)
+        assertFalse(vm.uiState.value.directionsEmpty)
+    }
+
+    // ---- Direction-request races (a slow, superseded lookup must never win) ----
+
+    @Test
+    fun `changing the query while directions are loading invalidates the in-flight request`() = runTest(dispatcher) {
+        val directions = ControllableDirectionOptionsSource()
+        val vm = viewModel(directions = directions)
+
+        vm.selectSite(fruangen) // call index 0
+        // Let the launched coroutine actually reach getDirectionOptions() and suspend on its
+        // CompletableDeferred (StandardTestDispatcher never runs a launch{} body just because
+        // it was created — without this, the job would be cancelled before it ever registered
+        // itself in ControllableDirectionOptionsSource, and directions.complete(0, ...) below
+        // would throw IndexOutOfBoundsException instead of exercising the race at all).
+        dispatcher.scheduler.advanceUntilIdle()
+        assertEquals(1, directions.callCount)
+        assertTrue(vm.uiState.value.isLoadingDirections)
+        assertEquals(fruangen.siteId, vm.uiState.value.selectedSite?.siteId)
+
+        vm.onSiteQueryChanged("something else")
+        dispatcher.scheduler.advanceUntilIdle() // let the cancellation actually propagate
+        assertFalse(vm.uiState.value.isLoadingDirections)
+        assertEquals(null, vm.uiState.value.selectedSite)
+
+        // Stop A's request finally resolves late, with a real (non-empty) result.
+        directions.complete(0, listOf(busOption, metroOption))
+        dispatcher.scheduler.advanceUntilIdle()
+
+        // Must not resurrect selectedSite/options or advance the step — the query change
+        // already invalidated this request.
+        assertEquals(RoutineCreateStep.STOP, vm.uiState.value.step)
+        assertEquals(null, vm.uiState.value.selectedSite)
+        assertFalse(vm.uiState.value.isLoadingDirections)
+        assertFalse(vm.uiState.value.directionsFailed)
+        assertFalse(vm.uiState.value.directionsEmpty)
+        assertTrue(vm.uiState.value.directionOptions.isEmpty())
+    }
+
+    @Test
+    fun `selecting a second stop while the first is still loading ignores the first once it resolves`() = runTest(dispatcher) {
+        val directions = ControllableDirectionOptionsSource()
+        val vm = viewModel(directions = directions)
+
+        vm.selectSite(fruangen) // call index 0 (Stop A), left pending
+        dispatcher.scheduler.advanceUntilIdle() // let A reach getDirectionOptions() and suspend
+        assertEquals(1, directions.callCount)
+
+        vm.selectSite(slussen) // call index 1 (Stop B) — must cancel/invalidate A
+        dispatcher.scheduler.advanceUntilIdle() // let A's cancellation propagate and B reach its own suspension
+        assertEquals(2, directions.callCount)
+
+        // B resolves first.
+        directions.complete(1, listOf(metroOption))
+        dispatcher.scheduler.advanceUntilIdle()
+
+        assertEquals(slussen.siteId, vm.uiState.value.selectedSite?.siteId)
+        assertEquals(RoutineCreateStep.TRANSPORT_MODE, vm.uiState.value.step)
+        assertEquals(listOf(metroOption), vm.uiState.value.directionOptions)
+
+        // A resolves late, with a DIFFERENT (also non-empty) result — must be ignored.
+        directions.complete(0, listOf(busOption))
+        dispatcher.scheduler.advanceUntilIdle()
+
+        assertEquals(slussen.siteId, vm.uiState.value.selectedSite?.siteId)
+        assertEquals(listOf(metroOption), vm.uiState.value.directionOptions)
+        assertEquals(RoutineCreateStep.TRANSPORT_MODE, vm.uiState.value.step)
+    }
+
+    @Test
+    fun `retrying directions ignores the original request if it resolves after the retry`() = runTest(dispatcher) {
+        val directions = ControllableDirectionOptionsSource()
+        val vm = viewModel(directions = directions)
+
+        vm.selectSite(fruangen) // call index 0 (original), left pending/slow
+        dispatcher.scheduler.advanceUntilIdle() // let it reach getDirectionOptions() and suspend
+        assertEquals(1, directions.callCount)
+        assertTrue(vm.uiState.value.isLoadingDirections)
+
+        vm.retryDirections() // call index 1 (retry) — must cancel/invalidate index 0
+        dispatcher.scheduler.advanceUntilIdle() // let the original's cancellation propagate and the retry reach its own suspension
+        assertEquals(2, directions.callCount)
+
+        // The retry succeeds.
+        directions.complete(1, listOf(metroOption))
+        dispatcher.scheduler.advanceUntilIdle()
+
+        assertEquals(RoutineCreateStep.TRANSPORT_MODE, vm.uiState.value.step)
+        assertEquals(listOf(metroOption), vm.uiState.value.directionOptions)
+
+        // The ORIGINAL request finally resolves late with a failure — must not overwrite
+        // the retry's already-applied success.
+        directions.completeWithError(0, RuntimeException("boom"))
+        dispatcher.scheduler.advanceUntilIdle()
+
+        assertEquals(listOf(metroOption), vm.uiState.value.directionOptions)
+        assertEquals(RoutineCreateStep.TRANSPORT_MODE, vm.uiState.value.step)
+        assertFalse(vm.uiState.value.directionsFailed)
     }
 
     @Test
@@ -176,13 +494,35 @@ class RoutineCreateViewModelTest {
         val vm = viewModel(directions = directions)
         vm.selectSite(fruangen)
         dispatcher.scheduler.advanceUntilIdle()
-        assertTrue(vm.uiState.value.directionsError)
+        assertTrue(vm.uiState.value.directionsEmpty)
 
         vm.retryDirections()
         dispatcher.scheduler.advanceUntilIdle()
 
         assertEquals(2, directions.callCount)
     }
+
+    @Test
+    fun `reselecting the same stop after navigating back to STOP reloads its directions`() = runTest(dispatcher) {
+        val directions = FakeDirectionOptionsSource(mapOf(9145L to listOf(busOption, metroOption)))
+        val vm = viewModel(directions = directions)
+
+        vm.selectSite(fruangen)
+        dispatcher.scheduler.advanceUntilIdle()
+        assertEquals(RoutineCreateStep.TRANSPORT_MODE, vm.uiState.value.step)
+        assertEquals(1, directions.callCount)
+
+        assertTrue(vm.back())
+        assertEquals(RoutineCreateStep.STOP, vm.uiState.value.step)
+
+        vm.selectSite(fruangen)
+        dispatcher.scheduler.advanceUntilIdle()
+
+        assertEquals(2, directions.callCount)
+        assertEquals(RoutineCreateStep.TRANSPORT_MODE, vm.uiState.value.step)
+    }
+
+    // ---- Full flow / name / back / canSave ----
 
     @Test
     fun `full flow selects mode, direction, sets schedule, and saves`() = runTest(dispatcher) {
@@ -267,5 +607,78 @@ class RoutineCreateViewModelTest {
 
         assertFalse(vm.uiState.value.canSave)
         assertFalse(vm.uiState.value.isTimeRangeValid)
+    }
+
+    // ---- Saving ----
+
+    @Test
+    fun `a failed save does not call onSaved and resets isSaving`() = runTest(dispatcher) {
+        val routines = FailingRoutineRepository()
+        val vm = viewModel(routines = routines)
+        vm.advanceToSaveReady()
+
+        var saved = false
+        vm.save { saved = true }
+        dispatcher.scheduler.advanceUntilIdle()
+
+        assertFalse(saved)
+        assertTrue(vm.uiState.value.saveFailed)
+        assertFalse(vm.uiState.value.isSaving)
+        assertEquals(1, routines.saveCallCount)
+    }
+
+    @Test
+    fun `retrying save after a failure succeeds once the underlying failure clears`() = runTest(dispatcher) {
+        val routines = ToggleableRoutineRepository(shouldFail = true)
+        val vm = viewModel(routines = routines)
+        vm.advanceToSaveReady()
+
+        var saved = false
+        vm.save { saved = true }
+        dispatcher.scheduler.advanceUntilIdle()
+        assertTrue(vm.uiState.value.saveFailed)
+        assertFalse(saved)
+
+        routines.shouldFail = false
+        vm.save { saved = true }
+        dispatcher.scheduler.advanceUntilIdle()
+
+        assertTrue(saved)
+        assertFalse(vm.uiState.value.saveFailed)
+        assertFalse(vm.uiState.value.isSaving)
+        assertEquals(1, routines.saved.size)
+    }
+
+    @Test
+    fun `a cancellation while saving is not converted into saveFailed and does not call onSaved`() = runTest(dispatcher) {
+        val vm = viewModel(routines = CancellingRoutineRepository())
+        vm.advanceToSaveReady()
+
+        var saved = false
+        vm.save { saved = true }
+        dispatcher.scheduler.advanceUntilIdle()
+
+        assertFalse(saved)
+        assertFalse(vm.uiState.value.saveFailed)
+        assertFalse(vm.uiState.value.isSaving)
+    }
+
+    @Test
+    fun `calling save while a save is already in flight only persists once`() = runTest(dispatcher) {
+        val routines = SlowRoutineRepository()
+        val vm = viewModel(routines = routines)
+        vm.advanceToSaveReady()
+
+        vm.save {}
+        vm.save {}
+        dispatcher.scheduler.runCurrent()
+
+        assertEquals(1, routines.callCount)
+
+        routines.release()
+        dispatcher.scheduler.advanceUntilIdle()
+
+        assertEquals(1, routines.saved.size)
+        assertFalse(vm.uiState.value.isSaving)
     }
 }

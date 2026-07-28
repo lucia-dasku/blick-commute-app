@@ -17,9 +17,13 @@
 
     <string name="routine_create_stop_search_label">Search for a stop</string>
     <string name="routine_create_no_results">No stops found.</string>
-    <string name="routine_create_search_error">Search failed: %1$s</string>
+    <!-- Deliberately generic: never interpolate the underlying exception message, class
+         name, or hostname here — see RoutineCreateViewModel's class doc. The real cause is
+         logged for developers via Log.e, not shown to the user. -->
+    <string name="routine_create_search_error">Couldn\'t reach the server. Check your connection and try again.</string>
     <string name="routine_create_checking_departures">Checking live departures at %1$s…</string>
     <string name="routine_create_no_departures_error">No live departures right now for %1$s. Try a different stop, or check back during service hours.</string>
+    <string name="routine_create_directions_failed_error">Couldn\'t load departures for %1$s. Check your connection and try again.</string>
     <string name="routine_create_retry">Try again</string>
 
     <string name="direction_unknown_destination">Unknown destination</string>
@@ -31,6 +35,7 @@
     <string name="routine_create_error_no_days">Select at least one day.</string>
     <string name="routine_create_error_time_range">End time must be after start time.</string>
     <string name="routine_create_save">Save routine</string>
+    <string name="routine_create_save_error">Couldn\'t save your routine. Check your connection and try again.</string>
 
     <string name="transport_mode_bus">Bus</string>
     <string name="transport_mode_metro">Metro</string>
