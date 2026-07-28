@@ -6,12 +6,16 @@ never directly to SL Transport/SL Deviations — see `../docs/api-contract.md`.
 ## Status
 
 This is a scaffold, not a feature-complete app. Implemented: package structure, Gradle
-config, Compose navigation between three placeholder screens, Material 3 theme, Room
-(routines) + Preferences DataStore (small settings) wiring, Hilt DI, repository/API
-client interfaces with real DTO↔domain mapping, and a real Room DAO test + a real
-ViewModel test. **Not implemented**: the actual routine setup flow, notifications,
-scheduling, and the widget — see `notification/`, `scheduling/`, and the placeholder
-screens for the interfaces those will be built behind.
+config, Compose navigation, Material 3 theme, Room (routines) + Preferences DataStore
+(small settings) wiring, Hilt DI, repository/API client interfaces with real
+DTO↔domain mapping, the routine-creation wizard (`ui/screens/routinecreate`, with its
+own error/retry handling and regression tests), and the live-departure engine
+(`domain/usecase/GetLiveDeparturesUseCase` + `LiveDeparturesProcessor` — fetches, filters,
+and prepares the next relevant departures for a saved routine; not yet wired into any
+screen). **Not implemented**: the routine live-preview screen, notifications, scheduling
+(`WorkManager`/foreground service), persistent stale-data storage, and the widget — see
+`notification/`, `scheduling/`, and `RoutineEditScreen`/`RoutineListScreen` for the
+interfaces those will be built behind.
 
 ## Pinned versions and why
 
