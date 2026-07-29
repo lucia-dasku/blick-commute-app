@@ -187,19 +187,45 @@ class LiveDeparturesProcessorTest {
     // ---- Sorting and limiting ----
 
     @Test
-    fun `results are sorted by effective time ascending`() {
+    fun `results are sorted by effective time ascending before the limit is applied`() {
+        // Deliberately out of chronological order in the input, and more than the limit,
+        // so this only passes if sorting actually happens before take(): an unsorted
+        // take(2) of (third, first, second) would wrongly yield [third, first].
         val third = departure(departureId = "third", scheduledTime = now.plusSeconds(900))
         val first = departure(departureId = "first", scheduledTime = now.plusSeconds(60))
         val second = departure(departureId = "second", scheduledTime = now.plusSeconds(300))
         val prepared = LiveDeparturesProcessor.prepare(result(third, first, second), routine(), now)
-        assertEquals(listOf("first", "second", "third"), prepared.map { it.departureId })
+        assertEquals(listOf("first", "second"), prepared.map { it.departureId })
     }
 
     @Test
-    fun `only the next three departures are returned`() {
+    fun `only the next two departures are returned`() {
         val departures = (1..5).map { i -> departure(departureId = "dep-$i", scheduledTime = now.plusSeconds(i * 60L)) }
         val prepared = LiveDeparturesProcessor.prepare(result(*departures.toTypedArray()), routine(), now)
-        assertEquals(listOf("dep-1", "dep-2", "dep-3"), prepared.map { it.departureId })
+        assertEquals(listOf("dep-1", "dep-2"), prepared.map { it.departureId })
+    }
+
+    @Test
+    fun `the two earliest relevant departures are selected, filtering and sorting before the limit`() {
+        // An earlier departure that doesn't match the routine's transport mode must not
+        // occupy one of the two slots, and the two matching departures must still come
+        // back in chronological order despite being supplied out of order.
+        val earlierButWrongMode = departure(
+            departureId = "wrong-mode",
+            line = line(transportMode = TransportMode.METRO),
+            scheduledTime = now.plusSeconds(10),
+        )
+        val third = departure(departureId = "third", scheduledTime = now.plusSeconds(900))
+        val second = departure(departureId = "second", scheduledTime = now.plusSeconds(300))
+        val first = departure(departureId = "first", scheduledTime = now.plusSeconds(60))
+
+        val prepared = LiveDeparturesProcessor.prepare(
+            result(earlierButWrongMode, third, second, first),
+            routine(transportMode = TransportMode.BUS),
+            now,
+        )
+
+        assertEquals(listOf("first", "second"), prepared.map { it.departureId })
     }
 
     // ---- Cancellation ----

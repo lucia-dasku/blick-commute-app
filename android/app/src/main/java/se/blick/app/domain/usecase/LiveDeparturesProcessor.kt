@@ -17,14 +17,14 @@ import java.time.Instant
  */
 object LiveDeparturesProcessor {
 
-    private const val MAX_RESULTS = 3
+    private const val MAX_DEPARTURES = 2
     private const val SECONDS_PER_MINUTE = 60L
 
     /**
      * Filters [result]'s departures to those matching [routine] (transport mode always;
      * line and direction only when the routine has pinned a specific value), drops any
      * whose [Departure.effectiveTime] is before [now], sorts the remainder by effective
-     * time ascending, and returns at most the next three — each converted to a
+     * time ascending, and returns at most the next two — each converted to a
      * [PreparedDeparture] with a countdown computed relative to [now].
      *
      * Cancelled departures are deliberately never filtered out here: a future cancelled
@@ -39,7 +39,7 @@ object LiveDeparturesProcessor {
             .filter { routine.directionCode == null || it.directionCode == routine.directionCode }
             .filter { !it.effectiveTime.isBefore(now) }
             .sortedBy { it.effectiveTime }
-            .take(MAX_RESULTS)
+            .take(MAX_DEPARTURES)
             .map { it.toPrepared(now) }
             .toList()
 
