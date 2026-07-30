@@ -192,13 +192,12 @@ positive on the already permission-guarded notification post, and two
 `context.getString()` calls inside non-composable callbacks flagged for potential
 staleness across configuration changes — all now fixed.
 
-**Two further work sessions after the 193-test baseline above have added substantially
-more JVM and instrumented source — 258 JVM `@Test` functions and 12 instrumented
-`@Test` functions exist in source as of this update. None of the 65 JVM tests or 3
-instrumented tests beyond the 193/9 baseline have been compiled or run yet, in this
-environment or on the project owner's machine — they are new source only. The
-193-JVM-test/`lintDebug`/`assembleDebug` run described above remains the last real,
-executed validation.**
+**Two further work sessions after the 193-test baseline above added substantially more
+JVM and instrumented source before any of it had been compiled or run — 258 JVM
+`@Test` functions and 12 instrumented `@Test` functions existed in source only, with
+none of the 65 JVM tests or 3 instrumented tests beyond the 193/9 baseline yet
+validated.** That gap has since been closed: see "Full verification pass" below for
+what running all of it for the first time actually found.
 
 The first of those two sessions (the WorkManager-scheduling milestone: restored
 Add-routine FAB, Routine Details 30-second auto-refresh, production
@@ -237,32 +236,71 @@ directions); and the existing `RoutineListScreenTest` instrumented cases were ex
 from 3 to 6 to cover the one-routine explanation dialog. That is 23 further JVM tests
 and 3 further instrumented tests, for the 258 JVM / 12 instrumented total stated above.
 
-**The environment used to prepare and edit this repository cannot run that Gradle build
-itself.** It has only a JRE (not a JDK) at Java 11, no Android SDK, and no network path
-to `services.gradle.org` to provision either one, so `assembleDebug`, `lintDebug`, and
-`testDebugUnitTest` could not be executed from it directly (confirmed again during the
-correction pass: `./gradlew --version` still fails with `UnknownHostException:
-services.gradle.org`). The 193-test validation above was performed locally, in Android
-Studio, by the project owner — not from this environment. AGP 9.2.1 requires a JDK 17+
-with `javac`. On a machine with a real JDK 17 and Android SDK (or Android Studio, which
-provides both), build with:
+On a machine with a real JDK 17 and Android SDK (or Android Studio, which provides
+both), build with:
 
 ```
 cd android
 ./gradlew assembleDebug              # requires a local Android SDK (Android Studio, or `sdkmanager`)
 ./gradlew lintDebug                  # static analysis
 ./gradlew testDebugUnitTest          # JVM unit tests (RoutineCreateViewModelTest, RoutineDetailsViewModelTest, RoutineListViewModelTest, RoutineMappersTest, ...)
-./gradlew connectedDebugAndroidTest  # instrumented Room DAO + RoutineListScreenTest (Compose UI), needs a device/emulator
+./gradlew connectedDebugAndroidTest  # instrumented: Room DAOs (RoutineDaoTest, StaleSnapshotDaoTest) + RoutineListScreenTest (Compose UI), needs a device/emulator
 ```
 
 The Gradle wrapper (`gradlew`, `gradlew.bat`, `gradle/wrapper/gradle-wrapper.jar`,
 `gradle-wrapper.properties` with `distributionSha256Sum`) is fully committed, so a fresh
 clone builds without Android Studio or a pre-existing local Gradle install.
 
+### Full verification pass
+
+A complete local run — `testDebugUnitTest`, `lintDebug`, `assembleDebug`, and
+`connectedDebugAndroidTest` on the physical Lenovo TB350FU (Android 14) referenced
+above — has since been completed, using Android Studio's own bundled JDK. All 260 JVM
+`@Test` functions and all 21 instrumented `@Test` functions pass; `lintDebug` reports 0
+errors; the debug APK builds and installs; and the ongoing-notification loop, the
+routine details live-preview, and full routine management were all exercised manually
+on that same device.
+
+Actually compiling and running the 65 JVM / 3 instrumented tests that had only existed
+as source (see above) surfaced three genuine issues, all now fixed:
+
+- `RoutineListScreenTest` imported `assertExists`/`assertDoesNotExist` as top-level
+  functions; in the Compose UI testing version this project pins, both are member
+  methods on `SemanticsNodeInteraction` instead, so the imports themselves were invalid.
+- `POST_NOTIFICATIONS` (API 33+) is a dangerous runtime permission — declaring it in the
+  manifest does not grant it, matching real first-install device behavior, so
+  Robolectric denies it by default. Most of `RoutineNotificationBuilderTest`'s
+  Robolectric suites assumed it was already granted; only the two tests specifically
+  about the permission itself accounted for the default-denied state. Fixed with a
+  default grant in `@Before`, leaving those two tests free to still exercise the
+  missing-permission path explicitly.
+- `WorkManagerRoutineSchedulerTest`'s shared fake "now" coincided exactly with the
+  default test routine's start time — which `WorkManagerRoutineScheduler` correctly
+  treats as "already active" (`Duration.ZERO` delay), running the worker immediately
+  and synchronously under that test class's `SynchronousExecutor` harness, where it
+  then failed with no Hilt component present. Separately, three timing assertions
+  compared `WorkInfo.nextScheduleTimeMillis` (WorkManager's own real-wall-clock enqueue
+  time plus the requested delay) against an absolute instant computed from a fake,
+  fixed-in-the-past `Clock` — structurally never equal. Both fixed; see this file's own
+  git history for the exact commits.
+
+That same verification pass also caught a real production bug no amount of source
+review had: enabling a routine never produced the automatic background notification,
+silently, regardless of settings. `RoutineActiveWindowWorker` is a `@HiltWorker`, and
+WorkManager was falling back to its plain reflection-based `WorkerFactory` and crashing
+on the worker's real (dependency-injected) constructor every single time it was due to
+run — with no UI attached to a background worker to ever surface that crash. Root
+cause: `@HiltWorker`'s own dependency-binding codegen requires the
+`androidx.hilt:hilt-compiler` annotation processor specifically, a separate Maven
+artifact from `com.google.dagger:hilt-android-compiler` (already applied here for
+`@HiltViewModel`) despite the near-identical name — and it had never been added
+alongside `hilt-work`. Fixed by declaring it as an additional `ksp(...)` processor in
+`app/build.gradle.kts` (see `gradle/libs.versions.toml`'s `androidx-hilt-compiler` entry
+for the full account, including how the missing generated binding was confirmed).
+
 `.github/workflows/android-ci.yml` runs `assembleDebug`/`lintDebug`/`testDebugUnitTest`
-on a real JDK 17 + Android SDK runner on every push — this is the genuine build
-verification that couldn't happen while preparing the repository. Its runs have caught
-three real issues so far, exactly what that workflow is there to catch:
+on a real JDK 17 + Android SDK runner on every push. Its runs have caught three further
+real issues, exactly what that workflow is there to catch:
 
 - Hilt's Gradle plugin needing 2.59+ for AGP 9 support (see the version table above).
 - A missing explicit `com.squareup.okhttp3:okhttp` dependency — `NetworkModule.kt` uses

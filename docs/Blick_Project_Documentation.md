@@ -16,27 +16,38 @@ that end-state design in the present tense, as a specification does — they are
 a claim that all of it already exists. This section is the authoritative summary of
 what is actually built today; where the two disagree, this section wins.
 
-**Validation status of this update, stated plainly up front:** the previously-committed
-baseline (193 JVM unit tests, `lintDebug` with 0 errors/37 warnings, `assembleDebug`
-producing a debug APK) was locally run and passed on the user's machine, and none of
-that source was redone. Two further work sessions since then have added new source
-without a fresh Gradle run: first, the FAB restoration, the Routine Details 30-second
-auto-refresh, the production notification-permission flow, and the
-`WorkManagerRoutineScheduler` / `RoutineActiveWindowWorker` scheduling-and-notification-loop
-implementation (42 new JVM `@Test` functions, 3 new instrumented Compose UI `@Test`
-functions); then a corrective audit session fixing a device-local-timezone scheduling
-bug, sharing one notification-availability check across the notifier/worker/UI, making
-the Routine Details notification-status hint refresh on every lifecycle resume, and
-replacing the one-routine FAB's "open then block" flow with an in-place explanation
-dialog (a further 23 JVM `@Test` functions, 3 further instrumented `@Test` functions).
-**258 JVM `@Test` functions and 12 instrumented `@Test` functions exist in source as of
-this update, but only the original 193 JVM tests have actually been compiled and
-executed in a real Gradle run.** The user still needs to run `./gradlew
-testDebugUnitTest lintDebug assembleDebug` (and the instrumented
-`connectedDebugAndroidTest` task, plus the manual device checks listed in
-`android/README.md`) before any of the remaining 65 JVM / 12 instrumented tests can be
-considered verified. Do not read "258 tests" anywhere in this document as "258 tests
-passed" — only 193 have actually been run.
+**Validation status of this update, stated plainly up front:** a complete local run —
+`testDebugUnitTest`, `lintDebug`, `assembleDebug`, and `connectedDebugAndroidTest` on a
+physical Lenovo TB350FU (Android 14) — has now passed in full: all 260 JVM `@Test`
+functions and all 21 instrumented `@Test` functions, `lintDebug` with 0 errors, and a
+working debug APK, with the ongoing-notification loop, routine details live-preview,
+and full routine management additionally exercised manually on that same device.
+
+Getting there took three work sessions of source beyond the earlier 193-JVM-test
+baseline. First: the FAB restoration, the Routine Details 30-second auto-refresh, the
+production notification-permission flow, and the `WorkManagerRoutineScheduler` /
+`RoutineActiveWindowWorker` scheduling-and-notification-loop implementation, plus a
+corrective audit fixing a device-local-timezone scheduling bug, sharing one
+notification-availability check across the notifier/worker/UI, making the Routine
+Details notification-status hint refresh on every lifecycle resume, and replacing the
+one-routine FAB's "open then block" flow with an in-place explanation dialog (together,
+65 new JVM `@Test` functions and 3 new instrumented ones, reaching 258 JVM / 12
+instrumented — all still unrun at that point). Then a verification session actually
+compiled and ran all of it for the first time, which surfaced and fixed three genuine
+test-suite issues (an invalid Compose-test-API import, a Robolectric runtime-permission
+default the tests hadn't accounted for, and a `WorkManager` test-timing assumption that
+could never hold) — and, more importantly, a real production bug no source review had
+caught: `RoutineActiveWindowWorker` (a `@HiltWorker`) was never actually receiving its
+injected dependencies, because the `androidx.hilt:hilt-compiler` annotation processor
+(distinct from `com.google.dagger:hilt-android-compiler`, already used here for
+`@HiltViewModel`) had never been added — so WorkManager silently fell back to its plain
+reflection-based factory and crashed on the worker's real constructor every time it was
+due to run, meaning **enabling a routine never produced the automatic background
+notification at all**, with nothing surfacing that failure anywhere a user could see it.
+Fixed by adding the missing processor (see `android/README.md`'s Build section for the
+full account). Finally, a further session added a dedicated `BOOT_COMPLETED` receiver
+and durable (Room-backed) stale-snapshot storage across process death, with their own
+tests, reaching the 260 JVM / 21 instrumented total now fully verified above.
 
 **Implemented today (Android client + backend):**
 
@@ -114,18 +125,24 @@ passed" — only 193 have actually been run.
   and the 30-second notification loop" in the architecture section below for exactly how
   this is built and what its real-world timing limitations are.
 
+**Now implemented, beyond the original plan for this milestone:**
+
+- A dedicated `BOOT_COMPLETED` receiver (`scheduling/BootCompletedReceiver`), alongside
+  `BlickApplication.onCreate()`'s existing process-start reconciliation and the
+  runtime-registered `ACTION_TIMEZONE_CHANGED` receiver — all three call the same
+  `RoutineScheduleReconciler.reconcileAll()`, which only ever enqueues WorkManager work;
+  it never starts a foreground service directly from the `BOOT_COMPLETED` broadcast
+  itself, so the "no `dataSync` foreground service directly from `BOOT_COMPLETED`"
+  restriction on modern Android (see the architecture section) is still respected —
+  WorkManager decides when the actual foreground worker later runs.
+- Persistent stale-data storage: the last successful departure snapshot used for the
+  `Stale` fallback is now Room-backed (`data/local/room/StaleSnapshotEntity.kt`), keyed
+  by routine id and scoped to the exact site/line/direction/mode that produced it, and
+  shared between the routine details screen and the background worker — it survives
+  process death, unlike the previous in-memory-only session scope.
+
 **Not yet implemented** (described in the sections below purely as the plan):
 
-- Scheduling reactions to a device reboot beyond ordinary process-death survival:
-  `BlickApplication.onCreate()` idempotently reschedules every enabled saved routine at
-  process start as a reconciliation safety net, and the same reconciliation now also
-  runs live on a device timezone change (a runtime-registered `ACTION_TIMEZONE_CHANGED`
-  receiver, so an already-enqueued occurrence is recomputed against the new local zone)
-  — but there is still no dedicated `BOOT_COMPLETED` receiver, and none is planned for
-  this milestone (a `dataSync` foreground service must not be started directly from
-  `BOOT_COMPLETED` on modern Android — see the architecture section).
-- Persistent stale-data storage beyond the current screen's or worker's in-memory
-  session — a stale snapshot is not written to disk and does not survive process death.
 - Notification action buttons, an "End now" control, and a home-screen widget.
 - Exact-time activation — see "Active-window scheduling" below for why this is
   deliberately best-effort, not exact.
@@ -476,19 +493,21 @@ minSdk = 26
 
 Build toolchain: Android Gradle Plugin 9.2.1 using AGP's built-in Kotlin (Kotlin 2.3.10, no separate `org.jetbrains.kotlin.android` plugin), Gradle 9.4.1, KSP 2.3.9. The Gradle wrapper (`gradlew`, `gradlew.bat`, `gradle-wrapper.jar`, and `gradle-wrapper.properties` with its distribution SHA-256 checksum) is committed, so a fresh clone can build without a pre-existing local Gradle install. An earlier Android baseline (predating the ongoing-notification milestone) was successfully validated with a real local run — `assembleDebug` produced a debug APK, `lintDebug` completed with 0 errors, and `testDebugUnitTest` passed 117 JVM unit tests — on a machine with JDK 17 and the Android SDK. The notification-foundation implementation that followed, with 193 JVM source-level `@Test` functions, was itself later validated with a fresh local `./gradlew testDebugUnitTest lintDebug assembleDebug` run: `testDebugUnitTest` passed with no failures, `lintDebug` completed with 0 errors/37 warnings, and `assembleDebug` produced a debug APK. (This run also caught and fixed two real issues surfaced only by actually executing the notification code: a test assertion that could false-fail against a departure's own line designation rather than an actual countdown value, and two Android Lint findings — a `MissingPermission` false positive on the already-guarded notification post, and two `context.getString()` calls inside non-composable callbacks that Lint flagged for potential staleness across configuration changes, both resolved by resolving the strings once via `stringResource()` in composable scope.)
 
-That 193-test run remains the last one actually executed on the user's machine. The
-scheduling/active-window/permission-flow milestone added 42 further JVM `@Test`
-functions and 3 further instrumented Compose UI `@Test` functions (reaching 235 JVM /
-9 instrumented in source at the time); a subsequent corrective audit session fixing the
-device-local-timezone bug, the shared notification-availability check, the
-lifecycle-aware status refresh, and the explicit one-routine dialog added a further 23
-JVM `@Test` functions and 3 further instrumented `@Test` functions. **258 JVM `@Test`
-functions and 12 instrumented `@Test` functions exist in source as of this update** —
-none of the 65 JVM / 12 instrumented tests beyond the original 193/9 baseline have been
-compiled or run yet in this environment or on the user's machine. See
-`android/README.md` for the exact toolchain versions, rationale, and the up-to-date
-per-file test breakdown, and see "Validation status of this update" at the top of this
-document for what still needs to be run before these numbers can be called passing.
+The scheduling/active-window/permission-flow milestone added 42 further JVM `@Test`
+functions and 3 further instrumented Compose UI `@Test` functions beyond the 193-test
+baseline (reaching 235 JVM / 9 instrumented in source at the time); a subsequent
+corrective audit session fixing the device-local-timezone bug, the shared
+notification-availability check, the lifecycle-aware status refresh, and the explicit
+one-routine dialog added a further 23 JVM `@Test` functions and 3 further instrumented
+`@Test` functions, reaching 258 JVM / 12 instrumented. All of that was subsequently
+compiled and run for the first time, together with a further session's `BOOT_COMPLETED`
+receiver and durable stale-snapshot storage (adding 2 JVM and 9 instrumented tests) —
+**260 JVM `@Test` functions and 21 instrumented `@Test` functions now exist in source,
+and all of them pass.** See `android/README.md`'s Build section for the exact toolchain
+versions, the up-to-date per-file test breakdown, and the real issues that first full
+run found and fixed (including a genuine production bug, not just test-suite
+corrections), and see "Validation status of this update" at the top of this document
+for the summary.
 
 ### Backend
 
@@ -855,8 +874,11 @@ Once a window is active, `RoutineActiveWindowWorker.doWork()`:
 If a network fetch fails after an earlier successful one inside the same window, the
 existing stale/offline semantics apply (no extra alert; the same notification reflects
 the last known departures with an appropriate stale indication) and the next 30-second
-tick retries. A stale snapshot is not persisted beyond that one worker run — it does
-not survive process death, matching the current explicitly-scoped limitation.
+tick retries. That stale snapshot is Room-backed (`StaleSnapshotRepository`), keyed by
+routine id and scoped to the exact departure identity that produced it, and shared with
+the routine details screen — it survives process death rather than being scoped to one
+worker run, and either the worker's or the screen's own successful fetch can serve as
+the other's fallback.
 
 Terminal handling is deliberately three-way: normal completion, a handled failure (for
 example building the foreground notification or posting an update throws), and a late
@@ -873,8 +895,12 @@ cancelled work to be rescheduled or resurrected.
 WorkManager persists scheduled work through ordinary process death and device reboot on
 its own. `BlickApplication.onCreate()` additionally reschedules every enabled saved
 routine at process start, as an idempotent reconciliation safety net — this is not the
-primary scheduling path and does not start a foreground service directly from
-`BOOT_COMPLETED` (restricted on modern Android; see [Restrictions on background
+primary scheduling path. A dedicated `BootCompletedReceiver` runs that same
+reconciliation directly on `ACTION_BOOT_COMPLETED`, as a further backstop for a reboot
+after which the app process never happens to start on its own before a routine's next
+window would have opened; it only ever enqueues WorkManager work from that receiver and
+does not start a foreground service directly from `BOOT_COMPLETED` (restricted on modern
+Android; see [Restrictions on background
 starts](https://developer.android.com/develop/background-work/services/fgs/restrictions-bg-start)).
 
 ### What remains best-effort, not exact
