@@ -9,13 +9,16 @@ This is a scaffold, not a feature-complete app. Implemented: package structure, 
 config, Compose navigation, Material 3 theme, Room (routines) + Preferences DataStore
 (small settings) wiring, Hilt DI, repository/API client interfaces with real
 DTO↔domain mapping, the routine-creation wizard (`ui/screens/routinecreate`, with its
-own error/retry handling and regression tests), and the live-departure engine
+own error/retry handling and regression tests), the live-departure engine
 (`domain/usecase/GetLiveDeparturesUseCase` + `LiveDeparturesProcessor` — fetches, filters,
-and prepares the next relevant departures for a saved routine; not yet wired into any
-screen). **Not implemented**: the routine live-preview screen, notifications, scheduling
+and prepares the next two relevant departures for a saved routine), and the routine
+details/live-preview screen (`ui/screens/routinedetails` — loads one saved routine and
+shows its next departures with a manual, foreground-only Refresh action; no periodic
+background refresh). **Not implemented**: editing a routine's fields, enable/disable and
+pause-today controls, notifications (and their permission onboarding), scheduling
 (`WorkManager`/foreground service), persistent stale-data storage, and the widget — see
-`notification/`, `scheduling/`, and `RoutineEditScreen`/`RoutineListScreen` for the
-interfaces those will be built behind.
+`notification/`, `scheduling/`, and `RoutineListScreen` for the interfaces those will be
+built behind.
 
 ## Pinned versions and why
 

@@ -6,7 +6,7 @@ import androidx.navigation.compose.NavHost
 import androidx.navigation.compose.composable
 import androidx.navigation.compose.rememberNavController
 import se.blick.app.ui.screens.routinecreate.RoutineCreateScreen
-import se.blick.app.ui.screens.routineedit.RoutineEditScreen
+import se.blick.app.ui.screens.routinedetails.RoutineDetailsScreen
 import se.blick.app.ui.screens.routinelist.RoutineListScreen
 
 @Composable
@@ -15,15 +15,17 @@ fun BlickNavHost(navController: NavHostController = rememberNavController()) {
         composable(Routes.RoutineList.route) {
             RoutineListScreen(
                 onAddRoutine = { navController.navigate(Routes.RoutineCreate.route) },
-                onOpenRoutine = { routineId -> navController.navigate(Routes.RoutineEdit.routeFor(routineId)) },
+                onOpenRoutine = { routineId -> navController.navigate(Routes.RoutineDetails.routeFor(routineId)) },
             )
         }
         composable(Routes.RoutineCreate.route) {
             RoutineCreateScreen(onDone = { navController.popBackStack() })
         }
-        composable(Routes.RoutineEdit.route) { backStackEntry ->
-            val routineId = backStackEntry.arguments?.getString(Routes.RoutineEdit.ARG_ROUTINE_ID).orEmpty()
-            RoutineEditScreen(routineId = routineId, onDone = { navController.popBackStack() })
+        composable(Routes.RoutineDetails.route) {
+            // routineId is read by RoutineDetailsViewModel from its injected SavedStateHandle
+            // (auto-populated by Hilt Navigation Compose from this destination's back stack
+            // entry) rather than being threaded through as a screen parameter.
+            RoutineDetailsScreen(onBack = { navController.popBackStack() })
         }
     }
 }

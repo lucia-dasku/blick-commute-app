@@ -7,8 +7,30 @@
     <string name="routine_list_add">Add routine</string>
 
     <string name="routine_create_title">New routine</string>
-    <string name="routine_edit_title">Edit routine</string>
     <string name="action_back">Back</string>
+
+    <string name="routine_details_title">Routine details</string>
+    <string name="routine_details_mode_label">Transport mode</string>
+    <string name="routine_details_line_label">Line</string>
+    <string name="routine_details_direction_label">Direction</string>
+    <string name="routine_details_time_label">Time window</string>
+    <string name="routine_details_status_label">Status</string>
+    <string name="routine_details_status_enabled">Enabled</string>
+    <string name="routine_details_status_disabled">Disabled</string>
+    <string name="routine_details_status_paused_today">Paused today</string>
+    <string name="routine_details_departures_heading">Next departures</string>
+    <string name="routine_details_refresh_action">Refresh</string>
+    <string name="routine_details_not_found">This routine could not be found. It may have been deleted.</string>
+    <string name="routine_details_no_departures">No upcoming departures right now.</string>
+    <!-- Deliberately generic, same rationale as RoutineCreateViewModel's error strings:
+         never interpolate the raw exception/hostname/class name here. -->
+    <string name="routine_details_offline">Couldn\'t reach the server. Check your connection and try again.</string>
+    <string name="routine_details_unavailable">Couldn\'t load departures right now. Try again in a moment.</string>
+    <string name="routine_details_stale_warning">Showing the last departures we could load — couldn\'t refresh just now.</string>
+    <string name="routine_details_departure_live">Live</string>
+    <string name="routine_details_departure_scheduled">Scheduled</string>
+    <string name="routine_details_departure_cancelled">Cancelled</string>
+    <string name="routine_details_minutes_remaining">%1$d min</string>
 
     <string name="routine_create_step_stop">Step 1 of 4 — Choose a stop</string>
     <string name="routine_create_step_mode">Step 2 of 4 — Choose a transport mode</string>
