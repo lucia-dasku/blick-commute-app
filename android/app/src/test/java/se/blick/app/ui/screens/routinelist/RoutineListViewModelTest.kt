@@ -70,7 +70,18 @@ class RoutineListViewModelTest {
 
         override suspend fun pauseForDate(id: String, date: LocalDate) {
             pausedIds += id to date
+            state.value = state.value.map { if (it.id == id) it.copy(pausedDate = date) else it }
         }
+
+        override suspend fun clearPause(id: String) {
+            state.value = state.value.map { if (it.id == id) it.copy(pausedDate = null) else it }
+        }
+
+        override suspend fun setEnabled(id: String, enabled: Boolean) {
+            state.value = state.value.map { if (it.id == id) it.copy(enabled = enabled) else it }
+        }
+
+        override suspend fun hasAnyRoutine(): Boolean = state.value.isNotEmpty()
     }
 
     @Test

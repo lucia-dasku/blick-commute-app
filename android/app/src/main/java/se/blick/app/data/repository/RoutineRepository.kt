@@ -12,4 +12,15 @@ interface RoutineRepository {
 
     /** "Pause for today" control from the product doc's daily-operation flow. */
     suspend fun pauseForDate(id: String, date: java.time.LocalDate)
+
+    /** Clears a routine's pausedDate (a no-op, no write, if already null) — used for both
+     * "resume today" and automatic expired-pause cleanup. */
+    suspend fun clearPause(id: String)
+
+    /** Targeted enable/disable write — never touches pausedDate or any other field. */
+    suspend fun setEnabled(id: String, enabled: Boolean)
+
+    /** First-beta one-routine limit check (see RoutineCreateViewModel/RoutineListScreen):
+     * a single source of truth so the create flow and the list UI cannot disagree. */
+    suspend fun hasAnyRoutine(): Boolean
 }

@@ -11,14 +11,19 @@ config, Compose navigation, Material 3 theme, Room (routines) + Preferences Data
 DTO↔domain mapping, the routine-creation wizard (`ui/screens/routinecreate`, with its
 own error/retry handling and regression tests), the live-departure engine
 (`domain/usecase/GetLiveDeparturesUseCase` + `LiveDeparturesProcessor` — fetches, filters,
-and prepares the next two relevant departures for a saved routine), and the routine
+and prepares the next two relevant departures for a saved routine), the routine
 details/live-preview screen (`ui/screens/routinedetails` — loads one saved routine and
 shows its next departures with a manual, foreground-only Refresh action; no periodic
-background refresh). **Not implemented**: editing a routine's fields, enable/disable and
-pause-today controls, notifications (and their permission onboarding), scheduling
-(`WorkManager`/foreground service), persistent stale-data storage, and the widget — see
-`notification/`, `scheduling/`, and `RoutineListScreen` for the interfaces those will be
-built behind.
+background refresh), and routine management: editing an existing routine (same
+wizard/ViewModel as creation, reached via the `routine-edit/{routineId}` route — see
+`RoutineCreateViewModel`'s edit-mode support), enable/disable, pause-today/resume-today
+(with automatic cleanup of an expired pause on load), delete (with an in-screen Material3
+confirmation dialog), and a first-beta one-routine limit enforced at the app/UI level (the
+"Add routine" FAB hides once a routine exists; the create flow also blocks saving a second
+one directly). **Not implemented**: notifications (and their permission onboarding),
+scheduling (`WorkManager`/foreground service), persistent stale-data storage, and the
+widget — see `notification/` and `scheduling/` for the interfaces those will be built
+behind.
 
 ## Pinned versions and why
 
@@ -119,7 +124,7 @@ provides both), build with:
 cd android
 ./gradlew assembleDebug              # requires a local Android SDK (Android Studio, or `sdkmanager`)
 ./gradlew lintDebug                  # static analysis
-./gradlew testDebugUnitTest          # JVM unit tests (RoutineListViewModelTest, RoutineMappersTest)
+./gradlew testDebugUnitTest          # JVM unit tests (RoutineCreateViewModelTest, RoutineDetailsViewModelTest, RoutineListViewModelTest, RoutineMappersTest, ...)
 ./gradlew connectedDebugAndroidTest  # instrumented Room DAO test, needs a device/emulator
 ```
 

@@ -41,9 +41,11 @@ import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
+import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.platform.LocalLocale
 import androidx.compose.ui.res.stringResource
+import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.unit.dp
 import androidx.hilt.navigation.compose.hiltViewModel
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
@@ -77,10 +79,18 @@ fun RoutineCreateScreen(
     val handleBack: () -> Unit = { if (!viewModel.back()) onDone() }
     BackHandler(onBack = handleBack)
 
+    // Edit mode reuses this exact wizard (see RoutineCreateViewModel's class doc) but has
+    // three states the plain creation flow never does: still loading the existing routine,
+    // the navigated-to routine id no longer resolving to anything, and (create mode only)
+    // the first-beta one-routine limit blocking the flow outright. All three fully replace
+    // the wizard content below rather than trying to render alongside it.
+    val isBlocked = uiState.isLoadingExistingRoutine || uiState.existingRoutineNotFound ||
+        (uiState.oneRoutineLimitReached && !uiState.isEditMode)
+
     Scaffold(
         topBar = {
             TopAppBar(
-                title = { Text(stepTitle(uiState.step)) },
+                title = { Text(if (isBlocked) stringResource(R.string.routine_create_title) else stepTitle(uiState.step)) },
                 navigationIcon = {
                     IconButton(onClick = handleBack) {
                         Icon(Icons.AutoMirrored.Filled.ArrowBack, contentDescription = stringResource(R.string.action_back))
@@ -89,40 +99,71 @@ fun RoutineCreateScreen(
             )
         },
     ) { padding ->
-        Column(Modifier.fillMaxSize().padding(padding).padding(16.dp)) {
-            LinearProgressIndicator(
-                progress = { (uiState.step.ordinal + 1) / 4f },
-                modifier = Modifier.fillMaxWidth(),
-            )
-            Spacer(Modifier.height(16.dp))
-            Box(Modifier.weight(1f).fillMaxWidth()) {
-                when (uiState.step) {
-                    RoutineCreateStep.STOP -> StopStep(
-                        uiState = uiState,
-                        onQueryChanged = viewModel::onSiteQueryChanged,
-                        onSelectSite = viewModel::selectSite,
-                        onRetryStopSearch = viewModel::retryStopSearch,
-                        onRetryDirections = viewModel::retryDirections,
-                    )
-                    RoutineCreateStep.TRANSPORT_MODE -> TransportModeStep(
-                        uiState = uiState,
-                        onSelectMode = viewModel::selectTransportMode,
-                    )
-                    RoutineCreateStep.DIRECTION -> DirectionStep(
-                        uiState = uiState,
-                        onSelectDirection = viewModel::selectDirection,
-                    )
-                    RoutineCreateStep.SCHEDULE -> ScheduleStep(
-                        uiState = uiState,
-                        onToggleDay = viewModel::toggleDay,
-                        onStartTimeChanged = viewModel::setStartTime,
-                        onEndTimeChanged = viewModel::setEndTime,
-                        onNameChanged = viewModel::setName,
-                        onSave = { viewModel.save(onDone) },
-                    )
+        when {
+            uiState.isLoadingExistingRoutine -> CenteredBox(Modifier.fillMaxSize().padding(padding)) {
+                CircularProgressIndicator()
+            }
+            uiState.existingRoutineNotFound -> CenteredBox(Modifier.fillMaxSize().padding(padding)) {
+                BlockedMessage(
+                    text = stringResource(R.string.routine_create_existing_not_found),
+                    onDone = onDone,
+                )
+            }
+            uiState.oneRoutineLimitReached && !uiState.isEditMode -> CenteredBox(Modifier.fillMaxSize().padding(padding)) {
+                BlockedMessage(
+                    text = stringResource(R.string.routine_create_limit_reached),
+                    onDone = onDone,
+                )
+            }
+            else -> Column(Modifier.fillMaxSize().padding(padding).padding(16.dp)) {
+                LinearProgressIndicator(
+                    progress = { (uiState.step.ordinal + 1) / 4f },
+                    modifier = Modifier.fillMaxWidth(),
+                )
+                Spacer(Modifier.height(16.dp))
+                Box(Modifier.weight(1f).fillMaxWidth()) {
+                    when (uiState.step) {
+                        RoutineCreateStep.STOP -> StopStep(
+                            uiState = uiState,
+                            onQueryChanged = viewModel::onSiteQueryChanged,
+                            onSelectSite = viewModel::selectSite,
+                            onRetryStopSearch = viewModel::retryStopSearch,
+                            onRetryDirections = viewModel::retryDirections,
+                        )
+                        RoutineCreateStep.TRANSPORT_MODE -> TransportModeStep(
+                            uiState = uiState,
+                            onSelectMode = viewModel::selectTransportMode,
+                        )
+                        RoutineCreateStep.DIRECTION -> DirectionStep(
+                            uiState = uiState,
+                            onSelectDirection = viewModel::selectDirection,
+                        )
+                        RoutineCreateStep.SCHEDULE -> ScheduleStep(
+                            uiState = uiState,
+                            onToggleDay = viewModel::toggleDay,
+                            onStartTimeChanged = viewModel::setStartTime,
+                            onEndTimeChanged = viewModel::setEndTime,
+                            onNameChanged = viewModel::setName,
+                            onSave = { viewModel.save(onDone) },
+                        )
+                    }
                 }
             }
         }
+    }
+}
+
+@Composable
+private fun CenteredBox(modifier: Modifier = Modifier, content: @Composable () -> Unit) {
+    Box(modifier, contentAlignment = Alignment.Center) { content() }
+}
+
+@Composable
+private fun BlockedMessage(text: String, onDone: () -> Unit) {
+    Column(horizontalAlignment = Alignment.CenterHorizontally) {
+        Text(text, textAlign = TextAlign.Center)
+        Spacer(Modifier.height(12.dp))
+        Button(onClick = onDone) { Text(stringResource(R.string.action_back)) }
     }
 }
 

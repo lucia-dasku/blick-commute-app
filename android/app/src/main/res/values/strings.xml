@@ -32,6 +32,22 @@
     <string name="routine_details_departure_cancelled">Cancelled</string>
     <string name="routine_details_minutes_remaining">%1$d min</string>
 
+    <string name="routine_details_actions_heading">Manage routine</string>
+    <string name="routine_details_edit_action">Edit routine</string>
+    <string name="routine_details_enable_action">Enable routine</string>
+    <string name="routine_details_disable_action">Disable routine</string>
+    <!-- Deliberately generic, same rationale as RoutineCreateViewModel's error strings. -->
+    <string name="routine_details_enable_action_failed">Couldn\'t update the routine. Try again.</string>
+    <string name="routine_details_pause_today_action">Pause today</string>
+    <string name="routine_details_resume_today_action">Resume today</string>
+    <string name="routine_details_pause_action_failed">Couldn\'t update the pause. Try again.</string>
+    <string name="routine_details_delete_action">Delete routine</string>
+    <string name="routine_details_delete_action_failed">Couldn\'t delete the routine. Try again.</string>
+    <string name="routine_details_delete_dialog_title">Delete routine?</string>
+    <string name="routine_details_delete_dialog_body">This will permanently delete \"%1$s\" (%2$s). This can\'t be undone.</string>
+    <string name="routine_details_delete_dialog_confirm">Delete</string>
+    <string name="routine_details_delete_dialog_cancel">Cancel</string>
+
     <string name="routine_create_step_stop">Step 1 of 4 — Choose a stop</string>
     <string name="routine_create_step_mode">Step 2 of 4 — Choose a transport mode</string>
     <string name="routine_create_step_direction">Step 3 of 4 — Choose a line and direction</string>
@@ -58,6 +74,8 @@
     <string name="routine_create_error_time_range">End time must be after start time.</string>
     <string name="routine_create_save">Save routine</string>
     <string name="routine_create_save_error">Couldn\'t save your routine. Check your connection and try again.</string>
+    <string name="routine_create_existing_not_found">This routine could not be found. It may have already been deleted.</string>
+    <string name="routine_create_limit_reached">You can only have one routine during this beta. Delete your existing routine before creating a new one.</string>
 
     <string name="transport_mode_bus">Bus</string>
     <string name="transport_mode_metro">Metro</string>

@@ -1,5 +1,6 @@
 package se.blick.app.ui.screens.routinecreate
 
+import androidx.lifecycle.SavedStateHandle
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.CompletableDeferred
 import kotlinx.coroutines.Dispatchers
@@ -23,6 +24,7 @@ import se.blick.app.data.repository.StopRepository
 import se.blick.app.domain.model.CommuteRoutine
 import se.blick.app.domain.model.Site
 import se.blick.app.domain.model.TransportMode
+import se.blick.app.ui.navigation.Routes
 import java.time.DayOfWeek
 import java.time.LocalDate
 import java.time.LocalTime
@@ -144,20 +146,23 @@ class RoutineCreateViewModelTest {
 
     // ---- RoutineRepository fakes ----
 
-    private class FakeRoutineRepository : RoutineRepository {
+    private class FakeRoutineRepository(initial: List<CommuteRoutine> = emptyList()) : RoutineRepository {
         val saved = mutableListOf<CommuteRoutine>()
-        private val state = MutableStateFlow<List<CommuteRoutine>>(emptyList())
+        private val state = MutableStateFlow(initial)
 
         override fun observeAll(): Flow<List<CommuteRoutine>> = state
         override suspend fun getById(id: String): CommuteRoutine? = state.value.find { it.id == id }
         override suspend fun save(routine: CommuteRoutine) {
             saved += routine
-            state.value = state.value + routine
+            state.value = state.value.filterNot { it.id == routine.id } + routine
         }
         override suspend fun delete(id: String) {
             state.value = state.value.filterNot { it.id == id }
         }
         override suspend fun pauseForDate(id: String, date: LocalDate) = Unit
+        override suspend fun clearPause(id: String) = Unit
+        override suspend fun setEnabled(id: String, enabled: Boolean) = Unit
+        override suspend fun hasAnyRoutine(): Boolean = state.value.isNotEmpty()
     }
 
     /** Always throws on save — for testing the pure save-failure path. */
@@ -171,6 +176,9 @@ class RoutineCreateViewModelTest {
         }
         override suspend fun delete(id: String) = Unit
         override suspend fun pauseForDate(id: String, date: LocalDate) = Unit
+        override suspend fun clearPause(id: String) = Unit
+        override suspend fun setEnabled(id: String, enabled: Boolean) = Unit
+        override suspend fun hasAnyRoutine(): Boolean = false
     }
 
     /** Always throws a real [CancellationException] from save — must propagate, not become saveFailed. */
@@ -180,6 +188,9 @@ class RoutineCreateViewModelTest {
         override suspend fun save(routine: CommuteRoutine): Unit = throw CancellationException("test cancellation")
         override suspend fun delete(id: String) = Unit
         override suspend fun pauseForDate(id: String, date: LocalDate) = Unit
+        override suspend fun clearPause(id: String) = Unit
+        override suspend fun setEnabled(id: String, enabled: Boolean) = Unit
+        override suspend fun hasAnyRoutine(): Boolean = false
     }
 
     /** Fails while [shouldFail] is true, succeeds once flipped off — for "failed, then retried
@@ -198,6 +209,9 @@ class RoutineCreateViewModelTest {
             state.value = state.value.filterNot { it.id == id }
         }
         override suspend fun pauseForDate(id: String, date: LocalDate) = Unit
+        override suspend fun clearPause(id: String) = Unit
+        override suspend fun setEnabled(id: String, enabled: Boolean) = Unit
+        override suspend fun hasAnyRoutine(): Boolean = false
     }
 
     /** Suspends on [save] until [release] is called — for proving overlapping save() calls
@@ -216,6 +230,9 @@ class RoutineCreateViewModelTest {
         }
         override suspend fun delete(id: String) = Unit
         override suspend fun pauseForDate(id: String, date: LocalDate) = Unit
+        override suspend fun clearPause(id: String) = Unit
+        override suspend fun setEnabled(id: String, enabled: Boolean) = Unit
+        override suspend fun hasAnyRoutine(): Boolean = false
         fun release() {
             gate.complete(Unit)
         }
@@ -225,7 +242,13 @@ class RoutineCreateViewModelTest {
         stops: StopRepository = FakeStopRepository(mapOf("Fru" to listOf(fruangen))),
         directions: DirectionOptionsSource = FakeDirectionOptionsSource(mapOf(9145L to listOf(busOption, metroOption))),
         routines: RoutineRepository = FakeRoutineRepository(),
-    ) = RoutineCreateViewModel(stops, directions, routines)
+        routineId: String? = null,
+    ) = RoutineCreateViewModel(
+        SavedStateHandle(routineId?.let { mapOf(Routes.RoutineEdit.ARG_ROUTINE_ID to it) } ?: emptyMap()),
+        stops,
+        directions,
+        routines,
+    )
 
     /** Selects [fruangen], advances past its (successful, non-empty) direction lookup, sets
      * a valid direction/schedule so [RoutineCreateUiState.canSave] is true. Shared setup for
@@ -680,5 +703,268 @@ class RoutineCreateViewModelTest {
 
         assertEquals(1, routines.saved.size)
         assertFalse(vm.uiState.value.isSaving)
+    }
+
+    // ---- Edit mode ----
+
+    private fun existingRoutine(
+        id: String = "existing-1",
+        lineId: Long? = 705,
+        lineDesignation: String? = "705",
+        transportMode: TransportMode = TransportMode.BUS,
+        directionCode: Int? = 1,
+        destinationLabel: String? = "Segeltorp",
+        enabled: Boolean = true,
+        pausedDate: LocalDate? = null,
+    ) = CommuteRoutine(
+        id = id,
+        name = "Morning commute",
+        siteId = fruangen.siteId,
+        siteName = fruangen.name,
+        transportMode = transportMode,
+        lineId = lineId,
+        lineDesignation = lineDesignation,
+        directionCode = directionCode,
+        destinationLabel = destinationLabel,
+        activeDays = setOf(DayOfWeek.MONDAY, DayOfWeek.WEDNESDAY),
+        startTime = LocalTime.of(7, 30),
+        endTime = LocalTime.of(8, 30),
+        enabled = enabled,
+        pausedDate = pausedDate,
+    )
+
+    @Test
+    fun `edit mode loads the routine by navigation id and pre-fills every editable value`() = runTest(dispatcher) {
+        val routine = existingRoutine()
+        val routines = FakeRoutineRepository(listOf(routine))
+        val vm = viewModel(routines = routines, routineId = routine.id)
+        dispatcher.scheduler.advanceUntilIdle()
+
+        val state = vm.uiState.value
+        assertTrue(state.isEditMode)
+        assertFalse(state.isLoadingExistingRoutine)
+        assertFalse(state.existingRoutineNotFound)
+        assertEquals(fruangen.siteId, state.selectedSite?.siteId)
+        assertEquals(TransportMode.BUS, state.selectedTransportMode)
+        assertEquals(705L, state.selectedDirection?.lineId)
+        assertEquals(1, state.selectedDirection?.directionCode)
+        assertEquals(setOf(DayOfWeek.MONDAY, DayOfWeek.WEDNESDAY), state.activeDays)
+        assertEquals(LocalTime.of(7, 30), state.startTime)
+        assertEquals(LocalTime.of(8, 30), state.endTime)
+        assertEquals("Morning commute", state.name)
+        assertEquals(RoutineCreateStep.SCHEDULE, state.step)
+    }
+
+    @Test
+    fun `a missing routine id in edit mode is reported without crashing`() = runTest(dispatcher) {
+        val routines = FakeRoutineRepository(emptyList())
+        val vm = viewModel(routines = routines, routineId = "does-not-exist")
+        dispatcher.scheduler.advanceUntilIdle()
+
+        assertTrue(vm.uiState.value.existingRoutineNotFound)
+        assertFalse(vm.uiState.value.isLoadingExistingRoutine)
+    }
+
+    @Test
+    fun `saving an edit updates the existing routine id instead of inserting a duplicate`() = runTest(dispatcher) {
+        val routine = existingRoutine()
+        val routines = FakeRoutineRepository(listOf(routine))
+        val vm = viewModel(routines = routines, routineId = routine.id)
+        dispatcher.scheduler.advanceUntilIdle()
+
+        vm.setStartTime(LocalTime.of(6, 0))
+        var saved = false
+        vm.save { saved = true }
+        dispatcher.scheduler.advanceUntilIdle()
+
+        assertTrue(saved)
+        // FakeRoutineRepository dedupes by id on save(); assert via getById + a single count.
+        assertEquals(routine.id, routines.getById(routine.id)?.id)
+        assertEquals(LocalTime.of(6, 0), routines.getById(routine.id)?.startTime)
+    }
+
+    @Test
+    fun `editing preserves enabled and pausedDate from the original routine`() = runTest(dispatcher) {
+        val today = LocalDate.of(2026, 7, 30)
+        val routine = existingRoutine(enabled = false, pausedDate = today)
+        val routines = FakeRoutineRepository(listOf(routine))
+        val vm = viewModel(routines = routines, routineId = routine.id)
+        dispatcher.scheduler.advanceUntilIdle()
+
+        vm.setName("Renamed commute")
+        var saved = false
+        vm.save { saved = true }
+        dispatcher.scheduler.advanceUntilIdle()
+
+        assertTrue(saved)
+        val updated = routines.getById(routine.id)
+        assertEquals(false, updated?.enabled)
+        assertEquals(today, updated?.pausedDate)
+        assertEquals("Renamed commute", updated?.name)
+    }
+
+    @Test
+    fun `validation still prevents saving an invalid edit`() = runTest(dispatcher) {
+        val routine = existingRoutine()
+        val routines = FakeRoutineRepository(listOf(routine))
+        val vm = viewModel(routines = routines, routineId = routine.id)
+        dispatcher.scheduler.advanceUntilIdle()
+
+        // Clearing every active day makes the routine invalid.
+        vm.toggleDay(DayOfWeek.MONDAY)
+        vm.toggleDay(DayOfWeek.WEDNESDAY)
+        assertFalse(vm.uiState.value.canSave)
+
+        var saved = false
+        vm.save { saved = true }
+        dispatcher.scheduler.advanceUntilIdle()
+
+        assertFalse(saved)
+    }
+
+    @Test
+    fun `changing station in edit mode clears the pre-filled mode and direction`() = runTest(dispatcher) {
+        val routine = existingRoutine()
+        // slussen must have its own (live, non-preselected) options for selectSite to land
+        // anywhere other than directionsEmpty -- distinct from fruangen's original bus line.
+        val directions = FakeDirectionOptionsSource(
+            mapOf(fruangen.siteId to listOf(busOption), slussen.siteId to listOf(metroOption)),
+        )
+        val routines = FakeRoutineRepository(listOf(routine))
+        val vm = viewModel(directions = directions, routines = routines, routineId = routine.id)
+        dispatcher.scheduler.advanceUntilIdle()
+        assertEquals(TransportMode.BUS, vm.uiState.value.selectedTransportMode)
+
+        vm.onSiteQueryChanged("Slu")
+        assertEquals(null, vm.uiState.value.selectedSite)
+        assertEquals(null, vm.uiState.value.selectedTransportMode)
+        assertEquals(null, vm.uiState.value.selectedDirection)
+
+        vm.selectSite(slussen)
+        dispatcher.scheduler.advanceUntilIdle()
+        // slussen's directions (metroOption) do not include the routine's original BUS line.
+        assertEquals(TransportMode.METRO, vm.uiState.value.selectedTransportMode)
+    }
+
+    @Test
+    fun `a saved direction no longer live is still shown and preselected via synthesis`() = runTest(dispatcher) {
+        // The live feed for this site currently only has the metro option running -- the
+        // routine's originally-saved bus line/direction isn't in today's forecast window.
+        val routine = existingRoutine()
+        val directions = FakeDirectionOptionsSource(mapOf(fruangen.siteId to listOf(metroOption)))
+        val routines = FakeRoutineRepository(listOf(routine))
+        val vm = viewModel(directions = directions, routines = routines, routineId = routine.id)
+        dispatcher.scheduler.advanceUntilIdle()
+
+        val state = vm.uiState.value
+        assertEquals(TransportMode.BUS, state.selectedTransportMode)
+        assertEquals(705L, state.selectedDirection?.lineId)
+        assertTrue(state.directionOptions.any { it.lineId == 705L })
+        assertTrue(state.directionOptions.any { it.lineId == metroOption.lineId })
+        assertFalse(state.directionsEmpty)
+    }
+
+    @Test
+    fun `repeated save taps while editing only persist once`() = runTest(dispatcher) {
+        val routine = existingRoutine()
+        val routines = FakeRoutineRepository(listOf(routine))
+        val vm = viewModel(routines = routines, routineId = routine.id)
+        dispatcher.scheduler.advanceUntilIdle()
+
+        // Both calls fire before the dispatcher advances, so the first has already flipped
+        // isSaving synchronously by the time the second is evaluated -- the ViewModel's own
+        // in-flight guard must block the second one, regardless of repository speed.
+        vm.save {}
+        vm.save {}
+        dispatcher.scheduler.advanceUntilIdle()
+
+        assertEquals(1, routines.saved.size)
+        assertFalse(vm.uiState.value.isSaving)
+    }
+
+    @Test
+    fun `a successful edit save triggers onSaved for navigation back`() = runTest(dispatcher) {
+        val routine = existingRoutine()
+        val routines = FakeRoutineRepository(listOf(routine))
+        val vm = viewModel(routines = routines, routineId = routine.id)
+        dispatcher.scheduler.advanceUntilIdle()
+
+        var navigatedBack = false
+        vm.save { navigatedBack = true }
+        dispatcher.scheduler.advanceUntilIdle()
+
+        assertTrue(navigatedBack)
+    }
+
+    /** Loads a real routine for editing (so save() actually reaches the edit-save path)
+     * but always fails on save -- for proving edit-mode save failures are handled the same
+     * friendly way as create-mode ones. */
+    private class FailingEditRoutineRepository(private val existing: CommuteRoutine) : RoutineRepository {
+        var saveCallCount = 0
+        override fun observeAll(): Flow<List<CommuteRoutine>> = MutableStateFlow(listOf(existing))
+        override suspend fun getById(id: String): CommuteRoutine? = existing.takeIf { it.id == id }
+        override suspend fun save(routine: CommuteRoutine) {
+            saveCallCount++
+            throw RuntimeException("boom")
+        }
+        override suspend fun delete(id: String) = Unit
+        override suspend fun pauseForDate(id: String, date: LocalDate) = Unit
+        override suspend fun clearPause(id: String) = Unit
+        override suspend fun setEnabled(id: String, enabled: Boolean) = Unit
+        override suspend fun hasAnyRoutine(): Boolean = true
+    }
+
+    @Test
+    fun `an edit save failure produces a friendly failure state, not a crash`() = runTest(dispatcher) {
+        val routine = existingRoutine()
+        val routines = FailingEditRoutineRepository(routine)
+        val vm = viewModel(routines = routines, routineId = routine.id)
+        dispatcher.scheduler.advanceUntilIdle()
+        assertFalse(vm.uiState.value.existingRoutineNotFound)
+
+        var saved = false
+        vm.save { saved = true }
+        dispatcher.scheduler.advanceUntilIdle()
+
+        assertFalse(saved)
+        assertTrue(vm.uiState.value.saveFailed)
+        assertFalse(vm.uiState.value.isSaving)
+        assertEquals(1, routines.saveCallCount)
+    }
+
+    // ---- One-routine beta limit ----
+
+    @Test
+    fun `create mode is available when no routine exists yet`() = runTest(dispatcher) {
+        val vm = viewModel(routines = FakeRoutineRepository(emptyList()))
+        dispatcher.scheduler.advanceUntilIdle()
+
+        assertFalse(vm.uiState.value.oneRoutineLimitReached)
+    }
+
+    @Test
+    fun `create mode is blocked once a routine already exists`() = runTest(dispatcher) {
+        val vm = viewModel(routines = FakeRoutineRepository(listOf(existingRoutine())))
+        dispatcher.scheduler.advanceUntilIdle()
+
+        assertTrue(vm.uiState.value.oneRoutineLimitReached)
+        assertFalse(vm.uiState.value.canSave)
+    }
+
+    @Test
+    fun `a direct save attempt cannot create a second routine once the limit is reached`() = runTest(dispatcher) {
+        val routines = FakeRoutineRepository(listOf(existingRoutine()))
+        val vm = viewModel(routines = routines)
+        dispatcher.scheduler.advanceUntilIdle()
+        vm.advanceToSaveReady()
+
+        var saved = false
+        vm.save { saved = true }
+        dispatcher.scheduler.advanceUntilIdle()
+
+        assertFalse(saved)
+        // save() must never have been called at all -- the guard short-circuits before
+        // reaching the repository, not merely after a failed write.
+        assertEquals(0, routines.saved.size)
     }
 }

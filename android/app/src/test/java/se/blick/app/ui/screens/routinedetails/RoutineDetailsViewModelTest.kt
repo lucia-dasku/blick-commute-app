@@ -7,6 +7,7 @@ import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.ExperimentalCoroutinesApi
 import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.MutableStateFlow
+import kotlinx.coroutines.flow.update
 import kotlinx.coroutines.test.StandardTestDispatcher
 import kotlinx.coroutines.test.resetMain
 import kotlinx.coroutines.test.runTest
@@ -108,16 +109,77 @@ class RoutineDetailsViewModelTest {
 
     // ---- RoutineRepository fakes ----
 
-    private class FakeRoutineRepository(private val routine: CommuteRoutine?) : RoutineRepository {
+    /** Mutable so action tests (enable/disable, pause/resume, delete, reload) can observe the
+     * effect of a write through a later [getById] call, not just via the ViewModel's own
+     * locally-merged copy. */
+    private class FakeRoutineRepository(initial: CommuteRoutine?) : RoutineRepository {
         var lastRequestedId: String? = null
-        override fun observeAll(): Flow<List<CommuteRoutine>> = MutableStateFlow(emptyList())
+        private val state = MutableStateFlow(initial)
+        val deletedIds = mutableListOf<String>()
+        val setEnabledCalls = mutableListOf<Pair<String, Boolean>>()
+        val pauseForDateCalls = mutableListOf<Pair<String, LocalDate>>()
+        val clearPauseCalls = mutableListOf<String>()
+
+        override fun observeAll(): Flow<List<CommuteRoutine>> = MutableStateFlow(listOfNotNull(state.value))
         override suspend fun getById(id: String): CommuteRoutine? {
             lastRequestedId = id
-            return routine?.takeIf { it.id == id }
+            return state.value?.takeIf { it.id == id }
         }
-        override suspend fun save(routine: CommuteRoutine) = Unit
-        override suspend fun delete(id: String) = Unit
-        override suspend fun pauseForDate(id: String, date: LocalDate) = Unit
+        override suspend fun save(routine: CommuteRoutine) {
+            state.value = routine
+        }
+        override suspend fun delete(id: String) {
+            deletedIds += id
+            if (state.value?.id == id) state.value = null
+        }
+        override suspend fun pauseForDate(id: String, date: LocalDate) {
+            pauseForDateCalls += id to date
+            state.update { current -> if (current?.id == id) current.copy(pausedDate = date) else current }
+        }
+        override suspend fun clearPause(id: String) {
+            clearPauseCalls += id
+            state.update { current -> if (current?.id == id) current.copy(pausedDate = null) else current }
+        }
+        override suspend fun setEnabled(id: String, enabled: Boolean) {
+            setEnabledCalls += id to enabled
+            state.update { current -> if (current?.id == id) current.copy(enabled = enabled) else current }
+        }
+        override suspend fun hasAnyRoutine(): Boolean = state.value != null
+    }
+
+    /** Always succeeds on [getById]/[save], but each of the four action writes can be
+     * independently forced to fail — for proving a write failure leaves the previously
+     * stored state untouched and surfaces a friendly, retryable failure flag instead of a
+     * raw exception. */
+    private class FailingActionRoutineRepository(
+        initial: CommuteRoutine,
+        private val failSetEnabled: Boolean = false,
+        private val failPauseForDate: Boolean = false,
+        private val failClearPause: Boolean = false,
+        private val failDelete: Boolean = false,
+    ) : RoutineRepository {
+        private val state = MutableStateFlow(initial)
+        override fun observeAll(): Flow<List<CommuteRoutine>> = MutableStateFlow(listOf(state.value))
+        override suspend fun getById(id: String): CommuteRoutine? = state.value.takeIf { it.id == id }
+        override suspend fun save(routine: CommuteRoutine) {
+            state.value = routine
+        }
+        override suspend fun delete(id: String) {
+            if (failDelete) throw RuntimeException("boom")
+        }
+        override suspend fun pauseForDate(id: String, date: LocalDate) {
+            if (failPauseForDate) throw RuntimeException("boom")
+            state.value = state.value.copy(pausedDate = date)
+        }
+        override suspend fun clearPause(id: String) {
+            if (failClearPause) throw RuntimeException("boom")
+            state.value = state.value.copy(pausedDate = null)
+        }
+        override suspend fun setEnabled(id: String, enabled: Boolean) {
+            if (failSetEnabled) throw RuntimeException("boom")
+            state.value = state.value.copy(enabled = enabled)
+        }
+        override suspend fun hasAnyRoutine(): Boolean = true
     }
 
     // ---- DepartureRepository fakes ----
@@ -374,5 +436,340 @@ class RoutineDetailsViewModelTest {
             (vm.uiState.value.departures as LiveDeparturesState.Live).snapshot.departures.map { it.departureId },
         )
         assertFalse(vm.uiState.value.isRefreshingDepartures)
+    }
+
+    // ---- Enable / disable ----
+
+    @Test
+    fun `an enabled routine can be disabled`() = runTest(dispatcher) {
+        val routine = sampleRoutine(enabled = true)
+        val repository = FakeRoutineRepository(routine)
+        val vm = viewModel(routine = routine, routines = repository)
+        dispatcher.scheduler.advanceUntilIdle()
+
+        vm.toggleEnabled()
+        dispatcher.scheduler.advanceUntilIdle()
+
+        assertEquals(false, vm.uiState.value.routine?.enabled)
+        assertEquals(listOf(routine.id to false), repository.setEnabledCalls)
+        assertFalse(vm.uiState.value.isTogglingEnabled)
+    }
+
+    @Test
+    fun `a disabled routine can be enabled`() = runTest(dispatcher) {
+        val routine = sampleRoutine(enabled = false)
+        val repository = FakeRoutineRepository(routine)
+        val vm = viewModel(routine = routine, routines = repository)
+        dispatcher.scheduler.advanceUntilIdle()
+
+        vm.toggleEnabled()
+        dispatcher.scheduler.advanceUntilIdle()
+
+        assertEquals(true, vm.uiState.value.routine?.enabled)
+        assertEquals(listOf(routine.id to true), repository.setEnabledCalls)
+    }
+
+    @Test
+    fun `toggling enabled never touches pausedDate`() = runTest(dispatcher) {
+        val today = LocalDate.now(clock)
+        val routine = sampleRoutine(pausedDate = today)
+        val repository = FakeRoutineRepository(routine)
+        val vm = viewModel(routine = routine, routines = repository)
+        dispatcher.scheduler.advanceUntilIdle()
+
+        vm.toggleEnabled()
+        dispatcher.scheduler.advanceUntilIdle()
+
+        assertEquals(today, vm.uiState.value.routine?.pausedDate)
+        assertTrue(vm.uiState.value.isPausedToday)
+        assertTrue(repository.pauseForDateCalls.isEmpty())
+        assertTrue(repository.clearPauseCalls.isEmpty())
+    }
+
+    @Test
+    fun `a failed enable-disable write leaves the stored state untouched with a friendly retryable failure`() = runTest(dispatcher) {
+        val routine = sampleRoutine(enabled = true)
+        val repository = FailingActionRoutineRepository(routine, failSetEnabled = true)
+        val vm = viewModel(routine = routine, routines = repository)
+        dispatcher.scheduler.advanceUntilIdle()
+
+        vm.toggleEnabled()
+        dispatcher.scheduler.advanceUntilIdle()
+
+        assertEquals(true, vm.uiState.value.routine?.enabled)
+        assertTrue(vm.uiState.value.enabledActionFailed)
+        assertFalse(vm.uiState.value.isTogglingEnabled)
+    }
+
+    @Test
+    fun `repeated enable-disable taps do not overlap`() = runTest(dispatcher) {
+        val routine = sampleRoutine(enabled = true)
+        val repository = FakeRoutineRepository(routine)
+        val vm = viewModel(routine = routine, routines = repository)
+        dispatcher.scheduler.advanceUntilIdle()
+
+        vm.toggleEnabled()
+        vm.toggleEnabled()
+        dispatcher.scheduler.advanceUntilIdle()
+
+        assertEquals(1, repository.setEnabledCalls.size)
+    }
+
+    // ---- Pause / resume today ----
+
+    @Test
+    fun `pause today stores today's date from the injected clock`() = runTest(dispatcher) {
+        val routine = sampleRoutine()
+        val repository = FakeRoutineRepository(routine)
+        val vm = viewModel(routine = routine, routines = repository)
+        dispatcher.scheduler.advanceUntilIdle()
+
+        vm.pauseToday()
+        dispatcher.scheduler.advanceUntilIdle()
+
+        val today = LocalDate.now(clock)
+        assertEquals(today, vm.uiState.value.routine?.pausedDate)
+        assertTrue(vm.uiState.value.isPausedToday)
+        assertEquals(listOf(routine.id to today), repository.pauseForDateCalls)
+    }
+
+    @Test
+    fun `resume today clears the pausedDate`() = runTest(dispatcher) {
+        val today = LocalDate.now(clock)
+        val routine = sampleRoutine(pausedDate = today)
+        val repository = FakeRoutineRepository(routine)
+        val vm = viewModel(routine = routine, routines = repository)
+        dispatcher.scheduler.advanceUntilIdle()
+        assertTrue(vm.uiState.value.isPausedToday)
+
+        vm.resumeToday()
+        dispatcher.scheduler.advanceUntilIdle()
+
+        assertEquals(null, vm.uiState.value.routine?.pausedDate)
+        assertFalse(vm.uiState.value.isPausedToday)
+        assertEquals(listOf(routine.id), repository.clearPauseCalls)
+    }
+
+    @Test
+    fun `pausing today never touches the enabled flag`() = runTest(dispatcher) {
+        val routine = sampleRoutine(enabled = false)
+        val repository = FakeRoutineRepository(routine)
+        val vm = viewModel(routine = routine, routines = repository)
+        dispatcher.scheduler.advanceUntilIdle()
+
+        vm.pauseToday()
+        dispatcher.scheduler.advanceUntilIdle()
+
+        assertEquals(false, vm.uiState.value.routine?.enabled)
+        assertTrue(repository.setEnabledCalls.isEmpty())
+    }
+
+    @Test
+    fun `a failed pause write leaves the stored state untouched with a friendly retryable failure`() = runTest(dispatcher) {
+        val routine = sampleRoutine()
+        val repository = FailingActionRoutineRepository(routine, failPauseForDate = true)
+        val vm = viewModel(routine = routine, routines = repository)
+        dispatcher.scheduler.advanceUntilIdle()
+
+        vm.pauseToday()
+        dispatcher.scheduler.advanceUntilIdle()
+
+        assertEquals(null, vm.uiState.value.routine?.pausedDate)
+        assertFalse(vm.uiState.value.isPausedToday)
+        assertTrue(vm.uiState.value.pauseActionFailed)
+        assertFalse(vm.uiState.value.isTogglingPause)
+    }
+
+    @Test
+    fun `repeated pause-resume taps do not overlap`() = runTest(dispatcher) {
+        val routine = sampleRoutine()
+        val repository = FakeRoutineRepository(routine)
+        val vm = viewModel(routine = routine, routines = repository)
+        dispatcher.scheduler.advanceUntilIdle()
+
+        vm.pauseToday()
+        vm.pauseToday()
+        dispatcher.scheduler.advanceUntilIdle()
+
+        assertEquals(1, repository.pauseForDateCalls.size)
+    }
+
+    // ---- Expired pause auto-cleanup ----
+
+    @Test
+    fun `an expired pausedDate is cleared automatically on load`() = runTest(dispatcher) {
+        val yesterday = LocalDate.now(clock).minusDays(1)
+        val routine = sampleRoutine(pausedDate = yesterday)
+        val repository = FakeRoutineRepository(routine)
+        val vm = viewModel(routine = routine, routines = repository)
+        dispatcher.scheduler.advanceUntilIdle()
+
+        assertEquals(null, vm.uiState.value.routine?.pausedDate)
+        assertFalse(vm.uiState.value.isPausedToday)
+        assertEquals(listOf(routine.id), repository.clearPauseCalls)
+    }
+
+    @Test
+    fun `today's pause is not treated as expired`() = runTest(dispatcher) {
+        val today = LocalDate.now(clock)
+        val routine = sampleRoutine(pausedDate = today)
+        val repository = FakeRoutineRepository(routine)
+        val vm = viewModel(routine = routine, routines = repository)
+        dispatcher.scheduler.advanceUntilIdle()
+
+        assertEquals(today, vm.uiState.value.routine?.pausedDate)
+        assertTrue(vm.uiState.value.isPausedToday)
+        assertTrue(repository.clearPauseCalls.isEmpty())
+    }
+
+    @Test
+    fun `a null pausedDate causes no cleanup write`() = runTest(dispatcher) {
+        val routine = sampleRoutine(pausedDate = null)
+        val repository = FakeRoutineRepository(routine)
+        viewModel(routine = routine, routines = repository)
+        dispatcher.scheduler.advanceUntilIdle()
+
+        assertTrue(repository.clearPauseCalls.isEmpty())
+    }
+
+    @Test
+    fun `a future pausedDate is never treated as expired`() = runTest(dispatcher) {
+        val tomorrow = LocalDate.now(clock).plusDays(1)
+        val routine = sampleRoutine(pausedDate = tomorrow)
+        val repository = FakeRoutineRepository(routine)
+        val vm = viewModel(routine = routine, routines = repository)
+        dispatcher.scheduler.advanceUntilIdle()
+
+        assertEquals(tomorrow, vm.uiState.value.routine?.pausedDate)
+        assertFalse(vm.uiState.value.isPausedToday)
+        assertTrue(repository.clearPauseCalls.isEmpty())
+    }
+
+    // ---- Deletion ----
+
+    @Test
+    fun `confirming delete removes only that routine`() = runTest(dispatcher) {
+        val routine = sampleRoutine(id = "r9")
+        val repository = FakeRoutineRepository(routine)
+        val vm = viewModel(routine = routine, routineId = "r9", routines = repository)
+        dispatcher.scheduler.advanceUntilIdle()
+
+        vm.deleteRoutine {}
+        dispatcher.scheduler.advanceUntilIdle()
+
+        assertEquals(listOf("r9"), repository.deletedIds)
+    }
+
+    @Test
+    fun `a successful delete invokes onDeleted so the caller can navigate to the list`() = runTest(dispatcher) {
+        val routine = sampleRoutine()
+        val repository = FakeRoutineRepository(routine)
+        val vm = viewModel(routine = routine, routines = repository)
+        dispatcher.scheduler.advanceUntilIdle()
+
+        var deleted = false
+        vm.deleteRoutine { deleted = true }
+        dispatcher.scheduler.advanceUntilIdle()
+
+        assertTrue(deleted)
+        assertFalse(vm.uiState.value.isDeleting)
+    }
+
+    @Test
+    fun `a delete failure keeps the screen on the routine with a friendly retryable failure`() = runTest(dispatcher) {
+        val routine = sampleRoutine()
+        val repository = FailingActionRoutineRepository(routine, failDelete = true)
+        val vm = viewModel(routine = routine, routines = repository)
+        dispatcher.scheduler.advanceUntilIdle()
+
+        var deleted = false
+        vm.deleteRoutine { deleted = true }
+        dispatcher.scheduler.advanceUntilIdle()
+
+        assertFalse(deleted)
+        assertTrue(vm.uiState.value.deleteFailed)
+        assertFalse(vm.uiState.value.isDeleting)
+        assertEquals(routine, vm.uiState.value.routine)
+    }
+
+    @Test
+    fun `repeated confirm taps do not delete twice`() = runTest(dispatcher) {
+        val routine = sampleRoutine()
+        val repository = FakeRoutineRepository(routine)
+        val vm = viewModel(routine = routine, routines = repository)
+        dispatcher.scheduler.advanceUntilIdle()
+
+        vm.deleteRoutine {}
+        vm.deleteRoutine {}
+        dispatcher.scheduler.advanceUntilIdle()
+
+        assertEquals(1, repository.deletedIds.size)
+    }
+
+    // ---- reload() after a successful edit (see BlickNavHost's savedStateHandle signal) ----
+
+    @Test
+    fun `reload fetches a new departure result once the routine's identity changes`() = runTest(dispatcher) {
+        val routine = sampleRoutine(id = "r1")
+        val repository = FakeRoutineRepository(routine)
+        val departures = FakeDepartureRepository(resultOf(upcomingDeparture("before")))
+        val vm = viewModel(routine = routine, routineId = "r1", departures = departures, routines = repository)
+        dispatcher.scheduler.advanceUntilIdle()
+        assertEquals(1, departures.callCount)
+
+        // Simulates what a successful edit does: routineRepository.save() upserts the same
+        // id with a new site.
+        repository.save(routine.copy(siteId = 9192, siteName = "Slussen"))
+
+        vm.reload()
+        dispatcher.scheduler.advanceUntilIdle()
+
+        assertEquals("Slussen", vm.uiState.value.routine?.siteName)
+        assertEquals(2, departures.callCount)
+    }
+
+    @Test
+    fun `reload does not re-fetch departures when the departure-relevant fields are unchanged`() = runTest(dispatcher) {
+        val routine = sampleRoutine(id = "r1")
+        val repository = FakeRoutineRepository(routine)
+        val departures = FakeDepartureRepository(resultOf(upcomingDeparture()))
+        val vm = viewModel(routine = routine, routineId = "r1", departures = departures, routines = repository)
+        dispatcher.scheduler.advanceUntilIdle()
+        assertEquals(1, departures.callCount)
+
+        // A name-only edit -- same site/line/direction/mode, so no new fetch is warranted.
+        repository.save(routine.copy(name = "Renamed"))
+
+        vm.reload()
+        dispatcher.scheduler.advanceUntilIdle()
+
+        assertEquals("Renamed", vm.uiState.value.routine?.name)
+        assertEquals(1, departures.callCount)
+    }
+
+    @Test
+    fun `a stale in-flight fetch for the old configuration cannot overwrite reload's new one`() = runTest(dispatcher) {
+        val routine = sampleRoutine(id = "r1")
+        val repository = FakeRoutineRepository(routine)
+        val departures = ControllableDepartureRepository()
+        val vm = viewModel(routine = routine, routineId = "r1", departures = departures, routines = repository)
+        dispatcher.scheduler.advanceUntilIdle() // reach the initial fetch's suspension point (call index 0)
+
+        repository.save(routine.copy(siteId = 9192, siteName = "Slussen"))
+        vm.reload()
+        dispatcher.scheduler.advanceUntilIdle() // reach reload's fetch's suspension point too (call index 1)
+
+        // The OLD (pre-edit configuration) fetch finally resolves late -- must be ignored.
+        departures.complete(0, resultOf(upcomingDeparture("stale-old-config")))
+        dispatcher.scheduler.advanceUntilIdle()
+        assertEquals(LiveDeparturesState.Loading, vm.uiState.value.departures)
+
+        // The NEW (post-edit configuration) fetch resolves -- this one must win.
+        departures.complete(1, resultOf(upcomingDeparture("fresh")))
+        dispatcher.scheduler.advanceUntilIdle()
+        assertEquals(
+            listOf("fresh"),
+            (vm.uiState.value.departures as LiveDeparturesState.Live).snapshot.departures.map { it.departureId },
+        )
     }
 }

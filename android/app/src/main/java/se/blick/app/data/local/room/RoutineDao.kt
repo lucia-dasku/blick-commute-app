@@ -27,4 +27,7 @@ interface RoutineDao {
 
     @Query("DELETE FROM routines WHERE id = :id")
     suspend fun deleteById(id: String)
+
+    @Query("SELECT EXISTS(SELECT 1 FROM routines LIMIT 1)")
+    suspend fun hasAny(): Boolean
 }

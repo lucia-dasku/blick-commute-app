@@ -15,7 +15,9 @@ import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.ArrowBack
+import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.Button
+import androidx.compose.material3.ButtonDefaults
 import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.HorizontalDivider
@@ -23,11 +25,16 @@ import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
 import androidx.compose.material3.LinearProgressIndicator
 import androidx.compose.material3.MaterialTheme
+import androidx.compose.material3.OutlinedButton
 import androidx.compose.material3.Scaffold
 import androidx.compose.material3.Text
+import androidx.compose.material3.TextButton
 import androidx.compose.material3.TopAppBar
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableStateOf
+import androidx.compose.runtime.remember
+import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.platform.LocalLocale
@@ -44,15 +51,23 @@ import se.blick.app.domain.model.TransportMode
 /**
  * Routine details / live-preview screen: loads one saved routine and shows its next two
  * relevant departures via [RoutineDetailsViewModel] + the existing live-departure engine.
- * Foreground, manually refreshable only — no periodic refresh, no notifications, no
- * editing (see this milestone's scope).
+ * Foreground, manually refreshable only — no periodic refresh, no notifications.
+ *
+ * Also hosts routine management: edit (delegates navigation to [onEdit], the actual editing
+ * UI is [se.blick.app.ui.screens.routinecreate.RoutineCreateScreen] reused in edit mode —
+ * see [se.blick.app.ui.navigation.BlickNavHost]), enable/disable, pause/resume today, and
+ * delete (with an in-screen confirmation dialog; [onDeleted] is only invoked once the
+ * repository write actually succeeds).
  */
 @Composable
 fun RoutineDetailsScreen(
     onBack: () -> Unit,
+    onEdit: (String) -> Unit = {},
+    onDeleted: () -> Unit = onBack,
     viewModel: RoutineDetailsViewModel = hiltViewModel(),
 ) {
     val uiState by viewModel.uiState.collectAsStateWithLifecycle()
+    var showDeleteConfirmation by remember { mutableStateOf(false) }
 
     Scaffold(
         topBar = {
@@ -85,8 +100,49 @@ fun RoutineDetailsScreen(
                 departuresState = uiState.departures,
                 isRefreshing = uiState.isRefreshingDepartures,
                 onRefresh = viewModel::refresh,
+                onEdit = { onEdit(routine.id) },
+                isTogglingEnabled = uiState.isTogglingEnabled,
+                enabledActionFailed = uiState.enabledActionFailed,
+                onToggleEnabled = viewModel::toggleEnabled,
+                isTogglingPause = uiState.isTogglingPause,
+                pauseActionFailed = uiState.pauseActionFailed,
+                onPauseToday = viewModel::pauseToday,
+                onResumeToday = viewModel::resumeToday,
+                isDeleting = uiState.isDeleting,
+                deleteFailed = uiState.deleteFailed,
+                onRequestDelete = { showDeleteConfirmation = true },
             )
         }
+    }
+
+    if (showDeleteConfirmation) {
+        val routineToDelete = uiState.routine
+        AlertDialog(
+            onDismissRequest = { showDeleteConfirmation = false },
+            title = { Text(stringResource(R.string.routine_details_delete_dialog_title)) },
+            text = {
+                Text(
+                    stringResource(
+                        R.string.routine_details_delete_dialog_body,
+                        routineToDelete?.name.orEmpty(),
+                        routineToDelete?.siteName.orEmpty(),
+                    ),
+                )
+            },
+            confirmButton = {
+                TextButton(
+                    onClick = {
+                        showDeleteConfirmation = false
+                        viewModel.deleteRoutine(onDeleted)
+                    },
+                ) { Text(stringResource(R.string.routine_details_delete_dialog_confirm)) }
+            },
+            dismissButton = {
+                TextButton(onClick = { showDeleteConfirmation = false }) {
+                    Text(stringResource(R.string.routine_details_delete_dialog_cancel))
+                }
+            },
+        )
     }
 }
 
@@ -103,6 +159,17 @@ private fun RoutineDetailsContent(
     departuresState: LiveDeparturesState,
     isRefreshing: Boolean,
     onRefresh: () -> Unit,
+    onEdit: () -> Unit,
+    isTogglingEnabled: Boolean,
+    enabledActionFailed: Boolean,
+    onToggleEnabled: () -> Unit,
+    isTogglingPause: Boolean,
+    pauseActionFailed: Boolean,
+    onPauseToday: () -> Unit,
+    onResumeToday: () -> Unit,
+    isDeleting: Boolean,
+    deleteFailed: Boolean,
+    onRequestDelete: () -> Unit,
 ) {
     val locale = LocalLocale.current.platformLocale
 
@@ -127,6 +194,26 @@ private fun RoutineDetailsContent(
         HorizontalDivider()
         Spacer(Modifier.height(16.dp))
 
+        RoutineActionsSection(
+            routine = routine,
+            isPausedToday = isPausedToday,
+            onEdit = onEdit,
+            isTogglingEnabled = isTogglingEnabled,
+            enabledActionFailed = enabledActionFailed,
+            onToggleEnabled = onToggleEnabled,
+            isTogglingPause = isTogglingPause,
+            pauseActionFailed = pauseActionFailed,
+            onPauseToday = onPauseToday,
+            onResumeToday = onResumeToday,
+            isDeleting = isDeleting,
+            deleteFailed = deleteFailed,
+            onRequestDelete = onRequestDelete,
+        )
+
+        Spacer(Modifier.height(20.dp))
+        HorizontalDivider()
+        Spacer(Modifier.height(16.dp))
+
         Row(
             modifier = Modifier.fillMaxWidth(),
             horizontalArrangement = Arrangement.SpaceBetween,
@@ -144,6 +231,94 @@ private fun RoutineDetailsContent(
         Spacer(Modifier.height(12.dp))
 
         DeparturesSection(departuresState, locale, onRefresh)
+    }
+}
+
+@Composable
+private fun RoutineActionsSection(
+    routine: CommuteRoutine,
+    isPausedToday: Boolean,
+    onEdit: () -> Unit,
+    isTogglingEnabled: Boolean,
+    enabledActionFailed: Boolean,
+    onToggleEnabled: () -> Unit,
+    isTogglingPause: Boolean,
+    pauseActionFailed: Boolean,
+    onPauseToday: () -> Unit,
+    onResumeToday: () -> Unit,
+    isDeleting: Boolean,
+    deleteFailed: Boolean,
+    onRequestDelete: () -> Unit,
+) {
+    Column {
+        Text(stringResource(R.string.routine_details_actions_heading), style = MaterialTheme.typography.titleMedium)
+        Spacer(Modifier.height(8.dp))
+
+        OutlinedButton(onClick = onEdit, modifier = Modifier.fillMaxWidth()) {
+            Text(stringResource(R.string.routine_details_edit_action))
+        }
+        Spacer(Modifier.height(8.dp))
+
+        // Never colour-only: the label itself always states the resulting/current state in
+        // words (see the milestone requirement on text scaling + no colour-only status).
+        OutlinedButton(
+            onClick = onToggleEnabled,
+            enabled = !isTogglingEnabled,
+            modifier = Modifier.fillMaxWidth(),
+        ) {
+            Text(
+                stringResource(
+                    if (routine.enabled) R.string.routine_details_disable_action else R.string.routine_details_enable_action,
+                ),
+            )
+        }
+        if (enabledActionFailed) {
+            Spacer(Modifier.height(4.dp))
+            Text(
+                stringResource(R.string.routine_details_enable_action_failed),
+                color = MaterialTheme.colorScheme.error,
+                style = MaterialTheme.typography.bodySmall,
+            )
+        }
+        Spacer(Modifier.height(8.dp))
+
+        OutlinedButton(
+            onClick = if (isPausedToday) onResumeToday else onPauseToday,
+            enabled = !isTogglingPause,
+            modifier = Modifier.fillMaxWidth(),
+        ) {
+            Text(
+                stringResource(
+                    if (isPausedToday) R.string.routine_details_resume_today_action else R.string.routine_details_pause_today_action,
+                ),
+            )
+        }
+        if (pauseActionFailed) {
+            Spacer(Modifier.height(4.dp))
+            Text(
+                stringResource(R.string.routine_details_pause_action_failed),
+                color = MaterialTheme.colorScheme.error,
+                style = MaterialTheme.typography.bodySmall,
+            )
+        }
+        Spacer(Modifier.height(8.dp))
+
+        Button(
+            onClick = onRequestDelete,
+            enabled = !isDeleting,
+            colors = ButtonDefaults.buttonColors(containerColor = MaterialTheme.colorScheme.error),
+            modifier = Modifier.fillMaxWidth(),
+        ) {
+            Text(stringResource(R.string.routine_details_delete_action))
+        }
+        if (deleteFailed) {
+            Spacer(Modifier.height(4.dp))
+            Text(
+                stringResource(R.string.routine_details_delete_action_failed),
+                color = MaterialTheme.colorScheme.error,
+                style = MaterialTheme.typography.bodySmall,
+            )
+        }
     }
 }
 

@@ -39,8 +39,14 @@ fun RoutineListScreen(
     Scaffold(
         topBar = { TopAppBar(title = { Text(stringResource(R.string.routine_list_title)) }) },
         floatingActionButton = {
-            FloatingActionButton(onClick = onAddRoutine) {
-                Icon(Icons.Filled.Add, contentDescription = stringResource(R.string.routine_list_add))
+            // First-beta one-routine limit (see RoutineCreateViewModel's matching save-time
+            // guard): hiding the FAB once a routine exists is the primary defence; both
+            // read from the same Room-backed repository, so this and the create flow's own
+            // check can never disagree about whether a routine already exists.
+            if (uiState.routines.isEmpty()) {
+                FloatingActionButton(onClick = onAddRoutine) {
+                    Icon(Icons.Filled.Add, contentDescription = stringResource(R.string.routine_list_add))
+                }
             }
         },
     ) { paddingValues ->
@@ -57,6 +63,14 @@ fun RoutineListScreen(
                     ListItem(
                         headlineContent = { Text(routine.name) },
                         supportingContent = { Text(routine.siteName) },
+                        // Consistent with the details screen: enabled/disabled is always
+                        // stated in words here too, never colour-only (see
+                        // RoutineDetailsScreen's statusLabel for the same rule; "paused
+                        // today" isn't surfaced here since it requires the injected Clock,
+                        // which this list-only screen has no other reason to depend on).
+                        trailingContent = if (!routine.enabled) {
+                            { Text(stringResource(R.string.routine_details_status_disabled)) }
+                        } else null,
                         modifier = Modifier.clickable { onOpenRoutine(routine.id) },
                     )
                 }

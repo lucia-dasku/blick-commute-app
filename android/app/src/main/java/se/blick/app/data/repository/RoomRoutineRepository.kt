@@ -26,4 +26,18 @@ class RoomRoutineRepository @Inject constructor(
         val existing = dao.getById(id) ?: return
         dao.update(existing.copy(pausedDateEpochDay = date.toEpochDay()))
     }
+
+    override suspend fun clearPause(id: String) {
+        val existing = dao.getById(id) ?: return
+        if (existing.pausedDateEpochDay == null) return
+        dao.update(existing.copy(pausedDateEpochDay = null))
+    }
+
+    override suspend fun setEnabled(id: String, enabled: Boolean) {
+        val existing = dao.getById(id) ?: return
+        if (existing.enabled == enabled) return
+        dao.update(existing.copy(enabled = enabled))
+    }
+
+    override suspend fun hasAnyRoutine(): Boolean = dao.hasAny()
 }

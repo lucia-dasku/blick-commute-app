@@ -1,6 +1,7 @@
 package se.blick.app.ui.screens.routinecreate
 
 import android.util.Log
+import androidx.lifecycle.SavedStateHandle
 import androidx.lifecycle.ViewModel
 import androidx.lifecycle.viewModelScope
 import dagger.hilt.android.lifecycle.HiltViewModel
@@ -23,6 +24,7 @@ import se.blick.app.data.repository.StopRepository
 import se.blick.app.domain.model.CommuteRoutine
 import se.blick.app.domain.model.Site
 import se.blick.app.domain.model.TransportMode
+import se.blick.app.ui.navigation.Routes
 import java.time.DayOfWeek
 import java.time.LocalTime
 import javax.inject.Inject
@@ -73,6 +75,14 @@ data class RoutineCreateUiState(
     val name: String = "",
     val isSaving: Boolean = false,
     val saveFailed: Boolean = false,
+    /** True when this screen was opened to edit an existing routine (see
+     * [RoutineCreateViewModel]'s edit-mode support) rather than to create a new one. */
+    val isEditMode: Boolean = false,
+    val isLoadingExistingRoutine: Boolean = false,
+    /** Edit mode only: the routineId from navigation didn't resolve to a saved routine. */
+    val existingRoutineNotFound: Boolean = false,
+    /** Create mode only: a routine already exists — see the first-beta one-routine limit. */
+    val oneRoutineLimitReached: Boolean = false,
 ) {
     val hasSelectedDays: Boolean get() = activeDays.isNotEmpty()
 
@@ -81,19 +91,41 @@ data class RoutineCreateUiState(
 
     val canSave: Boolean
         get() = selectedSite != null && selectedDirection != null &&
-            hasSelectedDays && isTimeRangeValid && name.isNotBlank() && !isSaving
+            hasSelectedDays && isTimeRangeValid && name.isNotBlank() && !isSaving &&
+            !oneRoutineLimitReached
 }
 
 @OptIn(ExperimentalCoroutinesApi::class, FlowPreview::class)
 @HiltViewModel
 class RoutineCreateViewModel @Inject constructor(
+    savedStateHandle: SavedStateHandle,
     private val stopRepository: StopRepository,
     private val directionOptionsSource: DirectionOptionsSource,
     private val routineRepository: RoutineRepository,
 ) : ViewModel() {
 
+    /** Present only when this screen was reached via [Routes.RoutineEdit] — absent (null)
+     * for [Routes.RoutineCreate]. This is the ONLY thing that distinguishes edit mode from
+     * create mode; everything else below reuses the exact same wizard/state/validation. */
+    private val editingRoutineId: String? = savedStateHandle.get<String>(Routes.RoutineEdit.ARG_ROUTINE_ID)
+
     private val _uiState = MutableStateFlow(RoutineCreateUiState())
     val uiState: StateFlow<RoutineCreateUiState> = _uiState.asStateFlow()
+
+    /** Captured once, at edit-mode load time: the fields editing must preserve rather than
+     * let the wizard reset (id, enabled, pausedDate) — see [save]. Null in create mode. */
+    private var originalRoutine: CommuteRoutine? = null
+
+    /**
+     * The direction the currently in-flight/most-recent direction fetch should try to
+     * preserve, or null for a plain "start fresh" fetch. Set by [fetchDirections]'s callers:
+     * [selectSite] always passes null (a station change must always clear mode/direction —
+     * see [onSiteQueryChanged]'s doc); the edit-mode loader passes the saved routine's own
+     * line/direction so it survives a fetch against the (time-window-limited) live feed;
+     * [retryDirections] simply re-uses whichever of the two was last requested, so retrying
+     * never surprises the user by discarding an edit-mode pre-fill.
+     */
+    private var activePreselect: DirectionOption? = null
 
     /**
      * `retryToken` exists purely so [retryStopSearch] can force [collectLatest] to re-run
@@ -135,6 +167,60 @@ class RoutineCreateViewModel @Inject constructor(
                 .distinctUntilChanged()
                 .collectLatest { request -> performSearch(request.query) }
         }
+        val routineId = editingRoutineId
+        if (routineId != null) {
+            _uiState.update { it.copy(isEditMode = true, isLoadingExistingRoutine = true) }
+            viewModelScope.launch { loadExistingRoutine(routineId) }
+        } else {
+            // First-beta one-routine limit (see RoutineListScreen for the matching list-side
+            // guard) — both read the same RoutineRepository, so they can't disagree.
+            viewModelScope.launch {
+                if (routineRepository.hasAnyRoutine()) {
+                    _uiState.update { it.copy(oneRoutineLimitReached = true) }
+                }
+            }
+        }
+    }
+
+    private suspend fun loadExistingRoutine(routineId: String) {
+        val existing = routineRepository.getById(routineId)
+        if (existing == null) {
+            _uiState.update { it.copy(isLoadingExistingRoutine = false, existingRoutineNotFound = true) }
+            return
+        }
+        originalRoutine = existing
+        // The user's existing name is treated as already deliberately set — a later
+        // automatic direction-based suggestion (see selectDirection) must not clobber it.
+        nameManuallyEdited = true
+        _uiState.update {
+            it.copy(
+                isLoadingExistingRoutine = false,
+                siteQuery = existing.siteName,
+                activeDays = existing.activeDays,
+                startTime = existing.startTime,
+                endTime = existing.endTime,
+                name = existing.name,
+            )
+        }
+        val syntheticSite = Site(
+            siteId = existing.siteId,
+            name = existing.siteName,
+            note = null,
+            lat = null,
+            lon = null,
+            stopAreaIds = listOf(existing.siteId),
+        )
+        val savedDirection = existing.lineId?.let { lineId ->
+            DirectionOption(
+                lineId = lineId,
+                lineDesignation = existing.lineDesignation.orEmpty(),
+                transportMode = existing.transportMode,
+                directionCode = existing.directionCode,
+                destinationLabel = existing.destinationLabel,
+            )
+        }
+        activePreselect = savedDirection
+        fetchDirections(syntheticSite, preselect = savedDirection)
     }
 
     private suspend fun performSearch(query: String) {
@@ -184,23 +270,47 @@ class RoutineCreateViewModel @Inject constructor(
     }
 
     fun selectSite(site: Site) {
-        // No same-site early return here on purpose: after navigating back to STOP and
-        // selecting the same stop again, the direction lookup must actually re-run (or at
-        // least be re-attempted) rather than silently doing nothing — see the 2026-07-28
-        // review. Re-selecting is cheap (one network call) and always correct; skipping it
-        // was an incorrect optimization that made "back, then reselect" look broken.
-        //
-        // Cancel/invalidate whatever direction request was previously in flight (a
-        // different site, or an earlier attempt at this same one via retryDirections)
-        // BEFORE starting this one — see the class doc on directionsJob/directionsRequestId
-        // for why both a cancel and a generation check are needed.
+        // Explicit user-initiated station change: always start fresh — a previously
+        // preselected mode/direction (from edit mode, or from a prior stop) is no longer
+        // valid for a different stop. See onSiteQueryChanged's doc for the same rule.
+        activePreselect = null
+        fetchDirections(site, preselect = null)
+    }
+
+    /**
+     * Re-runs the direction lookup for the currently selected site, preserving whatever
+     * [activePreselect] the last attempt used. Used by both the "empty" and "failed"
+     * direction states — the retry action is the same lookup either way, only the message
+     * shown for each differs — and by a failed edit-mode initial load, so retrying never
+     * discards the pre-filled mode/direction.
+     */
+    fun retryDirections() {
+        _uiState.value.selectedSite?.let { site -> fetchDirections(site, preselect = activePreselect) }
+    }
+
+    /**
+     * Shared direction-lookup engine for both plain site selection (creation) and the
+     * edit-mode pre-fill. [preselect], when non-null, is the routine's already-saved
+     * line/direction: if the live feed's current options include a match (by line id +
+     * direction code + transport mode — see [DirectionOption.matchesForPreselect]), that
+     * option is selected automatically; if the feed doesn't currently have it running (see
+     * [DirectionOptionsSource]'s live-departures-window limitation) it is still shown, added
+     * to the top of the list, so an edit never silently loses the user's existing selection
+     * just because it isn't live at the moment they happen to be editing.
+     *
+     * No same-site early return on purpose — see the retained 2026-07-28 review note: after
+     * navigating back to STOP and reselecting the same stop, the lookup must actually
+     * re-run. Cancel/invalidate any previous in-flight request first — see the class doc on
+     * [directionsJob]/[directionsRequestId].
+     */
+    private fun fetchDirections(site: Site, preselect: DirectionOption?) {
         cancelInFlightDirectionsRequest()
         val requestId = directionsRequestId
         _uiState.update {
             it.copy(
                 selectedSite = site,
-                selectedTransportMode = null,
-                selectedDirection = null,
+                selectedTransportMode = if (preselect == null) null else it.selectedTransportMode,
+                selectedDirection = if (preselect == null) null else it.selectedDirection,
                 directionOptions = emptyList(),
                 availableTransportModes = emptyList(),
                 directionsEmpty = false,
@@ -214,17 +324,26 @@ class RoutineCreateViewModel @Inject constructor(
                 // A newer selectSite/retryDirections call superseded this one while it was
                 // in flight — its result is stale even if cancellation didn't pre-empt it.
                 if (requestId != directionsRequestId) return@launch
-                if (options.isEmpty()) {
+                if (options.isEmpty() && preselect == null) {
                     _uiState.update { it.copy(isLoadingDirections = false, directionsEmpty = true) }
-                } else {
-                    _uiState.update {
-                        it.copy(
-                            isLoadingDirections = false,
-                            directionOptions = options,
-                            availableTransportModes = options.map { option -> option.transportMode }.distinct(),
-                            step = RoutineCreateStep.TRANSPORT_MODE,
-                        )
-                    }
+                    return@launch
+                }
+                val hasPreselectLive = preselect != null && options.any { it.matchesForPreselect(preselect) }
+                val effectiveOptions = when {
+                    preselect == null -> options
+                    hasPreselectLive -> options
+                    else -> listOf(preselect) + options
+                }
+                val selected = preselect?.let { target -> effectiveOptions.find { it.matchesForPreselect(target) } }
+                _uiState.update {
+                    it.copy(
+                        isLoadingDirections = false,
+                        directionOptions = effectiveOptions,
+                        availableTransportModes = effectiveOptions.map { option -> option.transportMode }.distinct(),
+                        selectedTransportMode = selected?.transportMode ?: it.selectedTransportMode,
+                        selectedDirection = selected ?: it.selectedDirection,
+                        step = if (preselect != null) RoutineCreateStep.SCHEDULE else RoutineCreateStep.TRANSPORT_MODE,
+                    )
                 }
             } catch (e: CancellationException) {
                 throw e
@@ -234,15 +353,6 @@ class RoutineCreateViewModel @Inject constructor(
                 _uiState.update { it.copy(isLoadingDirections = false, directionsFailed = true) }
             }
         }
-    }
-
-    /**
-     * Re-runs the direction lookup for the currently selected site. Used by both the
-     * "empty" and "failed" direction states — the retry action is the same lookup either
-     * way, only the message shown for each differs.
-     */
-    fun retryDirections() {
-        _uiState.value.selectedSite?.let { site -> selectSite(site) }
     }
 
     fun selectTransportMode(mode: TransportMode) {
@@ -306,6 +416,13 @@ class RoutineCreateViewModel @Inject constructor(
      * [RoutineCreateUiState.saveFailed] instead (see [save]'s own caller for the retry
      * action, which is just calling [save] again — rebuilding the same [CommuteRoutine]
      * from current state is naturally idempotent-enough to retry).
+     *
+     * In edit mode this reuses [originalRoutine]'s `id`/`enabled`/`pausedDate` so the
+     * underlying repository upsert-by-id replaces the same row rather than inserting a
+     * second routine, and so editing never silently resets whether the routine is
+     * enabled/paused. In create mode, [RoutineCreateUiState.oneRoutineLimitReached] blocks
+     * saving outright (defence in depth alongside [RoutineCreateUiState.canSave] and the
+     * list screen's own guard — see the class doc on [editingRoutineId]).
      */
     fun save(onSaved: () -> Unit) {
         val state = _uiState.value
@@ -313,12 +430,15 @@ class RoutineCreateViewModel @Inject constructor(
         val site = state.selectedSite ?: return
         val direction = state.selectedDirection ?: return
         if (!state.canSave) return
+        if (!state.isEditMode && state.oneRoutineLimitReached) return
 
         _uiState.update { it.copy(isSaving = true, saveFailed = false) }
         viewModelScope.launch {
             try {
+                val existing = originalRoutine
                 routineRepository.save(
                     CommuteRoutine(
+                        id = existing?.id ?: java.util.UUID.randomUUID().toString(),
                         name = state.name,
                         siteId = site.siteId,
                         siteName = site.name,
@@ -330,6 +450,8 @@ class RoutineCreateViewModel @Inject constructor(
                         activeDays = state.activeDays,
                         startTime = state.startTime,
                         endTime = state.endTime,
+                        enabled = existing?.enabled ?: true,
+                        pausedDate = existing?.pausedDate,
                     ),
                 )
                 _uiState.update { it.copy(isSaving = false, saveFailed = false) }
@@ -344,3 +466,8 @@ class RoutineCreateViewModel @Inject constructor(
         }
     }
 }
+
+/** Matches by the routine's real identity (line id + direction code + transport mode) —
+ * never by destination text, which is display-only (see [DirectionOption]'s doc comment). */
+private fun DirectionOption.matchesForPreselect(other: DirectionOption): Boolean =
+    lineId == other.lineId && directionCode == other.directionCode && transportMode == other.transportMode
