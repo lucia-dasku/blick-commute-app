@@ -3,6 +3,9 @@
     <marker id="arrow" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse">
       <path d="M 0 0 L 10 5 L 0 10 z" fill="#334155"/>
     </marker>
+    <marker id="arrowTeal" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse">
+      <path d="M 0 0 L 10 5 L 0 10 z" fill="#0f766e"/>
+    </marker>
     <marker id="arrowMuted" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse">
       <path d="M 0 0 L 10 5 L 0 10 z" fill="#64748b"/>
     </marker>
@@ -12,95 +15,105 @@
 
   <!-- Column headers -->
   <rect x="40" y="15" width="620" height="38" rx="6" fill="#dbeafe" stroke="#1d4ed8" stroke-width="2"/>
-  <text x="350" y="40" text-anchor="middle" font-size="18" font-weight="bold" fill="#1e3a8a">CURRENT FLOW — IMPLEMENTED TODAY</text>
+  <text x="350" y="40" text-anchor="middle" font-size="17" font-weight="bold" fill="#1e3a8a">ROUTINE SETUP + ACTIVE-WINDOW NOTIFICATION LOOP</text>
 
-  <rect x="740" y="15" width="620" height="38" rx="6" fill="#f1f5f9" stroke="#64748b" stroke-width="2" stroke-dasharray="8,5"/>
-  <text x="1050" y="40" text-anchor="middle" font-size="18" font-weight="bold" fill="#475569">PLANNED FLOW — NOT YET IMPLEMENTED</text>
+  <rect x="740" y="15" width="620" height="38" rx="6" fill="#ccfbf1" stroke="#0f766e" stroke-width="2"/>
+  <text x="1050" y="40" text-anchor="middle" font-size="17" font-weight="bold" fill="#134e4a">ROUTINE DETAILS SCREEN — SEPARATE 30s LIVE REFRESH</text>
 
   <!-- Vertical divider between the two flows -->
   <line x1="700" y1="60" x2="700" y2="850" stroke="#cbd5e1" stroke-width="2" stroke-dasharray="6,6"/>
 
-  <!-- ================= LEFT COLUMN: current, implemented, manual/foreground flow ================= -->
+  <!-- ================= LEFT COLUMN: routine setup + WorkManager-scheduled active-window notification loop ================= -->
 
-  <!-- 1: User creates and saves a routine -->
+  <!-- 1: User configures a routine -->
   <rect x="60" y="70" width="580" height="70" rx="10" fill="#e0f2fe" stroke="#0369a1" stroke-width="2"/>
-  <text x="350" y="112" text-anchor="middle" font-size="17" fill="#0c4a6e">1. User creates and saves a routine</text>
+  <text x="350" y="102" text-anchor="middle" font-size="15" fill="#0c4a6e">1. User picks a station, mode/line/direction, then</text>
+  <text x="350" y="124" text-anchor="middle" font-size="15" fill="#0c4a6e">active weekdays and a start/end time</text>
   <line x1="350" y1="140" x2="350" y2="180" stroke="#334155" stroke-width="2" marker-end="url(#arrow)"/>
 
-  <!-- 2: User opens the routine details screen -->
+  <!-- 2: Routine saved and scheduled -->
   <rect x="60" y="180" width="580" height="70" rx="10" fill="#e0f2fe" stroke="#0369a1" stroke-width="2"/>
-  <text x="350" y="222" text-anchor="middle" font-size="17" fill="#0c4a6e">2. User opens the routine details screen</text>
+  <text x="350" y="212" text-anchor="middle" font-size="15" fill="#0c4a6e">2. Routine is saved locally (Room) and scheduled with</text>
+  <text x="350" y="234" text-anchor="middle" font-size="15" fill="#0c4a6e">WorkManager, using unique, replaceable per-routine work</text>
   <line x1="350" y1="250" x2="350" y2="290" stroke="#334155" stroke-width="2" marker-end="url(#arrow)"/>
 
-  <!-- 3: Android requests departure data through the Blick backend -->
-  <rect x="60" y="290" width="580" height="70" rx="10" fill="#e0f2fe" stroke="#0369a1" stroke-width="2"/>
-  <text x="350" y="322" text-anchor="middle" font-size="16" fill="#0c4a6e">3. Android requests departure data</text>
-  <text x="350" y="344" text-anchor="middle" font-size="16" fill="#0c4a6e">through the Blick backend</text>
+  <!-- 3: Foreground worker requests departures via the Blick backend -->
+  <rect x="60" y="290" width="580" height="70" rx="10" fill="#dcfce7" stroke="#15803d" stroke-width="2"/>
+  <text x="350" y="322" text-anchor="middle" font-size="15" fill="#14532d">3. At the window's start, a foreground worker requests</text>
+  <text x="350" y="344" text-anchor="middle" font-size="15" fill="#14532d">departures through the Blick backend (SL Transport data)</text>
   <line x1="350" y1="360" x2="350" y2="400" stroke="#334155" stroke-width="2" marker-end="url(#arrow)"/>
 
-  <!-- 4: Backend requests SL Transport and SL Deviations -->
-  <rect x="60" y="400" width="580" height="70" rx="10" fill="#dcfce7" stroke="#15803d" stroke-width="2"/>
-  <text x="350" y="432" text-anchor="middle" font-size="16" fill="#14532d">4. Backend requests SL Transport</text>
-  <text x="350" y="454" text-anchor="middle" font-size="16" fill="#14532d">and SL Deviations</text>
+  <!-- 4: Departures filtered and mapped -->
+  <rect x="60" y="400" width="580" height="70" rx="10" fill="#fef9c3" stroke="#a16207" stroke-width="2"/>
+  <text x="350" y="432" text-anchor="middle" font-size="15" fill="#713f12">4. Departures are filtered for this routine, capped at two,</text>
+  <text x="350" y="454" text-anchor="middle" font-size="15" fill="#713f12">and mapped to notification content</text>
   <line x1="350" y1="470" x2="350" y2="510" stroke="#334155" stroke-width="2" marker-end="url(#arrow)"/>
 
-  <!-- 5: Android filters results for the saved routine -->
-  <rect x="60" y="510" width="580" height="70" rx="10" fill="#fef9c3" stroke="#a16207" stroke-width="2"/>
-  <text x="350" y="552" text-anchor="middle" font-size="17" fill="#713f12">5. Android filters results for the saved routine</text>
+  <!-- 5: One ongoing notification shown/updated -->
+  <rect x="60" y="510" width="580" height="70" rx="10" fill="#ede9fe" stroke="#6d28d9" stroke-width="2"/>
+  <text x="350" y="542" text-anchor="middle" font-size="15" fill="#4c1d95">5. One ongoing, lock-screen-visible notification is shown</text>
+  <text x="350" y="564" text-anchor="middle" font-size="15" fill="#4c1d95">or silently updated (same ID every time, setOnlyAlertOnce)</text>
   <line x1="350" y1="580" x2="350" y2="620" stroke="#334155" stroke-width="2" marker-end="url(#arrow)"/>
 
-  <!-- 6: The screen shows up to two departures -->
-  <rect x="60" y="620" width="580" height="70" rx="10" fill="#e0f2fe" stroke="#0369a1" stroke-width="2"/>
-  <text x="350" y="662" text-anchor="middle" font-size="17" fill="#0c4a6e">6. Screen shows up to two departures</text>
+  <!-- 6: Wait ~30 seconds -->
+  <rect x="60" y="620" width="580" height="70" rx="10" fill="#fee2e2" stroke="#b91c1c" stroke-width="2"/>
+  <text x="350" y="662" text-anchor="middle" font-size="16" fill="#7f1d1d">6. Wait ~30 seconds, then fetch again</text>
   <line x1="350" y1="690" x2="350" y2="730" stroke="#334155" stroke-width="2" marker-end="url(#arrow)"/>
 
-  <!-- 7: The user may manually refresh -->
-  <rect x="60" y="730" width="580" height="70" rx="10" fill="#ede9fe" stroke="#6d28d9" stroke-width="2"/>
-  <text x="350" y="772" text-anchor="middle" font-size="17" fill="#4c1d95">7. User may tap "Refresh" at any time</text>
+  <!-- Loop back to step 3: repeats every ~30s while inside the window -->
+  <path d="M 640 655 C 690 655, 690 325, 645 325" fill="none" stroke="#334155" stroke-width="2" marker-end="url(#arrow)"/>
+  <text x="672" y="490" text-anchor="middle" font-size="12" fill="#475569" transform="rotate(90 672 490)">repeats every ~30s while inside the active window</text>
 
-  <!-- Loop back to step 3: a manual refresh re-requests departure data -->
-  <path d="M 640 765 C 690 765, 690 325, 645 325" fill="none" stroke="#334155" stroke-width="2" marker-end="url(#arrow)"/>
-  <text x="672" y="545" text-anchor="middle" font-size="13" fill="#475569" transform="rotate(90 672 545)">manual refresh re-requests (step 3)</text>
+  <!-- 7: Window ends -->
+  <rect x="60" y="730" width="580" height="70" rx="10" fill="#e0f2fe" stroke="#0369a1" stroke-width="2"/>
+  <text x="350" y="762" text-anchor="middle" font-size="15" fill="#0c4a6e">7. At the routine's end time: work stops, the notification</text>
+  <text x="350" y="784" text-anchor="middle" font-size="15" fill="#0c4a6e">is removed, and the next eligible occurrence is scheduled</text>
 
-  <!-- ================= RIGHT COLUMN: planned automatic scheduling + notification loop ================= -->
+  <!-- Loop back to step 2: scheduling the next occurrence -->
+  <path d="M 60 765 C -10 765, -10 215, 55 215" fill="none" stroke="#94a3b8" stroke-width="2" stroke-dasharray="6,5" marker-end="url(#arrowMuted)"/>
+  <text x="18" y="490" text-anchor="middle" font-size="11" fill="#64748b" transform="rotate(-90 18 490)">schedules next occurrence (step 2)</text>
 
-  <!-- P1: Routine would activate automatically at start time -->
-  <rect x="760" y="70" width="580" height="70" rx="10" fill="#f1f5f9" stroke="#64748b" stroke-width="2" stroke-dasharray="8,5"/>
-  <text x="1050" y="102" text-anchor="middle" font-size="16" fill="#475569">Routine would activate automatically</text>
-  <text x="1050" y="124" text-anchor="middle" font-size="16" fill="#475569">at its configured start time</text>
-  <line x1="1050" y1="140" x2="1050" y2="180" stroke="#94a3b8" stroke-width="2" stroke-dasharray="6,5" marker-end="url(#arrowMuted)"/>
+  <!-- ================= RIGHT COLUMN: Routine Details screen's own 30s live refresh, separate from notifications ================= -->
 
-  <!-- P2: Backend requests SL Transport and SL Deviations (automatic) -->
-  <rect x="760" y="180" width="580" height="70" rx="10" fill="#f1f5f9" stroke="#64748b" stroke-width="2" stroke-dasharray="8,5"/>
-  <text x="1050" y="212" text-anchor="middle" font-size="16" fill="#475569">Backend requests SL Transport and</text>
-  <text x="1050" y="234" text-anchor="middle" font-size="16" fill="#475569">SL Deviations (automatic, no user action)</text>
-  <line x1="1050" y1="250" x2="1050" y2="290" stroke="#94a3b8" stroke-width="2" stroke-dasharray="6,5" marker-end="url(#arrowMuted)"/>
+  <!-- R1: Screen becomes active -->
+  <rect x="760" y="70" width="580" height="70" rx="10" fill="#ccfbf1" stroke="#0f766e" stroke-width="2"/>
+  <text x="1050" y="102" text-anchor="middle" font-size="15" fill="#134e4a">A. User opens the Routine Details screen</text>
+  <text x="1050" y="124" text-anchor="middle" font-size="15" fill="#134e4a">(the screen becomes lifecycle-STARTED)</text>
+  <line x1="1050" y1="140" x2="1050" y2="180" stroke="#0f766e" stroke-width="2" marker-end="url(#arrowTeal)"/>
 
-  <!-- P3: App filters results and updates one ongoing notification -->
-  <rect x="760" y="290" width="580" height="70" rx="10" fill="#f1f5f9" stroke="#64748b" stroke-width="2" stroke-dasharray="8,5"/>
-  <text x="1050" y="322" text-anchor="middle" font-size="16" fill="#475569">App filters results and updates ONE</text>
-  <text x="1050" y="344" text-anchor="middle" font-size="16" fill="#475569">ongoing lock-screen notification</text>
-  <line x1="1050" y1="360" x2="1050" y2="400" stroke="#94a3b8" stroke-width="2" stroke-dasharray="6,5" marker-end="url(#arrowMuted)"/>
+  <!-- R2: Immediate fetch -->
+  <rect x="760" y="180" width="580" height="70" rx="10" fill="#ccfbf1" stroke="#0f766e" stroke-width="2"/>
+  <text x="1050" y="212" text-anchor="middle" font-size="15" fill="#134e4a">B. Departures are fetched immediately through the</text>
+  <text x="1050" y="234" text-anchor="middle" font-size="15" fill="#134e4a">Blick backend — no waiting for the first 30s tick</text>
+  <line x1="1050" y1="250" x2="1050" y2="290" stroke="#0f766e" stroke-width="2" marker-end="url(#arrowTeal)"/>
 
-  <!-- P4: Wait 30 seconds -->
-  <rect x="835" y="400" width="430" height="70" rx="10" fill="#fee2e2" stroke="#b91c1c" stroke-width="2" stroke-dasharray="8,5"/>
-  <text x="1050" y="442" text-anchor="middle" font-size="17" fill="#7f1d1d">Wait 30 seconds</text>
+  <!-- R3: Screen shows state -->
+  <rect x="760" y="290" width="580" height="70" rx="10" fill="#fef9c3" stroke="#a16207" stroke-width="2"/>
+  <text x="1050" y="322" text-anchor="middle" font-size="15" fill="#713f12">C. Screen shows Loading / Live / Stale / Offline /</text>
+  <text x="1050" y="344" text-anchor="middle" font-size="15" fill="#713f12">Unavailable, with up to two departures</text>
+  <line x1="1050" y1="360" x2="1050" y2="400" stroke="#0f766e" stroke-width="2" marker-end="url(#arrowTeal)"/>
 
-  <!-- Loop back to P2: repeat while the routine is active (planned) -->
-  <path d="M 1265 435 C 1345 435, 1345 215, 1340 215" fill="none" stroke="#94a3b8" stroke-width="2" stroke-dasharray="6,5" marker-end="url(#arrowMuted)"/>
-  <text x="1310" y="330" text-anchor="middle" font-size="12" fill="#64748b" transform="rotate(90 1310 330)">repeat while active (planned)</text>
+  <!-- R4: Wait 30 seconds -->
+  <rect x="835" y="400" width="430" height="70" rx="10" fill="#fee2e2" stroke="#b91c1c" stroke-width="2"/>
+  <text x="1050" y="432" text-anchor="middle" font-size="15" fill="#7f1d1d">D. Wait ~30 seconds, then fetch again</text>
+  <text x="1050" y="454" text-anchor="middle" font-size="13" fill="#7f1d1d">(a manual "Refresh" tap remains available too)</text>
 
-  <!-- Down to P5: at the configured end time -->
-  <line x1="1050" y1="470" x2="1050" y2="510" stroke="#94a3b8" stroke-width="2" stroke-dasharray="6,5" marker-end="url(#arrowMuted)"/>
-  <text x="1120" y="495" text-anchor="middle" font-size="12" fill="#64748b">at end time</text>
+  <!-- Loop back to R2: repeat while the screen stays visible -->
+  <path d="M 1265 435 C 1345 435, 1345 215, 1340 215" fill="none" stroke="#0f766e" stroke-width="2" marker-end="url(#arrowTeal)"/>
+  <text x="1310" y="330" text-anchor="middle" font-size="12" fill="#0f766e" transform="rotate(90 1310 330)">repeats every ~30s while the screen is visible</text>
 
-  <!-- P5: Notification removed at routine end time -->
-  <rect x="760" y="510" width="580" height="70" rx="10" fill="#f1f5f9" stroke="#64748b" stroke-width="2" stroke-dasharray="8,5"/>
-  <text x="1050" y="542" text-anchor="middle" font-size="16" fill="#475569">Notification removed at the routine's</text>
-  <text x="1050" y="564" text-anchor="middle" font-size="16" fill="#475569">configured end time</text>
+  <!-- Down to R5: screen stops -->
+  <line x1="1050" y1="470" x2="1050" y2="510" stroke="#0f766e" stroke-width="2" marker-end="url(#arrowTeal)"/>
+  <text x="1150" y="495" text-anchor="middle" font-size="12" fill="#0f766e">screen stops</text>
+
+  <!-- R5: Loop cancelled, restarts on return -->
+  <rect x="760" y="510" width="580" height="70" rx="10" fill="#ccfbf1" stroke="#0f766e" stroke-width="2"/>
+  <text x="1050" y="542" text-anchor="middle" font-size="15" fill="#134e4a">E. When the screen is no longer visible, this refresh loop</text>
+  <text x="1050" y="564" text-anchor="middle" font-size="15" fill="#134e4a">is cancelled; reopening it restarts at step B, immediately</text>
 
   <!-- Footer notes -->
-  <text x="700" y="890" text-anchor="middle" font-size="13" fill="#64748b">Blick supports all SL transport modes (metro, bus, tram, train, ferry) for any saved routine —</text>
-  <text x="700" y="910" text-anchor="middle" font-size="13" fill="#64748b">this diagram is mode-agnostic and applies regardless of which mode is selected.</text>
-  <text x="700" y="935" text-anchor="middle" font-size="13" font-weight="bold" fill="#b91c1c">The right-hand automatic/notification flow does not exist in the repository yet — see docs/Blick_Project_Documentation.md and android/README.md.</text>
+  <text x="700" y="885" text-anchor="middle" font-size="13" fill="#64748b">Blick supports all SL transport modes (metro, bus, tram, train, ferry) for any saved routine —</text>
+  <text x="700" y="905" text-anchor="middle" font-size="13" fill="#64748b">this diagram is mode-agnostic and applies regardless of which mode is selected.</text>
+  <text x="700" y="925" text-anchor="middle" font-size="13" fill="#64748b">The two loops are independent: the notification loop (left) runs in a background worker tied to the routine's own window and continues even if the app is closed;</text>
+  <text x="700" y="943" text-anchor="middle" font-size="13" font-weight="bold" fill="#0369a1">the Details-screen loop (right) only runs while that screen is on-screen. Both are implemented in source; see docs/Blick_Project_Documentation.md for what has and hasn't been run locally yet.</text>
 </svg>

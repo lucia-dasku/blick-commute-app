@@ -32,11 +32,11 @@ unusable value (see `src/config/env.ts`).
 npm run typecheck   # tsc --noEmit
 npm run lint        # eslint (flat config, eslint.config.js)
 npm run build       # tsc, emits to dist/
-npm test            # vitest — 181 tests
+npm test            # vitest — 183 tests
 npm audit           # dependency vulnerability scan
 ```
 
-Test coverage (181 tests across 16 files): DST resolver (including calendar validation
+Test coverage (183 tests across 16 files): DST resolver (including calendar validation
 — rejecting impossible dates and the spring DST gap, and ISO round-trip consistency),
 cancellation derivation, search ranking, cache/dedup, `fetchedAt` semantics (fresh,
 cached, and deduplicated-concurrent requests), request-filter validation (`future`,
@@ -57,7 +57,7 @@ review), route validation/error-envelope behavior, and the actual Vercel entry p
 (`api/index.ts`, imported directly rather than re-testing a copy of it).
 
 All of the above passed clean in the authoring sandbox (0 type errors, 0 lint
-errors/warnings, 181/181 tests passing, `npm audit`: 0 vulnerabilities). A live smoke
+errors/warnings, 183/183 tests passing, `npm audit`: 0 vulnerabilities). A live smoke
 test of the running server against the real SL endpoints could not be completed from
 that sandbox — its outbound network proxy blocks `transport.integration.sl.se` /
 `deviations.integration.sl.se` / `vercel.com` / `api.vercel.com` by allowlist. The

@@ -1,19 +1,26 @@
 <?xml version="1.0" encoding="utf-8"?>
-<manifest xmlns:android="http://schemas.android.com/apk/res/android">
+<manifest xmlns:android="http://schemas.android.com/apk/res/android"
+    xmlns:tools="http://schemas.android.com/tools">
 
     <!--
         Deliberately minimal permission set for the MVP (see docs/api-contract.md §16
         of the project documentation and the "Privacy and security" principle):
         no GPS/location, no accounts, no advertising ID.
-        POST_NOTIFICATIONS is required on API 33+ to show the commute notification and
-        is declared here in preparation for that feature, but the app does NOT yet
-        request it at runtime anywhere (there is no notification functionality to gate
-        it behind yet — see notification/RoutineNotifier.kt). Runtime permission
-        onboarding, matching the documented "Initial setup" flow, is still pending and
-        must be implemented alongside the notification feature itself, not before it.
+        POST_NOTIFICATIONS is required on API 33+ to show the commute notification; the
+        production runtime-permission flow (see ui/notification/NotificationPermissionFlow.kt)
+        requests it at routine-enable/save time, gated behind
+        AppSettingsDataStore.hasSeenNotificationRationale so the user is never re-prompted
+        after an explicit denial. FOREGROUND_SERVICE and FOREGROUND_SERVICE_DATA_SYNC are
+        required for RoutineActiveWindowWorker's active-window foreground execution (see
+        scheduling/RoutineActiveWindowWorker.kt and its `dataSync` service-type declaration
+        below) — no other foreground-service type applies to "sync fresh departure data from
+        the Blick backend while a routine's active window is open." No location, camera,
+        microphone, or exact-alarm permission is requested anywhere in this app.
     -->
     <uses-permission android:name="android.permission.POST_NOTIFICATIONS" />
     <uses-permission android:name="android.permission.INTERNET" />
+    <uses-permission android:name="android.permission.FOREGROUND_SERVICE" />
+    <uses-permission android:name="android.permission.FOREGROUND_SERVICE_DATA_SYNC" />
 
     <application
         android:name=".BlickApplication"
@@ -34,10 +41,34 @@
         </activity>
 
         <!--
-            Notification and scheduling are represented by interfaces only in this
-            scaffold (see notification/RoutineNotifier.kt, scheduling/RoutineScheduler.kt).
-            No BroadcastReceiver, foreground Service, or AlarmManager registration exists
-            yet — that is deliberately out of scope until those interfaces are implemented.
+            BlickApplication implements Configuration.Provider to hand WorkManager a
+            HiltWorkerFactory (see BlickApplication.kt's class doc) — this disables
+            WorkManager's own default on-demand `androidx.startup` initializer, which would
+            otherwise initialize WorkManager with the default configuration before
+            BlickApplication.onCreate ever runs and crash with "WorkManager is already
+            initialized" the moment on-demand initialization is triggered here instead.
         -->
+        <provider
+            android:name="androidx.startup.InitializationProvider"
+            android:authorities="${applicationId}.androidx-startup"
+            android:exported="false"
+            tools:node="merge">
+            <meta-data
+                android:name="androidx.work.WorkManagerInitializer"
+                android:value="androidx.startup"
+                tools:node="remove" />
+        </provider>
+
+        <!--
+            Declares the `dataSync` foreground-service type for WorkManager's own
+            SystemForegroundService, required on API 34+ for RoutineActiveWindowWorker's
+            setForeground() call to succeed (see developer.android.com/develop/background-work/
+            services/fgs/service-types) — the manifest merger tool combines this declaration
+            with the one WorkManager's own library manifest already provides for that service.
+        -->
+        <service
+            android:name="androidx.work.impl.foreground.SystemForegroundService"
+            android:foregroundServiceType="dataSync"
+            tools:node="merge" />
     </application>
 </manifest>

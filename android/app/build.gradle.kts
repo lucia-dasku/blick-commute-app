@@ -122,13 +122,43 @@ dependencies {
     implementation(libs.kotlinx.serialization.json)
     implementation(libs.kotlinx.coroutines.android)
 
+    // Active-window scheduling milestone -- see libs.versions.toml's "work"/"hiltWork"
+    // entries and scheduling/RoutineActiveWindowWorker.kt. androidx.hilt:hilt-compiler is
+    // REQUIRED here (distinct from the com.google.dagger:hilt-android-compiler already
+    // applied above) -- see libs.versions.toml's androidx-hilt-compiler entry for the real
+    // on-device bug its absence caused.
+    implementation(libs.androidx.work.runtime.ktx)
+    implementation(libs.hilt.work)
+    ksp(libs.hilt.compiler)
+    ksp(libs.androidx.hilt.compiler)
+
     testImplementation(libs.junit)
     testImplementation(libs.mockk)
     testImplementation(libs.kotlinx.coroutines.test)
     testImplementation(libs.androidx.room.testing)
+    // See libs.versions.toml's robolectric entry for why this is pinned to 4.16.1 and why
+    // RoutineNotificationBuilderTest targets @Config(sdk = [34]) rather than this project's
+    // actual compileSdk/targetSdk of 36.
+    testImplementation(libs.robolectric)
+    // TestListenableWorkerBuilder/WorkManagerTestInitHelper (RoutineActiveWindowWorkerTest,
+    // WorkManagerRoutineSchedulerTest) -- deterministic worker/scheduler tests, no real
+    // device or foreground-service execution needed.
+    testImplementation(libs.androidx.work.testing)
 
     androidTestImplementation(libs.androidx.test.ext.junit)
     androidTestImplementation(libs.androidx.espresso.core)
     androidTestImplementation(libs.androidx.room.testing)
     androidTestImplementation(libs.kotlinx.coroutines.test)
+    // RoutineListScreenTest (Add-routine FAB regression coverage) -- exercises the plain,
+    // Hilt-free RoutineListContent composable directly, so no Hilt test application/runner
+    // changes are needed alongside this.
+    androidTestImplementation(platform(libs.androidx.compose.bom))
+    // Declared explicitly alongside ui-test-junit4 (not left as only a transitive of it) --
+    // see this artifact's own comment in libs.versions.toml for why: the same AGP-9
+    // variant-aware-resolution gap that previously hit okhttp/material-icons-core/the
+    // Retrofit converter in this project also kept assertExists()/assertDoesNotExist() off
+    // the real compile classpath when only ui-test-junit4 was declared.
+    androidTestImplementation(libs.androidx.compose.ui.test)
+    androidTestImplementation(libs.androidx.compose.ui.test.junit4)
+    debugImplementation(libs.androidx.compose.ui.test.manifest)
 }

@@ -16,17 +16,52 @@ that end-state design in the present tense, as a specification does — they are
 a claim that all of it already exists. This section is the authoritative summary of
 what is actually built today; where the two disagree, this section wins.
 
+**Validation status of this update, stated plainly up front:** the previously-committed
+baseline (193 JVM unit tests, `lintDebug` with 0 errors/37 warnings, `assembleDebug`
+producing a debug APK) was locally run and passed on the user's machine, and none of
+that source was redone. Two further work sessions since then have added new source
+without a fresh Gradle run: first, the FAB restoration, the Routine Details 30-second
+auto-refresh, the production notification-permission flow, and the
+`WorkManagerRoutineScheduler` / `RoutineActiveWindowWorker` scheduling-and-notification-loop
+implementation (42 new JVM `@Test` functions, 3 new instrumented Compose UI `@Test`
+functions); then a corrective audit session fixing a device-local-timezone scheduling
+bug, sharing one notification-availability check across the notifier/worker/UI, making
+the Routine Details notification-status hint refresh on every lifecycle resume, and
+replacing the one-routine FAB's "open then block" flow with an in-place explanation
+dialog (a further 23 JVM `@Test` functions, 3 further instrumented `@Test` functions).
+**258 JVM `@Test` functions and 12 instrumented `@Test` functions exist in source as of
+this update, but only the original 193 JVM tests have actually been compiled and
+executed in a real Gradle run.** The user still needs to run `./gradlew
+testDebugUnitTest lintDebug assembleDebug` (and the instrumented
+`connectedDebugAndroidTest` task, plus the manual device checks listed in
+`android/README.md`) before any of the remaining 65 JVM / 12 instrumented tests can be
+considered verified. Do not read "258 tests" anywhere in this document as "258 tests
+passed" — only 193 have actually been run.
+
 **Implemented today (Android client + backend):**
 
 - Live SL stop search and transport-mode/line/direction discovery during routine setup.
 - The routine-creation wizard, backed by Room persistence.
-- A foreground routine details/live-preview screen: manual "Refresh" only, showing **up
-  to two departures total** (not three — see the corrected departure-count language
-  later in this document).
+- A foreground routine details/live-preview screen showing **up to two departures
+  total** (not three — see the corrected departure-count language later in this
+  document), which now fetches immediately when the screen becomes active and again
+  automatically about every 30 seconds while it stays visible (lifecycle-`STARTED`),
+  stopping when the screen is no longer visible and restarting with an immediate fetch
+  when it becomes visible again. A manual "Refresh" action remains available alongside
+  this automatic refresh.
 - Routine editing (the same wizard, in an edit mode), enable/disable, pause-today /
   resume-today (with automatic cleanup of an expired pause), and deletion behind an
   in-screen Material 3 confirmation dialog.
-- A first-beta one-routine limit enforced at the application/UI level.
+- An always-visible "Add routine" floating action button on the routine list screen,
+  shown whether the list is empty or already has a saved routine, opening the same
+  creation flow either way.
+- A first-beta one-routine limit enforced at the application/UI level: the "Add routine"
+  FAB always stays visible, but with one routine already saved, tapping it shows an
+  in-place dialog explaining the beta limit and pointing at editing/deleting the
+  existing routine, rather than opening a creation flow that could never actually save.
+  `RoutineCreateViewModel.oneRoutineLimitReached` still blocks saving a second routine
+  directly, kept as defence in depth for any other entry point into that screen (e.g. a
+  deep link), but the list screen itself never navigates there once a routine exists.
 - Loading, live, no-departures, offline, stale, and unavailable states for the
   departures section — including a fix ensuring that editing a routine to a different
   site/line/direction/transport-mode, followed by that new configuration's first fetch
@@ -36,19 +71,64 @@ what is actually built today; where the two disagree, this section wins.
   produced it, and is discarded rather than reused across an identity change.
 - The backend's full contract, request validation, upstream normalization, and caching
   logic (183 passing automated tests as of this update).
+- The ongoing-notification foundation (a pure mapper from a routine + the
+  live-departures engine's state + the current time to a notification presentation
+  model, recomputing each departure's countdown rather than trusting a cached value; a
+  real `NotificationCompat`-based builder with one quiet `IMPORTANCE_LOW` channel, one
+  stable notification id reused on every update, distinct wording for the
+  live/stale/no-departures/offline/unavailable/loading states; and tap-to-reopen-the-routine
+  navigation) **now runs automatically**, not only through the debug-only manual
+  trigger (which remains, in debug builds only, as a development aid): see
+  "Active-window scheduling and the 30-second notification loop" below.
+- Production runtime notification-permission onboarding: a rationale dialog gated
+  behind `AppSettingsDataStore.hasSeenNotificationRationale`, shown at the point the
+  user enables or saves a routine that is meant to show notifications, never repeated
+  after being dismissed once, with a route to the system notification-settings screen
+  when the app's notifications or the Blick channel are disabled. The Routine Details
+  screen also shows a read-only notification-status line (active vs. disabled) computed
+  via the same shared `NotificationAvailabilityChecker` the notifier and the scheduling
+  worker both use, so all three always agree — it never claims automatic delivery is
+  active when app notifications or the Blick channel are actually off — and that status
+  line now re-checks on every lifecycle resume (e.g. returning from system notification
+  settings), not just once when the screen first loads.
+- Active-window scheduling and the 30-second notification loop: saving, editing,
+  enabling, disabling, pausing, resuming, or deleting a routine schedules, replaces, or
+  cancels a `WorkManager` one-time work item for that routine's next active window
+  (unique per-routine work name, so a change can never leave stale scheduled work
+  behind), computed against the device's own local time zone (resolved fresh on every
+  call, so a live device timezone change is picked up without any extra wiring, and a
+  routine's configured wall-clock times are never misinterpreted against UTC or any
+  other fixed zone). When that window starts, a `CoroutineWorker` first checks shared
+  notification availability; only if notifications are actually available does it enter
+  foreground execution, fetch departures immediately, and post or silently update one
+  ongoing, lock-screen-visible, `setOnlyAlertOnce(true)` notification (the same
+  notification id on every update — never a new card), waiting about 30 seconds and
+  repeating until the routine's configured end time. If notifications are unavailable
+  (permission missing, app disabled, or the Blick channel disabled), the worker never
+  enters foreground execution, never starts the loop, and never reports delivery as
+  active — it simply reschedules the next eligible occurrence and exits. On normal
+  completion, a handled failure, or unavailability, the worker re-reads the routine and
+  reschedules its next eligible occurrence (unless the routine has since been deleted or
+  disabled); a genuine cancellation from an edit, delete, or replacement is never treated
+  as a completion and never resurrects the cancelled work. See "Active-window scheduling
+  and the 30-second notification loop" in the architecture section below for exactly how
+  this is built and what its real-world timing limitations are.
 
 **Not yet implemented** (described in the sections below purely as the plan):
 
-- Automatic activation of a routine at its configured start time.
-- Any periodic/background refresh, including the planned 30-second active-routine loop.
-- The ongoing, auto-updating lock-screen notification.
-- Runtime notification-permission onboarding. The `POST_NOTIFICATIONS` manifest entry
-  is declared in preparation for this, but the application does not request it at
-  runtime anywhere yet — there is no notification feature to gate it behind.
-- Automatic removal of the notification at the end of a routine's active window.
-- Scheduling reactions to routine changes or a device reboot.
-- Persistent stale-data storage beyond the current screen's in-memory session.
-- The home-screen widget.
+- Scheduling reactions to a device reboot beyond ordinary process-death survival:
+  `BlickApplication.onCreate()` idempotently reschedules every enabled saved routine at
+  process start as a reconciliation safety net, and the same reconciliation now also
+  runs live on a device timezone change (a runtime-registered `ACTION_TIMEZONE_CHANGED`
+  receiver, so an already-enqueued occurrence is recomputed against the new local zone)
+  — but there is still no dedicated `BOOT_COMPLETED` receiver, and none is planned for
+  this milestone (a `dataSync` foreground service must not be started directly from
+  `BOOT_COMPLETED` on modern Android — see the architecture section).
+- Persistent stale-data storage beyond the current screen's or worker's in-memory
+  session — a stale snapshot is not written to disk and does not survive process death.
+- Notification action buttons, an "End now" control, and a home-screen widget.
+- Exact-time activation — see "Active-window scheduling" below for why this is
+  deliberately best-effort, not exact.
 
 ---
 
@@ -173,7 +253,8 @@ The first product is SL-specific. Support for other public-transport operators i
 
 ### Initial setup
 
-*Steps 1–7 are implemented today. Step 8 (notification permission) is still planned —
+*All eight steps below are implemented today; step 8's rationale dialog is shown once,
+at the point the user first enables or saves a routine meant to show notifications —
 see "Current implementation status" above.*
 
 1. The user opens the Android application.
@@ -189,18 +270,27 @@ Line and direction options are initially discovered from live departures at the 
 
 ### Daily operation
 
-*This entire section describes the planned automatic/scheduled and notification
-behavior. None of it is implemented yet — the current behavior is a manually-opened,
-foreground-only details screen with a manual Refresh action (see "Current
-implementation status" above).*
+*This section is now implemented in source (see "Current implementation status" and
+the "Active-window scheduling and the 30-second notification loop" architecture note
+below) but has not yet been exercised on a real device by the user — treat it as
+implemented-but-unverified until that device pass happens.*
 
-1. The routine becomes active around the configured start time.
+1. The routine becomes active around the configured start time (best-effort, not exact
+   — see the scheduling section below).
 2. The application requests current normalized departures from the Blick backend.
 3. It filters by the saved site, line, transport mode, and direction code.
 4. One ongoing notification appears.
-5. The notification is refreshed during the active period.
+5. The notification is silently refreshed about every 30 seconds during the active
+   period, without a repeated sound, vibration, or extra card.
 6. Relevant disruption information is included when available.
-7. The notification is removed at the configured end time.
+7. The notification is removed at the configured end time, and the next eligible
+   occurrence is scheduled.
+
+Separately, and independently of the notification loop above, the Routine Details
+screen performs its own 30-second automatic refresh purely to keep what's on-screen
+current while the user is actually looking at that screen — it starts as soon as the
+screen becomes visible, stops as soon as it isn't, and has no effect on whether the
+background notification loop is running.
 
 ### User controls
 
@@ -262,8 +352,12 @@ The application must:
 
 ### Notification and lock screen
 
-*Planned — not implemented yet. Runtime notification-permission onboarding is pending;
-see "Current implementation status" above.*
+*The notification foundation (mapper, builder, tap navigation), the production
+permission-rationale flow, and the automatic active-window scheduling/posting/removal
+loop are all implemented in source — see "Current implementation status" above. Device
+verification (does it actually behave this way on a real phone, screen locked,
+notifications or the channel disabled, mid-window edits, and so on) is still the user's
+to run; this document does not claim that pass has happened.*
 
 The application must:
 
@@ -366,7 +460,8 @@ The Android client uses:
 - Room for commute routines;
 - Preferences DataStore only for small application settings;
 - Retrofit with kotlinx.serialization for the backend API;
-- AlarmManager and WorkManager behind scheduling interfaces;
+- WorkManager (not AlarmManager — see "Active-window scheduling" below for why) behind
+  a `RoutineScheduler` interface, implemented by `WorkManagerRoutineScheduler`;
 - Android notification APIs behind a notifier interface.
 
 Pinned SDK values:
@@ -379,7 +474,21 @@ minSdk = 26
 
 `minSdk = 26` is a product support decision. It is not described as a technical requirement for notification channels.
 
-Build toolchain: Android Gradle Plugin 9.2.1 using AGP's built-in Kotlin (Kotlin 2.3.10, no separate `org.jetbrains.kotlin.android` plugin), Gradle 9.4.1, KSP 2.3.9. The Gradle wrapper (`gradlew`, `gradlew.bat`, `gradle-wrapper.jar`, and `gradle-wrapper.properties` with its distribution SHA-256 checksum) is committed, so a fresh clone can build without a pre-existing local Gradle install. `assembleDebug`, `lintDebug`, and `testDebugUnitTest` have not been executed as part of preparing this repository — that environment has no JDK 17, no Android SDK, and no network path to the hosts that would provide either, so these commands are structurally prepared but not build-verified from that environment. See `android/README.md` for the exact toolchain versions and rationale.
+Build toolchain: Android Gradle Plugin 9.2.1 using AGP's built-in Kotlin (Kotlin 2.3.10, no separate `org.jetbrains.kotlin.android` plugin), Gradle 9.4.1, KSP 2.3.9. The Gradle wrapper (`gradlew`, `gradlew.bat`, `gradle-wrapper.jar`, and `gradle-wrapper.properties` with its distribution SHA-256 checksum) is committed, so a fresh clone can build without a pre-existing local Gradle install. An earlier Android baseline (predating the ongoing-notification milestone) was successfully validated with a real local run — `assembleDebug` produced a debug APK, `lintDebug` completed with 0 errors, and `testDebugUnitTest` passed 117 JVM unit tests — on a machine with JDK 17 and the Android SDK. The notification-foundation implementation that followed, with 193 JVM source-level `@Test` functions, was itself later validated with a fresh local `./gradlew testDebugUnitTest lintDebug assembleDebug` run: `testDebugUnitTest` passed with no failures, `lintDebug` completed with 0 errors/37 warnings, and `assembleDebug` produced a debug APK. (This run also caught and fixed two real issues surfaced only by actually executing the notification code: a test assertion that could false-fail against a departure's own line designation rather than an actual countdown value, and two Android Lint findings — a `MissingPermission` false positive on the already-guarded notification post, and two `context.getString()` calls inside non-composable callbacks that Lint flagged for potential staleness across configuration changes, both resolved by resolving the strings once via `stringResource()` in composable scope.)
+
+That 193-test run remains the last one actually executed on the user's machine. The
+scheduling/active-window/permission-flow milestone added 42 further JVM `@Test`
+functions and 3 further instrumented Compose UI `@Test` functions (reaching 235 JVM /
+9 instrumented in source at the time); a subsequent corrective audit session fixing the
+device-local-timezone bug, the shared notification-availability check, the
+lifecycle-aware status refresh, and the explicit one-routine dialog added a further 23
+JVM `@Test` functions and 3 further instrumented `@Test` functions. **258 JVM `@Test`
+functions and 12 instrumented `@Test` functions exist in source as of this update** —
+none of the 65 JVM / 12 instrumented tests beyond the original 193/9 baseline have been
+compiled or run yet in this environment or on the user's machine. See
+`android/README.md` for the exact toolchain versions, rationale, and the up-to-date
+per-file test breakdown, and see "Validation status of this update" at the top of this
+document for what still needs to be run before these numbers can be called passing.
 
 ### Backend
 
@@ -655,29 +764,131 @@ Network DTOs receive ISO 8601 strings with explicit offsets. Android maps them i
 
 ---
 
-## 13. Scheduling and Android limitations
+## 13. Active-window scheduling and the 30-second notification loop
 
-*Planned — not implemented yet. There is no `WorkManager`/`AlarmManager`/foreground
-service in the repository today; see "Current implementation status" above.*
+*Implemented in source this update; device verification is still pending — see
+"Current implementation status" above and the "Validation status" note at the top of
+this document.*
 
-Android limits background activity to protect battery life. Blick should not attempt to run continuously.
+Android limits background activity to protect battery life. Blick does not attempt to
+run continuously — it schedules work only around each routine's own configured window.
 
-The scheduled commute-window design supports this requirement:
+### Why WorkManager, and why not an exact alarm
 
-- work begins only around the selected start time;
-- data is checked only during the active period;
-- one notification is updated instead of producing repeated alerts;
-- work stops when the configured period ends.
+- `PeriodicWorkRequest` was **not** used for the 30-second in-window refresh: WorkManager's
+  periodic work has a 15-minute minimum interval, which cannot represent a 30-second
+  cadence. Instead, a single `OneTimeWorkRequest` per routine activates the next window
+  (`WorkManagerRoutineScheduler.scheduleActivation`), and once that worker starts, it
+  owns its own internal 30-second loop for the duration of that one window.
+- `USE_EXACT_ALARM` and `SCHEDULE_EXACT_ALARM` are deliberately **not** used, and there
+  is no exact-alarm permission screen. Start-time activation is therefore best-effort,
+  not exact — WorkManager does not guarantee the worker starts at precisely the
+  configured time, only that it will start at or after it, subject to normal Android
+  battery/Doze/OEM scheduling behavior. This document and the app must not claim exact
+  execution.
+- Once activated, the worker calls `setForeground()` with a `CoroutineWorker`, so
+  WorkManager itself manages promoting the work to a foreground service — no separate,
+  manually-started foreground service class was written. See [Long-running
+  workers](https://developer.android.com/develop/background-work/background-tasks/persistent/how-to/long-running).
+- The `dataSync` foreground-service type was chosen (`FOREGROUND_SERVICE_DATA_SYNC`
+  permission, `android:foregroundServiceType="dataSync"` on the merged
+  `SystemForegroundService` manifest entry) since the worker's job — fetching current
+  departures over the network and reflecting them in a notification — is a data-sync
+  operation, not media, location, or camera/mic use. See [Foreground service
+  types](https://developer.android.com/develop/background-work/services/fgs/service-types).
+  Android 15+ limits a `dataSync` foreground service to six total hours in any rolling
+  24-hour period — routine windows are expected to be short (a typical commute window),
+  which is why the worker stops reliably at the routine's configured end time rather
+  than running indefinitely.
 
-Perfectly exact background execution may require Android's special exact-alarm permission. Where exact timing is unnecessary, an inexact scheduled start may provide a better balance between reliability, battery use, and permission burden.
+### Scheduling, replacing, and cancelling work
 
-Foreground-service use is restricted on modern Android versions and must match current Android and Google Play policy. Scheduling and notification components must be isolated behind interfaces and tested on recent Android versions, including Samsung devices whose battery settings may affect background work.
+Each routine's scheduled activation uses a unique, replaceable WorkManager work name
+(`ExistingWorkPolicy.REPLACE` against `"routine-active-window-" + routineId`). Saving a
+new routine, editing an existing one, enabling, disabling, pausing for today, resuming,
+or deleting a routine all call through the same `RoutineScheduler.scheduleActivation` /
+`cancelActivation` interface, so a change can never leave stale, obsolete scheduled work
+behind for that routine. `NextOccurrenceCalculator` computes the next active window (or
+"active right now") from the routine's active weekdays and start/end time using
+`ZonedDateTime`, so the JDK itself resolves daylight-saving-time gaps and overlaps
+rather than the app guessing. The current instant (an injectable `Clock`) and the zone
+used to interpret it (an injectable `DeviceZoneProvider`, resolving
+`ZoneId.systemDefault()` fresh on every call in production) are deliberately separate:
+a routine's weekdays and start/end time are the device's own local wall-clock values, so
+combining a zone-less `Clock.instant()` with the device's current zone is what makes a
+07:30 Stockholm routine actually activate at 07:30 Stockholm time, in both directions of
+daylight saving, rather than being silently reinterpreted against the clock's own zone
+(e.g. UTC). Because the zone is re-resolved on every call rather than captured once, a
+live device timezone change is picked up automatically the next time a schedule is
+computed, and is also reconciled immediately via a runtime-registered
+`ACTION_TIMEZONE_CHANGED` receiver.
 
-The application must restore appropriate schedules after device reboot or relevant time-setting changes.
+### The 30-second loop itself
+
+Once a window is active, `RoutineActiveWindowWorker.doWork()`:
+
+1. Loads and validates the routine, and checks whether it has been started late (for
+   example after a delay imposed by the system); if the window has already elapsed, it
+   skips posting entirely and reschedules the next eligible occurrence rather than
+   showing a notification for a window that has already ended.
+2. Checks shared notification availability (the same `NotificationAvailabilityChecker`
+   the notifier and the Routine Details status hint use) **before** ever entering
+   foreground execution. If notifications are unavailable — permission missing, app
+   notifications disabled, or the Blick channel specifically disabled — the worker never
+   calls `setForeground()`, never starts the loop, never recreates or modifies a
+   disabled channel, and never reports delivery as active; it simply reschedules the
+   next eligible occurrence and exits. Only once availability is confirmed does it enter
+   foreground execution with a valid Blick notification (channel creation still proceeds
+   normally if the channel is merely missing rather than disabled).
+3. Fetches current departures through the existing live-departures engine.
+4. Filters and maps them through the existing notification model (up to two
+   departures), and posts or silently updates the routine's one ongoing notification —
+   same notification id every time, `setOnlyAlertOnce(true)`, no repeated sound,
+   vibration, heads-up, or extra card.
+5. Waits about 30 seconds.
+6. Repeats from step 3 until the routine's configured end time, a disable, or a
+   deletion — whichever happens first (re-reading the routine from storage on every
+   iteration so an edit made mid-window takes effect without waiting for the next
+   scheduled activation).
+7. Removes that notification, stops, and schedules the next eligible occurrence.
+
+If a network fetch fails after an earlier successful one inside the same window, the
+existing stale/offline semantics apply (no extra alert; the same notification reflects
+the last known departures with an appropriate stale indication) and the next 30-second
+tick retries. A stale snapshot is not persisted beyond that one worker run — it does
+not survive process death, matching the current explicitly-scoped limitation.
+
+Terminal handling is deliberately three-way: normal completion, a handled failure (for
+example building the foreground notification or posting an update throws), and a late
+start or unavailable notifications all re-read the routine and reschedule its next
+eligible occurrence (unless the routine has since been deleted or disabled) and clean up
+the active notification if the loop had actually been entered. A genuine
+`CancellationException` — from the routine being deleted, disabled, or its unique work
+being replaced mid-run — is always rethrown rather than caught as a handled failure, so
+cancellation never gets converted into a success/failure result and never causes the
+cancelled work to be rescheduled or resurrected.
+
+### Reboot and process death
+
+WorkManager persists scheduled work through ordinary process death and device reboot on
+its own. `BlickApplication.onCreate()` additionally reschedules every enabled saved
+routine at process start, as an idempotent reconciliation safety net — this is not the
+primary scheduling path and does not start a foreground service directly from
+`BOOT_COMPLETED` (restricted on modern Android; see [Restrictions on background
+starts](https://developer.android.com/develop/background-work/services/fgs/restrictions-bg-start)).
+
+### What remains best-effort, not exact
+
+- Start-time activation is best-effort, as stated above — this is a deliberate,
+  documented trade-off, not an oversight.
+- The 30-second refresh cadence inside an active window is enforced by the worker's own
+  `delay()` loop while it holds foreground execution, not by a system-guaranteed timer.
 
 Relevant Android documentation:
 
-- [Schedule alarms](https://developer.android.com/develop/background-work/services/alarms)
+- [Long-running workers](https://developer.android.com/develop/background-work/background-tasks/persistent/how-to/long-running)
+- [Foreground service types](https://developer.android.com/develop/background-work/services/fgs/service-types)
+- [Restrictions on background starts](https://developer.android.com/develop/background-work/services/fgs/restrictions-bg-start)
 - [Background work](https://developer.android.com/develop/background-work)
 - [Create notifications](https://developer.android.com/develop/ui/views/notifications/build-notification)
 
@@ -901,8 +1112,58 @@ Although the current upstream APIs are keyless, the backend must remain capable 
 - effective-time and countdown calculation;
 - filtering by site, line, mode, and direction code;
 - ViewModel behaviour where implemented;
-- scheduler and notifier interfaces with fakes;
-- stale and offline presentation.
+- stale and offline presentation;
+- notification presentation mapping — a pure, Android-free mapper from a routine and the
+  live-departures engine's state to a notification model (`RoutineNotificationMapperTest`);
+- notification construction and posting — the real, built `android.app.Notification` and the
+  real framework `NotificationManager`, exercised via Robolectric (channel importance and
+  idempotency, ongoing/visibility/icon flags, tap-intent routine id, per-state content, the
+  app-wide notifications-disabled case, and the Blick notification channel's own
+  `IMPORTANCE_NONE` case — distinct from the app-wide toggle);
+- notification-tap intent consumed exactly once, so an Activity recreation cannot replay an
+  already-handled tap;
+- `RoutineDetailsViewModel`'s debug notification trigger, via hand-written fakes.
+
+The tests above have since been executed via a fresh local
+`./gradlew testDebugUnitTest lintDebug assembleDebug` run, alongside the rest of the JVM suite,
+with no failures; see the toolchain/validation note above. **The tests below are new
+this update and have not yet been run locally — see "Validation status of this update"
+at the top of this document.**
+
+- Add-routine control: an instrumented Compose UI test (`RoutineListScreenTest`, calling
+  the extracted stateless `RoutineListContent` composable directly, no Hilt needed)
+  proving the FAB exists and opens the creation flow both when the routine list is empty
+  and when it already has a saved routine, and that tapping a saved routine still opens
+  it.
+- `RoutineDetailsViewModel`'s 30-second auto-refresh: immediate fetch on first
+  becoming active without a duplicate fetch (since `init` already fetched once), fetch
+  again after ~30 virtual seconds, no `Loading` flash on an automatic tick, cancellation
+  stops further ticks when the screen becomes inactive, an immediate fetch on
+  reactivation, and no duplicate/overlapping refresh loop across repeated
+  activation — all using the existing `StandardTestDispatcher`/virtual-time convention,
+  never a real 30-second wait.
+- `NextOccurrenceCalculator`: no active weekday, before/inside/at the boundary of
+  today's window, rolling forward across inactive weekdays and into the following week,
+  the paused-for-today exclusion, every day active, and both sides of the 2027 spring
+  daylight-saving gap and the 2026 autumn overlap.
+- `WorkManagerRoutineScheduler`: real `WorkManager` (via
+  `WorkManagerTestInitHelper.initializeTestWorkManager`, not a hand-rolled fake)
+  enqueue, replace-on-reschedule, and cancel behavior for a routine's unique work name.
+- `RoutineActiveWindowWorker` (via `TestListenableWorkerBuilder` with a fake worker
+  factory): missing routine id fails cleanly; a routine that no longer exists succeeds
+  without posting; a late start past the window's end skips posting and reschedules; a
+  normal run produces the correct number of 30-second ticks, calls
+  `notifier.remove()` exactly once at the end, and reschedules once; the notification
+  model always carries the correct routine id for tap navigation; the routine being
+  disabled mid-run stops the loop early and reschedules with the routine's new disabled
+  state; the routine being deleted mid-run stops the loop and does **not** reschedule;
+  and a fetch failure after an earlier success in the same window produces a `Stale`
+  notification content, not `Offline`/`Unavailable`.
+- Scheduler integration: enabling, disabling, pausing for today, resuming, and deleting
+  a routine from `RoutineDetailsViewModel`, saving a new routine from
+  `RoutineCreateViewModel`, and deleting a routine from `RoutineListViewModel` all call
+  through to a fake `RoutineScheduler`'s `scheduleActivation`/`cancelActivation` as
+  expected.
 
 ### Release checks
 

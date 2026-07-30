@@ -9,6 +9,7 @@ import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.launch
 import se.blick.app.data.repository.RoutineRepository
 import se.blick.app.domain.model.CommuteRoutine
+import se.blick.app.scheduling.RoutineScheduler
 import java.time.LocalDate
 import javax.inject.Inject
 
@@ -20,6 +21,7 @@ data class RoutineListUiState(
 @HiltViewModel
 class RoutineListViewModel @Inject constructor(
     private val routineRepository: RoutineRepository,
+    private val routineScheduler: RoutineScheduler,
 ) : ViewModel() {
 
     private val _uiState = MutableStateFlow(RoutineListUiState())
@@ -34,7 +36,10 @@ class RoutineListViewModel @Inject constructor(
     }
 
     fun deleteRoutine(id: String) {
-        viewModelScope.launch { routineRepository.delete(id) }
+        viewModelScope.launch {
+            routineRepository.delete(id)
+            routineScheduler.cancelActivation(id)
+        }
     }
 
     fun pauseForToday(id: String) {

@@ -15,8 +15,10 @@ import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.flow.collectLatest
 import kotlinx.coroutines.flow.debounce
 import kotlinx.coroutines.flow.distinctUntilChanged
+import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.flow.update
 import kotlinx.coroutines.launch
+import se.blick.app.data.local.datastore.AppSettingsDataStore
 import se.blick.app.data.repository.DirectionOption
 import se.blick.app.data.repository.DirectionOptionsSource
 import se.blick.app.data.repository.RoutineRepository
@@ -24,6 +26,7 @@ import se.blick.app.data.repository.StopRepository
 import se.blick.app.domain.model.CommuteRoutine
 import se.blick.app.domain.model.Site
 import se.blick.app.domain.model.TransportMode
+import se.blick.app.scheduling.RoutineScheduler
 import se.blick.app.ui.navigation.Routes
 import java.time.DayOfWeek
 import java.time.LocalTime
@@ -83,6 +86,10 @@ data class RoutineCreateUiState(
     val existingRoutineNotFound: Boolean = false,
     /** Create mode only: a routine already exists — see the first-beta one-routine limit. */
     val oneRoutineLimitReached: Boolean = false,
+    /** Mirrors `AppSettingsDataStore.hasSeenNotificationRationale` — true once the production
+     * notification-permission rationale has been shown once (regardless of the user's answer),
+     * so [se.blick.app.ui.notification.rememberNotificationPermissionGate] never asks again. */
+    val hasSeenNotificationRationale: Boolean = false,
 ) {
     val hasSelectedDays: Boolean get() = activeDays.isNotEmpty()
 
@@ -102,6 +109,8 @@ class RoutineCreateViewModel @Inject constructor(
     private val stopRepository: StopRepository,
     private val directionOptionsSource: DirectionOptionsSource,
     private val routineRepository: RoutineRepository,
+    private val routineScheduler: RoutineScheduler,
+    private val appSettingsDataStore: AppSettingsDataStore,
 ) : ViewModel() {
 
     /** Present only when this screen was reached via [Routes.RoutineEdit] — absent (null)
@@ -166,6 +175,10 @@ class RoutineCreateViewModel @Inject constructor(
                 .debounce(300)
                 .distinctUntilChanged()
                 .collectLatest { request -> performSearch(request.query) }
+        }
+        viewModelScope.launch {
+            val seen = appSettingsDataStore.settings.first().hasSeenNotificationRationale
+            _uiState.update { it.copy(hasSeenNotificationRationale = seen) }
         }
         val routineId = editingRoutineId
         if (routineId != null) {
@@ -396,6 +409,16 @@ class RoutineCreateViewModel @Inject constructor(
         _uiState.update { it.copy(name = name) }
     }
 
+    /** Records that the production notification-permission rationale (see
+     * [se.blick.app.ui.notification.rememberNotificationPermissionGate]) has now been shown
+     * once, so it is never shown again regardless of the user's answer. Updates local state
+     * immediately (optimistic) so a second save attempt in the same screen session can never
+     * re-trigger it even before the DataStore write below completes. */
+    fun markNotificationRationaleSeen() {
+        _uiState.update { it.copy(hasSeenNotificationRationale = true) }
+        viewModelScope.launch { appSettingsDataStore.setHasSeenNotificationRationale(true) }
+    }
+
     /** Returns true if it moved back a step; false if already at the first step (caller should exit). */
     fun back(): Boolean {
         val previous = when (_uiState.value.step) {
@@ -436,24 +459,28 @@ class RoutineCreateViewModel @Inject constructor(
         viewModelScope.launch {
             try {
                 val existing = originalRoutine
-                routineRepository.save(
-                    CommuteRoutine(
-                        id = existing?.id ?: java.util.UUID.randomUUID().toString(),
-                        name = state.name,
-                        siteId = site.siteId,
-                        siteName = site.name,
-                        transportMode = direction.transportMode,
-                        lineId = direction.lineId,
-                        lineDesignation = direction.lineDesignation,
-                        directionCode = direction.directionCode,
-                        destinationLabel = direction.destinationLabel,
-                        activeDays = state.activeDays,
-                        startTime = state.startTime,
-                        endTime = state.endTime,
-                        enabled = existing?.enabled ?: true,
-                        pausedDate = existing?.pausedDate,
-                    ),
+                val toSave = CommuteRoutine(
+                    id = existing?.id ?: java.util.UUID.randomUUID().toString(),
+                    name = state.name,
+                    siteId = site.siteId,
+                    siteName = site.name,
+                    transportMode = direction.transportMode,
+                    lineId = direction.lineId,
+                    lineDesignation = direction.lineDesignation,
+                    directionCode = direction.directionCode,
+                    destinationLabel = direction.destinationLabel,
+                    activeDays = state.activeDays,
+                    startTime = state.startTime,
+                    endTime = state.endTime,
+                    enabled = existing?.enabled ?: true,
+                    pausedDate = existing?.pausedDate,
                 )
+                routineRepository.save(toSave)
+                // Schedules (or, for an edit, replaces) this routine's next active-window
+                // activation — see RoutineScheduler.scheduleActivation's own doc on why this
+                // is safe to call unconditionally here even for a disabled routine (it cancels
+                // any existing scheduled work instead).
+                routineScheduler.scheduleActivation(toSave)
                 _uiState.update { it.copy(isSaving = false, saveFailed = false) }
                 onSaved()
             } catch (e: CancellationException) {

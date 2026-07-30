@@ -2,6 +2,11 @@
 
 package se.blick.app.ui.screens.routinedetails
 
+import android.Manifest
+import android.content.pm.PackageManager
+import android.os.Build
+import androidx.activity.compose.rememberLauncherForActivityResult
+import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
@@ -31,33 +36,53 @@ import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
 import androidx.compose.material3.TopAppBar
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.platform.LocalLifecycleOwner
 import androidx.compose.ui.platform.LocalLocale
 import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.unit.dp
+import androidx.core.content.ContextCompat
 import androidx.hilt.navigation.compose.hiltViewModel
+import androidx.lifecycle.Lifecycle
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
+import androidx.lifecycle.repeatOnLifecycle
+import se.blick.app.BuildConfig
 import se.blick.app.R
 import se.blick.app.domain.model.CommuteRoutine
 import se.blick.app.domain.usecase.LiveDeparturesState
 import se.blick.app.domain.usecase.PreparedDeparture
 import se.blick.app.domain.model.TransportMode
+import se.blick.app.notification.NotificationAvailability
+import se.blick.app.notification.NotificationPostResult
+import se.blick.app.ui.notification.notificationSettingsIntent
+import se.blick.app.ui.notification.rememberNotificationPermissionGate
 
 /**
  * Routine details / live-preview screen: loads one saved routine and shows its next two
  * relevant departures via [RoutineDetailsViewModel] + the existing live-departure engine.
- * Foreground, manually refreshable only — no periodic refresh, no notifications.
+ * While this screen is open it automatically refreshes about every 30 seconds (independent
+ * of the separate ~30s ongoing-notification loop driven by `scheduling/RoutineActiveWindowWorker`),
+ * plus a manual Refresh action; a notification-status hint on this screen (see
+ * [NotificationStatusRow]) also re-checks availability every time the screen resumes, e.g.
+ * after returning from system notification settings.
  *
  * Also hosts routine management: edit (delegates navigation to [onEdit], the actual editing
  * UI is [se.blick.app.ui.screens.routinecreate.RoutineCreateScreen] reused in edit mode —
  * see [se.blick.app.ui.navigation.BlickNavHost]), enable/disable, pause/resume today, and
  * delete (with an in-screen confirmation dialog; [onDeleted] is only invoked once the
  * repository write actually succeeds).
+ *
+ * In debug builds only, also hosts a manual "Show/update test notification" /
+ * "Remove test notification" pair (see [DebugNotificationSection] and
+ * [RoutineDetailsViewModel.showDebugTestNotification]) for exercising the real
+ * `notification/AndroidRoutineNotifier` directly, alongside the automatic scheduled loop.
  */
 @Composable
 fun RoutineDetailsScreen(
@@ -68,6 +93,20 @@ fun RoutineDetailsScreen(
 ) {
     val uiState by viewModel.uiState.collectAsStateWithLifecycle()
     var showDeleteConfirmation by remember { mutableStateOf(false) }
+
+    // Drives RoutineDetailsViewModel.runAutoRefresh's 30-second loop for exactly as long as
+    // this screen is visible and STARTED (see that function's own doc) -- repeatOnLifecycle
+    // cancels its block (stopping the loop) on STOP and re-runs it (an immediate fetch, then
+    // resumed 30-second ticks) on the next STARTED, so backgrounding the app, navigating away,
+    // or a screen rotation all behave correctly with no separate stop/restart wiring needed
+    // here, and repeatOnLifecycle's own guarantee that only one of its blocks runs at a time
+    // rules out a duplicate concurrent loop from rapid recomposition.
+    val lifecycleOwner = LocalLifecycleOwner.current
+    LaunchedEffect(lifecycleOwner, viewModel) {
+        lifecycleOwner.lifecycle.repeatOnLifecycle(Lifecycle.State.STARTED) {
+            viewModel.runAutoRefresh()
+        }
+    }
 
     Scaffold(
         topBar = {
@@ -103,6 +142,9 @@ fun RoutineDetailsScreen(
                 onEdit = { onEdit(routine.id) },
                 isTogglingEnabled = uiState.isTogglingEnabled,
                 enabledActionFailed = uiState.enabledActionFailed,
+                hasSeenNotificationRationale = uiState.hasSeenNotificationRationale,
+                onNotificationRationaleSeen = viewModel::markNotificationRationaleSeen,
+                notificationAvailability = uiState.notificationAvailability,
                 onToggleEnabled = viewModel::toggleEnabled,
                 isTogglingPause = uiState.isTogglingPause,
                 pauseActionFailed = uiState.pauseActionFailed,
@@ -111,6 +153,8 @@ fun RoutineDetailsScreen(
                 isDeleting = uiState.isDeleting,
                 deleteFailed = uiState.deleteFailed,
                 onRequestDelete = { showDeleteConfirmation = true },
+                onShowDebugNotification = viewModel::showDebugTestNotification,
+                onRemoveDebugNotification = viewModel::removeDebugTestNotification,
             )
         }
     }
@@ -162,6 +206,9 @@ private fun RoutineDetailsContent(
     onEdit: () -> Unit,
     isTogglingEnabled: Boolean,
     enabledActionFailed: Boolean,
+    hasSeenNotificationRationale: Boolean,
+    onNotificationRationaleSeen: () -> Unit,
+    notificationAvailability: NotificationAvailability,
     onToggleEnabled: () -> Unit,
     isTogglingPause: Boolean,
     pauseActionFailed: Boolean,
@@ -170,6 +217,8 @@ private fun RoutineDetailsContent(
     isDeleting: Boolean,
     deleteFailed: Boolean,
     onRequestDelete: () -> Unit,
+    onShowDebugNotification: () -> NotificationPostResult?,
+    onRemoveDebugNotification: () -> Unit,
 ) {
     val locale = LocalLocale.current.platformLocale
 
@@ -200,6 +249,9 @@ private fun RoutineDetailsContent(
             onEdit = onEdit,
             isTogglingEnabled = isTogglingEnabled,
             enabledActionFailed = enabledActionFailed,
+            hasSeenNotificationRationale = hasSeenNotificationRationale,
+            onNotificationRationaleSeen = onNotificationRationaleSeen,
+            notificationAvailability = notificationAvailability,
             onToggleEnabled = onToggleEnabled,
             isTogglingPause = isTogglingPause,
             pauseActionFailed = pauseActionFailed,
@@ -231,7 +283,116 @@ private fun RoutineDetailsContent(
         Spacer(Modifier.height(12.dp))
 
         DeparturesSection(departuresState, locale, onRefresh)
+
+        // Debug-only manual notification trigger (Part 6 of the ongoing-notification
+        // foundation milestone) — see RoutineDetailsViewModel.showDebugTestNotification's
+        // doc comment. BuildConfig.DEBUG is compile-time-constant, so R8 strips this whole
+        // block (and the section below) out of a release build entirely.
+        if (BuildConfig.DEBUG) {
+            Spacer(Modifier.height(20.dp))
+            HorizontalDivider()
+            Spacer(Modifier.height(16.dp))
+            DebugNotificationSection(
+                canShow = departuresState !is LiveDeparturesState.Loading,
+                onShow = onShowDebugNotification,
+                onRemove = onRemoveDebugNotification,
+            )
+        }
     }
+}
+
+/**
+ * Debug-only UI for manually verifying [se.blick.app.notification.RoutineNotifier] end to
+ * end before any scheduler exists to call it automatically (see
+ * [RoutineDetailsViewModel.showDebugTestNotification]/`removeDebugTestNotification`). Handles
+ * its own minimal, debug-only `POST_NOTIFICATIONS` runtime-permission request on API 33+ —
+ * deliberately independent of `AppSettingsDataStore.hasSeenNotificationRationale` and the
+ * still-unbuilt production rationale screen; this is only for exercising the notifier itself.
+ *
+ * [onShow] returns the notifier's real [NotificationPostResult] (or null if there was no
+ * routine loaded to post for), and the displayed message is derived from that actual result
+ * via [NotificationPostResult.toDebugMessage] — granting the permission is necessary but not
+ * sufficient to report success; posting itself must also have actually succeeded.
+ */
+@Composable
+private fun DebugNotificationSection(
+    canShow: Boolean,
+    onShow: () -> NotificationPostResult?,
+    onRemove: () -> Unit,
+) {
+    val context = LocalContext.current
+    var resultMessage by remember { mutableStateOf<String?>(null) }
+
+    // Resolved here, in composable scope, rather than via context.getString(...) inside the
+    // callbacks below -- LocalContext.current reads don't get invalidated on a Configuration
+    // change, so a getString() call made lazily inside a lambda can return a stale value;
+    // stringResource() here is recomposed correctly and the resolved String is then just
+    // captured by the lambdas like any other value.
+    val permissionDeniedMessage = stringResource(R.string.debug_notification_permission_denied)
+    val removedMessage = stringResource(R.string.debug_notification_removed)
+
+    val permissionLauncher = rememberLauncherForActivityResult(
+        ActivityResultContracts.RequestPermission(),
+    ) { granted ->
+        resultMessage = if (granted) {
+            onShow().toDebugMessage(context)
+        } else {
+            permissionDeniedMessage
+        }
+    }
+
+    Column {
+        Text(stringResource(R.string.debug_notification_section_heading), style = MaterialTheme.typography.titleSmall)
+        Spacer(Modifier.height(8.dp))
+
+        Button(
+            onClick = {
+                val needsPermissionRequest = Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU &&
+                    ContextCompat.checkSelfPermission(context, Manifest.permission.POST_NOTIFICATIONS) !=
+                    PackageManager.PERMISSION_GRANTED
+                if (needsPermissionRequest) {
+                    permissionLauncher.launch(Manifest.permission.POST_NOTIFICATIONS)
+                } else {
+                    resultMessage = onShow().toDebugMessage(context)
+                }
+            },
+            enabled = canShow,
+            modifier = Modifier.fillMaxWidth(),
+        ) {
+            Text(stringResource(R.string.debug_show_test_notification))
+        }
+        Spacer(Modifier.height(8.dp))
+
+        OutlinedButton(
+            onClick = {
+                onRemove()
+                resultMessage = removedMessage
+            },
+            modifier = Modifier.fillMaxWidth(),
+        ) {
+            Text(stringResource(R.string.debug_remove_test_notification))
+        }
+
+        resultMessage?.let { message ->
+            Spacer(Modifier.height(4.dp))
+            Text(message, style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.secondary)
+        }
+    }
+}
+
+/**
+ * Maps the notifier's real [NotificationPostResult] to user-facing debug text — the only
+ * place in [DebugNotificationSection] allowed to produce the "posted" message, and only for
+ * [NotificationPostResult.Posted]. A null result (no routine loaded — see
+ * [RoutineDetailsViewModel.showDebugTestNotification]) falls back to the same generic
+ * failure wording as [NotificationPostResult.Failed]: this branch should be unreachable in
+ * practice since [DebugNotificationSection]'s "Show" button is disabled until a routine is
+ * loaded, but it must never silently claim success either way.
+ */
+internal fun NotificationPostResult?.toDebugMessage(context: android.content.Context): String = when (this) {
+    NotificationPostResult.Posted -> context.getString(R.string.debug_notification_posted)
+    NotificationPostResult.NotificationsDisabled -> context.getString(R.string.debug_notification_disabled)
+    NotificationPostResult.Failed, null -> context.getString(R.string.debug_notification_failed)
 }
 
 @Composable
@@ -241,6 +402,9 @@ private fun RoutineActionsSection(
     onEdit: () -> Unit,
     isTogglingEnabled: Boolean,
     enabledActionFailed: Boolean,
+    hasSeenNotificationRationale: Boolean,
+    onNotificationRationaleSeen: () -> Unit,
+    notificationAvailability: NotificationAvailability,
     onToggleEnabled: () -> Unit,
     isTogglingPause: Boolean,
     pauseActionFailed: Boolean,
@@ -250,9 +414,19 @@ private fun RoutineActionsSection(
     deleteFailed: Boolean,
     onRequestDelete: () -> Unit,
 ) {
+    // Enabling a routine is exactly the "appropriate user-driven point" the product doc asks
+    // for to request POST_NOTIFICATIONS (see rememberNotificationPermissionGate's own doc) --
+    // disabling never needs it, so the gate only wraps the enabling direction below.
+    val notifyGate = rememberNotificationPermissionGate(hasSeenNotificationRationale, onNotificationRationaleSeen)
+
     Column {
         Text(stringResource(R.string.routine_details_actions_heading), style = MaterialTheme.typography.titleMedium)
         Spacer(Modifier.height(8.dp))
+
+        if (routine.enabled) {
+            NotificationStatusRow(notificationAvailability)
+            Spacer(Modifier.height(8.dp))
+        }
 
         OutlinedButton(onClick = onEdit, modifier = Modifier.fillMaxWidth()) {
             Text(stringResource(R.string.routine_details_edit_action))
@@ -262,7 +436,9 @@ private fun RoutineActionsSection(
         // Never colour-only: the label itself always states the resulting/current state in
         // words (see the milestone requirement on text scaling + no colour-only status).
         OutlinedButton(
-            onClick = onToggleEnabled,
+            onClick = {
+                if (routine.enabled) onToggleEnabled() else notifyGate { onToggleEnabled() }
+            },
             enabled = !isTogglingEnabled,
             modifier = Modifier.fillMaxWidth(),
         ) {
@@ -318,6 +494,46 @@ private fun RoutineActionsSection(
                 color = MaterialTheme.colorScheme.error,
                 style = MaterialTheme.typography.bodySmall,
             )
+        }
+    }
+}
+
+/**
+ * Reflects the REAL, current [NotificationAvailability] (see that type's own doc — the exact
+ * same shared checker [se.blick.app.notification.AndroidRoutineNotifier] and
+ * `RoutineActiveWindowWorker` read before ever posting) — so this can never claim automatic
+ * notification delivery is active when it actually is not (see the product doc's "Production
+ * notification permission" requirement).
+ *
+ * Deliberately a plain parameter, not a locally-`remember`ed snapshot: the value is supplied by
+ * [RoutineDetailsViewModel.notificationAvailability], which that ViewModel re-checks every time
+ * the screen becomes active again (see [RoutineDetailsViewModel.refreshNotificationAvailability]'s
+ * doc) — returning from system Settings, a permission-result callback, or any other change is
+ * therefore always reflected on the very next recomposition once the lifecycle resumes, rather
+ * than staying frozen at whatever the very first read happened to be for the composable's whole
+ * lifetime (the bug a `remember(context)` snapshot here used to have).
+ */
+@Composable
+private fun NotificationStatusRow(notificationAvailability: NotificationAvailability) {
+    val context = LocalContext.current
+    val deliveryActive = notificationAvailability == NotificationAvailability.Available
+
+    Column {
+        Text(
+            stringResource(
+                if (deliveryActive) {
+                    R.string.routine_details_notifications_active_hint
+                } else {
+                    R.string.routine_details_notifications_disabled_hint
+                },
+            ),
+            style = MaterialTheme.typography.bodySmall,
+            color = if (deliveryActive) MaterialTheme.colorScheme.secondary else MaterialTheme.colorScheme.error,
+        )
+        if (!deliveryActive) {
+            TextButton(onClick = { context.startActivity(notificationSettingsIntent(context)) }) {
+                Text(stringResource(R.string.notification_settings_open_action))
+            }
         }
     }
 }

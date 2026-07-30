@@ -27,33 +27,58 @@ blick/
 
 ![Blick data flow](docs/framework.svg)
 
-**Currently implemented (foreground, manual):** the user creates a routine, opens its
-details screen, and the app requests departures for that routine through the backend,
-which in turn requests SL Transport (and, for disruption data, SL Deviations); the app
-filters the result down to what matches the saved routine and shows the next two
-matching departures. Refreshing is manual — the user taps Refresh — for any of the
-supported SL transport modes (bus, metro, train, tram, ferry).
+**Currently implemented:** the user creates a routine (any of the supported SL
+transport modes — bus, metro, train, tram, ferry), which is saved locally and scheduled
+for its next active window via WorkManager (best-effort, not exact — see
+`android/README.md`). Whether or not the app is open, that window activates
+automatically, requesting departures for the routine through the backend (which in
+turn requests SL Transport and, for disruption data, SL Deviations), filtering the
+result down to what matches the saved routine, and showing up to two matching
+departures in one ongoing, lock-screen-visible notification that updates silently
+about every 30 seconds and is removed at the routine's configured end time. A
+debug-only manual "Show/update test notification" control also remains available in
+debug builds. Separately, opening the routine's details screen fetches immediately and
+again automatically about every 30 seconds while that screen stays open — independent
+of the notification loop — with manual Refresh also available.
 
-**Not yet implemented:** the app does not automatically activate at a routine's start
-time, there is no periodic/background refresh, and the planned always-on 30-second
-active-routine loop feeding a single updating lock-screen notification does not exist
-yet — see `docs/framework.svg` and `android/README.md` for exactly which parts of the
-diagram are built versus still planned.
+**Not yet implemented:** a dedicated reboot receiver beyond WorkManager's own
+persistence plus a process-start reconciliation pass, persistent stale-data storage
+across process death, notification action buttons, and the widget — see
+`docs/framework.svg` and `android/README.md` for exactly which parts of the diagram are
+built versus still planned.
 
 ## Status
 
-Foundation plus an initial, real feature set — not yet the finished product described
-above. The backend's contract, normalization, and caching logic are implemented and
-tested (183 passing tests). The Android side has routine creation (live SL stop search,
-transport mode/line/direction discovery, Room persistence), a foreground routine
-details/live-preview screen (manual refresh, next two matching departures, and
-loading/live/no-departures/offline/stale/unavailable states), and full routine
-management (editing, enable/disable, pause/resume today, deletion, and a first-beta
-one-routine limit) implemented and tested. **Not yet implemented:** notifications (and
-their runtime permission onboarding), the scheduler that would activate a routine
-automatically and react to routine changes or a device reboot, the 30-second background
-refresh loop, persistent stale-data storage, and the widget. See each subproject's
-README for specifics and known limitations.
+Foundation plus a real, largely end-to-end feature set — not yet fully device-verified
+for this update. The backend's contract, normalization, and caching logic are
+implemented and tested (183 passing tests). The Android side has routine creation (live
+SL stop search, transport mode/line/direction discovery, Room persistence), an
+always-visible Add-routine control (with an explicit, in-place explanation — never a
+creation flow that can't save — once the current first-beta one-routine limit is
+reached), a foreground routine details/live-preview screen (automatic 30-second refresh
+plus manual refresh, next two matching departures, and
+loading/live/no-departures/offline/stale/unavailable states), full routine management
+(editing, enable/disable, pause/resume today, deletion), production
+notification-permission onboarding with a lifecycle-aware status hint that always
+re-checks on resume, and the full ongoing-notification loop
+(`WorkManagerRoutineScheduler` + `RoutineActiveWindowWorker` resolving each routine's
+window against the device's own local time zone, activating it, checking notification
+availability before ever entering foreground execution, posting/silently updating one
+stable notification every ~30 seconds, and removing it and rescheduling at window end)
+— with 193 of the JVM `@Test` functions covering the earlier notification foundation
+having actually passed in a fresh local `./gradlew testDebugUnitTest lintDebug
+assembleDebug` run (0 lint errors, debug APK built). **Two further work sessions since
+then have added JVM and instrumented source without a fresh Gradle run: 258 JVM
+`@Test` functions and 12 instrumented `@Test` functions exist in source as of this
+update, none of the 65 JVM / 3 instrumented tests beyond the original 193/9 have been
+run locally yet** — see `android/README.md`'s Build section for the exact toolchain,
+the up-to-date test breakdown, and what's still the user's to run.
+**Not yet implemented:** a dedicated `BOOT_COMPLETED` receiver (device-timezone-change
+reconciliation is handled by a runtime-registered `ACTION_TIMEZONE_CHANGED` receiver,
+but reboot itself still relies on WorkManager's own persistence plus a process-start
+reconciliation pass, not a boot receiver), persistent stale-data storage across process
+death, notification action buttons, and the widget. See each subproject's README for
+specifics and known limitations.
 
 ## Roadmap beyond this MVP
 

@@ -43,12 +43,31 @@ datastore = "1.1.2"
 kotlinxSerialization = "1.7.3"
 kotlinxCoroutines = "1.9.0"
 retrofit = "2.11.0"
+# Not individually re-verified against the registry at the time this was added (2026-07-30,
+# active-window scheduling milestone) -- the same caveat as the "Not individually
+# re-verified" block above applies. WorkManager 2.9.1 and Hilt's own WorkManager extension
+# (hilt-work, matched to the same 2.59.2 Hilt version pinned above via its own artifact
+# version) are both well-established stable releases; confirm no newer patch is available
+# during the next real Gradle sync.
+work = "2.9.1"
+hiltWork = "1.2.0"
 
 junit = "4.13.2"
 androidxTestExtJunit = "1.2.1"
 espressoCore = "3.6.1"
 mockk = "1.13.13"
 kotlinxCoroutinesTest = "1.9.0"
+# Latest stable per github.com/robolectric/robolectric/releases as of 2026-07-30, added for
+# RoutineNotificationBuilderTest (Part 3/7 of the ongoing-notification foundation milestone)
+# to construct and assert on a REAL android.app.Notification in a plain JVM unit test rather
+# than a second hand-rolled copy of its expected configuration. Robolectric 4.16+ requires
+# JDK 21 specifically to run against `@Config(sdk = 36)` (this project's compileSdk/targetSdk)
+# — since the whole toolchain here is pinned to JDK 17 (see compileOptions above and
+# android/README.md), RoutineNotificationBuilderTest instead targets `@Config(sdk = [34])`
+# (Android 14), which Robolectric 4.16.1 fully supports under JDK 17. API 34 also matches this
+# repo's own documented connected-device verification target (a Lenovo TB350FU running
+# Android 14), so this isn't an arbitrary downgrade.
+robolectric = "4.16.1"
 
 [libraries]
 androidx-core-ktx = { group = "androidx.core", name = "core-ktx", version.ref = "coreKtx" }
@@ -66,6 +85,19 @@ androidx-compose-ui-tooling-preview = { group = "androidx.compose.ui", name = "u
 androidx-compose-material3 = { group = "androidx.compose.material3", name = "material3" }
 androidx-compose-material-icons-core = { group = "androidx.compose.material", name = "material-icons-core" }
 androidx-navigation-compose = { group = "androidx.navigation", name = "navigation-compose", version.ref = "navigationCompose" }
+# RoutineListScreenTest (Add-routine FAB regression coverage) -- versioned by the same
+# composeBom platform as the rest of the androidx.compose.ui artifacts above, so no
+# separate version.ref is declared here. androidx-compose-ui-test (plain "ui-test", not
+# just "ui-test-junit4") is declared explicitly and applied directly in build.gradle.kts:
+# ui-test-junit4 depends on it for assertExists()/assertDoesNotExist()/other
+# SemanticsNodeInteraction assertions, but relying on that transitively did not put those
+# classes on the actual Kotlin compile classpath under AGP 9's stricter variant-aware
+# resolution -- the same category of issue already hit okhttp, material-icons-core, and
+# the Retrofit kotlinx-serialization converter in this project (see android/README.md's
+# "Known limitations" section for those three precedents).
+androidx-compose-ui-test = { group = "androidx.compose.ui", name = "ui-test" }
+androidx-compose-ui-test-junit4 = { group = "androidx.compose.ui", name = "ui-test-junit4" }
+androidx-compose-ui-test-manifest = { group = "androidx.compose.ui", name = "ui-test-manifest" }
 
 androidx-room-runtime = { group = "androidx.room", name = "room-runtime", version.ref = "room" }
 androidx-room-ktx = { group = "androidx.room", name = "room-ktx", version.ref = "room" }
@@ -77,6 +109,33 @@ androidx-datastore-preferences = { group = "androidx.datastore", name = "datasto
 hilt-android = { group = "com.google.dagger", name = "hilt-android", version.ref = "hilt" }
 hilt-compiler = { group = "com.google.dagger", name = "hilt-android-compiler", version.ref = "hilt" }
 hilt-navigation-compose = { group = "androidx.hilt", name = "hilt-navigation-compose", version = "1.2.0" }
+
+# Active-window scheduling milestone (see scheduling/RoutineActiveWindowWorker.kt):
+# work-runtime-ktx is the CoroutineWorker + WorkManager API surface itself; hilt-work is
+# Hilt's @HiltWorker/HiltWorkerFactory integration so the worker can constructor-inject
+# RoutineRepository/GetLiveDeparturesUseCase/RoutineNotifier/RoutineScheduler exactly like
+# every other class in this codebase, rather than reaching into a service locator by hand.
+# androidx-hilt-compiler is REQUIRED alongside it -- a real 2026-07-30 on-device bug traced
+# a permanently-silent "no automatic notification ever appears" symptom to its absence:
+# com.google.dagger:hilt-android-compiler (this catalog's "hilt-compiler" entry, used for
+# @HiltViewModel elsewhere in this codebase) does NOT generate @HiltWorker's own
+# WorkerAssistedFactory multibinding -- that codegen is androidx.hilt:hilt-compiler's job
+# specifically, a separate Maven artifact despite the near-identical name. Without it,
+# HiltWorkerFactory silently has no entry for RoutineActiveWindowWorker and WorkManager
+# falls back to its plain reflection-based factory, which fails with
+# "NoSuchMethodException: RoutineActiveWindowWorker.<init> [Context, WorkerParameters]"
+# every single time the worker is due to run -- silently, since a background worker's own
+# crash has no UI to surface it to. Verified fixed by adding this and its
+# ksp(libs.androidx.hilt.compiler) in app/build.gradle.kts by confirming
+# RoutineActiveWindowWorker's own generated Hilt module appears under
+# app/build/generated/ksp/debug/java/hilt_aggregated_deps/, matching the three
+# @HiltViewModel classes' own generated modules. work-testing supports
+# TestListenableWorkerBuilder/WorkManagerTestInitHelper for deterministic worker tests with
+# no real device/foreground-service execution.
+androidx-work-runtime-ktx = { group = "androidx.work", name = "work-runtime-ktx", version.ref = "work" }
+androidx-work-testing = { group = "androidx.work", name = "work-testing", version.ref = "work" }
+hilt-work = { group = "androidx.hilt", name = "hilt-work", version.ref = "hiltWork" }
+androidx-hilt-compiler = { group = "androidx.hilt", name = "hilt-compiler", version.ref = "hiltWork" }
 
 retrofit-core = { group = "com.squareup.retrofit2", name = "retrofit", version.ref = "retrofit" }
 # First-party artifact, not the old com.jakewharton.retrofit:retrofit2-kotlinx-serialization-converter:1.0.0
@@ -99,6 +158,7 @@ androidx-test-ext-junit = { group = "androidx.test.ext", name = "junit", version
 androidx-espresso-core = { group = "androidx.test.espresso", name = "espresso-core", version.ref = "espressoCore" }
 mockk = { group = "io.mockk", name = "mockk", version.ref = "mockk" }
 kotlinx-coroutines-test = { group = "org.jetbrains.kotlinx", name = "kotlinx-coroutines-test", version.ref = "kotlinxCoroutinesTest" }
+robolectric = { group = "org.robolectric", name = "robolectric", version.ref = "robolectric" }
 
 [plugins]
 android-application = { id = "com.android.application", version.ref = "agp" }

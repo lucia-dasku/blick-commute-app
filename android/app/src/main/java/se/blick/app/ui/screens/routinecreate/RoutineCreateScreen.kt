@@ -53,6 +53,7 @@ import se.blick.app.R
 import se.blick.app.data.repository.DirectionOption
 import se.blick.app.domain.model.Site
 import se.blick.app.domain.model.TransportMode
+import se.blick.app.ui.notification.rememberNotificationPermissionGate
 import java.time.DayOfWeek
 import java.time.LocalTime
 import java.time.format.DateTimeFormatter
@@ -138,14 +139,25 @@ fun RoutineCreateScreen(
                             uiState = uiState,
                             onSelectDirection = viewModel::selectDirection,
                         )
-                        RoutineCreateStep.SCHEDULE -> ScheduleStep(
-                            uiState = uiState,
-                            onToggleDay = viewModel::toggleDay,
-                            onStartTimeChanged = viewModel::setStartTime,
-                            onEndTimeChanged = viewModel::setEndTime,
-                            onNameChanged = viewModel::setName,
-                            onSave = { viewModel.save(onDone) },
-                        )
+                        RoutineCreateStep.SCHEDULE -> {
+                            // A newly saved routine is, by default, enabled and therefore
+                            // intended to show automatic notifications once its scheduled
+                            // window opens -- save is exactly the "appropriate user-driven
+                            // point" the product doc asks for to request POST_NOTIFICATIONS,
+                            // with a brief rationale first (see rememberNotificationPermissionGate).
+                            val notifyGate = rememberNotificationPermissionGate(
+                                hasSeenRationale = uiState.hasSeenNotificationRationale,
+                                onRationaleSeen = viewModel::markNotificationRationaleSeen,
+                            )
+                            ScheduleStep(
+                                uiState = uiState,
+                                onToggleDay = viewModel::toggleDay,
+                                onStartTimeChanged = viewModel::setStartTime,
+                                onEndTimeChanged = viewModel::setEndTime,
+                                onNameChanged = viewModel::setName,
+                                onSave = { notifyGate { viewModel.save(onDone) } },
+                            )
+                        }
                     }
                 }
             }

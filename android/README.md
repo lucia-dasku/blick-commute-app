@@ -5,25 +5,68 @@ never directly to SL Transport/SL Deviations — see `../docs/api-contract.md`.
 
 ## Status
 
-This is a scaffold, not a feature-complete app. Implemented: package structure, Gradle
-config, Compose navigation, Material 3 theme, Room (routines) + Preferences DataStore
-(small settings) wiring, Hilt DI, repository/API client interfaces with real
-DTO↔domain mapping, the routine-creation wizard (`ui/screens/routinecreate`, with its
-own error/retry handling and regression tests), the live-departure engine
+A real, largely end-to-end feature set, not a bare scaffold. Implemented: package
+structure, Gradle config, Compose navigation, Material 3 theme, Room (routines) +
+Preferences DataStore (small settings) wiring, Hilt DI, repository/API client interfaces
+with real DTO↔domain mapping, the routine-creation wizard (`ui/screens/routinecreate`,
+with its own error/retry handling and regression tests), the live-departure engine
 (`domain/usecase/GetLiveDeparturesUseCase` + `LiveDeparturesProcessor` — fetches, filters,
 and prepares the next two relevant departures for a saved routine), the routine
 details/live-preview screen (`ui/screens/routinedetails` — loads one saved routine and
-shows its next departures with a manual, foreground-only Refresh action; no periodic
-background refresh), and routine management: editing an existing routine (same
-wizard/ViewModel as creation, reached via the `routine-edit/{routineId}` route — see
-`RoutineCreateViewModel`'s edit-mode support), enable/disable, pause-today/resume-today
-(with automatic cleanup of an expired pause on load), delete (with an in-screen Material3
-confirmation dialog), and a first-beta one-routine limit enforced at the app/UI level (the
-"Add routine" FAB hides once a routine exists; the create flow also blocks saving a second
-one directly). **Not implemented**: notifications (and their permission onboarding),
-scheduling (`WorkManager`/foreground service), persistent stale-data storage, and the
-widget — see `notification/` and `scheduling/` for the interfaces those will be built
-behind.
+shows its next departures, refreshing automatically about every 30 seconds while the
+screen is open plus a manual Refresh action), and routine management: editing an existing
+routine (same wizard/ViewModel as creation, reached via the `routine-edit/{routineId}`
+route — see `RoutineCreateViewModel`'s edit-mode support), enable/disable,
+pause-today/resume-today (with automatic cleanup of an expired pause on load), delete
+(with an in-screen Material3 confirmation dialog), and a first-beta one-routine limit
+enforced at the app/UI level: the "Add routine" FAB always stays visible, but tapping it
+with a routine already saved shows an in-place dialog explaining the beta limit instead of
+opening (and then blocking) the creation flow — see `RoutineListContent`'s doc and
+`RoutineCreateViewModel.oneRoutineLimitReached`, kept as defence in depth for any other
+entry point into that screen.
+
+The ongoing-notification loop is fully implemented, not just its foundation:
+`notification/RoutineNotificationMapper` (a pure mapper, no Android dependency —
+converts a routine + the live-departures engine's state + an `Instant` into a
+`RoutineNotificationModel`, recomputing each departure's countdown rather than trusting a
+cached value), `notification/RoutineNotificationBuilder` (builds the real, single-channel,
+`IMPORTANCE_LOW` `Notification` — ongoing, only-alert-once, publicly visible, an
+`InboxStyle` expanded view for up to two departures, distinct copy per
+Live/Stale/no-departures/offline/unavailable/loading state), `notification/AndroidRoutineNotifier`
+(posts/cancels that one stable notification id, bound via Hilt as the app's single
+`RoutineNotifier`), and a shared `notification/NotificationAvailabilityChecker` (permission
+missing / app disabled / channel disabled / available — the single source of truth used by
+the notifier, the worker, and the details-screen status hint, so all three agree). Tapping
+the notification reopens the routine details screen for the correct routine
+(`MainActivity.onNewIntent`), and a `BuildConfig.DEBUG`-only "Show/update test
+notification" / "Remove test notification" pair on the routine details screen remains for
+manual testing alongside the automatic loop.
+
+Scheduling and activation are implemented via `scheduling/WorkManagerRoutineScheduler`
+(enqueues/replaces/cancels a unique `OneTimeWorkRequest` per routine for its next active
+occurrence, resolved against the device's own local time zone via an injectable
+`DeviceZoneProvider` — never against the injected `Clock`'s own zone, which would
+otherwise silently miscompute a Stockholm 07:30 routine as 07:30 UTC) and
+`scheduling/RoutineActiveWindowWorker` (a `CoroutineWorker` that, once its window starts,
+checks notification availability before ever entering foreground execution — it never
+calls `setForeground()`, starts the ~30-second update loop, recreates a disabled channel,
+or reports delivery as active if notifications are unavailable — then runs the loop while
+the routine stays enabled and its window is open, and reliably reschedules the next
+eligible occurrence on normal completion, a handled fetch/notification failure, a late
+start, or unavailability, while a genuine `CancellationException` from
+delete/disable/replacement propagates unconverted and does not resurrect the work).
+Production notification-permission onboarding (`ui/notification/NotificationPermissionGate`)
+gates a proper rationale UI behind `AppSettingsDataStore.hasSeenNotificationRationale`,
+and the routine details screen's own notification-status hint re-checks availability on
+every lifecycle resume (e.g. after returning from system settings), not just once. A
+device timezone change is reconciled live via a runtime-registered
+`ACTION_TIMEZONE_CHANGED` receiver in `BlickApplication` calling the same
+`RoutineScheduleReconciler` used at process start.
+
+**Still not implemented**: a dedicated `BOOT_COMPLETED` receiver (reboot currently relies
+on WorkManager's own persistence plus the process-start reconciliation pass, not an
+explicit boot receiver), persistent stale-data storage across process death, notification
+action buttons, and the widget.
 
 ## Pinned versions and why
 
@@ -53,9 +96,13 @@ bump them there as needed.
   right now won't be selectable during setup. This is intentionally not solved with a
   Journey Planner/GTFS dependency in this scaffold — the interface exists so the data
   source can be swapped later without touching Room or the UI.
-- **Notification/scheduling are interfaces only** (`notification/RoutineNotifier.kt`,
-  `scheduling/RoutineScheduler.kt`) — no `NotificationCompat`, `AlarmManager`, or
-  `WorkManager` implementation exists yet.
+- **Scheduling is best-effort, not exact.** `scheduling/WorkManagerRoutineScheduler` uses a
+  plain `OneTimeWorkRequest` with a computed initial delay, not `AlarmManager`'s exact-alarm
+  APIs (explicitly out of scope — see this doc's project instructions), so Android may
+  briefly defer the initial execution under Doze/battery-saver the same way any other
+  WorkManager job can be deferred. The notification/details-screen refresh cadence is
+  "about every 30 seconds," not a guaranteed exact interval, and one notification is updated
+  silently in place rather than posting a new card each refresh.
 - **Attribution is not yet wired into a real screen.** `R.string.attribution_text`
   ("Based on information from Trafiklab.se") exists, but no About/Settings screen
   displays it yet — see `../docs/api-contract.md` §8 before shipping publicly.
@@ -111,30 +158,95 @@ curl https://blick-backend.vercel.app/api/v1/health
 ## Build
 
 **Verified baseline (real local run, Android Studio's bundled JDK 17 + Android SDK):**
-debug APK build succeeded; 115 JVM unit tests passed with zero failures (before the
-stale-snapshot-identity regression test described in this project's fix log added 2
-more, for 117 source-level `@Test` functions as of the latest change — not yet
-re-verified by an actual run, see below); `lintDebug` completed with 0 errors and 37
-warnings; and six Room instrumented (`connectedDebugAndroidTest`) tests previously
-passed on a physical Lenovo TB350FU running Android 14 — that connected-device run
-predates the newest routine-details/live-preview and routine-management changes, so it
-covers the Room DAO only, not those newer screens/ViewModels.
+debug APK build succeeded; 117 JVM unit tests passed with zero failures as of the
+stale-snapshot-identity fix; `lintDebug` completed with 0 errors and 37 warnings; and six
+Room instrumented (`connectedDebugAndroidTest`) tests previously passed on a physical
+Lenovo TB350FU running Android 14 — that connected-device run predates the newest
+routine-details/live-preview and routine-management changes, so it covers the Room DAO
+only, not those newer screens/ViewModels.
 
-**This particular working environment cannot reproduce that run.** It has only a JRE
-(not a JDK) at Java 11, no Android SDK, and no network path to
-`services.gradle.org` to provision either one — so `assembleDebug`, `lintDebug`, and
-`testDebugUnitTest` could not genuinely be executed here (confirmed: `./gradlew
---version` fails with `UnknownHostException: services.gradle.org`), and no result from
-them should be assumed beyond the verified baseline above, which predates whatever the
-most recent change was. AGP 9.2.1 requires a JDK 17+ with `javac`. On a machine with a
-real JDK 17 and Android SDK (or Android Studio, which provides both), build with:
+**The ongoing-notification foundation milestone, plus its subsequent correction passes,
+added 76 more source-level `@Test` functions beyond that 117 baseline, for 193 total.**
+A fresh local `./gradlew testDebugUnitTest lintDebug assembleDebug` run (Android
+Studio's bundled JDK + Android SDK) has since validated all of them: `testDebugUnitTest`
+passed with zero failures across all 193 tests, `lintDebug` completed with 0 errors and
+37 warnings, and `assembleDebug` produced a debug APK. Breakdown: 28 in
+`RoutineNotificationMapperTest` (plain JVM, no Android dependency); 32 across
+`RoutineNotificationBuilderTest`/`AndroidRoutineNotifierTest` (Robolectric-backed,
+targeting `@Config(sdk = [34])` — see `libs.versions.toml`'s `robolectric` entry for
+why — including the disabled-notification-channel detection added in the latest
+correction pass); 5 in `NotificationIntentCoordinatorTest` (Robolectric, covers the
+one-time notification-tap intent consumption fix); 4 in `DebugNotificationMessageTest`
+(Robolectric, covers the debug UI's `NotificationPostResult`-to-message mapping); 7
+debug-trigger/notifier-result cases in `RoutineDetailsViewModelTest`. That run also
+caught and fixed two real issues surfaced only by actually executing this code: a test
+assertion that could false-fail against a departure's own line designation rather than
+an actual countdown value, and two Android Lint findings — a `MissingPermission` false
+positive on the already permission-guarded notification post, and two
+`context.getString()` calls inside non-composable callbacks flagged for potential
+staleness across configuration changes — all now fixed.
+
+**Two further work sessions after the 193-test baseline above have added substantially
+more JVM and instrumented source — 258 JVM `@Test` functions and 12 instrumented
+`@Test` functions exist in source as of this update. None of the 65 JVM tests or 3
+instrumented tests beyond the 193/9 baseline have been compiled or run yet, in this
+environment or on the project owner's machine — they are new source only. The
+193-JVM-test/`lintDebug`/`assembleDebug` run described above remains the last real,
+executed validation.**
+
+The first of those two sessions (the WorkManager-scheduling milestone: restored
+Add-routine FAB, Routine Details 30-second auto-refresh, production
+notification-permission flow, `WorkManagerRoutineScheduler`, and the
+`RoutineActiveWindowWorker` active-window notification loop) added 42 JVM `@Test`
+functions and 3 instrumented ones, reaching 235 JVM / 9 instrumented at the time.
+Breakdown: 12 in `NextOccurrenceCalculatorTest` (plain JVM, next-active-window
+computation including both sides of daylight-saving transitions); 9 in
+`WorkManagerRoutineSchedulerTest` (Robolectric + a real `WorkManager` test instance via
+`WorkManagerTestInitHelper`, covering enqueue/replace/cancel of the unique per-routine
+work item); 8 in `RoutineActiveWindowWorkerTest` (`TestListenableWorkerBuilder` with a
+fake worker factory, covering the tick loop, late-start skip, disable/delete mid-run,
+and the stale-fallback-on-fetch-failure case); **11** (not 13, an arithmetic error in
+an earlier draft of this note, now corrected) new cases added to
+`RoutineDetailsViewModelTest` covering the 30-second auto-refresh lifecycle
+(immediate/duplicate-free first fetch, fetch after 30s, cancellation, restart, and the
+scheduler-integration calls from enable/disable/pause/resume/delete), plus one new test
+each in `RoutineCreateViewModelTest` (save schedules activation) and
+`RoutineListViewModelTest` (delete cancels activation); and 3 new instrumented
+`RoutineListScreenTest` cases.
+
+A second, corrective session then fixed several audited issues in that milestone
+(device-local timezone resolution, checking notification availability before
+foreground execution, lifecycle-aware notification-status refresh in the UI, and an
+explicit one-routine Add-button explanation) and added the tests proving them: 3 more
+in `WorkManagerRoutineSchedulerTest` (Stockholm summer/winter activation time,
+timezone-change recalculation); 7 more in `RoutineActiveWindowWorkerTest` (permission
+missing/app-disabled/channel-disabled/missing-channel-but-available before
+`setForeground()`, a handled failure building the foreground notification, a handled
+failure mid-loop, and a real cancellation that does not reschedule); a new
+`RoutineScheduleReconcilerTest` (3 tests, plain JVM, no Robolectric) for the
+reconciliation pass now shared between process start and a device-timezone-change
+receiver; 3 more in `RoutineDetailsViewModelTest` (notification availability
+reflecting the checker on first load and on every lifecycle resume, in both
+directions); and the existing `RoutineListScreenTest` instrumented cases were expanded
+from 3 to 6 to cover the one-routine explanation dialog. That is 23 further JVM tests
+and 3 further instrumented tests, for the 258 JVM / 12 instrumented total stated above.
+
+**The environment used to prepare and edit this repository cannot run that Gradle build
+itself.** It has only a JRE (not a JDK) at Java 11, no Android SDK, and no network path
+to `services.gradle.org` to provision either one, so `assembleDebug`, `lintDebug`, and
+`testDebugUnitTest` could not be executed from it directly (confirmed again during the
+correction pass: `./gradlew --version` still fails with `UnknownHostException:
+services.gradle.org`). The 193-test validation above was performed locally, in Android
+Studio, by the project owner — not from this environment. AGP 9.2.1 requires a JDK 17+
+with `javac`. On a machine with a real JDK 17 and Android SDK (or Android Studio, which
+provides both), build with:
 
 ```
 cd android
 ./gradlew assembleDebug              # requires a local Android SDK (Android Studio, or `sdkmanager`)
 ./gradlew lintDebug                  # static analysis
 ./gradlew testDebugUnitTest          # JVM unit tests (RoutineCreateViewModelTest, RoutineDetailsViewModelTest, RoutineListViewModelTest, RoutineMappersTest, ...)
-./gradlew connectedDebugAndroidTest  # instrumented Room DAO test, needs a device/emulator
+./gradlew connectedDebugAndroidTest  # instrumented Room DAO + RoutineListScreenTest (Compose UI), needs a device/emulator
 ```
 
 The Gradle wrapper (`gradlew`, `gradlew.bat`, `gradle/wrapper/gradle-wrapper.jar`,

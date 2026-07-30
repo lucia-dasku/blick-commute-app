@@ -14,6 +14,7 @@ import org.junit.Test
 import se.blick.app.data.repository.RoutineRepository
 import se.blick.app.domain.model.CommuteRoutine
 import se.blick.app.domain.model.TransportMode
+import se.blick.app.scheduling.RoutineScheduler
 import java.time.DayOfWeek
 import java.time.LocalDate
 import java.time.LocalTime
@@ -84,10 +85,23 @@ class RoutineListViewModelTest {
         override suspend fun hasAnyRoutine(): Boolean = state.value.isNotEmpty()
     }
 
+    /** Records every cancellation call — for proving deleteRoutine also cancels the deleted
+     * routine's scheduled activation, not just its stored data. */
+    private class FakeRoutineScheduler : RoutineScheduler {
+        val scheduledRoutines = mutableListOf<CommuteRoutine>()
+        val cancelledRoutineIds = mutableListOf<String>()
+        override fun scheduleActivation(routine: CommuteRoutine) {
+            scheduledRoutines += routine
+        }
+        override fun cancelActivation(routineId: String) {
+            cancelledRoutineIds += routineId
+        }
+    }
+
     @Test
     fun `starts in loading state before the repository emits`() = runTest(dispatcher) {
         val repository = FakeRoutineRepository(listOf(sampleRoutine()))
-        val viewModel = RoutineListViewModel(repository)
+        val viewModel = RoutineListViewModel(repository, FakeRoutineScheduler())
 
         assertTrue(viewModel.uiState.value.isLoading)
     }
@@ -96,7 +110,7 @@ class RoutineListViewModelTest {
     fun `reflects routines from the repository once collected`() = runTest(dispatcher) {
         val routine = sampleRoutine()
         val repository = FakeRoutineRepository(listOf(routine))
-        val viewModel = RoutineListViewModel(repository)
+        val viewModel = RoutineListViewModel(repository, FakeRoutineScheduler())
 
         dispatcher.scheduler.advanceUntilIdle()
 
@@ -108,7 +122,7 @@ class RoutineListViewModelTest {
     fun `deleteRoutine delegates to the repository and the list updates`() = runTest(dispatcher) {
         val routine = sampleRoutine()
         val repository = FakeRoutineRepository(listOf(routine))
-        val viewModel = RoutineListViewModel(repository)
+        val viewModel = RoutineListViewModel(repository, FakeRoutineScheduler())
         dispatcher.scheduler.advanceUntilIdle()
 
         viewModel.deleteRoutine(routine.id)
@@ -119,10 +133,24 @@ class RoutineListViewModelTest {
     }
 
     @Test
+    fun `deleteRoutine also cancels the routine's scheduled activation`() = runTest(dispatcher) {
+        val routine = sampleRoutine()
+        val repository = FakeRoutineRepository(listOf(routine))
+        val scheduler = FakeRoutineScheduler()
+        val viewModel = RoutineListViewModel(repository, scheduler)
+        dispatcher.scheduler.advanceUntilIdle()
+
+        viewModel.deleteRoutine(routine.id)
+        dispatcher.scheduler.advanceUntilIdle()
+
+        assertEquals(listOf(routine.id), scheduler.cancelledRoutineIds)
+    }
+
+    @Test
     fun `pauseForToday records today's date against the routine id`() = runTest(dispatcher) {
         val routine = sampleRoutine()
         val repository = FakeRoutineRepository(listOf(routine))
-        val viewModel = RoutineListViewModel(repository)
+        val viewModel = RoutineListViewModel(repository, FakeRoutineScheduler())
         dispatcher.scheduler.advanceUntilIdle()
 
         viewModel.pauseForToday(routine.id)

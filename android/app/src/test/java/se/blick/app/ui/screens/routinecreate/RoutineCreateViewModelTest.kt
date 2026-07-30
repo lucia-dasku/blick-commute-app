@@ -17,6 +17,8 @@ import org.junit.Assert.assertFalse
 import org.junit.Assert.assertTrue
 import org.junit.Before
 import org.junit.Test
+import se.blick.app.data.local.datastore.AppSettings
+import se.blick.app.data.local.datastore.AppSettingsDataStore
 import se.blick.app.data.repository.DirectionOption
 import se.blick.app.data.repository.DirectionOptionsSource
 import se.blick.app.data.repository.RoutineRepository
@@ -24,6 +26,7 @@ import se.blick.app.data.repository.StopRepository
 import se.blick.app.domain.model.CommuteRoutine
 import se.blick.app.domain.model.Site
 import se.blick.app.domain.model.TransportMode
+import se.blick.app.scheduling.RoutineScheduler
 import se.blick.app.ui.navigation.Routes
 import java.time.DayOfWeek
 import java.time.LocalDate
@@ -238,16 +241,51 @@ class RoutineCreateViewModelTest {
         }
     }
 
+    /** Records every scheduling call — for proving save() (both create and edit mode)
+     * schedules the saved routine's next activation. WorkManager-backed integration itself is
+     * covered separately by `WorkManagerRoutineSchedulerTest`. */
+    private class FakeRoutineScheduler : RoutineScheduler {
+        val scheduledRoutines = mutableListOf<CommuteRoutine>()
+        val cancelledRoutineIds = mutableListOf<String>()
+        override fun scheduleActivation(routine: CommuteRoutine) {
+            scheduledRoutines += routine
+        }
+        override fun cancelActivation(routineId: String) {
+            cancelledRoutineIds += routineId
+        }
+    }
+
+    /** Minimal in-memory [AppSettingsDataStore] fake — see the identical fake in
+     * `RoutineDetailsViewModelTest` for why each ViewModel test file keeps its own copy rather
+     * than sharing one across packages. */
+    private class FakeAppSettingsDataStore(initial: AppSettings = AppSettings()) : AppSettingsDataStore {
+        private val state = MutableStateFlow(initial)
+        override val settings: Flow<AppSettings> = state
+        override suspend fun setUseDarkTheme(useDarkTheme: Boolean?) {
+            state.value = state.value.copy(useDarkTheme = useDarkTheme)
+        }
+        override suspend fun setHasSeenNotificationRationale(seen: Boolean) {
+            state.value = state.value.copy(hasSeenNotificationRationale = seen)
+        }
+        override suspend fun setHasAcknowledgedAttribution(acknowledged: Boolean) {
+            state.value = state.value.copy(hasAcknowledgedAttribution = acknowledged)
+        }
+    }
+
     private fun viewModel(
         stops: StopRepository = FakeStopRepository(mapOf("Fru" to listOf(fruangen))),
         directions: DirectionOptionsSource = FakeDirectionOptionsSource(mapOf(9145L to listOf(busOption, metroOption))),
         routines: RoutineRepository = FakeRoutineRepository(),
+        scheduler: RoutineScheduler = FakeRoutineScheduler(),
+        appSettingsDataStore: AppSettingsDataStore = FakeAppSettingsDataStore(),
         routineId: String? = null,
     ) = RoutineCreateViewModel(
         SavedStateHandle(routineId?.let { mapOf(Routes.RoutineEdit.ARG_ROUTINE_ID to it) } ?: emptyMap()),
         stops,
         directions,
         routines,
+        scheduler,
+        appSettingsDataStore,
     )
 
     /** Selects [fruangen], advances past its (successful, non-empty) direction lookup, sets
@@ -973,5 +1011,20 @@ class RoutineCreateViewModelTest {
         // save() must never have been called at all -- the guard short-circuits before
         // reaching the repository, not merely after a failed write.
         assertEquals(0, routines.saved.size)
+    }
+
+    // ---- Scheduler integration ----
+
+    @Test
+    fun `saving a new routine schedules its activation`() = runTest(dispatcher) {
+        val scheduler = FakeRoutineScheduler()
+        val vm = viewModel(scheduler = scheduler)
+        dispatcher.scheduler.advanceUntilIdle()
+        vm.advanceToSaveReady()
+
+        vm.save {}
+        dispatcher.scheduler.advanceUntilIdle()
+
+        assertEquals(1, scheduler.scheduledRoutines.size)
     }
 }

@@ -8,6 +8,7 @@ import kotlinx.coroutines.ExperimentalCoroutinesApi
 import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.update
+import kotlinx.coroutines.launch
 import kotlinx.coroutines.test.StandardTestDispatcher
 import kotlinx.coroutines.test.resetMain
 import kotlinx.coroutines.test.runTest
@@ -15,10 +16,13 @@ import kotlinx.coroutines.test.setMain
 import org.junit.After
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
+import org.junit.Assert.assertNotEquals
 import org.junit.Assert.assertNull
 import org.junit.Assert.assertTrue
 import org.junit.Before
 import org.junit.Test
+import se.blick.app.data.local.datastore.AppSettings
+import se.blick.app.data.local.datastore.AppSettingsDataStore
 import se.blick.app.data.repository.DepartureRepository
 import se.blick.app.data.repository.RoutineRepository
 import se.blick.app.domain.model.CommuteRoutine
@@ -31,6 +35,12 @@ import se.blick.app.domain.model.StopPointRef
 import se.blick.app.domain.model.TransportMode
 import se.blick.app.domain.usecase.GetLiveDeparturesUseCase
 import se.blick.app.domain.usecase.LiveDeparturesState
+import se.blick.app.notification.NotificationAvailability
+import se.blick.app.notification.NotificationAvailabilityChecker
+import se.blick.app.notification.NotificationPostResult
+import se.blick.app.notification.RoutineNotificationModel
+import se.blick.app.notification.RoutineNotifier
+import se.blick.app.scheduling.RoutineScheduler
 import se.blick.app.ui.navigation.Routes
 import java.io.IOException
 import java.time.Clock
@@ -245,15 +255,86 @@ class RoutineDetailsViewModelTest {
         }
     }
 
+    /** Records every [RoutineNotifier] call so the debug-trigger tests can assert on them
+     * without needing a real Android `NotificationManager` — the concrete Android
+     * implementation is covered separately by `RoutineNotificationBuilderTest`. Returns
+     * [resultToReturn] (default [NotificationPostResult.Posted]) from every [showOrUpdate]
+     * call, so tests can also simulate [NotificationPostResult.NotificationsDisabled]/
+     * [NotificationPostResult.Failed] and assert the ViewModel propagates them unchanged. */
+    private class FakeRoutineNotifier(
+        private val resultToReturn: NotificationPostResult = NotificationPostResult.Posted,
+    ) : RoutineNotifier {
+        val shown = mutableListOf<RoutineNotificationModel>()
+        var removeCallCount = 0
+        override fun showOrUpdate(model: RoutineNotificationModel): NotificationPostResult {
+            shown += model
+            return resultToReturn
+        }
+        override fun remove() {
+            removeCallCount++
+        }
+    }
+
+    /** Records every scheduling call so tests can assert save/edit/enable/disable/pause/
+     * resume/delete each correctly replace or cancel this routine's scheduled work, without
+     * needing a real WorkManager (that integration is covered separately by
+     * `WorkManagerRoutineSchedulerTest`). */
+    private class FakeRoutineScheduler : RoutineScheduler {
+        val scheduledRoutines = mutableListOf<CommuteRoutine>()
+        val cancelledRoutineIds = mutableListOf<String>()
+        override fun scheduleActivation(routine: CommuteRoutine) {
+            scheduledRoutines += routine
+        }
+        override fun cancelActivation(routineId: String) {
+            cancelledRoutineIds += routineId
+        }
+    }
+
+    /** Minimal in-memory [AppSettingsDataStore] fake — see the identical fake in
+     * `RoutineCreateViewModelTest` for why each ViewModel test file keeps its own copy rather
+     * than sharing one across packages. */
+    private class FakeAppSettingsDataStore(initial: AppSettings = AppSettings()) : AppSettingsDataStore {
+        private val state = MutableStateFlow(initial)
+        override val settings: Flow<AppSettings> = state
+        override suspend fun setUseDarkTheme(useDarkTheme: Boolean?) {
+            state.value = state.value.copy(useDarkTheme = useDarkTheme)
+        }
+        override suspend fun setHasSeenNotificationRationale(seen: Boolean) {
+            state.value = state.value.copy(hasSeenNotificationRationale = seen)
+        }
+        override suspend fun setHasAcknowledgedAttribution(acknowledged: Boolean) {
+            state.value = state.value.copy(hasAcknowledgedAttribution = acknowledged)
+        }
+    }
+
+    /** Settable in-memory [NotificationAvailabilityChecker] fake — lets tests flip the
+     * "current" availability (e.g. while the screen is stopped, simulating the user changing
+     * a system Settings toggle) and then assert [RoutineDetailsViewModel.refreshNotificationAvailability]
+     * (driven by [RoutineDetailsViewModel.runAutoRefresh] on every lifecycle resume) actually
+     * picks up the new value, without a real Android `NotificationManager`. */
+    private class FakeNotificationAvailabilityChecker(
+        var current: NotificationAvailability = NotificationAvailability.Available,
+    ) : NotificationAvailabilityChecker {
+        override fun check(): NotificationAvailability = current
+    }
+
     private fun viewModel(
         routine: CommuteRoutine? = sampleRoutine(),
         routineId: String = routine?.id ?: "missing",
         departures: DepartureRepository = FakeDepartureRepository(resultOf(upcomingDeparture())),
         routines: RoutineRepository = FakeRoutineRepository(routine),
+        notifier: RoutineNotifier = FakeRoutineNotifier(),
+        scheduler: RoutineScheduler = FakeRoutineScheduler(),
+        appSettingsDataStore: AppSettingsDataStore = FakeAppSettingsDataStore(),
+        notificationAvailabilityChecker: NotificationAvailabilityChecker = FakeNotificationAvailabilityChecker(),
     ) = RoutineDetailsViewModel(
         savedStateHandle = SavedStateHandle(mapOf(Routes.RoutineDetails.ARG_ROUTINE_ID to routineId)),
         routineRepository = routines,
         getLiveDepartures = GetLiveDeparturesUseCase(departures, clock),
+        routineNotifier = notifier,
+        routineScheduler = scheduler,
+        appSettingsDataStore = appSettingsDataStore,
+        notificationAvailabilityChecker = notificationAvailabilityChecker,
         clock = clock,
     )
 
@@ -267,6 +348,10 @@ class RoutineDetailsViewModelTest {
             savedStateHandle = SavedStateHandle(mapOf(Routes.RoutineDetails.ARG_ROUTINE_ID to "r42")),
             routineRepository = repository,
             getLiveDepartures = GetLiveDeparturesUseCase(FakeDepartureRepository(resultOf(upcomingDeparture())), clock),
+            routineNotifier = FakeRoutineNotifier(),
+            routineScheduler = FakeRoutineScheduler(),
+            appSettingsDataStore = FakeAppSettingsDataStore(),
+            notificationAvailabilityChecker = FakeNotificationAvailabilityChecker(),
             clock = clock,
         )
         dispatcher.scheduler.advanceUntilIdle()
@@ -845,5 +930,364 @@ class RoutineDetailsViewModelTest {
         val state = vm.uiState.value.departures
         assertTrue(state is LiveDeparturesState.Stale)
         assertEquals(listOf("kept"), (state as LiveDeparturesState.Stale).snapshot.departures.map { it.departureId })
+    }
+
+    // ---- Debug-only manual notification trigger (Part 6 / Fix 3) ----
+
+    @Test
+    fun `showDebugTestNotification maps the already-loaded routine and departures without a new fetch`() = runTest(dispatcher) {
+        val departures = FakeDepartureRepository(resultOf(upcomingDeparture("dep-a")))
+        val notifier = FakeRoutineNotifier()
+        val vm = viewModel(departures = departures, notifier = notifier)
+        dispatcher.scheduler.advanceUntilIdle()
+        assertEquals(1, departures.callCount)
+
+        vm.showDebugTestNotification()
+
+        assertEquals(1, departures.callCount) // no new fetch was triggered
+        assertEquals(1, notifier.shown.size)
+        assertEquals(vm.uiState.value.routine?.id, notifier.shown.single().routineId)
+    }
+
+    @Test
+    fun `showDebugTestNotification is a no-op before the routine has loaded`() = runTest(dispatcher) {
+        val notifier = FakeRoutineNotifier()
+        val departures = ControllableDepartureRepository()
+        viewModel(departures = departures, notifier = notifier).showDebugTestNotification()
+
+        assertTrue(notifier.shown.isEmpty())
+    }
+
+    @Test
+    fun `showDebugTestNotification returns null before the routine has loaded`() = runTest(dispatcher) {
+        val notifier = FakeRoutineNotifier()
+        val departures = ControllableDepartureRepository()
+        val result = viewModel(departures = departures, notifier = notifier).showDebugTestNotification()
+
+        assertNull(result)
+    }
+
+    @Test
+    fun `showDebugTestNotification returns Posted when the notifier actually posts`() = runTest(dispatcher) {
+        val notifier = FakeRoutineNotifier(resultToReturn = NotificationPostResult.Posted)
+        val vm = viewModel(notifier = notifier)
+        dispatcher.scheduler.advanceUntilIdle()
+
+        val result = vm.showDebugTestNotification()
+
+        assertEquals(NotificationPostResult.Posted, result)
+    }
+
+    @Test
+    fun `showDebugTestNotification propagates NotificationsDisabled from the notifier without posting`() = runTest(dispatcher) {
+        val notifier = FakeRoutineNotifier(resultToReturn = NotificationPostResult.NotificationsDisabled)
+        val vm = viewModel(notifier = notifier)
+        dispatcher.scheduler.advanceUntilIdle()
+
+        val result = vm.showDebugTestNotification()
+
+        assertEquals(NotificationPostResult.NotificationsDisabled, result)
+    }
+
+    @Test
+    fun `showDebugTestNotification propagates Failed from the notifier`() = runTest(dispatcher) {
+        val notifier = FakeRoutineNotifier(resultToReturn = NotificationPostResult.Failed)
+        val vm = viewModel(notifier = notifier)
+        dispatcher.scheduler.advanceUntilIdle()
+
+        val result = vm.showDebugTestNotification()
+
+        assertEquals(NotificationPostResult.Failed, result)
+    }
+
+    @Test
+    fun `removeDebugTestNotification calls through to the notifier`() = runTest(dispatcher) {
+        val notifier = FakeRoutineNotifier()
+        val vm = viewModel(notifier = notifier)
+        dispatcher.scheduler.advanceUntilIdle()
+
+        vm.removeDebugTestNotification()
+
+        assertEquals(1, notifier.removeCallCount)
+    }
+
+    // ---- Automatic 30-second refresh (runAutoRefresh) ----
+    //
+    // dispatcher.scheduler (StandardTestDispatcher's virtual-time TestCoroutineScheduler) is
+    // advanced explicitly throughout this section instead of ever waiting a real 30 seconds —
+    // see RoutineDetailsViewModel.AUTO_REFRESH_INTERVAL_MS's own doc comment on why no separate
+    // Ticker abstraction is needed for this.
+
+    @Test
+    fun `runAutoRefresh's first-ever call does not duplicate the initial fetch already triggered by loading the routine`() =
+        runTest(dispatcher) {
+            val departures = FakeDepartureRepository(resultOf(upcomingDeparture()))
+            val vm = viewModel(departures = departures)
+            dispatcher.scheduler.advanceUntilIdle()
+            assertEquals(1, departures.callCount) // init's own immediate fetch
+
+            val job = launch { vm.runAutoRefresh() }
+            // runCurrent() (not advanceUntilIdle()) -- the loop is `while (isActive) { delay(30s)
+            // ...}` and never stops on its own, so advanceUntilIdle() here would free-run forever
+            // (it only returns once genuinely idle, which this loop never reaches while active).
+            // runCurrent() drains everything scheduled at the current virtual time -- enough to
+            // let the coroutine reach its first real suspension point (the delay) -- without
+            // advancing past it. Same pattern as RoutineActiveWindowWorkerTest's identical comment.
+            dispatcher.scheduler.runCurrent()
+
+            assertEquals(1, departures.callCount) // no extra fetch from starting the loop itself
+            job.cancel()
+        }
+
+    @Test
+    fun `runAutoRefresh fetches again after 30 seconds`() = runTest(dispatcher) {
+        val departures = FakeDepartureRepository(resultOf(upcomingDeparture()))
+        val vm = viewModel(departures = departures)
+        dispatcher.scheduler.advanceUntilIdle()
+        assertEquals(1, departures.callCount)
+
+        val job = launch { vm.runAutoRefresh() }
+        // See `runAutoRefresh's first-ever call...`'s comment on why this is runCurrent(), not
+        // advanceUntilIdle() -- the loop is still active at both points below.
+        dispatcher.scheduler.runCurrent()
+        dispatcher.scheduler.advanceTimeBy(RoutineDetailsViewModel.AUTO_REFRESH_INTERVAL_MS + 1)
+        dispatcher.scheduler.runCurrent()
+
+        assertEquals(2, departures.callCount)
+        job.cancel()
+    }
+
+    @Test
+    fun `an automatic refresh tick never blanks the section back to Loading`() = runTest(dispatcher) {
+        val departures = ControllableDepartureRepository()
+        val vm = viewModel(departures = departures)
+        dispatcher.scheduler.advanceUntilIdle()
+        departures.complete(0, resultOf(upcomingDeparture()))
+        dispatcher.scheduler.advanceUntilIdle()
+        assertTrue(vm.uiState.value.departures is LiveDeparturesState.Live)
+
+        val job = launch { vm.runAutoRefresh() }
+        dispatcher.scheduler.advanceTimeBy(RoutineDetailsViewModel.AUTO_REFRESH_INTERVAL_MS + 1)
+        // runCurrent(), not advanceUntilIdle() -- the loop is still active (see
+        // `runAutoRefresh's first-ever call...`'s comment).
+        dispatcher.scheduler.runCurrent() // reach the automatic tick's own suspension point
+
+        // Unlike the very first (INITIAL) fetch, an AUTOMATIC tick never resets the section to
+        // Loading while its own fetch is in flight -- the previous Live data stays visible.
+        assertNotEquals(LiveDeparturesState.Loading, vm.uiState.value.departures)
+        departures.complete(1, resultOf(upcomingDeparture()))
+        dispatcher.scheduler.runCurrent()
+        job.cancel()
+    }
+
+    @Test
+    fun `cancelling the auto-refresh coroutine stops further ticks`() = runTest(dispatcher) {
+        val departures = FakeDepartureRepository(resultOf(upcomingDeparture()))
+        val vm = viewModel(departures = departures)
+        dispatcher.scheduler.advanceUntilIdle()
+        assertEquals(1, departures.callCount)
+
+        val job = launch { vm.runAutoRefresh() }
+        // runCurrent() while the loop is still active (see `runAutoRefresh's first-ever
+        // call...`'s comment); advanceUntilIdle() below is fine once it's actually cancelled.
+        dispatcher.scheduler.runCurrent()
+        job.cancel()
+        dispatcher.scheduler.advanceUntilIdle()
+
+        dispatcher.scheduler.advanceTimeBy(RoutineDetailsViewModel.AUTO_REFRESH_INTERVAL_MS * 3)
+        dispatcher.scheduler.advanceUntilIdle()
+
+        assertEquals(1, departures.callCount) // no ticks fired after cancellation
+    }
+
+    @Test
+    fun `restarting runAutoRefresh after being stopped fetches immediately again, without waiting 30 seconds`() =
+        runTest(dispatcher) {
+            val departures = FakeDepartureRepository(resultOf(upcomingDeparture()))
+            val vm = viewModel(departures = departures)
+            dispatcher.scheduler.advanceUntilIdle()
+            assertEquals(1, departures.callCount)
+
+            val firstJob = launch { vm.runAutoRefresh() }
+            // runCurrent() while active; advanceUntilIdle() below is fine once cancelled (see
+            // `runAutoRefresh's first-ever call...`'s comment).
+            dispatcher.scheduler.runCurrent()
+            firstJob.cancel()
+            dispatcher.scheduler.advanceUntilIdle()
+            assertEquals(1, departures.callCount)
+
+            val secondJob = launch { vm.runAutoRefresh() }
+            dispatcher.scheduler.runCurrent()
+
+            assertEquals(2, departures.callCount) // the restart's own immediate fetch
+            secondJob.cancel()
+        }
+
+    @Test
+    fun `calling runAutoRefresh while a loop is already active does not start a second concurrent loop`() =
+        runTest(dispatcher) {
+            val departures = FakeDepartureRepository(resultOf(upcomingDeparture()))
+            val vm = viewModel(departures = departures)
+            dispatcher.scheduler.advanceUntilIdle()
+            assertEquals(1, departures.callCount)
+
+            val firstJob = launch { vm.runAutoRefresh() }
+            // runCurrent() throughout -- both loops are still active (see `runAutoRefresh's
+            // first-ever call...`'s comment).
+            dispatcher.scheduler.runCurrent()
+            // e.g. a rapid double recomposition re-entering repeatOnLifecycle before the first
+            // call's own `finally` has cleared autoRefreshJob -- must be a no-op, not a second
+            // concurrent loop.
+            val secondJob = launch { vm.runAutoRefresh() }
+            dispatcher.scheduler.runCurrent()
+
+            dispatcher.scheduler.advanceTimeBy(RoutineDetailsViewModel.AUTO_REFRESH_INTERVAL_MS + 1)
+            dispatcher.scheduler.runCurrent()
+
+            // Exactly one tick's worth of extra fetches (init's 1 + one tick = 2) -- two
+            // concurrent loops would have produced two ticks (3 total) instead.
+            assertEquals(2, departures.callCount)
+            firstJob.cancel()
+            secondJob.cancel()
+        }
+
+    // ---- Notification availability refreshes on lifecycle resume (Fix 3) ----
+
+    @Test
+    fun `notification availability begins reflecting the checker, changes while stopped are picked up on resume`() =
+        runTest(dispatcher) {
+            val checker = FakeNotificationAvailabilityChecker(current = NotificationAvailability.AppDisabled)
+            val vm = viewModel(notificationAvailabilityChecker = checker)
+            dispatcher.scheduler.advanceUntilIdle()
+
+            // Begins disabled -- the very first check, from init, before any lifecycle
+            // resume/runAutoRefresh call at all.
+            assertEquals(NotificationAvailability.AppDisabled, vm.uiState.value.notificationAvailability)
+
+            // The screen is "stopped" (no runAutoRefresh loop running) while the underlying
+            // availability changes -- e.g. the user granted notifications from system Settings.
+            checker.current = NotificationAvailability.Available
+
+            // A lifecycle resume: repeatOnLifecycle(STARTED) calling runAutoRefresh() again.
+            val job = launch { vm.runAutoRefresh() }
+            // runCurrent(), not advanceUntilIdle() -- see `runAutoRefresh's first-ever call...`'s
+            // comment on why advanceUntilIdle() free-runs forever while this loop is active.
+            dispatcher.scheduler.runCurrent()
+
+            assertEquals(NotificationAvailability.Available, vm.uiState.value.notificationAvailability)
+            job.cancel()
+        }
+
+    @Test
+    fun `notification availability changing to disabled while stopped is also picked up on resume`() =
+        runTest(dispatcher) {
+            val checker = FakeNotificationAvailabilityChecker(current = NotificationAvailability.Available)
+            val vm = viewModel(notificationAvailabilityChecker = checker)
+            dispatcher.scheduler.advanceUntilIdle()
+
+            assertEquals(NotificationAvailability.Available, vm.uiState.value.notificationAvailability)
+
+            // Stopped, then the user disables the Blick channel specifically while away.
+            checker.current = NotificationAvailability.ChannelDisabled
+
+            val job = launch { vm.runAutoRefresh() }
+            // runCurrent() -- see `runAutoRefresh's first-ever call...`'s comment.
+            dispatcher.scheduler.runCurrent()
+
+            assertEquals(NotificationAvailability.ChannelDisabled, vm.uiState.value.notificationAvailability)
+            job.cancel()
+        }
+
+    @Test
+    fun `markNotificationRationaleSeen also refreshes notification availability`() = runTest(dispatcher) {
+        val checker = FakeNotificationAvailabilityChecker(current = NotificationAvailability.PermissionMissing)
+        val vm = viewModel(notificationAvailabilityChecker = checker)
+        dispatcher.scheduler.advanceUntilIdle()
+        assertEquals(NotificationAvailability.PermissionMissing, vm.uiState.value.notificationAvailability)
+
+        // The permission result callback flow always calls markNotificationRationaleSeen()
+        // (granted, denied, or dismissed -- see rememberNotificationPermissionGate's finishAndRun).
+        checker.current = NotificationAvailability.Available
+        vm.markNotificationRationaleSeen()
+        dispatcher.scheduler.advanceUntilIdle()
+
+        assertEquals(NotificationAvailability.Available, vm.uiState.value.notificationAvailability)
+    }
+
+    // ---- Scheduler integration (save/enable/disable/pause/resume/delete) ----
+
+    @Test
+    fun `enabling a routine schedules its next activation`() = runTest(dispatcher) {
+        val routine = sampleRoutine(enabled = false)
+        val scheduler = FakeRoutineScheduler()
+        val vm = viewModel(routine = routine, routines = FakeRoutineRepository(routine), scheduler = scheduler)
+        dispatcher.scheduler.advanceUntilIdle()
+
+        vm.toggleEnabled()
+        dispatcher.scheduler.advanceUntilIdle()
+
+        assertEquals(listOf(true), scheduler.scheduledRoutines.map { it.enabled })
+        assertTrue(scheduler.cancelledRoutineIds.isEmpty())
+    }
+
+    @Test
+    fun `disabling a routine cancels its scheduled activation`() = runTest(dispatcher) {
+        val routine = sampleRoutine(enabled = true)
+        val scheduler = FakeRoutineScheduler()
+        val vm = viewModel(routine = routine, routines = FakeRoutineRepository(routine), scheduler = scheduler)
+        dispatcher.scheduler.advanceUntilIdle()
+
+        vm.toggleEnabled()
+        dispatcher.scheduler.advanceUntilIdle()
+
+        assertEquals(listOf(routine.id), scheduler.cancelledRoutineIds)
+        assertTrue(scheduler.scheduledRoutines.isEmpty())
+    }
+
+    @Test
+    fun `pausing today reschedules excluding today`() = runTest(dispatcher) {
+        val routine = sampleRoutine()
+        val scheduler = FakeRoutineScheduler()
+        val vm = viewModel(routine = routine, routines = FakeRoutineRepository(routine), scheduler = scheduler)
+        dispatcher.scheduler.advanceUntilIdle()
+
+        vm.pauseToday()
+        dispatcher.scheduler.advanceUntilIdle()
+
+        assertEquals(listOf(LocalDate.now(clock)), scheduler.scheduledRoutines.map { it.pausedDate })
+    }
+
+    @Test
+    fun `resuming today reschedules without an excluded date`() = runTest(dispatcher) {
+        val today = LocalDate.now(clock)
+        val routine = sampleRoutine(pausedDate = today)
+        val scheduler = FakeRoutineScheduler()
+        val vm = viewModel(routine = routine, routines = FakeRoutineRepository(routine), scheduler = scheduler)
+        dispatcher.scheduler.advanceUntilIdle()
+
+        vm.resumeToday()
+        dispatcher.scheduler.advanceUntilIdle()
+
+        assertEquals(listOf<LocalDate?>(null), scheduler.scheduledRoutines.map { it.pausedDate })
+    }
+
+    @Test
+    fun `deleting a routine cancels its scheduled activation and removes its notification`() = runTest(dispatcher) {
+        val routine = sampleRoutine()
+        val scheduler = FakeRoutineScheduler()
+        val notifier = FakeRoutineNotifier()
+        val vm = viewModel(
+            routine = routine,
+            routines = FakeRoutineRepository(routine),
+            scheduler = scheduler,
+            notifier = notifier,
+        )
+        dispatcher.scheduler.advanceUntilIdle()
+
+        vm.deleteRoutine {}
+        dispatcher.scheduler.advanceUntilIdle()
+
+        assertEquals(listOf(routine.id), scheduler.cancelledRoutineIds)
+        assertEquals(1, notifier.removeCallCount)
     }
 }

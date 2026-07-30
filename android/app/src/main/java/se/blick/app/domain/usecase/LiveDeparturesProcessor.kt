@@ -3,7 +3,6 @@ package se.blick.app.domain.usecase
 import se.blick.app.domain.model.CommuteRoutine
 import se.blick.app.domain.model.Departure
 import se.blick.app.domain.model.DeparturesResult
-import java.time.Duration
 import java.time.Instant
 
 /**
@@ -18,7 +17,6 @@ import java.time.Instant
 object LiveDeparturesProcessor {
 
     private const val MAX_DEPARTURES = 2
-    private const val SECONDS_PER_MINUTE = 60L
 
     /**
      * Filters [result]'s departures to those matching [routine] (transport mode always;
@@ -44,15 +42,9 @@ object LiveDeparturesProcessor {
             .toList()
 
     private fun Departure.toPrepared(now: Instant): PreparedDeparture {
-        // effectiveTime >= now is already guaranteed by the caller's filter above, but
-        // coerceAtLeast(0) keeps this function itself safe/non-negative even if called
-        // directly (e.g. from a future caller that skips the "before now" filter).
-        val secondsUntil = Duration.between(now, effectiveTime).seconds.coerceAtLeast(0)
-        // Ceiling-divide seconds into minutes using plain integer arithmetic (no floating
-        // point): 0s -> 0 min, 30s -> 1 min, 60s -> 1 min, 61s -> 2 min. This matches the
-        // product requirement that a departure "30 seconds away" reads as 1 minute, while
-        // one exactly at `now` reads as 0.
-        val minutesRemaining = (secondsUntil + SECONDS_PER_MINUTE - 1) / SECONDS_PER_MINUTE
+        // effectiveTime >= now is already guaranteed by the caller's filter above; see
+        // countdownMinutes's own doc for why it stays defensive regardless.
+        val minutesRemaining = countdownMinutes(now, effectiveTime)
         return PreparedDeparture(
             departureId = departureId,
             lineDesignation = line.designation,
