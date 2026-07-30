@@ -110,15 +110,24 @@ curl https://blick-backend.vercel.app/api/v1/health
 
 ## Build
 
-This project has been authored and structurally validated (brace/paren balance, XML
-well-formedness, internal import resolution, Gradle Kotlin DSL syntax) but **has not
-been compiled or run as part of preparing this repository**: that environment has
-only a JRE (not a JDK) at Java 11, no Android SDK, and no network path to
-`dl.google.com`/`repo.maven.apache.org`/`services.gradle.org` to provision either one —
-so `assembleDebug`, `lintDebug`, and `testDebugUnitTest` could not genuinely be executed
-here, and no result from them should be assumed. AGP 9.2.1 requires a JDK 17+ with
-`javac`. On a machine with a real JDK 17 and Android SDK (or Android Studio, which
-provides both), build with:
+**Verified baseline (real local run, Android Studio's bundled JDK 17 + Android SDK):**
+debug APK build succeeded; 115 JVM unit tests passed with zero failures (before the
+stale-snapshot-identity regression test described in this project's fix log added 2
+more, for 117 source-level `@Test` functions as of the latest change — not yet
+re-verified by an actual run, see below); `lintDebug` completed with 0 errors and 37
+warnings; and six Room instrumented (`connectedDebugAndroidTest`) tests previously
+passed on a physical Lenovo TB350FU running Android 14 — that connected-device run
+predates the newest routine-details/live-preview and routine-management changes, so it
+covers the Room DAO only, not those newer screens/ViewModels.
+
+**This particular working environment cannot reproduce that run.** It has only a JRE
+(not a JDK) at Java 11, no Android SDK, and no network path to
+`services.gradle.org` to provision either one — so `assembleDebug`, `lintDebug`, and
+`testDebugUnitTest` could not genuinely be executed here (confirmed: `./gradlew
+--version` fails with `UnknownHostException: services.gradle.org`), and no result from
+them should be assumed beyond the verified baseline above, which predates whatever the
+most recent change was. AGP 9.2.1 requires a JDK 17+ with `javac`. On a machine with a
+real JDK 17 and Android SDK (or Android Studio, which provides both), build with:
 
 ```
 cd android

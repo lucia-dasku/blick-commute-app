@@ -66,10 +66,11 @@ class RoutineDetailsViewModelTest {
         id: String = "r1",
         pausedDate: LocalDate? = null,
         enabled: Boolean = true,
+        siteId: Long = 9145,
     ) = CommuteRoutine(
         id = id,
         name = "Morning commute",
-        siteId = 9145,
+        siteId = siteId,
         siteName = "Fruängen",
         transportMode = TransportMode.BUS,
         lineId = null,
@@ -208,6 +209,23 @@ class RoutineDetailsViewModelTest {
             callCount++
             if (shouldFail) throw failure
             return result
+        }
+    }
+
+    /** Succeeds with a per-site configured result for sites in [resultsBySite]; throws
+     * [failure] for any site listed in [failingSites] — for proving a fetch against a NEW
+     * site (e.g. after editing a routine to a different station) can genuinely fail
+     * independently of whatever succeeded for the OLD site. */
+    private class PerSiteDepartureRepository(
+        private val resultsBySite: Map<Long, DeparturesResult> = emptyMap(),
+        private val failingSites: Set<Long> = emptySet(),
+        private val failure: Throwable = IOException("network down"),
+    ) : DepartureRepository {
+        var callCount = 0
+        override suspend fun getDepartures(siteId: Long): DeparturesResult {
+            callCount++
+            if (siteId in failingSites) throw failure
+            return resultsBySite[siteId] ?: error("PerSiteDepartureRepository: no result configured for site $siteId")
         }
     }
 
@@ -771,5 +789,61 @@ class RoutineDetailsViewModelTest {
             listOf("fresh"),
             (vm.uiState.value.departures as LiveDeparturesState.Live).snapshot.departures.map { it.departureId },
         )
+    }
+
+    // ---- Stale-snapshot identity regression (edit to a new site/line/direction/mode must
+    // never let the OLD routine's cached snapshot resurface as "stale" data for the NEW one)
+
+    @Test
+    fun `a failed first fetch for an edited routine's new identity does not resurface the old routine's departures as stale`() = runTest(dispatcher) {
+        val routineA = sampleRoutine(id = "r1", siteId = 9145)
+        val repository = FakeRoutineRepository(routineA)
+        val departures = PerSiteDepartureRepository(
+            resultsBySite = mapOf(9145L to resultOf(upcomingDeparture("a-dep"))),
+            failingSites = setOf(9192L),
+        )
+        val vm = viewModel(routine = routineA, routineId = "r1", departures = departures, routines = repository)
+        dispatcher.scheduler.advanceUntilIdle()
+
+        // Sanity: routine A's own fetch genuinely succeeded and is cached.
+        val initial = vm.uiState.value.departures
+        assertTrue(initial is LiveDeparturesState.Live)
+        assertEquals(listOf("a-dep"), (initial as LiveDeparturesState.Live).snapshot.departures.map { it.departureId })
+
+        // Edit routine A to a different site (a new departure identity) -- simulates what
+        // RoutineCreateViewModel's save() does for an existing id.
+        val routineB = routineA.copy(siteId = 9192, siteName = "Slussen")
+        repository.save(routineB)
+        vm.reload()
+        dispatcher.scheduler.advanceUntilIdle()
+
+        // Routine B's first-ever fetch genuinely fails with no valid (same-identity) cached
+        // snapshot of its own -- this must surface as a real failure state, never as Stale
+        // wrapping routine A's unrelated departures.
+        val afterFailedReload = vm.uiState.value.departures
+        assertTrue(
+            "expected a non-Stale failure state (no valid snapshot for the new identity), got $afterFailedReload",
+            afterFailedReload is LiveDeparturesState.Offline,
+        )
+        assertEquals("Slussen", vm.uiState.value.routine?.siteName)
+    }
+
+    @Test
+    fun `a refresh failure for the SAME departure identity still falls back to its own cached snapshot`() = runTest(dispatcher) {
+        val routine = sampleRoutine(id = "r1", siteId = 9145)
+        val departures = ToggleableDepartureRepository(resultOf(upcomingDeparture("kept")))
+        val vm = viewModel(routine = routine, routineId = "r1", departures = departures)
+        dispatcher.scheduler.advanceUntilIdle()
+        assertTrue(vm.uiState.value.departures is LiveDeparturesState.Live)
+
+        // A later manual refresh of the exact same routine/identity fails -- this is the
+        // legitimate case the identity check must still allow through to Stale.
+        departures.shouldFail = true
+        vm.refresh()
+        dispatcher.scheduler.advanceUntilIdle()
+
+        val state = vm.uiState.value.departures
+        assertTrue(state is LiveDeparturesState.Stale)
+        assertEquals(listOf("kept"), (state as LiveDeparturesState.Stale).snapshot.departures.map { it.departureId })
     }
 }

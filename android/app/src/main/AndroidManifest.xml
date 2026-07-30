@@ -5,9 +5,12 @@
         Deliberately minimal permission set for the MVP (see docs/api-contract.md §16
         of the project documentation and the "Privacy and security" principle):
         no GPS/location, no accounts, no advertising ID.
-        POST_NOTIFICATIONS is required on API 33+ to show the commute notification;
-        the app requests it at runtime during routine setup, matching the documented
-        "Initial setup" flow.
+        POST_NOTIFICATIONS is required on API 33+ to show the commute notification and
+        is declared here in preparation for that feature, but the app does NOT yet
+        request it at runtime anywhere (there is no notification functionality to gate
+        it behind yet — see notification/RoutineNotifier.kt). Runtime permission
+        onboarding, matching the documented "Initial setup" flow, is still pending and
+        must be implemented alongside the notification feature itself, not before it.
     -->
     <uses-permission android:name="android.permission.POST_NOTIFICATIONS" />
     <uses-permission android:name="android.permission.INTERNET" />

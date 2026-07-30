@@ -14,6 +14,7 @@ import kotlinx.coroutines.flow.update
 import kotlinx.coroutines.launch
 import se.blick.app.data.repository.RoutineRepository
 import se.blick.app.domain.model.CommuteRoutine
+import se.blick.app.domain.model.TransportMode
 import se.blick.app.domain.usecase.GetLiveDeparturesUseCase
 import se.blick.app.domain.usecase.LiveDeparturesSnapshot
 import se.blick.app.domain.usecase.LiveDeparturesState
@@ -23,6 +24,23 @@ import java.time.LocalDate
 import javax.inject.Inject
 
 private const val LOG_TAG = "RoutineDetailsViewModel"
+
+/**
+ * The fields that together identify "the same departure query" for a routine. Two routines
+ * (or the same routine before/after an edit) only ever produce comparable departure data if
+ * all four match — see [RoutineDetailsViewModel]'s `lastSnapshotIdentity` doc comment for why
+ * this exists: a cached [LiveDeparturesSnapshot] must never be offered as a stale fallback to
+ * a fetch for a different identity, or an edited routine's first failed fetch could show the
+ * previous configuration's departures as if they were its own stale data.
+ */
+private data class DepartureIdentity(
+    val siteId: Long,
+    val lineId: Long?,
+    val directionCode: Int?,
+    val transportMode: TransportMode,
+)
+
+private fun CommuteRoutine.departureIdentity() = DepartureIdentity(siteId, lineId, directionCode, transportMode)
 
 /**
  * Foreground, manually-refreshable UI state for the routine details/live-preview screen.
@@ -85,8 +103,16 @@ class RoutineDetailsViewModel @Inject constructor(
     val uiState: StateFlow<RoutineDetailsUiState> = _uiState.asStateFlow()
 
     /** The last successful fetch, kept in memory only (see class doc) so a later failed
-     * refresh can fall back to [LiveDeparturesState.Stale] instead of losing the data. */
+     * refresh can fall back to [LiveDeparturesState.Stale] instead of losing the data —
+     * together with [lastSnapshotIdentity], the departure identity (site/line/direction/mode)
+     * that actually produced it. [loadDepartures] only ever offers this snapshot to
+     * [GetLiveDeparturesUseCase] as `previous` when the identity it's about to fetch matches
+     * exactly; otherwise a routine edit followed by an immediately-failing first fetch could
+     * surface the PREVIOUS configuration's departures, mislabelled as "stale" data for the
+     * new one, which is exactly the bug this pairing fixes. Both fields are always written
+     * together so they can never drift out of sync. */
     private var lastSnapshot: LiveDeparturesSnapshot? = null
+    private var lastSnapshotIdentity: DepartureIdentity? = null
 
     /** Guards against an overlapping/superseded departures fetch overwriting a newer one —
      * same stored-Job + request-generation-token pattern as
@@ -153,11 +179,7 @@ class RoutineDetailsViewModel @Inject constructor(
             val loaded = routineRepository.getById(routineId) ?: return@launch
             val fresh = clearExpiredPauseIfNeeded(loaded)
             val previous = _uiState.value.routine
-            val departureConfigChanged = previous == null ||
-                previous.siteId != fresh.siteId ||
-                previous.lineId != fresh.lineId ||
-                previous.directionCode != fresh.directionCode ||
-                previous.transportMode != fresh.transportMode
+            val departureConfigChanged = previous == null || previous.departureIdentity() != fresh.departureIdentity()
             _uiState.update {
                 it.copy(
                     routine = fresh,
@@ -165,6 +187,13 @@ class RoutineDetailsViewModel @Inject constructor(
                 )
             }
             if (departureConfigChanged) {
+                // The cached snapshot (if any) belongs to the OLD identity and must never be
+                // offered as a stale fallback for the new one — loadDepartures's own identity
+                // check already prevents this (see lastSnapshotIdentity's doc), but clearing
+                // it here too makes the invariant explicit rather than relying on that check
+                // alone, and prevents it from lingering in memory for no purpose.
+                lastSnapshot = null
+                lastSnapshotIdentity = null
                 loadDepartures(fresh, isManualRefresh = false)
             }
         }
@@ -277,13 +306,20 @@ class RoutineDetailsViewModel @Inject constructor(
     private fun loadDepartures(routine: CommuteRoutine, isManualRefresh: Boolean) {
         departuresJob?.cancel()
         val requestId = ++departuresRequestId
+        val identity = routine.departureIdentity()
 
         _uiState.update {
             if (isManualRefresh) it.copy(isRefreshingDepartures = true) else it.copy(departures = LiveDeparturesState.Loading)
         }
 
+        // The cached snapshot is only a valid stale fallback for a fetch of the EXACT same
+        // departure identity that produced it (see lastSnapshotIdentity's doc) — a manual
+        // refresh of the same routine reuses it, but a fetch following an edit to a
+        // different site/line/direction/mode must not.
+        val previousForThisFetch = lastSnapshot.takeIf { lastSnapshotIdentity == identity }
+
         departuresJob = viewModelScope.launch {
-            getLiveDepartures(routine, previous = lastSnapshot).collect { state ->
+            getLiveDepartures(routine, previous = previousForThisFetch).collect { state ->
                 if (requestId != departuresRequestId) return@collect
 
                 if (state is LiveDeparturesState.Loading) {
@@ -298,6 +334,7 @@ class RoutineDetailsViewModel @Inject constructor(
 
                 if (state is LiveDeparturesState.Live) {
                     lastSnapshot = state.snapshot
+                    lastSnapshotIdentity = identity
                 }
                 _uiState.update { it.copy(departures = state, isRefreshingDepartures = false) }
             }

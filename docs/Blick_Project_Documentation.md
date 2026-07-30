@@ -2,8 +2,53 @@
 
 **Product concept, functional specification, verified data sources, architecture, privacy, and delivery scope**
 
-**Document status:** Android-first MVP specification  
-**Updated:** 28 July 2026
+**Document status:** Android-first MVP specification — see "Current implementation
+status" immediately below for what already exists in this repository versus what the
+rest of this document specifies as still planned.\
+**Updated:** 30 July 2026
+
+---
+
+## Current implementation status (as of 30 July 2026)
+
+This document specifies the full intended product. Most of the sections below describe
+that end-state design in the present tense, as a specification does — they are **not**
+a claim that all of it already exists. This section is the authoritative summary of
+what is actually built today; where the two disagree, this section wins.
+
+**Implemented today (Android client + backend):**
+
+- Live SL stop search and transport-mode/line/direction discovery during routine setup.
+- The routine-creation wizard, backed by Room persistence.
+- A foreground routine details/live-preview screen: manual "Refresh" only, showing **up
+  to two departures total** (not three — see the corrected departure-count language
+  later in this document).
+- Routine editing (the same wizard, in an edit mode), enable/disable, pause-today /
+  resume-today (with automatic cleanup of an expired pause), and deletion behind an
+  in-screen Material 3 confirmation dialog.
+- A first-beta one-routine limit enforced at the application/UI level.
+- Loading, live, no-departures, offline, stale, and unavailable states for the
+  departures section — including a fix ensuring that editing a routine to a different
+  site/line/direction/transport-mode, followed by that new configuration's first fetch
+  failing, can never surface the *previous* configuration's departures mislabelled as
+  "stale" data for the new one. The client's retained last-successful snapshot is now
+  scoped to the exact departure identity (site, line, direction, transport mode) that
+  produced it, and is discarded rather than reused across an identity change.
+- The backend's full contract, request validation, upstream normalization, and caching
+  logic (183 passing automated tests as of this update).
+
+**Not yet implemented** (described in the sections below purely as the plan):
+
+- Automatic activation of a routine at its configured start time.
+- Any periodic/background refresh, including the planned 30-second active-routine loop.
+- The ongoing, auto-updating lock-screen notification.
+- Runtime notification-permission onboarding. The `POST_NOTIFICATIONS` manifest entry
+  is declared in preparation for this, but the application does not request it at
+  runtime anywhere yet — there is no notification feature to gate it behind.
+- Automatic removal of the notification at the end of a routine's active window.
+- Scheduling reactions to routine changes or a device reboot.
+- Persistent stale-data storage beyond the current screen's in-memory session.
+- The home-screen widget.
 
 ---
 
@@ -128,6 +173,9 @@ The first product is SL-specific. Support for other public-transport operators i
 
 ### Initial setup
 
+*Steps 1–7 are implemented today. Step 8 (notification permission) is still planned —
+see "Current implementation status" above.*
+
 1. The user opens the Android application.
 2. The user searches for and selects an SL site.
 3. The user selects a supported transport mode.
@@ -140,6 +188,11 @@ The first product is SL-specific. Support for other public-transport operators i
 Line and direction options are initially discovered from live departures at the selected site. The SL Transport departures endpoint exposes only services inside its current forecast window. A route that is not currently operating may therefore be unavailable during setup. This is a documented MVP limitation. Direction discovery must remain behind an application interface so a more complete source can replace it later without changing the saved-routine model.
 
 ### Daily operation
+
+*This entire section describes the planned automatic/scheduled and notification
+behavior. None of it is implemented yet — the current behavior is a manually-opened,
+foreground-only details screen with a manual Refresh action (see "Current
+implementation status" above).*
 
 1. The routine becomes active around the configured start time.
 2. The application requests current normalized departures from the Blick backend.
@@ -185,8 +238,7 @@ The first UI supports one routine. The local database is designed for multiple r
 During an active routine, the application must:
 
 - retrieve current departures through the versioned backend API;
-- display the next departure;
-- display at least two following departures when available;
+- display up to two upcoming departures total, when available;
 - show the selected site, line, and direction;
 - calculate the visible countdown locally;
 - automatically remove departures whose effective time has passed;
@@ -209,6 +261,9 @@ The application must:
 - hide the disruption section when nothing relevant is reported.
 
 ### Notification and lock screen
+
+*Planned — not implemented yet. Runtime notification-permission onboarding is pending;
+see "Current implementation status" above.*
 
 The application must:
 
@@ -602,6 +657,9 @@ Network DTOs receive ISO 8601 strings with explicit offsets. Android maps them i
 
 ## 13. Scheduling and Android limitations
 
+*Planned — not implemented yet. There is no `WorkManager`/`AlarmManager`/foreground
+service in the repository today; see "Current implementation status" above.*
+
 Android limits background activity to protect battery life. Blick should not attempt to run continuously.
 
 The scheduled commute-window design supports this requirement:
@@ -667,6 +725,8 @@ No upcoming departures
 
 The backend applies timeouts and consistent error mapping. The Android client retains the last successful response only with a visible stale state and appropriate expiry.
 
+The retained response is scoped to the exact departure identity (site, line, direction, and transport mode) that produced it. If the user edits a routine to a different site/line/direction/mode and that new configuration's first fetch fails, the client must not fall back to the previous configuration's retained response — doing so would mislabel unrelated departures as "stale" data for the new routine. A failed refresh may only fall back to stale data that was captured for the identical configuration currently being fetched.
+
 ---
 
 ## 15. Edge cases
@@ -709,7 +769,7 @@ The MVP contains:
 6. Transport, line, and direction selection from available data.
 7. Weekday selection.
 8. Configurable start and end time.
-9. Next three departures when available.
+9. Up to two departures total when available.
 10. One scheduled ongoing notification.
 11. Lock-screen visibility subject to Android settings.
 12. Relevant SL disruption messages.

@@ -1,64 +1,106 @@
-<svg viewBox="0 0 760 900" xmlns="http://www.w3.org/2000/svg" font-family="Helvetica, Arial, sans-serif">
+<svg viewBox="0 0 1400 950" xmlns="http://www.w3.org/2000/svg" font-family="Helvetica, Arial, sans-serif">
   <defs>
     <marker id="arrow" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse">
       <path d="M 0 0 L 10 5 L 0 10 z" fill="#334155"/>
     </marker>
+    <marker id="arrowMuted" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse">
+      <path d="M 0 0 L 10 5 L 0 10 z" fill="#64748b"/>
+    </marker>
   </defs>
 
-  <rect width="760" height="900" fill="#ffffff"/>
+  <rect width="1400" height="950" fill="#ffffff"/>
 
-  <!-- Box 1: User selects stop -->
-  <rect x="230" y="20" width="300" height="70" rx="10" fill="#e0f2fe" stroke="#0369a1" stroke-width="2"/>
-  <text x="380" y="60" text-anchor="middle" font-size="18" fill="#0c4a6e">User selects stop</text>
+  <!-- Column headers -->
+  <rect x="40" y="15" width="620" height="38" rx="6" fill="#dbeafe" stroke="#1d4ed8" stroke-width="2"/>
+  <text x="350" y="40" text-anchor="middle" font-size="18" font-weight="bold" fill="#1e3a8a">CURRENT FLOW — IMPLEMENTED TODAY</text>
 
-  <line x1="380" y1="90" x2="380" y2="130" stroke="#334155" stroke-width="2" marker-end="url(#arrow)"/>
+  <rect x="740" y="15" width="620" height="38" rx="6" fill="#f1f5f9" stroke="#64748b" stroke-width="2" stroke-dasharray="8,5"/>
+  <text x="1050" y="40" text-anchor="middle" font-size="18" font-weight="bold" fill="#475569">PLANNED FLOW — NOT YET IMPLEMENTED</text>
 
-  <!-- Box 2: Select transport mode, line and direction -->
-  <rect x="180" y="130" width="400" height="70" rx="10" fill="#e0f2fe" stroke="#0369a1" stroke-width="2"/>
-  <text x="380" y="170" text-anchor="middle" font-size="18" fill="#0c4a6e">Select transport mode, line and direction</text>
+  <!-- Vertical divider between the two flows -->
+  <line x1="700" y1="60" x2="700" y2="850" stroke="#cbd5e1" stroke-width="2" stroke-dasharray="6,6"/>
 
-  <line x1="380" y1="200" x2="380" y2="240" stroke="#334155" stroke-width="2" marker-end="url(#arrow)"/>
+  <!-- ================= LEFT COLUMN: current, implemented, manual/foreground flow ================= -->
 
-  <!-- Box 3: Save routine -->
-  <rect x="255" y="240" width="250" height="70" rx="10" fill="#e0f2fe" stroke="#0369a1" stroke-width="2"/>
-  <text x="380" y="280" text-anchor="middle" font-size="18" fill="#0c4a6e">Save routine</text>
+  <!-- 1: User creates and saves a routine -->
+  <rect x="60" y="70" width="580" height="70" rx="10" fill="#e0f2fe" stroke="#0369a1" stroke-width="2"/>
+  <text x="350" y="112" text-anchor="middle" font-size="17" fill="#0c4a6e">1. User creates and saves a routine</text>
+  <line x1="350" y1="140" x2="350" y2="180" stroke="#334155" stroke-width="2" marker-end="url(#arrow)"/>
 
-  <line x1="380" y1="310" x2="380" y2="350" stroke="#334155" stroke-width="2" marker-end="url(#arrow)"/>
+  <!-- 2: User opens the routine details screen -->
+  <rect x="60" y="180" width="580" height="70" rx="10" fill="#e0f2fe" stroke="#0369a1" stroke-width="2"/>
+  <text x="350" y="222" text-anchor="middle" font-size="17" fill="#0c4a6e">2. User opens the routine details screen</text>
+  <line x1="350" y1="250" x2="350" y2="290" stroke="#334155" stroke-width="2" marker-end="url(#arrow)"/>
 
-  <!--
-    Refresh loop while the routine is active: request -> filter -> show -> wait 30s -> repeat.
-    Drawn as one straight-line sequence of four boxes so the cycle reads left-to-right in
-    time, not as two parallel branches.
-  -->
+  <!-- 3: Android requests departure data through the Blick backend -->
+  <rect x="60" y="290" width="580" height="70" rx="10" fill="#e0f2fe" stroke="#0369a1" stroke-width="2"/>
+  <text x="350" y="322" text-anchor="middle" font-size="16" fill="#0c4a6e">3. Android requests departure data</text>
+  <text x="350" y="344" text-anchor="middle" font-size="16" fill="#0c4a6e">through the Blick backend</text>
+  <line x1="350" y1="360" x2="350" y2="400" stroke="#334155" stroke-width="2" marker-end="url(#arrow)"/>
 
-  <!-- Box 4: Backend requests SL Transport and SL Deviations -->
-  <rect x="130" y="350" width="500" height="70" rx="10" fill="#dcfce7" stroke="#15803d" stroke-width="2"/>
-  <text x="380" y="382" text-anchor="middle" font-size="17" fill="#14532d">Backend requests SL Transport</text>
-  <text x="380" y="404" text-anchor="middle" font-size="17" fill="#14532d">and SL Deviations</text>
+  <!-- 4: Backend requests SL Transport and SL Deviations -->
+  <rect x="60" y="400" width="580" height="70" rx="10" fill="#dcfce7" stroke="#15803d" stroke-width="2"/>
+  <text x="350" y="432" text-anchor="middle" font-size="16" fill="#14532d">4. Backend requests SL Transport</text>
+  <text x="350" y="454" text-anchor="middle" font-size="16" fill="#14532d">and SL Deviations</text>
+  <line x1="350" y1="470" x2="350" y2="510" stroke="#334155" stroke-width="2" marker-end="url(#arrow)"/>
 
-  <line x1="380" y1="420" x2="380" y2="460" stroke="#334155" stroke-width="2" marker-end="url(#arrow)"/>
+  <!-- 5: Android filters results for the saved routine -->
+  <rect x="60" y="510" width="580" height="70" rx="10" fill="#fef9c3" stroke="#a16207" stroke-width="2"/>
+  <text x="350" y="552" text-anchor="middle" font-size="17" fill="#713f12">5. Android filters results for the saved routine</text>
+  <line x1="350" y1="580" x2="350" y2="620" stroke="#334155" stroke-width="2" marker-end="url(#arrow)"/>
 
-  <!-- Box 5: Filter departures for saved routine -->
-  <rect x="155" y="460" width="450" height="70" rx="10" fill="#fef9c3" stroke="#a16207" stroke-width="2"/>
-  <text x="380" y="500" text-anchor="middle" font-size="17" fill="#713f12">Filter departures for saved routine</text>
+  <!-- 6: The screen shows up to two departures -->
+  <rect x="60" y="620" width="580" height="70" rx="10" fill="#e0f2fe" stroke="#0369a1" stroke-width="2"/>
+  <text x="350" y="662" text-anchor="middle" font-size="17" fill="#0c4a6e">6. Screen shows up to two departures</text>
+  <line x1="350" y1="690" x2="350" y2="730" stroke="#334155" stroke-width="2" marker-end="url(#arrow)"/>
 
-  <line x1="380" y1="530" x2="380" y2="570" stroke="#334155" stroke-width="2" marker-end="url(#arrow)"/>
+  <!-- 7: The user may manually refresh -->
+  <rect x="60" y="730" width="580" height="70" rx="10" fill="#ede9fe" stroke="#6d28d9" stroke-width="2"/>
+  <text x="350" y="772" text-anchor="middle" font-size="17" fill="#4c1d95">7. User may tap "Refresh" at any time</text>
 
-  <!-- Box 6: Show upcoming departures -->
-  <rect x="205" y="570" width="350" height="70" rx="10" fill="#e0f2fe" stroke="#0369a1" stroke-width="2"/>
-  <text x="380" y="612" text-anchor="middle" font-size="18" fill="#0c4a6e">Show upcoming departures</text>
+  <!-- Loop back to step 3: a manual refresh re-requests departure data -->
+  <path d="M 640 765 C 690 765, 690 325, 645 325" fill="none" stroke="#334155" stroke-width="2" marker-end="url(#arrow)"/>
+  <text x="672" y="545" text-anchor="middle" font-size="13" fill="#475569" transform="rotate(90 672 545)">manual refresh re-requests (step 3)</text>
 
-  <line x1="380" y1="640" x2="380" y2="680" stroke="#334155" stroke-width="2" marker-end="url(#arrow)"/>
+  <!-- ================= RIGHT COLUMN: planned automatic scheduling + notification loop ================= -->
 
-  <!-- Box 7: Wait 30 seconds -->
-  <rect x="255" y="680" width="250" height="70" rx="10" fill="#fee2e2" stroke="#b91c1c" stroke-width="2"/>
-  <text x="380" y="722" text-anchor="middle" font-size="18" fill="#7f1d1d">Wait 30 seconds</text>
+  <!-- P1: Routine would activate automatically at start time -->
+  <rect x="760" y="70" width="580" height="70" rx="10" fill="#f1f5f9" stroke="#64748b" stroke-width="2" stroke-dasharray="8,5"/>
+  <text x="1050" y="102" text-anchor="middle" font-size="16" fill="#475569">Routine would activate automatically</text>
+  <text x="1050" y="124" text-anchor="middle" font-size="16" fill="#475569">at its configured start time</text>
+  <line x1="1050" y1="140" x2="1050" y2="180" stroke="#94a3b8" stroke-width="2" stroke-dasharray="6,5" marker-end="url(#arrowMuted)"/>
 
-  <!-- Loop back to Box 4: repeat while the routine is active -->
-  <path d="M 505 715 C 690 715, 690 385, 635 385" fill="none" stroke="#334155" stroke-width="2" marker-end="url(#arrow)"/>
-  <text x="662" y="550" text-anchor="middle" font-size="14" fill="#475569" transform="rotate(90 662 550)">repeat while routine is active</text>
+  <!-- P2: Backend requests SL Transport and SL Deviations (automatic) -->
+  <rect x="760" y="180" width="580" height="70" rx="10" fill="#f1f5f9" stroke="#64748b" stroke-width="2" stroke-dasharray="8,5"/>
+  <text x="1050" y="212" text-anchor="middle" font-size="16" fill="#475569">Backend requests SL Transport and</text>
+  <text x="1050" y="234" text-anchor="middle" font-size="16" fill="#475569">SL Deviations (automatic, no user action)</text>
+  <line x1="1050" y1="250" x2="1050" y2="290" stroke="#94a3b8" stroke-width="2" stroke-dasharray="6,5" marker-end="url(#arrowMuted)"/>
 
-  <!-- Footer note -->
-  <text x="380" y="820" text-anchor="middle" font-size="13" fill="#64748b">Blick supports all SL transport modes (metro, bus, tram, train, ferry) for any saved routine —</text>
-  <text x="380" y="840" text-anchor="middle" font-size="13" fill="#64748b">this diagram is mode-agnostic and applies regardless of which mode is selected.</text>
+  <!-- P3: App filters results and updates one ongoing notification -->
+  <rect x="760" y="290" width="580" height="70" rx="10" fill="#f1f5f9" stroke="#64748b" stroke-width="2" stroke-dasharray="8,5"/>
+  <text x="1050" y="322" text-anchor="middle" font-size="16" fill="#475569">App filters results and updates ONE</text>
+  <text x="1050" y="344" text-anchor="middle" font-size="16" fill="#475569">ongoing lock-screen notification</text>
+  <line x1="1050" y1="360" x2="1050" y2="400" stroke="#94a3b8" stroke-width="2" stroke-dasharray="6,5" marker-end="url(#arrowMuted)"/>
+
+  <!-- P4: Wait 30 seconds -->
+  <rect x="835" y="400" width="430" height="70" rx="10" fill="#fee2e2" stroke="#b91c1c" stroke-width="2" stroke-dasharray="8,5"/>
+  <text x="1050" y="442" text-anchor="middle" font-size="17" fill="#7f1d1d">Wait 30 seconds</text>
+
+  <!-- Loop back to P2: repeat while the routine is active (planned) -->
+  <path d="M 1265 435 C 1345 435, 1345 215, 1340 215" fill="none" stroke="#94a3b8" stroke-width="2" stroke-dasharray="6,5" marker-end="url(#arrowMuted)"/>
+  <text x="1310" y="330" text-anchor="middle" font-size="12" fill="#64748b" transform="rotate(90 1310 330)">repeat while active (planned)</text>
+
+  <!-- Down to P5: at the configured end time -->
+  <line x1="1050" y1="470" x2="1050" y2="510" stroke="#94a3b8" stroke-width="2" stroke-dasharray="6,5" marker-end="url(#arrowMuted)"/>
+  <text x="1120" y="495" text-anchor="middle" font-size="12" fill="#64748b">at end time</text>
+
+  <!-- P5: Notification removed at routine end time -->
+  <rect x="760" y="510" width="580" height="70" rx="10" fill="#f1f5f9" stroke="#64748b" stroke-width="2" stroke-dasharray="8,5"/>
+  <text x="1050" y="542" text-anchor="middle" font-size="16" fill="#475569">Notification removed at the routine's</text>
+  <text x="1050" y="564" text-anchor="middle" font-size="16" fill="#475569">configured end time</text>
+
+  <!-- Footer notes -->
+  <text x="700" y="890" text-anchor="middle" font-size="13" fill="#64748b">Blick supports all SL transport modes (metro, bus, tram, train, ferry) for any saved routine —</text>
+  <text x="700" y="910" text-anchor="middle" font-size="13" fill="#64748b">this diagram is mode-agnostic and applies regardless of which mode is selected.</text>
+  <text x="700" y="935" text-anchor="middle" font-size="13" font-weight="bold" fill="#b91c1c">The right-hand automatic/notification flow does not exist in the repository yet — see docs/Blick_Project_Documentation.md and android/README.md.</text>
 </svg>
