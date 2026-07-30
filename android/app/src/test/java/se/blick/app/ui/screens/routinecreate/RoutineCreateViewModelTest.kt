@@ -842,8 +842,15 @@ class RoutineCreateViewModelTest {
 
         vm.selectSite(slussen)
         dispatcher.scheduler.advanceUntilIdle()
-        // slussen's directions (metroOption) do not include the routine's original BUS line.
-        assertEquals(TransportMode.METRO, vm.uiState.value.selectedTransportMode)
+        // selectSite always fetches with preselect = null (see its doc comment), so it never
+        // auto-picks a mode/direction even when only one option is available -- the user
+        // must walk through TRANSPORT_MODE/DIRECTION themselves, same as plain creation. What
+        // this test actually proves: slussen's own (distinct) live options were fetched
+        // fresh, rather than the edit-mode pre-fill leaking through for the new station.
+        assertEquals(null, vm.uiState.value.selectedTransportMode)
+        assertEquals(null, vm.uiState.value.selectedDirection)
+        assertEquals(RoutineCreateStep.TRANSPORT_MODE, vm.uiState.value.step)
+        assertEquals(listOf(TransportMode.METRO), vm.uiState.value.availableTransportModes)
     }
 
     @Test
