@@ -23,6 +23,7 @@ import org.robolectric.RuntimeEnvironment
 import org.robolectric.annotation.Config
 import se.blick.app.data.repository.DepartureRepository
 import se.blick.app.data.repository.RoutineRepository
+import se.blick.app.data.repository.StaleSnapshotRepository
 import se.blick.app.domain.model.CommuteRoutine
 import se.blick.app.domain.model.DeparturesResult
 import se.blick.app.domain.model.Departure
@@ -31,7 +32,9 @@ import se.blick.app.domain.model.LineRef
 import se.blick.app.domain.model.StopAreaRef
 import se.blick.app.domain.model.StopPointRef
 import se.blick.app.domain.model.TransportMode
+import se.blick.app.domain.usecase.DepartureIdentity
 import se.blick.app.domain.usecase.GetLiveDeparturesUseCase
+import se.blick.app.domain.usecase.LiveDeparturesSnapshot
 import se.blick.app.notification.NotificationAvailability
 import se.blick.app.notification.NotificationAvailabilityChecker
 import se.blick.app.notification.NotificationPostResult
@@ -191,6 +194,25 @@ class RoutineActiveWindowWorkerTest {
         override fun check(): NotificationAvailability = current
     }
 
+    /** In-memory [StaleSnapshotRepository] fake — see the identical fake's doc in
+     * `RoutineDetailsViewModelTest` for why a SHARED instance passed to two separately-built
+     * workers is exactly how a test simulates "the process was killed and restarted between
+     * these two runs": neither worker instance carries any in-memory field of its own, so
+     * whatever the first one persisted is all the second one can see. */
+    private class FakeStaleSnapshotRepository : StaleSnapshotRepository {
+        private val stored = mutableMapOf<String, Pair<DepartureIdentity, LiveDeparturesSnapshot>>()
+        override suspend fun get(routineId: String, identity: DepartureIdentity): LiveDeparturesSnapshot? {
+            val (storedIdentity, snapshot) = stored[routineId] ?: return null
+            return snapshot.takeIf { storedIdentity == identity }
+        }
+        override suspend fun save(routineId: String, identity: DepartureIdentity, snapshot: LiveDeparturesSnapshot) {
+            stored[routineId] = identity to snapshot
+        }
+        override suspend fun clear(routineId: String) {
+            stored.remove(routineId)
+        }
+    }
+
     private fun buildWorker(
         routineId: String,
         routineRepository: RoutineRepository,
@@ -201,6 +223,7 @@ class RoutineActiveWindowWorkerTest {
         notificationAvailabilityChecker: NotificationAvailabilityChecker = FakeNotificationAvailabilityChecker(),
         notificationBuilder: RoutineNotificationBuilder = this.notificationBuilder,
         deviceZoneProvider: DeviceZoneProvider = zoneProvider,
+        staleSnapshotRepository: StaleSnapshotRepository = FakeStaleSnapshotRepository(),
     ): RoutineActiveWindowWorker =
         TestListenableWorkerBuilder<RoutineActiveWindowWorker>(context)
             .setInputData(workDataOf(RoutineActiveWindowWorker.KEY_ROUTINE_ID to routineId))
@@ -214,6 +237,7 @@ class RoutineActiveWindowWorkerTest {
                     workerParameters,
                     routineRepository,
                     getLiveDepartures,
+                    staleSnapshotRepository,
                     notifier,
                     notificationBuilder,
                     scheduler,
@@ -234,6 +258,7 @@ class RoutineActiveWindowWorkerTest {
                         workerParameters,
                         ScriptedRoutineRepository(TickingClock(Instant.now(), zone)) { null },
                         GetLiveDeparturesUseCase(FakeDepartureRepository { error("unused") }, Clock.systemUTC()),
+                        FakeStaleSnapshotRepository(),
                         RecordingNotifier(),
                         notificationBuilder,
                         RecordingScheduler(),
@@ -429,6 +454,56 @@ class RoutineActiveWindowWorkerTest {
         // stale-fallback behaviour, rather than reporting Offline/Unavailable and losing it.
         assertTrue(notifier.shown[1].content is RoutineNotificationContent.Stale)
         assertEquals(1, notifier.removeCallCount)
+    }
+
+    @Test
+    fun `stale data persists across separate worker instances, simulating a process restart`() = runTest {
+        val routine = routine()
+        val staleSnapshots = FakeStaleSnapshotRepository()
+
+        // First "run" -- succeeds, persisting a snapshot via the SHARED staleSnapshots repository.
+        val firstClock = TickingClock(Instant.parse("2026-07-27T05:00:00Z"), zone) // 07:00 local
+        val firstRepository = ScriptedRoutineRepository(firstClock) { routine }
+        val firstNotifier = RecordingNotifier()
+        val firstDepartures = FakeDepartureRepository {
+            DeparturesResult(firstClock.instant(), 9145, listOf(sampleDeparture()), emptyList())
+        }
+        val firstWorker = buildWorker(
+            routine.id,
+            firstRepository,
+            GetLiveDeparturesUseCase(firstDepartures, firstClock),
+            firstNotifier,
+            RecordingScheduler(),
+            firstClock,
+            staleSnapshotRepository = staleSnapshots,
+        )
+        firstWorker.doWork()
+        assertTrue(firstNotifier.shown.isNotEmpty())
+        assertTrue(firstNotifier.shown.all { it.content is RoutineNotificationContent.Live })
+
+        // A second, entirely separate worker instance -- no in-memory field carried over from
+        // the first -- whose OWN fetch always fails. It must still fall back to Stale using
+        // the snapshot the FIRST instance persisted, proving durability survives a worker (and,
+        // in production, a whole process) being torn down and recreated.
+        val secondClock = TickingClock(Instant.parse("2026-07-27T05:00:00Z"), zone)
+        val secondRepository = ScriptedRoutineRepository(secondClock) { routine }
+        val secondNotifier = RecordingNotifier()
+        val secondDepartures = object : DepartureRepository {
+            override suspend fun getDepartures(siteId: Long): DeparturesResult = throw IOException("network down")
+        }
+        val secondWorker = buildWorker(
+            routine.id,
+            secondRepository,
+            GetLiveDeparturesUseCase(secondDepartures, secondClock),
+            secondNotifier,
+            RecordingScheduler(),
+            secondClock,
+            staleSnapshotRepository = staleSnapshots,
+        )
+        secondWorker.doWork()
+
+        assertTrue(secondNotifier.shown.isNotEmpty())
+        assertTrue(secondNotifier.shown[0].content is RoutineNotificationContent.Stale)
     }
 
     // ---- Notification availability checked before foreground execution (Fix 2) ----

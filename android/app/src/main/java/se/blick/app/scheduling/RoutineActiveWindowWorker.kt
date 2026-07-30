@@ -13,11 +13,11 @@ import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.last
 import se.blick.app.data.repository.RoutineRepository
+import se.blick.app.data.repository.StaleSnapshotRepository
 import se.blick.app.domain.model.CommuteRoutine
-import se.blick.app.domain.model.TransportMode
 import se.blick.app.domain.usecase.GetLiveDeparturesUseCase
-import se.blick.app.domain.usecase.LiveDeparturesSnapshot
 import se.blick.app.domain.usecase.LiveDeparturesState
+import se.blick.app.domain.usecase.departureIdentity
 import se.blick.app.notification.NotificationAvailability
 import se.blick.app.notification.NotificationAvailabilityChecker
 import se.blick.app.notification.RoutineNotificationBuilder
@@ -32,22 +32,6 @@ import java.time.ZonedDateTime
  * — WorkManager's periodic-work minimum interval (15 minutes) cannot represent this; see
  * [WorkManagerRoutineScheduler]'s class doc. */
 internal const val ACTIVE_WINDOW_REFRESH_INTERVAL_MS = 30_000L
-
-/** Identifies one routine's departure query for the sole purpose of deciding whether a
- * previously fetched [LiveDeparturesSnapshot] is still a valid stale fallback (see this
- * worker's own use below) — the exact same identity fields and reasoning as
- * [se.blick.app.ui.screens.routinedetails.RoutineDetailsViewModel]'s own (private) departure
- * identity guard, duplicated here rather than shared so this worker does not depend on that
- * ViewModel's internals. */
-private data class WorkerDepartureIdentity(
-    val siteId: Long,
-    val lineId: Long?,
-    val directionCode: Int?,
-    val transportMode: TransportMode,
-)
-
-private fun CommuteRoutine.workerDepartureIdentity() =
-    WorkerDepartureIdentity(siteId, lineId, directionCode, transportMode)
 
 /**
  * Runs one routine's active window end to end: checks notification availability, enters
@@ -116,6 +100,7 @@ class RoutineActiveWindowWorker @AssistedInject constructor(
     @Assisted params: WorkerParameters,
     private val routineRepository: RoutineRepository,
     private val getLiveDepartures: GetLiveDeparturesUseCase,
+    private val staleSnapshotRepository: StaleSnapshotRepository,
     private val routineNotifier: RoutineNotifier,
     private val routineNotificationBuilder: RoutineNotificationBuilder,
     private val routineScheduler: RoutineScheduler,
@@ -152,8 +137,6 @@ class RoutineActiveWindowWorker @AssistedInject constructor(
             return Result.success()
         }
 
-        var lastSnapshot: LiveDeparturesSnapshot? = null
-        var lastSnapshotIdentity: WorkerDepartureIdentity? = null
         var enteredForeground = false
 
         try {
@@ -166,12 +149,11 @@ class RoutineActiveWindowWorker @AssistedInject constructor(
                 if (current.pausedDate == zonedNow().toLocalDate()) break
                 if (!zonedNow().isBefore(windowEnd)) break
 
-                val identity = current.workerDepartureIdentity()
-                val previous = lastSnapshot.takeIf { lastSnapshotIdentity == identity }
+                val identity = current.departureIdentity()
+                val previous = staleSnapshotRepository.get(routineId, identity)
                 val departuresState = getLiveDepartures(current, previous = previous).last()
                 if (departuresState is LiveDeparturesState.Live) {
-                    lastSnapshot = departuresState.snapshot
-                    lastSnapshotIdentity = identity
+                    staleSnapshotRepository.save(routineId, identity, departuresState.snapshot)
                 }
 
                 val model = RoutineNotificationMapper.map(current, departuresState, clock.instant())

@@ -61,12 +61,18 @@ and the routine details screen's own notification-status hint re-checks availabi
 every lifecycle resume (e.g. after returning from system settings), not just once. A
 device timezone change is reconciled live via a runtime-registered
 `ACTION_TIMEZONE_CHANGED` receiver in `BlickApplication` calling the same
-`RoutineScheduleReconciler` used at process start.
+`RoutineScheduleReconciler` used at process start. A `scheduling/BootCompletedReceiver`
+also re-schedules every enabled routine immediately on `ACTION_BOOT_COMPLETED`, as a
+backstop alongside WorkManager's own persistence and the process-start reconciliation pass
+for a reboot after which the app process never happens to start on its own first. The last
+successful departure snapshot used for the `Stale` fallback is durably persisted via a
+Room-backed `StaleSnapshotRepository` (`data/local/room/StaleSnapshotEntity.kt`), keyed by
+routine id and scoped to the exact `DepartureIdentity` that produced it, and shared by both
+`RoutineDetailsViewModel` and `RoutineActiveWindowWorker` — it survives the app's process
+being killed and recreated, unlike a plain in-memory field, and its row is automatically
+removed (`ON DELETE CASCADE`) whenever its owning routine is deleted.
 
-**Still not implemented**: a dedicated `BOOT_COMPLETED` receiver (reboot currently relies
-on WorkManager's own persistence plus the process-start reconciliation pass, not an
-explicit boot receiver), persistent stale-data storage across process death, notification
-action buttons, and the widget.
+**Still not implemented**: notification action buttons and the widget.
 
 ## Pinned versions and why
 

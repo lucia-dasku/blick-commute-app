@@ -41,22 +41,20 @@ debug builds. Separately, opening the routine's details screen fetches immediate
 again automatically about every 30 seconds while that screen stays open — independent
 of the notification loop — with manual Refresh also available.
 
-**Not yet implemented:** a dedicated reboot receiver beyond WorkManager's own
-persistence plus a process-start reconciliation pass, persistent stale-data storage
-across process death, notification action buttons, and the widget — see
+**Not yet implemented:** notification action buttons and the widget — see
 `docs/framework.svg` and `android/README.md` for exactly which parts of the diagram are
 built versus still planned.
 
 ## Status
 
-Foundation plus a real, largely end-to-end feature set — not yet fully device-verified
-for this update. The backend's contract, normalization, and caching logic are
-implemented and tested (183 passing tests). The Android side has routine creation (live
-SL stop search, transport mode/line/direction discovery, Room persistence), an
-always-visible Add-routine control (with an explicit, in-place explanation — never a
-creation flow that can't save — once the current first-beta one-routine limit is
-reached), a foreground routine details/live-preview screen (automatic 30-second refresh
-plus manual refresh, next two matching departures, and
+Foundation plus a real, largely end-to-end feature set, device-verified on a physical
+tablet. The backend's contract, normalization, and caching logic are implemented and
+tested (183 passing tests). The Android side has routine creation (live SL stop search,
+transport mode/line/direction discovery, Room persistence), an always-visible
+Add-routine control (with an explicit, in-place explanation — never a creation flow
+that can't save — once the current first-beta one-routine limit is reached), a
+foreground routine details/live-preview screen (automatic 30-second refresh plus manual
+refresh, next two matching departures, and
 loading/live/no-departures/offline/stale/unavailable states), full routine management
 (editing, enable/disable, pause/resume today, deletion), production
 notification-permission onboarding with a lifecycle-aware status hint that always
@@ -64,21 +62,21 @@ re-checks on resume, and the full ongoing-notification loop
 (`WorkManagerRoutineScheduler` + `RoutineActiveWindowWorker` resolving each routine's
 window against the device's own local time zone, activating it, checking notification
 availability before ever entering foreground execution, posting/silently updating one
-stable notification every ~30 seconds, and removing it and rescheduling at window end)
-— with 193 of the JVM `@Test` functions covering the earlier notification foundation
-having actually passed in a fresh local `./gradlew testDebugUnitTest lintDebug
-assembleDebug` run (0 lint errors, debug APK built). **Two further work sessions since
-then have added JVM and instrumented source without a fresh Gradle run: 258 JVM
-`@Test` functions and 12 instrumented `@Test` functions exist in source as of this
-update, none of the 65 JVM / 3 instrumented tests beyond the original 193/9 have been
-run locally yet** — see `android/README.md`'s Build section for the exact toolchain,
-the up-to-date test breakdown, and what's still the user's to run.
-**Not yet implemented:** a dedicated `BOOT_COMPLETED` receiver (device-timezone-change
-reconciliation is handled by a runtime-registered `ACTION_TIMEZONE_CHANGED` receiver,
-but reboot itself still relies on WorkManager's own persistence plus a process-start
-reconciliation pass, not a boot receiver), persistent stale-data storage across process
-death, notification action buttons, and the widget. See each subproject's README for
-specifics and known limitations.
+stable notification every ~30 seconds, and removing it and rescheduling at window end).
+A dedicated `BOOT_COMPLETED` receiver re-schedules every enabled routine immediately
+after a reboot, alongside the existing process-start reconciliation pass and the
+runtime-registered `ACTION_TIMEZONE_CHANGED` receiver for a live device timezone change.
+The last successful departure snapshot used for the `Stale` fallback is durably
+persisted (Room-backed, scoped to the routine's exact site/line/direction/mode) rather
+than held only in memory, so it survives the app's process being killed and recreated,
+and is shared between the foreground preview and the background notification loop.
+260 JVM `@Test` functions and 21 instrumented `@Test` functions exist in source as of
+this update, all passing in a fresh local `./gradlew testDebugUnitTest lintDebug
+assembleDebug connectedDebugAndroidTest` run (0 lint errors, debug APK built, all
+instrumented tests run on a physical device) — see `android/README.md`'s Build section
+for the exact toolchain and test breakdown. **Not yet implemented:** notification
+action buttons and the widget. See each subproject's README for specifics and known
+limitations.
 
 ## Roadmap beyond this MVP
 

@@ -25,6 +25,7 @@ import se.blick.app.data.local.datastore.AppSettings
 import se.blick.app.data.local.datastore.AppSettingsDataStore
 import se.blick.app.data.repository.DepartureRepository
 import se.blick.app.data.repository.RoutineRepository
+import se.blick.app.data.repository.StaleSnapshotRepository
 import se.blick.app.domain.model.CommuteRoutine
 import se.blick.app.domain.model.Departure
 import se.blick.app.domain.model.DeparturesResult
@@ -33,7 +34,9 @@ import se.blick.app.domain.model.LineRef
 import se.blick.app.domain.model.StopAreaRef
 import se.blick.app.domain.model.StopPointRef
 import se.blick.app.domain.model.TransportMode
+import se.blick.app.domain.usecase.DepartureIdentity
 import se.blick.app.domain.usecase.GetLiveDeparturesUseCase
+import se.blick.app.domain.usecase.LiveDeparturesSnapshot
 import se.blick.app.domain.usecase.LiveDeparturesState
 import se.blick.app.notification.NotificationAvailability
 import se.blick.app.notification.NotificationAvailabilityChecker
@@ -318,11 +321,31 @@ class RoutineDetailsViewModelTest {
         override fun check(): NotificationAvailability = current
     }
 
+    /** In-memory [StaleSnapshotRepository] fake, backed by a plain mutable map rather than
+     * Room — a SHARED instance passed to two separately-constructed ViewModels is exactly how
+     * these tests simulate "the process was killed and recreated": a fresh ViewModel instance
+     * (no in-memory fields of its own left over) still sees whatever the previous instance
+     * persisted, because durability now lives here rather than in a ViewModel-owned field. */
+    private class FakeStaleSnapshotRepository : StaleSnapshotRepository {
+        private val stored = mutableMapOf<String, Pair<DepartureIdentity, LiveDeparturesSnapshot>>()
+        override suspend fun get(routineId: String, identity: DepartureIdentity): LiveDeparturesSnapshot? {
+            val (storedIdentity, snapshot) = stored[routineId] ?: return null
+            return snapshot.takeIf { storedIdentity == identity }
+        }
+        override suspend fun save(routineId: String, identity: DepartureIdentity, snapshot: LiveDeparturesSnapshot) {
+            stored[routineId] = identity to snapshot
+        }
+        override suspend fun clear(routineId: String) {
+            stored.remove(routineId)
+        }
+    }
+
     private fun viewModel(
         routine: CommuteRoutine? = sampleRoutine(),
         routineId: String = routine?.id ?: "missing",
         departures: DepartureRepository = FakeDepartureRepository(resultOf(upcomingDeparture())),
         routines: RoutineRepository = FakeRoutineRepository(routine),
+        staleSnapshots: StaleSnapshotRepository = FakeStaleSnapshotRepository(),
         notifier: RoutineNotifier = FakeRoutineNotifier(),
         scheduler: RoutineScheduler = FakeRoutineScheduler(),
         appSettingsDataStore: AppSettingsDataStore = FakeAppSettingsDataStore(),
@@ -331,6 +354,7 @@ class RoutineDetailsViewModelTest {
         savedStateHandle = SavedStateHandle(mapOf(Routes.RoutineDetails.ARG_ROUTINE_ID to routineId)),
         routineRepository = routines,
         getLiveDepartures = GetLiveDeparturesUseCase(departures, clock),
+        staleSnapshotRepository = staleSnapshots,
         routineNotifier = notifier,
         routineScheduler = scheduler,
         appSettingsDataStore = appSettingsDataStore,
@@ -348,6 +372,7 @@ class RoutineDetailsViewModelTest {
             savedStateHandle = SavedStateHandle(mapOf(Routes.RoutineDetails.ARG_ROUTINE_ID to "r42")),
             routineRepository = repository,
             getLiveDepartures = GetLiveDeparturesUseCase(FakeDepartureRepository(resultOf(upcomingDeparture())), clock),
+            staleSnapshotRepository = FakeStaleSnapshotRepository(),
             routineNotifier = FakeRoutineNotifier(),
             routineScheduler = FakeRoutineScheduler(),
             appSettingsDataStore = FakeAppSettingsDataStore(),
@@ -471,6 +496,38 @@ class RoutineDetailsViewModelTest {
         assertTrue(stale is LiveDeparturesState.Stale)
         assertEquals(liveSnapshot, (stale as LiveDeparturesState.Stale).snapshot)
         assertEquals(listOf("kept"), stale.snapshot.departures.map { it.departureId })
+    }
+
+    @Test
+    fun `a persisted snapshot survives a fresh ViewModel instance, simulating process death`() = runTest(dispatcher) {
+        // A brand-new RoutineDetailsViewModel instance -- no in-memory fields carried over from
+        // the first one -- backed by the SAME StaleSnapshotRepository, is exactly what "the
+        // process was killed and recreated between these two instances" looks like from this
+        // ViewModel's perspective (see FakeStaleSnapshotRepository's own doc).
+        val routine = sampleRoutine()
+        val routines = FakeRoutineRepository(routine)
+        val staleSnapshots = FakeStaleSnapshotRepository()
+
+        val firstVm = viewModel(
+            routine = routine,
+            routines = routines,
+            staleSnapshots = staleSnapshots,
+            departures = FakeDepartureRepository(resultOf(upcomingDeparture("kept"))),
+        )
+        dispatcher.scheduler.advanceUntilIdle()
+        assertTrue(firstVm.uiState.value.departures is LiveDeparturesState.Live)
+
+        val secondVm = viewModel(
+            routine = routine,
+            routines = routines,
+            staleSnapshots = staleSnapshots,
+            departures = FailingDepartureRepository(IOException("network down")),
+        )
+        dispatcher.scheduler.advanceUntilIdle()
+
+        val state = secondVm.uiState.value.departures
+        assertTrue("expected Stale using the first instance's persisted snapshot, got $state", state is LiveDeparturesState.Stale)
+        assertEquals(listOf("kept"), (state as LiveDeparturesState.Stale).snapshot.departures.map { it.departureId })
     }
 
     // ---- Manual refresh ----

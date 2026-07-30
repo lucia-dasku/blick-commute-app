@@ -7,8 +7,10 @@ import dagger.Provides
 import dagger.hilt.InstallIn
 import dagger.hilt.android.qualifiers.ApplicationContext
 import dagger.hilt.components.SingletonComponent
+import se.blick.app.data.local.room.MIGRATION_1_2
 import se.blick.app.data.local.room.RoutineDao
 import se.blick.app.data.local.room.BlickDatabase
+import se.blick.app.data.local.room.StaleSnapshotDao
 import javax.inject.Singleton
 
 @Module
@@ -18,8 +20,13 @@ object DatabaseModule {
     @Provides
     @Singleton
     fun provideDatabase(@ApplicationContext context: Context): BlickDatabase =
-        Room.databaseBuilder(context, BlickDatabase::class.java, "blick.db").build()
+        Room.databaseBuilder(context, BlickDatabase::class.java, "blick.db")
+            .addMigrations(MIGRATION_1_2)
+            .build()
 
     @Provides
     fun provideRoutineDao(database: BlickDatabase): RoutineDao = database.routineDao()
+
+    @Provides
+    fun provideStaleSnapshotDao(database: BlickDatabase): StaleSnapshotDao = database.staleSnapshotDao()
 }
