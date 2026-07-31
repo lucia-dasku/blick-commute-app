@@ -123,6 +123,10 @@
     <string name="notification_unavailable">Couldn\'t load departures right now. Will try again soon.</string>
     <string name="notification_no_departures">No upcoming departures right now.</string>
     <string name="notification_stale_warning">Couldn\'t refresh — showing the last departures we could load.</string>
+    <!-- The ongoing/promoted notification's Stop action (see RoutineNotificationBuilder,
+         StopRoutineNotificationReceiver) — stops today's active window early, same effect
+         as "pause for today" on the routine details screen. -->
+    <string name="notification_action_stop">Stop</string>
 
     <!-- Debug-only manual notification trigger (RoutineDetailsScreen, BuildConfig.DEBUG-gated
          — see Part 6 of the ongoing-notification foundation milestone). Never shown in a

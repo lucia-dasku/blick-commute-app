@@ -1,0 +1,16 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!--
+    Small action icon for the ongoing notification's Stop action (see
+    RoutineNotificationBuilder). A plain filled square, matching ic_stat_blick.xml's
+    convention of a single opaque white shape on a transparent background so the system can
+    safely mask/tint it on any OS version or notification-shade background.
+-->
+<vector xmlns:android="http://schemas.android.com/apk/res/android"
+    android:width="24dp"
+    android:height="24dp"
+    android:viewportWidth="24"
+    android:viewportHeight="24">
+    <path
+        android:fillColor="#FFFFFF"
+        android:pathData="M6,6 L18,6 L18,18 L6,18 Z" />
+</vector>

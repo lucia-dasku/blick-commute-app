@@ -93,5 +93,16 @@
                 <action android:name="android.intent.action.BOOT_COMPLETED" />
             </intent-filter>
         </receiver>
+
+        <!--
+            See notification/StopRoutineNotificationReceiver.kt's own doc — only ever triggered
+            by this app's own explicit PendingIntent from the ongoing notification's Stop action,
+            never a system or cross-app broadcast, so exported="false" (unlike BootCompletedReceiver
+            above, which must be exported to receive the system's protected BOOT_COMPLETED broadcast).
+        -->
+        <receiver
+            android:name=".notification.StopRoutineNotificationReceiver"
+            android:exported="false"
+            android:enabled="true" />
     </application>
 </manifest>

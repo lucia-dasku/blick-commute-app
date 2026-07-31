@@ -115,6 +115,27 @@ class RoutineNotificationBuilderTest {
         assertEquals("r2", savedIntent.getStringExtra(RoutineNotificationIds.EXTRA_ROUTINE_ID))
     }
 
+    // ---- Stop action ("Stop/Unpin" control) ----
+
+    @Test
+    fun `the built notification has exactly one Stop action targeting StopRoutineNotificationReceiver with the model's routine id`() {
+        val notification = builder.build(model(routineId = "r-42"))
+        assertEquals(1, notification.actions.size)
+        val action = notification.actions.single()
+        assertEquals(context.getString(R.string.notification_action_stop), action.title.toString())
+        val savedIntent = shadowOf(action.actionIntent).savedIntent
+        assertEquals(StopRoutineNotificationReceiver::class.java.name, savedIntent.component?.className)
+        assertEquals("r-42", savedIntent.getStringExtra(RoutineNotificationIds.EXTRA_ROUTINE_ID))
+    }
+
+    @Test
+    fun `rebuilding for a different routine id updates the Stop action's extras`() {
+        builder.build(model(routineId = "r1"))
+        val second = builder.build(model(routineId = "r2"))
+        val savedIntent = shadowOf(second.actions.single().actionIntent).savedIntent
+        assertEquals("r2", savedIntent.getStringExtra(RoutineNotificationIds.EXTRA_ROUTINE_ID))
+    }
+
     // ---- Title / collapsed content ----
 
     @Test

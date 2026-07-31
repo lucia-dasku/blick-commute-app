@@ -38,6 +38,12 @@ import javax.inject.Singleton
  * restricted to a handful of styles (`BigTextStyle` among them); [NotificationCompat.InboxStyle]
  * — used here previously — is not one of them, which is why [bigTextStyle], not an inbox
  * style, renders the expanded view.
+ *
+ * Also always adds a Stop action (the spec's "Stop/Unpin" control) — a plain
+ * [NotificationCompat.Action], not a custom view, so it stays valid on the promoted surface too
+ * — whose [PendingIntent] targets [StopRoutineNotificationReceiver] and, in turn,
+ * [StopRoutineNotificationAction], which stops today's active window early (same effect as
+ * "pause for today") and removes this notification.
  */
 @Singleton
 class RoutineNotificationBuilder @Inject constructor(
@@ -63,6 +69,7 @@ class RoutineNotificationBuilder @Inject constructor(
             // See this class's own doc — a request, not a guarantee; requires the
             // POST_PROMOTED_NOTIFICATIONS manifest permission (AndroidManifest.xml).
             .setRequestPromotedOngoing(true)
+            .addAction(stopAction(model.routineId))
 
         applyContent(builder, model)
 
@@ -162,6 +169,28 @@ class RoutineNotificationBuilder @Inject constructor(
         } else {
             context.getString(R.string.routine_details_minutes_remaining, soonest.minutesRemaining)
         }
+    }
+
+    /** The "Stop/Unpin" action — see this class's own doc. Uses the dedicated stop icon rather
+     * than the small icon: an action icon is a distinct visual slot from the status-bar small
+     * icon, and reusing an unrelated glyph there would misrepresent what tapping it does. */
+    private fun stopAction(routineId: String): NotificationCompat.Action =
+        NotificationCompat.Action.Builder(
+            R.drawable.ic_stat_stop,
+            context.getString(R.string.notification_action_stop),
+            stopIntent(routineId),
+        ).build()
+
+    private fun stopIntent(routineId: String): PendingIntent {
+        val intent = Intent(context, StopRoutineNotificationReceiver::class.java).apply {
+            putExtra(RoutineNotificationIds.EXTRA_ROUTINE_ID, routineId)
+        }
+        return PendingIntent.getBroadcast(
+            context,
+            RoutineNotificationIds.STOP_ACTION_REQUEST_CODE,
+            intent,
+            PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE,
+        )
     }
 
     private fun contentIntent(routineId: String): PendingIntent {

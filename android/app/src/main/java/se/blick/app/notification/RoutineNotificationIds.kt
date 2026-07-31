@@ -19,4 +19,9 @@ internal object RoutineNotificationIds {
      * `FLAG_UPDATE_CURRENT`, rebuilding it on every [RoutineNotifier.showOrUpdate] call
      * refreshes its routine-id extra in place rather than accumulating separate PendingIntents. */
     const val CONTENT_INTENT_REQUEST_CODE = 1001
+
+    /** Distinct from [CONTENT_INTENT_REQUEST_CODE] so the Stop action's broadcast
+     * [android.app.PendingIntent] (see [RoutineNotificationBuilder]'s Stop action and
+     * [StopRoutineNotificationReceiver]) never collides with the content intent's identity. */
+    const val STOP_ACTION_REQUEST_CODE = 1002
 }
