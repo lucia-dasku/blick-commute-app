@@ -194,6 +194,20 @@ class RoutineActiveWindowWorkerTest {
         override fun check(): NotificationAvailability = current
     }
 
+    /** Scripted variant of [FakeNotificationAvailabilityChecker] whose answer depends on the
+     * call index -- lets a test drive notifications from [NotificationAvailability.Available]
+     * to unavailable mid-loop, independent of the routine repository's own call count. */
+    private class ScriptedNotificationAvailabilityChecker(
+        private val availabilityForCall: (callIndex: Int) -> NotificationAvailability,
+    ) : NotificationAvailabilityChecker {
+        var callCount = 0
+        override fun check(): NotificationAvailability {
+            val result = availabilityForCall(callCount)
+            callCount++
+            return result
+        }
+    }
+
     /** In-memory [StaleSnapshotRepository] fake — see the identical fake's doc in
      * `RoutineDetailsViewModelTest` for why a SHARED instance passed to two separately-built
      * workers is exactly how a test simulates "the process was killed and restarted between
@@ -397,6 +411,37 @@ class RoutineActiveWindowWorkerTest {
         assertEquals(1, notifier.shown.size) // only the one tick before being disabled
         assertEquals(1, notifier.removeCallCount)
         assertEquals(listOf(false), scheduler.scheduledRoutines.map { it.enabled })
+    }
+
+    @Test
+    fun `notifications becoming unavailable mid-run stops the loop early and reschedules`() = runTest {
+        val clock = TickingClock(Instant.parse("2026-07-27T05:00:00Z"), zone)
+        val enabledRoutine = routine()
+        val repository = ScriptedRoutineRepository(clock) { enabledRoutine }
+        val notifier = RecordingNotifier()
+        val scheduler = RecordingScheduler()
+        val departures = FakeDepartureRepository { DeparturesResult(clock.instant(), 9145, listOf(sampleDeparture()), emptyList()) }
+        // Call index 0 is the pre-loop check in doWork(), call index 1 is the first tick's
+        // re-check (still available) -- then AppDisabled from the second tick's re-check
+        // onward, simulating the user turning notifications off partway through the window.
+        val checker = ScriptedNotificationAvailabilityChecker { callIndex ->
+            if (callIndex < 2) NotificationAvailability.Available else NotificationAvailability.AppDisabled
+        }
+
+        val worker = buildWorker(
+            enabledRoutine.id,
+            repository,
+            GetLiveDeparturesUseCase(departures, clock),
+            notifier,
+            scheduler,
+            clock,
+            notificationAvailabilityChecker = checker,
+        )
+        worker.doWork()
+
+        assertEquals(1, notifier.shown.size) // only the one tick before notifications became unavailable
+        assertEquals(1, notifier.removeCallCount)
+        assertEquals(1, scheduler.scheduledRoutines.size)
     }
 
     @Test

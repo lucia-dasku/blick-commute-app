@@ -69,10 +69,15 @@ internal const val ACTIVE_WINDOW_REFRESH_INTERVAL_MS = 30_000L
  * next eligible occurrence and exits. [setForeground] is only ever called once this worker is
  * actually about to run its loop.
  *
- * Also re-checks the routine's existence/enabled/paused-for-today state on every single loop
- * tick (not just once at the start) — an edit, disable, pause, or delete that happens while this
- * worker is already running takes effect on its very next tick, stopping the loop, removing the
- * notification, and (if the routine still exists) rescheduling its next eligible occurrence.
+ * Also re-checks the routine's existence/enabled/paused-for-today state, AND notification
+ * availability, on every single loop tick (not just once at the start) — an edit, disable,
+ * pause, or delete that happens while this worker is already running, or the user turning
+ * notifications off partway through the window, takes effect on its very next tick, stopping
+ * the loop, removing the notification, and (if the routine still exists) rescheduling its next
+ * eligible occurrence. Without this, the loop would otherwise keep fetching departures and
+ * burning battery/network/backend requests for the rest of the window even though
+ * [RoutineNotifier.showOrUpdate] itself would silently refuse to post anything once
+ * notifications are unavailable.
  *
  * Terminal handling distinguishes three cases so the next occurrence is never silently lost and
  * a real coroutine cancellation is never mistaken for a handled failure: a genuine
@@ -148,6 +153,7 @@ class RoutineActiveWindowWorker @AssistedInject constructor(
                 if (!current.enabled) break
                 if (current.pausedDate == zonedNow().toLocalDate()) break
                 if (!zonedNow().isBefore(windowEnd)) break
+                if (notificationAvailabilityChecker.check() != NotificationAvailability.Available) break
 
                 val identity = current.departureIdentity()
                 val previous = staleSnapshotRepository.get(routineId, identity)
