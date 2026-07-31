@@ -32,10 +32,12 @@ import se.blick.app.notification.NotificationPostResult
 import se.blick.app.notification.PromotedNotificationChecker
 import se.blick.app.notification.RoutineNotificationMapper
 import se.blick.app.notification.RoutineNotifier
+import se.blick.app.scheduling.DeviceZoneProvider
 import se.blick.app.scheduling.RoutineScheduler
 import se.blick.app.ui.navigation.Routes
 import java.time.Clock
 import java.time.LocalDate
+import java.time.ZonedDateTime
 import javax.inject.Inject
 
 private const val LOG_TAG = "RoutineDetailsViewModel"
@@ -50,8 +52,8 @@ data class RoutineDetailsUiState(
     val isRoutineLoading: Boolean = true,
     val routineNotFound: Boolean = false,
     val routine: CommuteRoutine? = null,
-    /** Derived from [CommuteRoutine.pausedDate] vs. "today" — see [RoutineDetailsViewModel]'s
-     * injected [Clock] for why this isn't just `LocalDate.now()`. */
+    /** Derived from [CommuteRoutine.pausedDate] vs. "today" — see [RoutineDetailsViewModel.today]
+     * for why this isn't just `LocalDate.now()` or `LocalDate.now(clock)`. */
     val isPausedToday: Boolean = false,
     /**
      * The live-departures engine's own state. On a manual refresh this is deliberately
@@ -110,6 +112,7 @@ class RoutineDetailsViewModel @Inject constructor(
     private val notificationAvailabilityChecker: NotificationAvailabilityChecker,
     private val promotedNotificationChecker: PromotedNotificationChecker,
     private val clock: Clock,
+    private val deviceZoneProvider: DeviceZoneProvider,
 ) : ViewModel() {
 
     private val routineId: String =
@@ -137,6 +140,18 @@ class RoutineDetailsViewModel @Inject constructor(
      * second concurrent loop starting (see [runAutoRefresh]'s own doc). */
     private var autoRefreshJob: Job? = null
 
+    /** "Today" for pause/resume purposes, resolved from [clock]'s instant combined with
+     * [deviceZoneProvider]'s CURRENT zone — mirroring
+     * [se.blick.app.scheduling.RoutineActiveWindowWorker]'s own `zonedNow()` and
+     * [se.blick.app.notification.StopRoutineNotificationAction]'s identical computation.
+     * Deliberately never a zone-less `LocalDate.now(clock)`: [clock] is
+     * `Clock.systemUTC()` in production (see `di/TimeModule.kt`), so resolving "today"
+     * against it directly would compute the wrong calendar date shortly after local
+     * midnight in any zone ahead of UTC (e.g. Sweden) — the worker's own mid-loop
+     * `pausedDate == today` check (which this screen's pause/resume actions must agree
+     * with) already uses the device zone, so this must too. */
+    private fun today(): LocalDate = ZonedDateTime.ofInstant(clock.instant(), deviceZoneProvider.currentZone()).toLocalDate()
+
     init {
         viewModelScope.launch {
             val loaded = routineRepository.getById(routineId)
@@ -148,7 +163,7 @@ class RoutineDetailsViewModel @Inject constructor(
                     it.copy(
                         isRoutineLoading = false,
                         routine = routine,
-                        isPausedToday = routine.pausedDate == LocalDate.now(clock),
+                        isPausedToday = routine.pausedDate == today(),
                     )
                 }
                 loadDepartures(routine, RefreshTrigger.INITIAL)
@@ -250,8 +265,7 @@ class RoutineDetailsViewModel @Inject constructor(
      * never repeatedly write the same state. */
     private suspend fun clearExpiredPauseIfNeeded(routine: CommuteRoutine): CommuteRoutine {
         val pausedDate = routine.pausedDate ?: return routine
-        val today = LocalDate.now(clock)
-        if (!pausedDate.isBefore(today)) return routine
+        if (!pausedDate.isBefore(today())) return routine
         routineRepository.clearPause(routine.id)
         return routine.copy(pausedDate = null)
     }
@@ -288,7 +302,7 @@ class RoutineDetailsViewModel @Inject constructor(
             _uiState.update {
                 it.copy(
                     routine = fresh,
-                    isPausedToday = fresh.pausedDate == LocalDate.now(clock),
+                    isPausedToday = fresh.pausedDate == today(),
                 )
             }
             if (departureConfigChanged) {
@@ -348,7 +362,7 @@ class RoutineDetailsViewModel @Inject constructor(
         val state = _uiState.value
         val routine = state.routine ?: return
         if (state.isTogglingPause) return
-        val today = LocalDate.now(clock)
+        val today = today()
         _uiState.update { it.copy(isTogglingPause = true, pauseActionFailed = false) }
         viewModelScope.launch {
             try {

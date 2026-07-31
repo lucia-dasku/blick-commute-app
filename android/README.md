@@ -105,7 +105,12 @@ it writes `pausedDate` to today's date (resolved in the device's own zone, match
 `RoutineActiveWindowWorker`'s own break condition, not a zone-less clock) and
 reschedules, which the worker's own next loop tick already observes and stops on —
 and additionally removes the notification directly, so it disappears immediately on
-tap rather than up to ~30 seconds later.
+tap rather than up to ~30 seconds later. `RoutineDetailsViewModel`'s own "pause
+today"/"resume today" controls were fixed to resolve "today" the same device-zone way
+(an injected `DeviceZoneProvider`, not a zone-less `LocalDate.now(clock)`) — the
+previous zone-less resolution could pause the wrong calendar day shortly after local
+midnight in any zone ahead of UTC (e.g. Sweden), a mismatch against the worker's own
+device-zone break condition that the Stop action's introduction surfaced.
 
 **Still not implemented**: the home-screen widget.
 

@@ -44,6 +44,7 @@ import se.blick.app.notification.NotificationPostResult
 import se.blick.app.notification.PromotedNotificationChecker
 import se.blick.app.notification.RoutineNotificationModel
 import se.blick.app.notification.RoutineNotifier
+import se.blick.app.scheduling.DeviceZoneProvider
 import se.blick.app.scheduling.RoutineScheduler
 import se.blick.app.ui.navigation.Routes
 import java.io.IOException
@@ -52,6 +53,7 @@ import java.time.DayOfWeek
 import java.time.Instant
 import java.time.LocalDate
 import java.time.LocalTime
+import java.time.ZoneId
 import java.time.ZoneOffset
 import java.util.UUID
 
@@ -72,6 +74,10 @@ class RoutineDetailsViewModelTest {
 
     private val now: Instant = Instant.parse("2026-07-28T08:00:00Z")
     private val clock: Clock = Clock.fixed(now, ZoneOffset.UTC)
+    // Matches the clock's own zone so every existing `LocalDate.now(clock)`-based
+    // expectation in this file still holds -- see the dedicated device-zone test below for
+    // proof that a non-UTC zone is actually honored, distinct from this default.
+    private val deviceZoneProvider = DeviceZoneProvider { ZoneOffset.UTC }
 
     private val stopArea = StopAreaRef(id = 9145, name = "Fruängen", type = "BUSTERM")
     private val stopPoint = StopPointRef(id = 1, name = "Fruängen", designation = "A")
@@ -360,6 +366,7 @@ class RoutineDetailsViewModelTest {
         appSettingsDataStore: AppSettingsDataStore = FakeAppSettingsDataStore(),
         notificationAvailabilityChecker: NotificationAvailabilityChecker = FakeNotificationAvailabilityChecker(),
         promotedNotificationChecker: PromotedNotificationChecker = FakePromotedNotificationChecker(),
+        deviceZoneProvider: DeviceZoneProvider = this.deviceZoneProvider,
     ) = RoutineDetailsViewModel(
         savedStateHandle = SavedStateHandle(mapOf(Routes.RoutineDetails.ARG_ROUTINE_ID to routineId)),
         routineRepository = routines,
@@ -371,6 +378,7 @@ class RoutineDetailsViewModelTest {
         notificationAvailabilityChecker = notificationAvailabilityChecker,
         promotedNotificationChecker = promotedNotificationChecker,
         clock = clock,
+        deviceZoneProvider = deviceZoneProvider,
     )
 
     // ---- Routine loading ----
@@ -390,6 +398,7 @@ class RoutineDetailsViewModelTest {
             notificationAvailabilityChecker = FakeNotificationAvailabilityChecker(),
             promotedNotificationChecker = FakePromotedNotificationChecker(),
             clock = clock,
+            deviceZoneProvider = deviceZoneProvider,
         )
         dispatcher.scheduler.advanceUntilIdle()
 
@@ -703,6 +712,40 @@ class RoutineDetailsViewModelTest {
         assertEquals(today, vm.uiState.value.routine?.pausedDate)
         assertTrue(vm.uiState.value.isPausedToday)
         assertEquals(listOf(routine.id to today), repository.pauseForDateCalls)
+    }
+
+    @Test
+    fun `pause today resolves today's date in the device's own zone, not the clock's UTC instant`() = runTest(dispatcher) {
+        // 2026-07-31T22:30:00Z is already 2026-08-01 in Stockholm's summer UTC+2 offset --
+        // proves pauseToday agrees with RoutineActiveWindowWorker's own zonedNow() (and
+        // StopRoutineNotificationAction's identical computation) instead of silently pausing
+        // the wrong calendar day shortly after local midnight, as a zone-less
+        // LocalDate.now(clock) would have.
+        val lateNightClock = Clock.fixed(Instant.parse("2026-07-31T22:30:00Z"), ZoneOffset.UTC)
+        val stockholmZone = DeviceZoneProvider { ZoneId.of("Europe/Stockholm") }
+        val routine = sampleRoutine()
+        val repository = FakeRoutineRepository(routine)
+        val vm = RoutineDetailsViewModel(
+            savedStateHandle = SavedStateHandle(mapOf(Routes.RoutineDetails.ARG_ROUTINE_ID to routine.id)),
+            routineRepository = repository,
+            getLiveDepartures = GetLiveDeparturesUseCase(FakeDepartureRepository(resultOf(upcomingDeparture())), lateNightClock),
+            staleSnapshotRepository = FakeStaleSnapshotRepository(),
+            routineNotifier = FakeRoutineNotifier(),
+            routineScheduler = FakeRoutineScheduler(),
+            appSettingsDataStore = FakeAppSettingsDataStore(),
+            notificationAvailabilityChecker = FakeNotificationAvailabilityChecker(),
+            promotedNotificationChecker = FakePromotedNotificationChecker(),
+            clock = lateNightClock,
+            deviceZoneProvider = stockholmZone,
+        )
+        dispatcher.scheduler.advanceUntilIdle()
+
+        vm.pauseToday()
+        dispatcher.scheduler.advanceUntilIdle()
+
+        val expected = LocalDate.of(2026, 8, 1)
+        assertEquals(expected, vm.uiState.value.routine?.pausedDate)
+        assertEquals(listOf(routine.id to expected), repository.pauseForDateCalls)
     }
 
     @Test

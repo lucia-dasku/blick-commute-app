@@ -979,6 +979,13 @@ notification-drawer entry:
   up to ~30 seconds later. "Today" here is deliberately resolved from the device's
   current zone (mirroring the worker's own `zonedNow()`), not a zone-less clock, so this
   write and the worker's read of it always agree, including right around local midnight.
+  Introducing this surfaced a pre-existing bug in `RoutineDetailsViewModel`'s own "pause
+  today"/"resume today" controls, which had been resolving "today" from a zone-less
+  `LocalDate.now(clock)` — the production `Clock` is `Clock.systemUTC()` (see
+  `di/TimeModule.kt`), so shortly after local midnight in any zone ahead of UTC (e.g.
+  Sweden), "pause today" could pause yesterday instead, disagreeing with the worker's
+  own device-zone break condition. Fixed to resolve "today" the same
+  `DeviceZoneProvider`-based way everywhere in this screen.
 
 ### Reboot and process death
 
