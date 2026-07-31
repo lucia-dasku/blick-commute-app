@@ -79,7 +79,7 @@ The last successful departure snapshot used for the `Stale` fallback is durably
 persisted (Room-backed, scoped to the routine's exact site/line/direction/mode) rather
 than held only in memory, so it survives the app's process being killed and recreated,
 and is shared between the foreground preview and the background notification loop.
-260 JVM `@Test` functions and 21 instrumented `@Test` functions exist in source as of
+271 JVM `@Test` functions and 21 instrumented `@Test` functions exist in source as of
 this update, all passing in a fresh local `./gradlew testDebugUnitTest lintDebug
 assembleDebug connectedDebugAndroidTest` run (0 lint errors, debug APK built, all
 instrumented tests run on a physical device) — see `android/README.md`'s Build section

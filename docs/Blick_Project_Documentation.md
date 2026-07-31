@@ -18,7 +18,7 @@ what is actually built today; where the two disagree, this section wins.
 
 **Validation status of this update, stated plainly up front:** a complete local run —
 `testDebugUnitTest`, `lintDebug`, `assembleDebug`, and `connectedDebugAndroidTest` on a
-physical Lenovo TB350FU (Android 14) — has now passed in full: all 270 JVM `@Test`
+physical Lenovo TB350FU (Android 14) — has now passed in full: all 271 JVM `@Test`
 functions and all 21 instrumented `@Test` functions, `lintDebug` with 0 errors (42
 warnings), and a working debug APK, with the ongoing-notification loop, routine
 details live-preview, and full routine management additionally exercised manually on
@@ -55,8 +55,13 @@ notification was reworked to request promotion to Android 16's Live Update surfa
 section), and a pre-existing device-timezone bug in the routine details screen's
 "pause today"/"resume today" controls was fixed to agree with the worker's own
 device-zone definition of "today" — ten further JVM `@Test` functions across these
-three changes bring the fully verified total to 270 JVM / 21 instrumented, stated
-above.
+three changes reached 270 JVM / 21 instrumented. Most recently still, the
+active-window worker's notification-availability check — previously only performed
+once before the loop began — was extended to re-run on every loop tick, so the loop
+now stops fetching departures and burning battery/network for the rest of the window
+as soon as the user disables notifications partway through, rather than continuing
+until the window's own end; this added one further JVM `@Test` function, bringing the
+fully verified total to 271 JVM / 21 instrumented, stated above.
 
 **Implemented today (Android client + backend):**
 
@@ -561,8 +566,10 @@ compiled and run for the first time, together with a further session's `BOOT_COM
 receiver and durable stale-snapshot storage (adding 2 JVM and 9 instrumented tests),
 reaching 260 JVM / 21 instrumented. The promoted Live Update request, its Stop action,
 and the pause-today device-timezone fix added 10 further JVM `@Test` functions with no
-further instrumented ones —
-**270 JVM `@Test` functions and 21 instrumented `@Test` functions now exist in source,
+further instrumented ones, reaching 270 JVM / 21 instrumented. The active-window
+worker's notification-availability re-check on every loop tick added 1 further JVM
+`@Test` function with no further instrumented ones —
+**271 JVM `@Test` functions and 21 instrumented `@Test` functions now exist in source,
 and all of them pass.** See `android/README.md`'s Build section for the exact toolchain
 versions, the up-to-date per-file test breakdown, and the real issues that first full
 run found and fixed (including a genuine production bug, not just test-suite

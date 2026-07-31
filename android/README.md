@@ -306,7 +306,7 @@ clone builds without Android Studio or a pre-existing local Gradle install.
 
 A complete local run — `testDebugUnitTest`, `lintDebug`, `assembleDebug`, and
 `connectedDebugAndroidTest` on the physical Lenovo TB350FU (Android 14) referenced
-above — has since been completed, using Android Studio's own bundled JDK. All 260 JVM
+above — has since been completed, using Android Studio's own bundled JDK. All 271 JVM
 `@Test` functions and all 21 instrumented `@Test` functions pass; `lintDebug` reports 0
 errors; the debug APK builds and installs; and the ongoing-notification loop, the
 routine details live-preview, and full routine management were all exercised manually
