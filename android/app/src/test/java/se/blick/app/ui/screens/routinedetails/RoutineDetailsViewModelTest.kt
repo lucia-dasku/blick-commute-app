@@ -41,6 +41,7 @@ import se.blick.app.domain.usecase.LiveDeparturesState
 import se.blick.app.notification.NotificationAvailability
 import se.blick.app.notification.NotificationAvailabilityChecker
 import se.blick.app.notification.NotificationPostResult
+import se.blick.app.notification.PromotedNotificationChecker
 import se.blick.app.notification.RoutineNotificationModel
 import se.blick.app.notification.RoutineNotifier
 import se.blick.app.scheduling.RoutineScheduler
@@ -321,6 +322,14 @@ class RoutineDetailsViewModelTest {
         override fun check(): NotificationAvailability = current
     }
 
+    /** Settable in-memory [PromotedNotificationChecker] fake — see that interface's own doc
+     * for why this is a separate concern from [NotificationAvailability] above. */
+    private class FakePromotedNotificationChecker(
+        var promotable: Boolean = false,
+    ) : PromotedNotificationChecker {
+        override fun isPromotable(): Boolean = promotable
+    }
+
     /** In-memory [StaleSnapshotRepository] fake, backed by a plain mutable map rather than
      * Room — a SHARED instance passed to two separately-constructed ViewModels is exactly how
      * these tests simulate "the process was killed and recreated": a fresh ViewModel instance
@@ -350,6 +359,7 @@ class RoutineDetailsViewModelTest {
         scheduler: RoutineScheduler = FakeRoutineScheduler(),
         appSettingsDataStore: AppSettingsDataStore = FakeAppSettingsDataStore(),
         notificationAvailabilityChecker: NotificationAvailabilityChecker = FakeNotificationAvailabilityChecker(),
+        promotedNotificationChecker: PromotedNotificationChecker = FakePromotedNotificationChecker(),
     ) = RoutineDetailsViewModel(
         savedStateHandle = SavedStateHandle(mapOf(Routes.RoutineDetails.ARG_ROUTINE_ID to routineId)),
         routineRepository = routines,
@@ -359,6 +369,7 @@ class RoutineDetailsViewModelTest {
         routineScheduler = scheduler,
         appSettingsDataStore = appSettingsDataStore,
         notificationAvailabilityChecker = notificationAvailabilityChecker,
+        promotedNotificationChecker = promotedNotificationChecker,
         clock = clock,
     )
 
@@ -377,6 +388,7 @@ class RoutineDetailsViewModelTest {
             routineScheduler = FakeRoutineScheduler(),
             appSettingsDataStore = FakeAppSettingsDataStore(),
             notificationAvailabilityChecker = FakeNotificationAvailabilityChecker(),
+            promotedNotificationChecker = FakePromotedNotificationChecker(),
             clock = clock,
         )
         dispatcher.scheduler.advanceUntilIdle()
@@ -1066,6 +1078,18 @@ class RoutineDetailsViewModelTest {
         vm.removeDebugTestNotification()
 
         assertEquals(1, notifier.removeCallCount)
+    }
+
+    @Test
+    fun `isLiveUpdatePromotable reflects the checker`() = runTest(dispatcher) {
+        val checker = FakePromotedNotificationChecker(promotable = true)
+        val vm = viewModel(promotedNotificationChecker = checker)
+        dispatcher.scheduler.advanceUntilIdle()
+
+        assertTrue(vm.isLiveUpdatePromotable())
+
+        checker.promotable = false
+        assertFalse(vm.isLiveUpdatePromotable())
     }
 
     // ---- Automatic 30-second refresh (runAutoRefresh) ----

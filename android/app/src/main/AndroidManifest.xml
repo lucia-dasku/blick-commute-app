@@ -16,15 +16,20 @@
         below) — no other foreground-service type applies to "sync fresh departure data from
         the Blick backend while a routine's active window is open." RECEIVE_BOOT_COMPLETED is
         for scheduling/BootCompletedReceiver.kt, a backstop that re-schedules every enabled
-        routine right after a reboot rather than waiting for the app to next be opened. No
-        location, camera, microphone, or exact-alarm permission is requested anywhere in this
-        app.
+        routine right after a reboot rather than waiting for the app to next be opened.
+        POST_PROMOTED_NOTIFICATIONS (Android 16+) is a normal, non-runtime permission that
+        requests the ongoing routine notification be promoted to a prominent lock-screen Live
+        Update / Now Bar surface (see RoutineNotificationBuilder.kt) — declaring it does not
+        guarantee promotion (the OS and OEM still decide), so this always coexists with a
+        graceful plain-ongoing-notification fallback. No location, camera, microphone, or
+        exact-alarm permission is requested anywhere in this app.
     -->
     <uses-permission android:name="android.permission.POST_NOTIFICATIONS" />
     <uses-permission android:name="android.permission.INTERNET" />
     <uses-permission android:name="android.permission.FOREGROUND_SERVICE" />
     <uses-permission android:name="android.permission.FOREGROUND_SERVICE_DATA_SYNC" />
     <uses-permission android:name="android.permission.RECEIVE_BOOT_COMPLETED" />
+    <uses-permission android:name="android.permission.POST_PROMOTED_NOTIFICATIONS" />
 
     <application
         android:name=".BlickApplication"

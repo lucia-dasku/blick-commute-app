@@ -155,6 +155,7 @@ fun RoutineDetailsScreen(
                 onRequestDelete = { showDeleteConfirmation = true },
                 onShowDebugNotification = viewModel::showDebugTestNotification,
                 onRemoveDebugNotification = viewModel::removeDebugTestNotification,
+                isLiveUpdatePromotable = viewModel::isLiveUpdatePromotable,
             )
         }
     }
@@ -219,6 +220,7 @@ private fun RoutineDetailsContent(
     onRequestDelete: () -> Unit,
     onShowDebugNotification: () -> NotificationPostResult?,
     onRemoveDebugNotification: () -> Unit,
+    isLiveUpdatePromotable: () -> Boolean,
 ) {
     val locale = LocalLocale.current.platformLocale
 
@@ -296,6 +298,7 @@ private fun RoutineDetailsContent(
                 canShow = departuresState !is LiveDeparturesState.Loading,
                 onShow = onShowDebugNotification,
                 onRemove = onRemoveDebugNotification,
+                isLiveUpdatePromotable = isLiveUpdatePromotable,
             )
         }
     }
@@ -312,13 +315,18 @@ private fun RoutineDetailsContent(
  * [onShow] returns the notifier's real [NotificationPostResult] (or null if there was no
  * routine loaded to post for), and the displayed message is derived from that actual result
  * via [NotificationPostResult.toDebugMessage] — granting the permission is necessary but not
- * sufficient to report success; posting itself must also have actually succeeded.
+ * sufficient to report success; posting itself must also have actually succeeded. On an
+ * actual [NotificationPostResult.Posted], [isLiveUpdatePromotable] is also checked and
+ * appended, so this section doubles as the way to "verify whether promotion is available and
+ * enabled" (see [se.blick.app.notification.PromotedNotificationChecker]'s own doc) without
+ * needing a real Android 16 lock screen to confirm it by eye.
  */
 @Composable
 private fun DebugNotificationSection(
     canShow: Boolean,
     onShow: () -> NotificationPostResult?,
     onRemove: () -> Unit,
+    isLiveUpdatePromotable: () -> Boolean,
 ) {
     val context = LocalContext.current
     var resultMessage by remember { mutableStateOf<String?>(null) }
@@ -330,12 +338,20 @@ private fun DebugNotificationSection(
     // captured by the lambdas like any other value.
     val permissionDeniedMessage = stringResource(R.string.debug_notification_permission_denied)
     val removedMessage = stringResource(R.string.debug_notification_removed)
+    val promotedSuffix = stringResource(R.string.debug_notification_promoted_suffix)
+    val notPromotedSuffix = stringResource(R.string.debug_notification_not_promoted_suffix)
+
+    fun messageFor(result: NotificationPostResult?): String {
+        val base = result.toDebugMessage(context)
+        if (result !is NotificationPostResult.Posted) return base
+        return base + if (isLiveUpdatePromotable()) promotedSuffix else notPromotedSuffix
+    }
 
     val permissionLauncher = rememberLauncherForActivityResult(
         ActivityResultContracts.RequestPermission(),
     ) { granted ->
         resultMessage = if (granted) {
-            onShow().toDebugMessage(context)
+            messageFor(onShow())
         } else {
             permissionDeniedMessage
         }
@@ -353,7 +369,7 @@ private fun DebugNotificationSection(
                 if (needsPermissionRequest) {
                     permissionLauncher.launch(Manifest.permission.POST_NOTIFICATIONS)
                 } else {
-                    resultMessage = onShow().toDebugMessage(context)
+                    resultMessage = messageFor(onShow())
                 }
             },
             enabled = canShow,

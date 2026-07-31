@@ -229,6 +229,15 @@ class RoutineNotificationBuilderTest {
     }
 
     // ---- Expanded departure lines ----
+    //
+    // NotificationCompat.BigTextStyle (Notification.EXTRA_BIG_TEXT), not InboxStyle
+    // (Notification.EXTRA_TEXT_LINES) -- see RoutineNotificationBuilder's own class doc on
+    // why: Android 16's promoted-ongoing ("Live Update") surface only allows a handful of
+    // styles, and InboxStyle is not one of them. The up-to-two rows are joined by "\n" into
+    // one wrapped text block instead of separate bulleted lines.
+
+    private fun bigTextLines(notification: Notification): List<String> =
+        notification.extras.getCharSequence(Notification.EXTRA_BIG_TEXT).toString().split("\n")
 
     @Test
     fun `Live content shows up to two expanded departure lines`() {
@@ -239,7 +248,7 @@ class RoutineNotificationBuilderTest {
                 ),
             ),
         )
-        val lines = notification.extras.getCharSequenceArray(Notification.EXTRA_TEXT_LINES)!!.map { it.toString() }
+        val lines = bigTextLines(notification)
         assertEquals(2, lines.size)
         assertTrue(lines[0].contains("4"))
         assertTrue(lines[0].contains(context.getString(R.string.routine_details_departure_live)))
@@ -252,7 +261,7 @@ class RoutineNotificationBuilderTest {
         val notification = builder.build(
             model(content = RoutineNotificationContent.Live(listOf(sampleRow(isCancelled = true, minutesRemaining = 4, isRealTime = true)))),
         )
-        val line = notification.extras.getCharSequenceArray(Notification.EXTRA_TEXT_LINES)!!.single().toString()
+        val line = bigTextLines(notification).single()
         assertTrue(line.contains(context.getString(R.string.routine_details_departure_cancelled)))
         // Checking for the literal countdown suffix ("4 min", from notification_row_format's
         // "%1$d min" segment) rather than a bare "4 " -- the sample row's own line designation
@@ -273,8 +282,60 @@ class RoutineNotificationBuilderTest {
         assertEquals(context.getString(R.string.notification_stale_warning), text)
 
         val expectedTimeText = formatDepartureTime(lastCheckedAt, Locale.getDefault())
-        val lines = notification.extras.getCharSequenceArray(Notification.EXTRA_TEXT_LINES)!!.map { it.toString() }
-        assertTrue(lines.any { it.contains(expectedTimeText) })
+        assertTrue(bigTextLines(notification).any { it.contains(expectedTimeText) })
+    }
+
+    // ---- Promoted-ongoing (Live Update) request ----
+
+    @Test
+    fun `every built notification requests promoted-ongoing status`() {
+        val states = listOf(
+            RoutineNotificationContent.Live(listOf(sampleRow())),
+            RoutineNotificationContent.Stale(listOf(sampleRow()), now),
+            RoutineNotificationContent.NoUpcomingDepartures(now),
+            RoutineNotificationContent.Offline,
+            RoutineNotificationContent.Unavailable,
+            RoutineNotificationContent.Loading,
+        )
+        states.forEach { content ->
+            val notification = builder.build(model(content = content))
+            assertTrue(
+                "expected setRequestPromotedOngoing(true) for $content",
+                androidx.core.app.NotificationCompat.isRequestPromotedOngoing(notification),
+            )
+        }
+    }
+
+    @Test
+    fun `Live content sets the soonest departure's countdown as the short critical text`() {
+        val notification = builder.build(
+            model(
+                content = RoutineNotificationContent.Live(
+                    listOf(sampleRow(minutesRemaining = 4), sampleRow(minutesRemaining = 19)),
+                ),
+            ),
+        )
+        assertEquals(
+            context.getString(R.string.routine_details_minutes_remaining, 4L),
+            androidx.core.app.NotificationCompat.getShortCriticalText(notification),
+        )
+    }
+
+    @Test
+    fun `a cancelled soonest departure sets the cancelled label as the short critical text`() {
+        val notification = builder.build(
+            model(content = RoutineNotificationContent.Live(listOf(sampleRow(isCancelled = true)))),
+        )
+        assertEquals(
+            context.getString(R.string.routine_details_departure_cancelled),
+            androidx.core.app.NotificationCompat.getShortCriticalText(notification),
+        )
+    }
+
+    @Test
+    fun `no short critical text is set when there is no departure to summarize`() {
+        val notification = builder.build(model(content = RoutineNotificationContent.NoUpcomingDepartures(now)))
+        assertEquals(null, androidx.core.app.NotificationCompat.getShortCriticalText(notification))
     }
 
     @Test

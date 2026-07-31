@@ -34,7 +34,18 @@ okhttp = "4.12.0"
 # Not individually re-verified against the registry at scaffold time; bump via this
 # catalog as needed. None of these affect the compileSdk/targetSdk/minSdk decisions,
 # which were explicitly verified (see android/README.md).
-coreKtx = "1.15.0"
+# coreKtx deliberately bumped ahead of the rest of this block (2026-07-30, Live Update
+# milestone): NotificationCompat.Builder.setRequestPromotedOngoing -- required to
+# request Android 16's promoted-ongoing-notification ("Live Update") surface -- was
+# added in androidx.core 1.17.0-alpha01 and is stable as of 1.17.0 (2025-08-13).
+# Deliberately NOT bumped further to the actual latest stable (1.19.0, 2026-06-03):
+# that release's own AAR metadata requires compileSdk 37+ (confirmed via a real local
+# build failure -- "Dependency 'androidx.core:core:1.19.0' requires ... compile against
+# version 37 or later"), one major SDK level ahead of this project's verified compileSdk
+# 36 (Android 16, the same OS version this milestone's Live Update feature targets in
+# the first place) -- bumping compileSdk itself is out of scope for this milestone.
+# 1.17.0 has no such requirement and is the version that actually introduced this API.
+coreKtx = "1.17.0"
 lifecycle = "2.9.1"
 activityCompose = "1.10.1"
 navigationCompose = "2.8.9"

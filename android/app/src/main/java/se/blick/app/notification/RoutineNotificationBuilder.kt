@@ -25,6 +25,19 @@ import javax.inject.Singleton
  * All user-facing text is a string resource — never a raw exception message, hostname, or
  * other technical detail (matching the rest of the app's error-string convention, e.g.
  * `RoutineDetailsViewModel`/`RoutineCreateViewModel`).
+ *
+ * Every notification this builds requests Android 16's promoted-ongoing ("Live Update")
+ * surface via [NotificationCompat.Builder.setRequestPromotedOngoing] — the prominent
+ * lock-screen card (Samsung's Now Bar where supported), not merely a notification-shade
+ * entry. That is a *request* only: the OS and OEM still decide whether to actually promote
+ * it (device/OS version — Android 16+ only — user settings, and other active promoted
+ * notifications all factor in; see [AndroidNotificationAvailabilityChecker]'s own doc on
+ * checking this), so the exact same [Notification] this builds is also a perfectly valid
+ * plain ongoing notification on any device/state where promotion doesn't happen — there is
+ * no separate "unpromoted" code path to fall back to. Promoted notifications are
+ * restricted to a handful of styles (`BigTextStyle` among them); [NotificationCompat.InboxStyle]
+ * — used here previously — is not one of them, which is why [bigTextStyle], not an inbox
+ * style, renders the expanded view.
  */
 @Singleton
 class RoutineNotificationBuilder @Inject constructor(
@@ -47,6 +60,9 @@ class RoutineNotificationBuilder @Inject constructor(
             .setOnlyAlertOnce(true)
             .setAutoCancel(false)
             .setVisibility(NotificationCompat.VISIBILITY_PUBLIC)
+            // See this class's own doc — a request, not a guarantee; requires the
+            // POST_PROMOTED_NOTIFICATIONS manifest permission (AndroidManifest.xml).
+            .setRequestPromotedOngoing(true)
 
         applyContent(builder, model)
 
@@ -74,19 +90,21 @@ class RoutineNotificationBuilder @Inject constructor(
                 // glance rather than repeating `summary` a second time (already shown via
                 // setSubText above).
                 builder.setContentText(rows.firstOrNull())
-                builder.setStyle(inboxStyle(summary, rows))
+                builder.setStyle(bigTextStyle(summary, rows))
+                shortCriticalText(content.departures)?.let { builder.setShortCriticalText(it) }
             }
             is RoutineNotificationContent.Stale -> {
                 val staleText = context.getString(R.string.notification_stale_warning)
                 builder.setContentText(staleText)
                 val lines = rowLines(content.departures).ifEmpty { listOf(context.getString(R.string.notification_no_departures)) } +
                     lastCheckedLine(content.lastCheckedAt)
-                builder.setStyle(inboxStyle(staleText, lines))
+                builder.setStyle(bigTextStyle(staleText, lines))
+                shortCriticalText(content.departures)?.let { builder.setShortCriticalText(it) }
             }
             is RoutineNotificationContent.NoUpcomingDepartures -> {
                 val text = context.getString(R.string.notification_no_departures)
                 builder.setContentText(text)
-                builder.setStyle(inboxStyle(text, listOf(lastCheckedLine(content.lastCheckedAt))))
+                builder.setStyle(bigTextStyle(text, listOf(lastCheckedLine(content.lastCheckedAt))))
             }
             is RoutineNotificationContent.Offline -> {
                 builder.setContentText(context.getString(R.string.notification_offline))
@@ -118,14 +136,32 @@ class RoutineNotificationBuilder @Inject constructor(
     private fun lastCheckedLine(lastCheckedAt: java.time.Instant): String =
         context.getString(R.string.notification_last_checked_format, formatDepartureTime(lastCheckedAt, Locale.getDefault()))
 
-    /** [androidx.core.app.NotificationCompat.InboxStyle] is used for the expanded view since
-     * it renders up to two departure lines cleanly; [summary] repeats the collapsed
+    /** [androidx.core.app.NotificationCompat.BigTextStyle] renders the expanded view —
+     * [NotificationCompat.InboxStyle], used here previously, is not one of the styles
+     * Android 16's promoted-ongoing surface allows (see this class's own doc), while
+     * `BigTextStyle` is. [lines] (up to two departure rows, sometimes a last-checked line
+     * too) are joined into one wrapped text block rather than InboxStyle's separate bullet
+     * lines — the closest equivalent this style permits. [summary] repeats the collapsed
      * line+direction summary as the style's own summary text so the expanded view doesn't
      * lose that context. */
-    private fun inboxStyle(summary: String, lines: List<String>): NotificationCompat.InboxStyle {
-        val style = NotificationCompat.InboxStyle().setSummaryText(summary)
-        lines.forEach { style.addLine(it) }
-        return style
+    private fun bigTextStyle(summary: String, lines: List<String>): NotificationCompat.BigTextStyle =
+        NotificationCompat.BigTextStyle()
+            .bigText(lines.joinToString("\n"))
+            .setSummaryText(summary)
+
+    /** The promoted surface's small "status chip" text (see
+     * [androidx.core.app.NotificationCompat.Builder.setShortCriticalText]) — the soonest
+     * departure's own countdown (or "Cancelled"), the single most critical fact this
+     * notification has to offer at a glance. Returns null (skip the chip entirely) when
+     * there is no departure to summarize — see [RoutineNotificationContent.Stale]'s own doc
+     * on why its `departures` can be empty. */
+    private fun shortCriticalText(departures: List<NotificationDepartureRow>): String? {
+        val soonest = departures.firstOrNull() ?: return null
+        return if (soonest.isCancelled) {
+            context.getString(R.string.routine_details_departure_cancelled)
+        } else {
+            context.getString(R.string.routine_details_minutes_remaining, soonest.minutesRemaining)
+        }
     }
 
     private fun contentIntent(routineId: String): PendingIntent {

@@ -29,6 +29,7 @@ import se.blick.app.domain.usecase.departureIdentity
 import se.blick.app.notification.NotificationAvailability
 import se.blick.app.notification.NotificationAvailabilityChecker
 import se.blick.app.notification.NotificationPostResult
+import se.blick.app.notification.PromotedNotificationChecker
 import se.blick.app.notification.RoutineNotificationMapper
 import se.blick.app.notification.RoutineNotifier
 import se.blick.app.scheduling.RoutineScheduler
@@ -107,6 +108,7 @@ class RoutineDetailsViewModel @Inject constructor(
     private val routineScheduler: RoutineScheduler,
     private val appSettingsDataStore: AppSettingsDataStore,
     private val notificationAvailabilityChecker: NotificationAvailabilityChecker,
+    private val promotedNotificationChecker: PromotedNotificationChecker,
     private val clock: Clock,
 ) : ViewModel() {
 
@@ -451,6 +453,15 @@ class RoutineDetailsViewModel @Inject constructor(
     fun removeDebugTestNotification() {
         routineNotifier.remove()
     }
+
+    /** Debug-only: whether the system currently reports it will actually promote Blick's
+     * ongoing notification to the lock-screen Live Update surface (see
+     * [PromotedNotificationChecker]'s own doc on why this is separate from
+     * [NotificationAvailability]) — lets the debug notification section report this
+     * alongside [showDebugTestNotification]'s own result, satisfying "verify whether
+     * promotion is available and enabled" without needing a real Android 16 device's
+     * lock screen to confirm it by eye. */
+    fun isLiveUpdatePromotable(): Boolean = promotedNotificationChecker.isPromotable()
 
     private fun loadDepartures(routine: CommuteRoutine, trigger: RefreshTrigger) {
         departuresJob?.cancel()

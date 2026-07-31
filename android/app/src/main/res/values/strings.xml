@@ -110,7 +110,7 @@
     <string name="notification_header_format">%1$s → %2$s</string>
     <string name="notification_line_fallback">All lines</string>
     <string name="notification_direction_fallback">Any direction</string>
-    <!-- Expanded (InboxStyle) departure row text. Cancelled is deliberately its own format
+    <!-- Expanded (BigTextStyle) departure row text. Cancelled is deliberately its own format
          with no countdown, and takes priority over the real-time/scheduled row format even
          for a departure that is otherwise real-time. -->
     <string name="notification_row_format">%1$d min • %2$s • %3$s → %4$s</string>
@@ -131,6 +131,8 @@
     <string name="debug_show_test_notification">Show/update test notification</string>
     <string name="debug_remove_test_notification">Remove test notification</string>
     <string name="debug_notification_posted">Test notification posted.</string>
+    <string name="debug_notification_promoted_suffix"> Promoted to a lock-screen Live Update.</string>
+    <string name="debug_notification_not_promoted_suffix"> Not promoted — requires Android 16+ with Live Updates enabled; showing as a regular ongoing notification.</string>
     <string name="debug_notification_removed">Test notification removed.</string>
     <string name="debug_notification_permission_denied">Notification permission denied — can\'t show the test notification.</string>
     <string name="debug_notification_disabled">Not posted — notifications are disabled for this app. Enable them in system settings and try again.</string>

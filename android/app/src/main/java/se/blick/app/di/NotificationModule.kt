@@ -5,8 +5,10 @@ import dagger.Module
 import dagger.hilt.InstallIn
 import dagger.hilt.components.SingletonComponent
 import se.blick.app.notification.AndroidNotificationAvailabilityChecker
+import se.blick.app.notification.AndroidPromotedNotificationChecker
 import se.blick.app.notification.AndroidRoutineNotifier
 import se.blick.app.notification.NotificationAvailabilityChecker
+import se.blick.app.notification.PromotedNotificationChecker
 import se.blick.app.notification.RoutineNotifier
 import javax.inject.Singleton
 
@@ -14,7 +16,8 @@ import javax.inject.Singleton
  * [RoutineNotifier] instance, matching there only ever being one ongoing notification. Also
  * binds the shared [NotificationAvailabilityChecker] (see that interface's own doc) so
  * [AndroidRoutineNotifier], `RoutineActiveWindowWorker`, and the routine details screen all
- * read the exact same live availability state. */
+ * read the exact same live availability state, and the separate [PromotedNotificationChecker]
+ * (see that interface's own doc on why it's a distinct concern). */
 @Module
 @InstallIn(SingletonComponent::class)
 abstract class NotificationModule {
@@ -28,4 +31,10 @@ abstract class NotificationModule {
     abstract fun bindNotificationAvailabilityChecker(
         impl: AndroidNotificationAvailabilityChecker,
     ): NotificationAvailabilityChecker
+
+    @Binds
+    @Singleton
+    abstract fun bindPromotedNotificationChecker(
+        impl: AndroidPromotedNotificationChecker,
+    ): PromotedNotificationChecker
 }
