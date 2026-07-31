@@ -5,11 +5,11 @@
 **Document status:** Android-first MVP specification — see "Current implementation
 status" immediately below for what already exists in this repository versus what the
 rest of this document specifies as still planned.\
-**Updated:** 30 July 2026
+**Updated:** 31 July 2026
 
 ---
 
-## Current implementation status (as of 30 July 2026)
+## Current implementation status (as of 31 July 2026)
 
 This document specifies the full intended product. Most of the sections below describe
 that end-state design in the present tense, as a specification does — they are **not**
@@ -45,9 +45,12 @@ reflection-based factory and crashed on the worker's real constructor every time
 due to run, meaning **enabling a routine never produced the automatic background
 notification at all**, with nothing surfacing that failure anywhere a user could see it.
 Fixed by adding the missing processor (see `android/README.md`'s Build section for the
-full account). Finally, a further session added a dedicated `BOOT_COMPLETED` receiver
-and durable (Room-backed) stale-snapshot storage across process death, with their own
-tests, reaching the 260 JVM / 21 instrumented total now fully verified above.
+full account). A further session added a dedicated `BOOT_COMPLETED` receiver and
+durable (Room-backed) stale-snapshot storage across process death, with their own
+tests, reaching the 260 JVM / 21 instrumented total now fully verified above. Most
+recently, the ongoing notification was reworked to request promotion to Android 16's
+Live Update surface — see "Requesting a promoted Live Update" under "Active-window
+scheduling and the 30-second notification loop" below for the full account.
 
 **Implemented today (Android client + backend):**
 
@@ -86,11 +89,19 @@ tests, reaching the 260 JVM / 21 instrumented total now fully verified above.
   live-departures engine's state + the current time to a notification presentation
   model, recomputing each departure's countdown rather than trusting a cached value; a
   real `NotificationCompat`-based builder with one quiet `IMPORTANCE_LOW` channel, one
-  stable notification id reused on every update, distinct wording for the
-  live/stale/no-departures/offline/unavailable/loading states; and tap-to-reopen-the-routine
-  navigation) **now runs automatically**, not only through the debug-only manual
-  trigger (which remains, in debug builds only, as a development aid): see
-  "Active-window scheduling and the 30-second notification loop" below.
+  stable notification id reused on every update, a `BigTextStyle` body listing both
+  departures plus a short critical-text countdown for the soonest one, distinct wording
+  for the live/stale/no-departures/offline/unavailable/loading states; and
+  tap-to-reopen-the-routine navigation) **now runs automatically**, not only through the
+  debug-only manual trigger (which remains, in debug builds only, as a development aid):
+  see "Active-window scheduling and the 30-second notification loop" below. The builder
+  also requests promotion (`setRequestPromotedOngoing(true)`) to Android 16's Live Update
+  surface (Samsung's Now Bar where supported) on every post; a `PromotedNotificationChecker`
+  wraps `NotificationManagerCompat.canPostPromotedNotifications()` so the Routine Details
+  debug section can surface whether promotion is actually available on the current
+  device, but the same notification is posted either way — an unsupported or
+  promotion-disabled device automatically falls back to a normal ongoing notification
+  with no separate code path.
 - Production runtime notification-permission onboarding: a rationale dialog gated
   behind `AppSettingsDataStore.hasSeenNotificationRationale`, shown at the point the
   user enables or saves a routine that is meant to show notifications, never repeated
@@ -112,9 +123,9 @@ tests, reaching the 260 JVM / 21 instrumented total now fully verified above.
   other fixed zone). When that window starts, a `CoroutineWorker` first checks shared
   notification availability; only if notifications are actually available does it enter
   foreground execution, fetch departures immediately, and post or silently update one
-  ongoing, lock-screen-visible, `setOnlyAlertOnce(true)` notification (the same
-  notification id on every update — never a new card), waiting about 30 seconds and
-  repeating until the routine's configured end time. If notifications are unavailable
+  ongoing, `setOnlyAlertOnce(true)` notification (the same notification id on every
+  update — never a new card) that requests promotion to a lock-screen Live Update,
+  waiting about 30 seconds and repeating until the routine's configured end time. If notifications are unavailable
   (permission missing, app disabled, or the Blick channel disabled), the worker never
   enters foreground execution, never starts the loop, and never reports delivery as
   active — it simply reschedules the next eligible occurrence and exits. On normal
@@ -383,6 +394,31 @@ The application must:
 - permit full departure information on the lock screen when allowed by the user's system settings;
 - remove the notification when the routine ends;
 - explain that Android and the user's privacy settings control lock-screen visibility.
+
+The intended presentation is not merely an ordinary notification-drawer entry: while a
+routine is active, the application must request promotion of that ongoing notification
+to Android 16's Live Update system surface — a prominent, persistent card intended for
+the lock screen and, where supported, Samsung's Now Bar — rather than treating an
+unpromoted ongoing notification as the finished feature. Concretely, the application
+must:
+
+- declare the `android.permission.POST_PROMOTED_NOTIFICATIONS` manifest permission (a
+  normal, non-runtime permission, separate from the runtime notification permission
+  above);
+- request promotion on the routine's ongoing notification (`setRequestPromotedOngoing`),
+  which requires an ongoing notification with a title and a system-supported style —
+  no custom `RemoteViews`;
+- check whether the current device and user settings actually allow a promoted post
+  (`canPostPromotedNotifications`) and surface that status for verification rather than
+  assuming promotion always succeeds;
+- fall back automatically to a standard ongoing notification — the same content, same
+  update cadence, same removal behavior — on devices or configurations where promotion
+  is unsupported or disabled, with no separate code path and no degraded content.
+
+The exact visual treatment of a promoted Live Update (whether it renders as a card,
+where exactly it appears, and any OEM-specific eligibility rules) is controlled by
+Android and, on Samsung devices, One UI — Blick requests promotion but cannot guarantee
+that every device grants it.
 
 ### Future widget
 
@@ -863,7 +899,8 @@ Once a window is active, `RoutineActiveWindowWorker.doWork()`:
 4. Filters and maps them through the existing notification model (up to two
    departures), and posts or silently updates the routine's one ongoing notification —
    same notification id every time, `setOnlyAlertOnce(true)`, no repeated sound,
-   vibration, heads-up, or extra card.
+   vibration, heads-up, or extra card — requesting promotion to a lock-screen Live
+   Update on every post (see "Requesting a promoted Live Update" below).
 5. Waits about 30 seconds.
 6. Repeats from step 3 until the routine's configured end time, a disable, or a
    deletion — whichever happens first (re-reading the routine from storage on every
@@ -889,6 +926,39 @@ the active notification if the loop had actually been entered. A genuine
 being replaced mid-run — is always rethrown rather than caught as a handled failure, so
 cancellation never gets converted into a success/failure result and never causes the
 cancelled work to be rescheduled or resurrected.
+
+### Requesting a promoted Live Update
+
+Every post or silent update of the routine's ongoing notification also requests
+promotion to Android 16's Live Update surface, rather than settling for an ordinary
+notification-drawer entry:
+
+- `RoutineNotificationBuilder` calls `setRequestPromotedOngoing(true)` on the
+  `NotificationCompat.Builder` for every content state, and declares the manifest
+  permission `android.permission.POST_PROMOTED_NOTIFICATIONS` (normal, granted at
+  install time, distinct from the runtime `POST_NOTIFICATIONS` permission).
+- The notification body uses `BigTextStyle` (listing both visible departures) with
+  `setShortCriticalText` set to the soonest departure's countdown, or a cancelled
+  indicator — one of the styles the promoted-notification surface actually supports.
+  No custom `RemoteViews` are used anywhere in the builder, since promoted Live Updates
+  do not support them.
+- `PromotedNotificationChecker` (backed by
+  `NotificationManagerCompat.canPostPromotedNotifications()`) reports whether the
+  current device and user settings actually allow a promoted post. This is
+  surfaced through the Routine Details debug section for on-device verification; it is
+  not used to change what gets posted — the same builder call is made either way, so an
+  unsupported device or a user who has disabled promoted notifications simply receives
+  a standard ongoing notification automatically, with no separate fallback code path to
+  keep in sync.
+- Because `setRequestPromotedOngoing` was only stabilized in `androidx.core` 1.17.0, and
+  the next stable release (1.19.0) requires `compileSdk` 37 (one major version beyond
+  this project's current 36), the dependency is deliberately held at 1.17.0 rather than
+  the latest available version — see `android/README.md`'s Build section.
+- Promotion cannot be visually verified on this project's Android 14 physical test
+  device, since promoted ongoing notifications are an Android 16 platform feature; only
+  the debug-surfaced `canPostPromotedNotifications()` result and the underlying unit
+  tests (asserting `NotificationCompat.isRequestPromotedOngoing` and
+  `getShortCriticalText` on the built `Notification`) have been verified so far.
 
 ### Reboot and process death
 

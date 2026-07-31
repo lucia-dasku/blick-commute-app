@@ -51,8 +51,8 @@
 
   <!-- 5: One ongoing notification shown/updated -->
   <rect x="60" y="510" width="580" height="70" rx="10" fill="#ede9fe" stroke="#6d28d9" stroke-width="2"/>
-  <text x="350" y="542" text-anchor="middle" font-size="15" fill="#4c1d95">5. One ongoing, lock-screen-visible notification is shown</text>
-  <text x="350" y="564" text-anchor="middle" font-size="15" fill="#4c1d95">or silently updated (same ID every time, setOnlyAlertOnce)</text>
+  <text x="350" y="542" text-anchor="middle" font-size="15" fill="#4c1d95">5. Show and refresh the next two departures in a promoted</text>
+  <text x="350" y="564" text-anchor="middle" font-size="15" fill="#4c1d95">lock-screen Live Update (Samsung Now Bar where supported)</text>
   <line x1="350" y1="580" x2="350" y2="620" stroke="#334155" stroke-width="2" marker-end="url(#arrow)"/>
 
   <!-- 6: Wait ~30 seconds -->

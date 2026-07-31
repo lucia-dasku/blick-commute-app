@@ -30,8 +30,8 @@ The ongoing-notification loop is fully implemented, not just its foundation:
 converts a routine + the live-departures engine's state + an `Instant` into a
 `RoutineNotificationModel`, recomputing each departure's countdown rather than trusting a
 cached value), `notification/RoutineNotificationBuilder` (builds the real, single-channel,
-`IMPORTANCE_LOW` `Notification` — ongoing, only-alert-once, publicly visible, an
-`InboxStyle` expanded view for up to two departures, distinct copy per
+`IMPORTANCE_LOW` `Notification` — ongoing, only-alert-once, publicly visible, a
+`BigTextStyle` expanded view for up to two departures, distinct copy per
 Live/Stale/no-departures/offline/unavailable/loading state), `notification/AndroidRoutineNotifier`
 (posts/cancels that one stable notification id, bound via Hilt as the app's single
 `RoutineNotifier`), and a shared `notification/NotificationAvailabilityChecker` (permission
@@ -41,6 +41,26 @@ the notification reopens the routine details screen for the correct routine
 (`MainActivity.onNewIntent`), and a `BuildConfig.DEBUG`-only "Show/update test
 notification" / "Remove test notification" pair on the routine details screen remains for
 manual testing alongside the automatic loop.
+
+Every notification `RoutineNotificationBuilder` builds also requests Android 16's
+promoted-ongoing ("Live Update") surface via
+`NotificationCompat.Builder.setRequestPromotedOngoing(true)` — the prominent lock-screen
+card (Samsung's Now Bar where supported), not merely a notification-shade entry, per the
+product doc's "Lock-screen Live Update" requirement. This is a *request*, never a
+guarantee: the OS and OEM still decide based on real-time eligibility (Android 16+ only,
+user settings, other active promoted notifications), which is exactly why `BigTextStyle`
+replaced the previous `InboxStyle` expanded view above — promoted notifications are
+restricted to a handful of styles (`BigTextStyle` among them) and `InboxStyle` is not one
+of them — and why no separate "unpromoted" code path exists: the exact same `Notification`
+this builds is also a perfectly valid plain ongoing notification on any device/state where
+promotion doesn't happen. The soonest departure's own countdown (or "Cancelled") is set as
+the promoted surface's short "status chip" text via `setShortCriticalText`. Requires the
+normal, non-runtime `POST_PROMOTED_NOTIFICATIONS` manifest permission. A separate
+`notification/PromotedNotificationChecker` (`canPostPromotedNotifications`) — distinct from
+`NotificationAvailabilityChecker`, since promotion is an enhancement layered on top, never a
+blocking condition — is surfaced through the existing debug notification section so
+"whether promotion is available and enabled" can be verified without needing a real
+Android 16 device's lock screen to confirm it by eye.
 
 Scheduling and activation are implemented via `scheduling/WorkManagerRoutineScheduler`
 (enqueues/replaces/cancels a unique `OneTimeWorkRequest` per routine for its next active
@@ -112,6 +132,17 @@ bump them there as needed.
 - **Attribution is not yet wired into a real screen.** `R.string.attribution_text`
   ("Based on information from Trafiklab.se") exists, but no About/Settings screen
   displays it yet — see `../docs/api-contract.md` §8 before shipping publicly.
+- **Lock-screen Live Update promotion cannot be verified on every device.** Requesting it
+  (`setRequestPromotedOngoing(true)`) is unconditional, but actually being promoted to the
+  prominent lock-screen card/Now Bar requires Android 16+ specifically — any older device
+  (including this project's own documented connected-device verification target, a Lenovo
+  TB350FU on Android 14) will only ever show the plain ongoing notification, correctly and
+  silently, with no way to visually confirm the promoted surface on that hardware. Use the
+  debug notification section's promotion status line (backed by
+  `notification/PromotedNotificationChecker`) to verify eligibility on any device without
+  needing to see the actual card. `androidx.core` is deliberately held at 1.17.0 rather
+  than the newest stable release for this same reason — see `libs.versions.toml`'s
+  `coreKtx` entry.
 
 ## Pointing at a deployed backend
 

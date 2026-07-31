@@ -3,7 +3,10 @@
 A scheduled Android departure display for regular SL commuters, across any SL transport
 mode (bus, metro, train, tram, ferry). Users choose a stop, transport mode, line,
 direction, weekdays, and time window; during that period, upcoming departures and
-relevant disruptions appear in one quiet, updating lock-screen notification. See
+relevant disruptions appear in one quiet, updating lock-screen notification — requesting
+promotion to Android 16's prominent Live Update surface (Samsung's Now Bar where
+supported), with a plain ongoing notification as the automatic, transparent fallback on
+older devices or wherever the OS/OEM doesn't promote it. See
 `docs/Blick_Project_Documentation.md` for the full product specification.
 
 ## Repository layout
@@ -34,7 +37,8 @@ for its next active window via WorkManager (best-effort, not exact — see
 automatically, requesting departures for the routine through the backend (which in
 turn requests SL Transport and, for disruption data, SL Deviations), filtering the
 result down to what matches the saved routine, and showing up to two matching
-departures in one ongoing, lock-screen-visible notification that updates silently
+departures in one ongoing, lock-screen-visible notification (requesting promotion to
+Android 16's Live Update surface — see the Status section below) that updates silently
 about every 30 seconds and is removed at the routine's configured end time. A
 debug-only manual "Show/update test notification" control also remains available in
 debug builds. Separately, opening the routine's details screen fetches immediately and
