@@ -2,11 +2,13 @@
 
 A scheduled Android departure display for regular SL commuters, across any SL transport
 mode (bus, metro, train, tram, ferry). Users choose a stop, transport mode, line,
-direction, weekdays, and time window; during that period, upcoming departures and
-relevant disruptions appear in one quiet, updating lock-screen notification — requesting
-promotion to Android 16's prominent Live Update surface (Samsung's Now Bar where
-supported), with a plain ongoing notification as the automatic, transparent fallback on
-older devices or wherever the OS/OEM doesn't promote it. See
+direction, weekdays, and time window; during that period, upcoming departures appear in
+one quiet, updating lock-screen notification — requesting promotion to Android 16's
+prominent Live Update surface (Samsung's Now Bar where supported), with a plain ongoing
+notification as the automatic, transparent fallback on older devices or wherever the
+OS/OEM doesn't promote it. The backend also retrieves and normalizes SL disruption data,
+though the Android client does not yet surface it anywhere (see
+`docs/Blick_Project_Documentation.md`'s "Not yet implemented" list). See
 `docs/Blick_Project_Documentation.md` for the full product specification.
 
 ## Repository layout

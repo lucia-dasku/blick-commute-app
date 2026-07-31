@@ -4,7 +4,7 @@
 
 **Document status:** Android-first MVP specification — see "Current implementation
 status" immediately below for what already exists in this repository versus what the
-rest of this document specifies as still planned.\
+rest of this document specifies as still planned.  
 **Updated:** 31 July 2026
 
 ---
@@ -18,10 +18,11 @@ what is actually built today; where the two disagree, this section wins.
 
 **Validation status of this update, stated plainly up front:** a complete local run —
 `testDebugUnitTest`, `lintDebug`, `assembleDebug`, and `connectedDebugAndroidTest` on a
-physical Lenovo TB350FU (Android 14) — has now passed in full: all 260 JVM `@Test`
-functions and all 21 instrumented `@Test` functions, `lintDebug` with 0 errors, and a
-working debug APK, with the ongoing-notification loop, routine details live-preview,
-and full routine management additionally exercised manually on that same device.
+physical Lenovo TB350FU (Android 14) — has now passed in full: all 270 JVM `@Test`
+functions and all 21 instrumented `@Test` functions, `lintDebug` with 0 errors (42
+warnings), and a working debug APK, with the ongoing-notification loop, routine
+details live-preview, and full routine management additionally exercised manually on
+that same device.
 
 Getting there took three work sessions of source beyond the earlier 193-JVM-test
 baseline. First: the FAB restoration, the Routine Details 30-second auto-refresh, the
@@ -47,10 +48,15 @@ notification at all**, with nothing surfacing that failure anywhere a user could
 Fixed by adding the missing processor (see `android/README.md`'s Build section for the
 full account). A further session added a dedicated `BOOT_COMPLETED` receiver and
 durable (Room-backed) stale-snapshot storage across process death, with their own
-tests, reaching the 260 JVM / 21 instrumented total now fully verified above. Most
-recently, the ongoing notification was reworked to request promotion to Android 16's
-Live Update surface — see "Requesting a promoted Live Update" under "Active-window
-scheduling and the 30-second notification loop" below for the full account.
+tests, reaching a 260 JVM / 21 instrumented total. Most recently, the ongoing
+notification was reworked to request promotion to Android 16's Live Update surface
+(see "Requesting a promoted Live Update" under "Active-window scheduling and the
+30-second notification loop" below), a Stop action was added to it (see the same
+section), and a pre-existing device-timezone bug in the routine details screen's
+"pause today"/"resume today" controls was fixed to agree with the worker's own
+device-zone definition of "today" — ten further JVM `@Test` functions across these
+three changes bring the fully verified total to 270 JVM / 21 instrumented, stated
+above.
 
 **Implemented today (Android client + backend):**
 
@@ -156,6 +162,12 @@ scheduling and the 30-second notification loop" below for the full account.
 
 **Not yet implemented** (described in the sections below purely as the plan):
 
+- Disruptions are not currently displayed anywhere in the Android client. The backend
+  fully implements and tests disruption retrieval and normalization (see "Disruptions"
+  under §8 and §9 below), and the Android side has a matching `Disruption` domain model,
+  DTO, and `DisruptionRepository`/`RemoteDisruptionRepository` — but nothing in the
+  notification, the routine details screen, or any ViewModel calls that repository yet,
+  so no disruption message ever reaches the user today.
 - A home-screen widget.
 - Exact-time activation — see "Active-window scheduling" below for why this is
   deliberately best-effort, not exact.
@@ -300,10 +312,10 @@ Line and direction options are initially discovered from live departures at the 
 
 ### Daily operation
 
-*This section is now implemented in source (see "Current implementation status" and
-the "Active-window scheduling and the 30-second notification loop" architecture note
-below) but has not yet been exercised on a real device by the user — treat it as
-implemented-but-unverified until that device pass happens.*
+*Steps 1, 2, 3, 4, 5, and 7 below are implemented in source and verified on a real
+device — see "Current implementation status" above and the "Active-window scheduling
+and the 30-second notification loop" architecture note below. Step 6 is not: no
+disruption information is included anywhere today — see "Not yet implemented" above.*
 
 1. The routine becomes active around the configured start time (best-effort, not exact
    — see the scheduling section below).
@@ -312,7 +324,8 @@ implemented-but-unverified until that device pass happens.*
 4. One ongoing notification appears.
 5. The notification is silently refreshed about every 30 seconds during the active
    period, without a repeated sound, vibration, or extra card.
-6. Relevant disruption information is included when available.
+6. Relevant disruption information is included when available. *(Not yet implemented
+   — see above.)*
 7. The notification is removed at the configured end time, and the next eligible
    occurrence is scheduled.
 
@@ -384,10 +397,13 @@ The application must:
 
 *The notification foundation (mapper, builder, tap navigation), the production
 permission-rationale flow, and the automatic active-window scheduling/posting/removal
-loop are all implemented in source — see "Current implementation status" above. Device
-verification (does it actually behave this way on a real phone, screen locked,
-notifications or the channel disabled, mid-window edits, and so on) is still the user's
-to run; this document does not claim that pass has happened.*
+loop are all implemented in source and verified — see "Current implementation status"
+above for the full local run (JVM unit tests, `lintDebug`, `assembleDebug`, and
+`connectedDebugAndroidTest`) plus manual exercising on a physical device, covering the
+ongoing-notification loop, mid-window edits, and full routine management. Promotion to
+Android 16's Live Update surface specifically cannot be visually confirmed on that
+device (Android 14) — see "Requesting a promoted Live Update" below for what has and
+hasn't been verified there.*
 
 The application must:
 
@@ -542,8 +558,11 @@ notification-availability check, the lifecycle-aware status refresh, and the exp
 one-routine dialog added a further 23 JVM `@Test` functions and 3 further instrumented
 `@Test` functions, reaching 258 JVM / 12 instrumented. All of that was subsequently
 compiled and run for the first time, together with a further session's `BOOT_COMPLETED`
-receiver and durable stale-snapshot storage (adding 2 JVM and 9 instrumented tests) —
-**260 JVM `@Test` functions and 21 instrumented `@Test` functions now exist in source,
+receiver and durable stale-snapshot storage (adding 2 JVM and 9 instrumented tests),
+reaching 260 JVM / 21 instrumented. The promoted Live Update request, its Stop action,
+and the pause-today device-timezone fix added 10 further JVM `@Test` functions with no
+further instrumented ones —
+**270 JVM `@Test` functions and 21 instrumented `@Test` functions now exist in source,
 and all of them pass.** See `android/README.md`'s Build section for the exact toolchain
 versions, the up-to-date per-file test breakdown, and the real issues that first full
 run found and fixed (including a genuine production bug, not just test-suite
@@ -826,9 +845,10 @@ Network DTOs receive ISO 8601 strings with explicit offsets. Android maps them i
 
 ## 13. Active-window scheduling and the 30-second notification loop
 
-*Implemented in source this update; device verification is still pending — see
-"Current implementation status" above and the "Validation status" note at the top of
-this document.*
+*Implemented in source and verified — see "Current implementation status" above and
+the "Validation status" note at the top of this document for the full local run,
+including manual exercising of the active-window scheduling/posting/removal loop on a
+physical device.*
 
 Android limits background activity to protect battery life. Blick does not attempt to
 run continuously — it schedules work only around each routine's own configured window.
@@ -1247,11 +1267,9 @@ Although the current upstream APIs are keyless, the backend must remain capable 
   already-handled tap;
 - `RoutineDetailsViewModel`'s debug notification trigger, via hand-written fakes.
 
-The tests above have since been executed via a fresh local
-`./gradlew testDebugUnitTest lintDebug assembleDebug` run, alongside the rest of the JVM suite,
-with no failures; see the toolchain/validation note above. **The tests below are new
-this update and have not yet been run locally — see "Validation status of this update"
-at the top of this document.**
+The tests above, and the tests below, have all since been executed via a fresh local
+`./gradlew testDebugUnitTest lintDebug assembleDebug connectedDebugAndroidTest` run,
+with no failures — see "Validation status of this update" at the top of this document.
 
 - Add-routine control: an instrumented Compose UI test (`RoutineListScreenTest`, calling
   the extracted stateless `RoutineListContent` composable directly, no Hilt needed)
