@@ -101,7 +101,9 @@ scheduling and the 30-second notification loop" below for the full account.
   debug section can surface whether promotion is actually available on the current
   device, but the same notification is posted either way — an unsupported or
   promotion-disabled device automatically falls back to a normal ongoing notification
-  with no separate code path.
+  with no separate code path. The notification also always carries a Stop action
+  ("Stop/Unpin" the current window early — same effect as "pause for today" — see
+  "Requesting a promoted Live Update" below).
 - Production runtime notification-permission onboarding: a rationale dialog gated
   behind `AppSettingsDataStore.hasSeenNotificationRationale`, shown at the point the
   user enables or saves a routine that is meant to show notifications, never repeated
@@ -154,7 +156,7 @@ scheduling and the 30-second notification loop" below for the full account.
 
 **Not yet implemented** (described in the sections below purely as the plan):
 
-- Notification action buttons, an "End now" control, and a home-screen widget.
+- A home-screen widget.
 - Exact-time activation — see "Active-window scheduling" below for why this is
   deliberately best-effort, not exact.
 
@@ -413,7 +415,10 @@ must:
   assuming promotion always succeeds;
 - fall back automatically to a standard ongoing notification — the same content, same
   update cadence, same removal behavior — on devices or configurations where promotion
-  is unsupported or disabled, with no separate code path and no degraded content.
+  is unsupported or disabled, with no separate code path and no degraded content;
+- provide a Stop/Unpin action on the notification itself, stopping the current active
+  window early (the same effect as "pause for today") without requiring the app to be
+  opened.
 
 The exact visual treatment of a promoted Live Update (whether it renders as a card,
 where exactly it appears, and any OEM-specific eligibility rules) is controlled by
@@ -959,6 +964,21 @@ notification-drawer entry:
   the debug-surfaced `canPostPromotedNotifications()` result and the underlying unit
   tests (asserting `NotificationCompat.isRequestPromotedOngoing` and
   `getShortCriticalText` on the built `Notification`) have been verified so far.
+- The notification always carries a Stop action (a plain `NotificationCompat.Action`,
+  not a custom view, so it stays valid on the promoted surface too) fulfilling the
+  spec's "Stop/Unpin" requirement. Its `PendingIntent` targets
+  `StopRoutineNotificationReceiver` — an `exported="false"` `@AndroidEntryPoint`
+  `BroadcastReceiver` only ever triggered by this app's own explicit intent, never a
+  system or cross-app broadcast — which hands off to `StopRoutineNotificationAction`, a
+  small, separately unit-tested class (the same split used for `BootCompletedReceiver`
+  and `RoutineScheduleReconciler`). Stopping today's window early is given exactly the
+  same effect as the existing "pause for today" control: it writes `pausedDate` to
+  today's date and reschedules, which `RoutineActiveWindowWorker`'s own next loop tick
+  already observes and stops on (see "The 30-second loop itself" above) — and the
+  notification is also removed directly, so it disappears immediately on tap rather than
+  up to ~30 seconds later. "Today" here is deliberately resolved from the device's
+  current zone (mirroring the worker's own `zonedNow()`), not a zone-less clock, so this
+  write and the worker's read of it always agree, including right around local midnight.
 
 ### Reboot and process death
 

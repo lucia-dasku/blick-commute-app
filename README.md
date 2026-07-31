@@ -45,9 +45,12 @@ debug builds. Separately, opening the routine's details screen fetches immediate
 again automatically about every 30 seconds while that screen stays open — independent
 of the notification loop — with manual Refresh also available.
 
-**Not yet implemented:** notification action buttons and the widget — see
-`docs/framework.svg` and `android/README.md` for exactly which parts of the diagram are
-built versus still planned.
+The notification also always carries a Stop action ("Stop/Unpin" the current window
+early — same effect as "pause for today").
+
+**Not yet implemented:** the home-screen widget — see `docs/framework.svg` and
+`android/README.md` for exactly which parts of the diagram are built versus still
+planned.
 
 ## Status
 
@@ -78,9 +81,8 @@ and is shared between the foreground preview and the background notification loo
 this update, all passing in a fresh local `./gradlew testDebugUnitTest lintDebug
 assembleDebug connectedDebugAndroidTest` run (0 lint errors, debug APK built, all
 instrumented tests run on a physical device) — see `android/README.md`'s Build section
-for the exact toolchain and test breakdown. **Not yet implemented:** notification
-action buttons and the widget. See each subproject's README for specifics and known
-limitations.
+for the exact toolchain and test breakdown. **Not yet implemented:** the home-screen
+widget. See each subproject's README for specifics and known limitations.
 
 ## Roadmap beyond this MVP
 

@@ -92,7 +92,22 @@ routine id and scoped to the exact `DepartureIdentity` that produced it, and sha
 being killed and recreated, unlike a plain in-memory field, and its row is automatically
 removed (`ON DELETE CASCADE`) whenever its owning routine is deleted.
 
-**Still not implemented**: notification action buttons and the widget.
+The ongoing/promoted notification also always carries a Stop action (the spec's
+"Stop/Unpin" control) — a plain `NotificationCompat.Action`, not a custom view, so it
+stays valid on the promoted surface too. Its `PendingIntent` targets
+`notification/StopRoutineNotificationReceiver`, an `exported="false"`
+`@AndroidEntryPoint` `BroadcastReceiver` only ever triggered by this app's own explicit
+intent, which hands off to `notification/StopRoutineNotificationAction` — kept as its
+own plain, unit-tested class rather than logic embedded directly in the receiver (see
+`scheduling/RoutineScheduleReconciler` for the same split behind `BootCompletedReceiver`).
+Tapping it has exactly the same effect as the existing "pause for today" control:
+it writes `pausedDate` to today's date (resolved in the device's own zone, matching
+`RoutineActiveWindowWorker`'s own break condition, not a zone-less clock) and
+reschedules, which the worker's own next loop tick already observes and stops on —
+and additionally removes the notification directly, so it disappears immediately on
+tap rather than up to ~30 seconds later.
+
+**Still not implemented**: the home-screen widget.
 
 ## Pinned versions and why
 
