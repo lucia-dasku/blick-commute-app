@@ -9,7 +9,7 @@ import {
 
 export interface SlTransportClient {
   fetchAllSites(): Promise<RawSlSite[]>;
-  fetchDepartures(siteId: number): Promise<RawDeparturesResponse>;
+  fetchDepartures(siteId: number, forecastMinutes?: number): Promise<RawDeparturesResponse>;
 }
 
 const UPSTREAM_NAME = "SL Transport";
@@ -21,8 +21,9 @@ export function createSlTransportClient(baseUrl: string = config.slTransportBase
         upstreamName: UPSTREAM_NAME,
       });
     },
-    async fetchDepartures(siteId: number) {
-      return fetchUpstreamJson(`${baseUrl}/sites/${siteId}/departures`, RawDeparturesResponseSchema, {
+    async fetchDepartures(siteId: number, forecastMinutes?: number) {
+      const url = `${baseUrl}/sites/${siteId}/departures` + (forecastMinutes != null ? `?forecast=${forecastMinutes}` : "");
+      return fetchUpstreamJson(url, RawDeparturesResponseSchema, {
         upstreamName: UPSTREAM_NAME,
       });
     },

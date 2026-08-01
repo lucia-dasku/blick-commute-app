@@ -207,14 +207,14 @@ class RoutineDetailsViewModelTest {
 
     private class FakeDepartureRepository(private val result: DeparturesResult) : DepartureRepository {
         var callCount = 0
-        override suspend fun getDepartures(siteId: Long): DeparturesResult {
+        override suspend fun getDepartures(siteId: Long, forecastMinutes: Int?): DeparturesResult {
             callCount++
             return result
         }
     }
 
     private class FailingDepartureRepository(private val error: Throwable) : DepartureRepository {
-        override suspend fun getDepartures(siteId: Long): DeparturesResult = throw error
+        override suspend fun getDepartures(siteId: Long, forecastMinutes: Int?): DeparturesResult = throw error
     }
 
     /** Succeeds with [result] while [shouldFail] is false; throws [failure] once flipped on
@@ -225,7 +225,7 @@ class RoutineDetailsViewModelTest {
         private val failure: Throwable = IOException("network down"),
     ) : DepartureRepository {
         var callCount = 0
-        override suspend fun getDepartures(siteId: Long): DeparturesResult {
+        override suspend fun getDepartures(siteId: Long, forecastMinutes: Int?): DeparturesResult {
             callCount++
             if (shouldFail) throw failure
             return result
@@ -242,7 +242,7 @@ class RoutineDetailsViewModelTest {
         private val failure: Throwable = IOException("network down"),
     ) : DepartureRepository {
         var callCount = 0
-        override suspend fun getDepartures(siteId: Long): DeparturesResult {
+        override suspend fun getDepartures(siteId: Long, forecastMinutes: Int?): DeparturesResult {
             callCount++
             if (siteId in failingSites) throw failure
             return resultsBySite[siteId] ?: error("PerSiteDepartureRepository: no result configured for site $siteId")
@@ -255,7 +255,7 @@ class RoutineDetailsViewModelTest {
     private class ControllableDepartureRepository : DepartureRepository {
         private val pending = mutableListOf<CompletableDeferred<DeparturesResult>>()
         val callCount: Int get() = pending.size
-        override suspend fun getDepartures(siteId: Long): DeparturesResult {
+        override suspend fun getDepartures(siteId: Long, forecastMinutes: Int?): DeparturesResult {
             val deferred = CompletableDeferred<DeparturesResult>()
             pending += deferred
             return deferred.await()

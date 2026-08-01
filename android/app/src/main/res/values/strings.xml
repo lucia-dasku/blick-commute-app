@@ -59,6 +59,8 @@
     <string name="notification_settings_open_action">Open notification settings</string>
     <string name="routine_details_notifications_active_hint">You\'ll get one ongoing notification with live departures while this routine is active.</string>
     <string name="routine_details_notifications_disabled_hint">Notifications are turned off, so this routine won\'t show live updates. Open settings to turn them back on.</string>
+    <string name="routine_details_live_update_not_enabled_hint">This notification isn\'t currently eligible for the prominent lock-screen Live Update surface (Android 16+ only) — it\'ll still show as a regular ongoing notification.</string>
+    <string name="routine_details_live_update_settings_action">Open Live Update settings</string>
 
     <string name="routine_create_step_stop">Step 1 of 4 — Choose a stop</string>
     <string name="routine_create_step_mode">Step 2 of 4 — Choose a transport mode</string>
@@ -101,6 +103,15 @@
     <!-- Required attribution, see docs/api-contract.md §8 (Licensing and attribution). -->
     <string name="attribution_text">Based on information from Trafiklab.se</string>
 
+    <!-- About screen (see ui/screens/about/AboutScreen.kt) — the one place attribution_text
+         above is actually shown to the user, plus a link to Trafiklab.se ("when practicable",
+         see docs/api-contract.md §8), reachable from the routine list's top app bar. -->
+    <string name="about_action">About Blick</string>
+    <string name="about_title">About</string>
+    <string name="about_version_label">Version %1$s</string>
+    <string name="about_trafiklab_link">Trafiklab.se</string>
+    <string name="about_disclaimer">Blick is not affiliated with or endorsed by SL or Trafiklab.</string>
+
     <!-- Ongoing commute notification (RoutineNotificationBuilder). A quiet, low-importance
          channel — see that class's doc comment for why IMPORTANCE_LOW is used. -->
     <string name="notification_channel_name">Commute departures</string>
@@ -135,8 +146,8 @@
     <string name="debug_show_test_notification">Show/update test notification</string>
     <string name="debug_remove_test_notification">Remove test notification</string>
     <string name="debug_notification_posted">Test notification posted.</string>
-    <string name="debug_notification_promoted_suffix"> Promoted to a lock-screen Live Update.</string>
-    <string name="debug_notification_not_promoted_suffix"> Not promoted — requires Android 16+ with Live Updates enabled; showing as a regular ongoing notification.</string>
+    <string name="debug_notification_promoted_suffix"> Eligible for a promoted lock-screen Live Update — actual placement (e.g. Samsung\'s Now Bar) is decided by Android/the OEM and can\'t be confirmed from inside the app.</string>
+    <string name="debug_notification_not_promoted_suffix"> Not eligible for promotion right now — requires Android 16+ with Live Updates enabled; showing as a regular ongoing notification.</string>
     <string name="debug_notification_removed">Test notification removed.</string>
     <string name="debug_notification_permission_denied">Notification permission denied — can\'t show the test notification.</string>
     <string name="debug_notification_disabled">Not posted — notifications are disabled for this app. Enable them in system settings and try again.</string>

@@ -112,9 +112,29 @@ previous zone-less resolution could pause the wrong calendar day shortly after l
 midnight in any zone ahead of UTC (e.g. Sweden), a mismatch against the worker's own
 device-zone break condition that the Stop action's introduction surfaced.
 
-**Still not implemented**: the home-screen widget, and a production (non-debug) prompt
-deep-linking to `Settings.ACTION_APP_NOTIFICATION_PROMOTION_SETTINGS` when promotion isn't
-enabled — see the Known limitations entry on Live Update promotion below.
+The debug notification section's promotion-status line now reads as an eligibility check
+rather than a confirmation: `canPostPromotedNotifications()` only means the OS currently
+permits requesting promotion, not that any specific OEM surface (e.g. Samsung's Now Bar)
+actually rendered a card — see `PromotedNotificationChecker`'s KDoc and the Known
+limitations entry below. When the routine details screen's notification status is
+`Available` but promotion isn't currently eligible, a `LiveUpdatePromotionRow` now offers a
+guarded link straight to Android's own per-app Live Update settings
+(`Settings.ACTION_APP_NOTIFICATION_PROMOTION_SETTINGS` via
+`ui/notification/promotedNotificationSettingsIntent`, wrapped in a
+`try`/`catch (ActivityNotFoundException)` for devices without that Settings activity) — a
+real Android control, but distinct from and unable to reach Samsung's separate Now Bar
+developer gate (see Known limitations below). A simple `ui/screens/about/AboutScreen`
+(reached via an info icon in the routine list's top app bar) now shows the app name,
+version, `R.string.attribution_text`, a link to Trafiklab.se, and a non-affiliation
+disclaimer, closing the `../docs/api-contract.md` §8 attribution requirement.
+`LiveDeparturesDirectionOptionsSource` now requests SL Transport's maximum supported
+`forecast` window (1200 minutes ≈ 20 hours, empirically bounded — see
+`../docs/api-contract.md`'s departures endpoint entry) instead of the live-display
+default, so routine setup can offer directions for routes that aren't running at the
+exact moment of setup but do run at least once every 20 hours; see Known limitations
+below for the residual gap this doesn't close.
+
+**Still not implemented**: the home-screen widget.
 
 ## Pinned versions and why
 
@@ -138,12 +158,18 @@ bump them there as needed.
 
 ## Known limitations (see `../docs/api-contract.md` for full detail)
 
-- **Direction discovery is incomplete.** `LiveDeparturesDirectionOptionsSource` (the only
-  implementation of `DirectionOptionsSource`) can only offer lines/directions that are
-  currently running in SL Transport's live forecast window. A route that isn't running
-  right now won't be selectable during setup. This is intentionally not solved with a
-  Journey Planner/GTFS dependency in this scaffold — the interface exists so the data
-  source can be swapped later without touching Room or the UI.
+- **Direction discovery still has a residual gap.** `LiveDeparturesDirectionOptionsSource`
+  (the only implementation of `DirectionOptionsSource`) now requests SL Transport's
+  `forecast` query parameter at its empirically-confirmed maximum, 1200 minutes (see
+  `../docs/api-contract.md`), instead of the live-display default, so a route is
+  selectable during setup as long as it runs at least once within the next ~20 hours —
+  not only at the exact moment of setup, as before. `/v1/lines` and `/v1/stop-points` were
+  checked directly against the real API and confirmed not to provide a static
+  site/direction association that could close the gap entirely without a Journey
+  Planner/GTFS dependency (intentionally out of scope for this scaffold — the
+  `DirectionOptionsSource` interface exists so the data source can be swapped later
+  without touching Room or the UI). A route that runs less often than every ~20 hours can
+  still be missed during setup.
 - **Scheduling is best-effort, not exact.** `scheduling/WorkManagerRoutineScheduler` uses a
   plain `OneTimeWorkRequest` with a computed initial delay, not `AlarmManager`'s exact-alarm
   APIs (explicitly out of scope — see this doc's project instructions), so Android may
@@ -151,9 +177,6 @@ bump them there as needed.
   WorkManager job can be deferred. The notification/details-screen refresh cadence is
   "about every 30 seconds," not a guaranteed exact interval, and one notification is updated
   silently in place rather than posting a new card each refresh.
-- **Attribution is not yet wired into a real screen.** `R.string.attribution_text`
-  ("Based on information from Trafiklab.se") exists, but no About/Settings screen
-  displays it yet — see `../docs/api-contract.md` §8 before shipping publicly.
 - **Blick's Live Update implementation is standard and correct, but Samsung currently
   blocks it for ordinary third-party apps, with no known removal date — treat the
   prominent Now Bar experience as device/firmware-dependent, not a guaranteed feature.**
@@ -184,11 +207,11 @@ bump them there as needed.
   on any device — though this has not been separately confirmed to reflect Samsung's own
   developer-option gate one way or the other. Android separately exposes a real,
   permanent per-app settings control for its own Live Update eligibility —
-  `Settings.ACTION_APP_NOTIFICATION_PROMOTION_SETTINGS` — which a production prompt could
-  deep-link to (not yet implemented; see "Still not implemented" above), but that is a
-  distinct, general Android control: it cannot enable Samsung's separate "Live
-  notifications for all apps" developer option, so it would not make Blick's Now Bar
-  card generally available on Samsung devices either way. `androidx.core` is
+  `Settings.ACTION_APP_NOTIFICATION_PROMOTION_SETTINGS` — which the routine details
+  screen now links to (guarded behind a resolvability check, see the Status section
+  above), but that is a distinct, general Android control: it cannot enable Samsung's
+  separate "Live notifications for all apps" developer option, so it would not make
+  Blick's Now Bar card generally available on Samsung devices either way. `androidx.core` is
   deliberately held at 1.17.0 rather than the newest stable release for this same
   reason — see `libs.versions.toml`'s `coreKtx` entry.
 
@@ -317,9 +340,14 @@ and 3 further instrumented tests, for the 258 JVM / 12 instrumented total stated
 Three later sessions (a `BOOT_COMPLETED` receiver plus durable stale-snapshot storage;
 the promoted Live Update request, its Stop action, and a pause-today device-timezone
 fix; and re-checking notification availability on every active-window loop tick) added
-13 further JVM tests with no further instrumented ones, reaching the 271 JVM / 21
-instrumented total stated below — see `../docs/Blick_Project_Documentation.md`'s
-"Validation status" note for the full account of each.
+13 further JVM tests with no further instrumented ones, reaching 271 JVM / 21
+instrumented. A further session (correcting the debug Live Update status wording, the
+guarded Settings deep-link, the About screen, and the `forecast`-based direction-discovery
+fix) added 4 more JVM tests (`LiveDeparturesDirectionOptionsSourceTest`) and 3 more
+instrumented tests (`AboutScreenTest`'s 2, plus one more in `RoutineListScreenTest` for the
+new info action), reaching the 275 JVM / 24 instrumented total stated below — see
+`../docs/Blick_Project_Documentation.md`'s "Validation status" note for the full account of
+each.
 
 On a machine with a real JDK 17 and Android SDK (or Android Studio, which provides
 both), build with:
@@ -340,9 +368,11 @@ clone builds without Android Studio or a pre-existing local Gradle install.
 
 A complete local run — `testDebugUnitTest`, `lintDebug`, `assembleDebug`, and
 `connectedDebugAndroidTest` on the physical Lenovo TB350FU (Android 14) referenced
-above — has since been completed, using Android Studio's own bundled JDK. All 271 JVM
-`@Test` functions and all 21 instrumented `@Test` functions pass; `lintDebug` reports 0
-errors (42 warnings); the debug APK builds and installs; and the ongoing-notification
+above — has since been completed, using Android Studio's own bundled JDK. All 275 JVM
+`@Test` functions and all 24 instrumented `@Test` functions pass; `lintDebug` reports 0
+errors (42 warnings, including one new, expected, already-guarded `InlinedApi` finding on
+the API-36 `ACTION_APP_NOTIFICATION_PROMOTION_SETTINGS` deep-link); the debug APK builds
+and installs; and the ongoing-notification
 loop, the routine details live-preview, and full routine management were all exercised
 manually on that same device.
 

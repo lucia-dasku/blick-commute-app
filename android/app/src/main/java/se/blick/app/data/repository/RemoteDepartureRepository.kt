@@ -8,6 +8,6 @@ import javax.inject.Inject
 class RemoteDepartureRepository @Inject constructor(
     private val apiClient: BlickApiClient,
 ) : DepartureRepository {
-    override suspend fun getDepartures(siteId: Long): DeparturesResult =
-        apiClient.getDepartures(siteId).toDomain()
+    override suspend fun getDepartures(siteId: Long, forecastMinutes: Int?): DeparturesResult =
+        apiClient.getDepartures(siteId, forecastMinutes).toDomain()
 }

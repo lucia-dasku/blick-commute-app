@@ -3,6 +3,7 @@
 package se.blick.app.ui.screens.routinedetails
 
 import android.Manifest
+import android.content.ActivityNotFoundException
 import android.content.pm.PackageManager
 import android.os.Build
 import androidx.activity.compose.rememberLauncherForActivityResult
@@ -62,6 +63,7 @@ import se.blick.app.domain.model.TransportMode
 import se.blick.app.notification.NotificationAvailability
 import se.blick.app.notification.NotificationPostResult
 import se.blick.app.ui.notification.notificationSettingsIntent
+import se.blick.app.ui.notification.promotedNotificationSettingsIntent
 import se.blick.app.ui.notification.rememberNotificationPermissionGate
 
 /**
@@ -254,6 +256,7 @@ private fun RoutineDetailsContent(
             hasSeenNotificationRationale = hasSeenNotificationRationale,
             onNotificationRationaleSeen = onNotificationRationaleSeen,
             notificationAvailability = notificationAvailability,
+            isLiveUpdatePromotable = isLiveUpdatePromotable,
             onToggleEnabled = onToggleEnabled,
             isTogglingPause = isTogglingPause,
             pauseActionFailed = pauseActionFailed,
@@ -317,9 +320,10 @@ private fun RoutineDetailsContent(
  * via [NotificationPostResult.toDebugMessage] — granting the permission is necessary but not
  * sufficient to report success; posting itself must also have actually succeeded. On an
  * actual [NotificationPostResult.Posted], [isLiveUpdatePromotable] is also checked and
- * appended, so this section doubles as the way to "verify whether promotion is available and
- * enabled" (see [se.blick.app.notification.PromotedNotificationChecker]'s own doc) without
- * needing a real Android 16 lock screen to confirm it by eye.
+ * appended, so this section doubles as a way to check platform-level promotion *eligibility*
+ * without needing a real Android 16 lock screen — but see
+ * [se.blick.app.notification.PromotedNotificationChecker]'s own doc for why "eligible" is not
+ * the same as "will actually render," and cannot substitute for real device verification.
  */
 @Composable
 private fun DebugNotificationSection(
@@ -421,6 +425,7 @@ private fun RoutineActionsSection(
     hasSeenNotificationRationale: Boolean,
     onNotificationRationaleSeen: () -> Unit,
     notificationAvailability: NotificationAvailability,
+    isLiveUpdatePromotable: () -> Boolean,
     onToggleEnabled: () -> Unit,
     isTogglingPause: Boolean,
     pauseActionFailed: Boolean,
@@ -442,6 +447,10 @@ private fun RoutineActionsSection(
         if (routine.enabled) {
             NotificationStatusRow(notificationAvailability)
             Spacer(Modifier.height(8.dp))
+            if (notificationAvailability == NotificationAvailability.Available) {
+                LiveUpdatePromotionRow(isLiveUpdatePromotable())
+                Spacer(Modifier.height(8.dp))
+            }
         }
 
         OutlinedButton(onClick = onEdit, modifier = Modifier.fillMaxWidth()) {
@@ -550,6 +559,46 @@ private fun NotificationStatusRow(notificationAvailability: NotificationAvailabi
             TextButton(onClick = { context.startActivity(notificationSettingsIntent(context)) }) {
                 Text(stringResource(R.string.notification_settings_open_action))
             }
+        }
+    }
+}
+
+/**
+ * Production (not [BuildConfig.DEBUG]-gated) hint shown only when base notification delivery
+ * is already [NotificationAvailability.Available] but Live Update promotion specifically is
+ * not — see [se.blick.app.notification.PromotedNotificationChecker]'s own doc for why "not
+ * eligible" only ever means "currently not eligible," never "broken," since
+ * [se.blick.app.notification.RoutineNotificationBuilder] already produces a perfectly valid
+ * plain ongoing notification either way. Renders nothing when already eligible.
+ *
+ * [promotedNotificationSettingsIntent] targets `Settings.ACTION_APP_NOTIFICATION_PROMOTION_SETTINGS`,
+ * an Android 16+ system screen that may not exist on this device/OEM at all (older Android, or
+ * an OEM build that doesn't ship it) — [android.content.ActivityNotFoundException] is caught
+ * rather than left to crash the tap, since there is nothing more this app can do about a
+ * missing system screen.
+ */
+@Composable
+private fun LiveUpdatePromotionRow(isLiveUpdatePromotable: Boolean) {
+    if (isLiveUpdatePromotable) return
+    val context = LocalContext.current
+
+    Column {
+        Text(
+            stringResource(R.string.routine_details_live_update_not_enabled_hint),
+            style = MaterialTheme.typography.bodySmall,
+            color = MaterialTheme.colorScheme.secondary,
+        )
+        TextButton(
+            onClick = {
+                try {
+                    context.startActivity(promotedNotificationSettingsIntent(context))
+                } catch (e: ActivityNotFoundException) {
+                    // No Live Update settings screen on this device/OEM -- nothing else this
+                    // app can do; it already falls back to a plain ongoing notification.
+                }
+            },
+        ) {
+            Text(stringResource(R.string.routine_details_live_update_settings_action))
         }
     }
 }

@@ -5,6 +5,33 @@ import { normalizeDeparturesResponse } from "../normalize/normalizeDeparture.js"
 import { isInvalidStockholmTimestampError } from "../lib/stockholmTime.js";
 import type { SlTransportClient } from "../services/slTransportClient.js";
 
+// Empirically confirmed against the real SL Transport API (2026-08-01): `forecast` values
+// above 1200 silently return zero departures rather than an error, so 1200 is the real
+// upper bound, not merely a guess or a value copied from unverified docs. See
+// docs/api-contract.md, "Departures" for the account of how this was verified.
+const MAX_FORECAST_MINUTES = 1200;
+
+/**
+ * `forecast` is optional and, when absent, is not forwarded to SL Transport at all --
+ * that upstream applies its own undocumented default (empirically ~60 minutes) in that
+ * case, unchanged from this route's pre-existing behaviour. Supplying it lets a caller
+ * (specifically Android's direction-discovery flow during routine setup -- see
+ * `LiveDeparturesDirectionOptionsSource`) request a much longer window than the live
+ * display ever needs, to surface lines/directions that aren't running RIGHT NOW but will
+ * be later today.
+ */
+function parseForecastMinutes(raw: string | undefined): number | undefined {
+  if (raw == null) return undefined;
+  const forecast = Number(raw);
+  if (!Number.isInteger(forecast) || forecast <= 0 || forecast > MAX_FORECAST_MINUTES) {
+    throw new AppError(
+      "VALIDATION_ERROR",
+      `Query parameter 'forecast' must be a positive integer no greater than ${MAX_FORECAST_MINUTES}`,
+    );
+  }
+  return forecast;
+}
+
 export function createDeparturesRoute(client: SlTransportClient) {
   const route = new Hono();
 
@@ -18,7 +45,9 @@ export function createDeparturesRoute(client: SlTransportClient) {
       throw new AppError("VALIDATION_ERROR", "Query parameter 'siteId' must be a positive integer");
     }
 
-    const raw = await client.fetchDepartures(siteId);
+    const forecastMinutes = parseForecastMinutes(c.req.query("forecast") ?? undefined);
+
+    const raw = await client.fetchDepartures(siteId, forecastMinutes);
 
     // fetchedAt is captured only now — immediately after the upstream response body has
     // been fully received — never before the request was sent. This is what feeds the

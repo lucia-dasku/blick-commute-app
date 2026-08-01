@@ -11,6 +11,6 @@ import se.blick.app.data.remote.dto.StopSearchResponseDto
  */
 interface BlickApiClient {
     suspend fun searchStops(query: String): StopSearchResponseDto
-    suspend fun getDepartures(siteId: Long): DeparturesResponseDto
+    suspend fun getDepartures(siteId: Long, forecastMinutes: Int? = null): DeparturesResponseDto
     suspend fun getDisruptions(siteId: Long, lineId: Long?, transportMode: String?): DisruptionsResponseDto
 }

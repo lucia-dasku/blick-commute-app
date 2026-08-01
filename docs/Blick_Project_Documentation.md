@@ -18,11 +18,12 @@ what is actually built today; where the two disagree, this section wins.
 
 **Validation status of this update, stated plainly up front:** a complete local run —
 `testDebugUnitTest`, `lintDebug`, `assembleDebug`, and `connectedDebugAndroidTest` on a
-physical Lenovo TB350FU (Android 14) — has now passed in full: all 271 JVM `@Test`
-functions and all 21 instrumented `@Test` functions, `lintDebug` with 0 errors (42
-warnings), and a working debug APK, with the ongoing-notification loop, routine
-details live-preview, and full routine management additionally exercised manually on
-that same device.
+physical Lenovo TB350FU (Android 14) — has now passed in full: all 275 JVM `@Test`
+functions and all 24 instrumented `@Test` functions, `lintDebug` with 0 errors (42
+warnings, including one new, expected, already-guarded `InlinedApi` finding on the
+API-36 `ACTION_APP_NOTIFICATION_PROMOTION_SETTINGS` deep-link), and a working debug APK,
+with the ongoing-notification loop, routine details live-preview, and full routine
+management additionally exercised manually on that same device.
 
 Getting there took three work sessions of source beyond the earlier 193-JVM-test
 baseline. First: the FAB restoration, the Routine Details 30-second auto-refresh, the
@@ -60,8 +61,20 @@ active-window worker's notification-availability check — previously only perfo
 once before the loop began — was extended to re-run on every loop tick, so the loop
 now stops fetching departures and burning battery/network for the rest of the window
 as soon as the user disables notifications partway through, rather than continuing
-until the window's own end; this added one further JVM `@Test` function, bringing the
-fully verified total to 271 JVM / 21 instrumented, stated above.
+until the window's own end; this added one further JVM `@Test` function, reaching 271
+JVM / 21 instrumented. A further session then: corrected the debug notification
+section's promotion-status wording to state plainly that `canPostPromotedNotifications()`
+is an eligibility check, not confirmation that any OEM surface actually rendered a card;
+added a guarded deep-link from the routine details screen to Android's own per-app Live
+Update settings (`Settings.ACTION_APP_NOTIFICATION_PROMOTION_SETTINGS`, wrapped in a
+resolvability check for devices without that Settings activity); added a simple About
+screen carrying the required Trafiklab.se attribution, reachable from the routine list's
+top app bar; and fixed routine setup so a route needs only to run at least once within
+roughly the next 20 hours to be selectable, not at the exact moment of setup, by
+requesting SL Transport's maximum supported forecast window instead of the live-display
+default (see "Initial setup" under §7 below). This added 4 further JVM `@Test` functions
+and 3 further instrumented ones, bringing the fully verified total to 275 JVM / 24
+instrumented, stated above.
 
 **Implemented today (Android client + backend):**
 
@@ -95,7 +108,7 @@ fully verified total to 271 JVM / 21 instrumented, stated above.
   scoped to the exact departure identity (site, line, direction, transport mode) that
   produced it, and is discarded rather than reused across an identity change.
 - The backend's full contract, request validation, upstream normalization, and caching
-  logic (183 passing automated tests as of this update).
+  logic (188 passing automated tests as of this update).
 - The ongoing-notification foundation (a pure mapper from a routine + the
   live-departures engine's state + the current time to a notification presentation
   model, recomputing each departure's countdown rather than trusting a cached value; a
@@ -164,6 +177,17 @@ fully verified total to 271 JVM / 21 instrumented, stated above.
   by routine id and scoped to the exact site/line/direction/mode that produced it, and
   shared between the routine details screen and the background worker — it survives
   process death, unlike the previous in-memory-only session scope.
+- A guarded deep-link to Android's own per-app Live Update settings
+  (`Settings.ACTION_APP_NOTIFICATION_PROMOTION_SETTINGS`): the routine details screen
+  now offers this when notifications are available but promotion currently isn't
+  eligible, wrapped in a resolvability check for devices without that Settings activity.
+  This is Android's own general per-app control, distinct from and unable to affect
+  Samsung's separate "Live notifications for all apps" developer-only gate — see
+  "Requesting a promoted Live Update" below.
+- A simple About screen (`ui/screens/about/AboutScreen`, reached via an info icon in the
+  routine list's top app bar) satisfying MVP requirement 17: app name, version, the
+  required Trafiklab.se attribution text with a link to Trafiklab.se, and a
+  non-affiliation disclaimer.
 
 **Not yet implemented** (described in the sections below purely as the plan):
 
@@ -176,14 +200,6 @@ fully verified total to 271 JVM / 21 instrumented, stated above.
 - A home-screen widget.
 - Exact-time activation — see "Active-window scheduling" below for why this is
   deliberately best-effort, not exact.
-- A production prompt that detects when promoted-notification eligibility isn't enabled
-  and deep-links the user to `Settings.ACTION_APP_NOTIFICATION_PROMOTION_SETTINGS` to turn
-  it on — mirroring the existing notification-permission rationale flow. Today
-  `canPostPromotedNotifications()` is only surfaced in the debug notification section,
-  not acted on anywhere a real user would see it. Note this is Android's own general
-  per-app control, distinct from and unable to affect Samsung's separate "Live
-  notifications for all apps" developer-only gate — see "Requesting a promoted Live
-  Update" below.
 
 ---
 
@@ -321,7 +337,7 @@ see "Current implementation status" above.*
 7. The user saves the commute routine.
 8. The application requests notification permission and explains lock-screen visibility.
 
-Line and direction options are initially discovered from live departures at the selected site. The SL Transport departures endpoint exposes only services inside its current forecast window. A route that is not currently operating may therefore be unavailable during setup. This is a documented MVP limitation. Direction discovery must remain behind an application interface so a more complete source can replace it later without changing the saved-routine model.
+Line and direction options are initially discovered from live departures at the selected site, requesting the SL Transport departures endpoint's maximum supported forecast window (1200 minutes, ≈20 hours — empirically confirmed; see `docs/api-contract.md`'s departures endpoint entry) rather than the shorter window used for live display, so a route need only run at least once within roughly the next 20 hours to be selectable during setup, not at the exact moment of setup. A route that runs less often than that may still be unavailable during setup. This is a documented MVP limitation. Direction discovery must remain behind an application interface so a more complete source can replace it later without changing the saved-routine model.
 
 ### Daily operation
 
@@ -581,8 +597,11 @@ reaching 260 JVM / 21 instrumented. The promoted Live Update request, its Stop a
 and the pause-today device-timezone fix added 10 further JVM `@Test` functions with no
 further instrumented ones, reaching 270 JVM / 21 instrumented. The active-window
 worker's notification-availability re-check on every loop tick added 1 further JVM
-`@Test` function with no further instrumented ones —
-**271 JVM `@Test` functions and 21 instrumented `@Test` functions now exist in source,
+`@Test` function with no further instrumented ones, reaching 271 JVM / 21 instrumented.
+The corrected debug promotion-status wording, the guarded Settings deep-link, the About
+screen, and the forecast-based direction-discovery fix added 4 further JVM `@Test`
+functions and 3 further instrumented ones —
+**275 JVM `@Test` functions and 24 instrumented `@Test` functions now exist in source,
 and all of them pass.** See `android/README.md`'s Build section for the exact toolchain
 versions, the up-to-date per-file test breakdown, and the real issues that first full
 run found and fixed (including a genuine production bug, not just test-suite
@@ -713,9 +732,14 @@ Cache-Control: public, s-maxage=3600, stale-while-revalidate=86400
 
 ### Departures
 
-`GET /api/v1/departures?siteId=`
+`GET /api/v1/departures?siteId=&forecast=`
 
-`siteId` is required and must be a valid positive SL Site ID.
+`siteId` is required and must be a valid positive SL Site ID. `forecast` is optional: a
+positive integer number of minutes to look ahead, capped at 1200 (20 hours, the upstream's
+empirically-confirmed real maximum — see `docs/api-contract.md` §3). When omitted, the
+upstream's own short undocumented default applies, as before. Android's routine-setup
+direction discovery passes `forecast=1200` specifically; the live routine-details and
+notification polling paths never pass it.
 
 Top-level data:
 
@@ -988,13 +1012,19 @@ notification-drawer entry:
   No custom `RemoteViews` are used anywhere in the builder, since promoted Live Updates
   do not support them.
 - `PromotedNotificationChecker` (backed by
-  `NotificationManagerCompat.canPostPromotedNotifications()`) reports whether the
-  current device and user settings actually allow a promoted post. This is
-  surfaced through the Routine Details debug section for on-device verification; it is
-  not used to change what gets posted — the same builder call is made either way, so an
-  unsupported device or a user who has disabled promoted notifications simply receives
-  a standard ongoing notification automatically, with no separate fallback code path to
-  keep in sync.
+  `NotificationManagerCompat.canPostPromotedNotifications()`) reports whether the OS
+  currently *permits requesting* promotion — eligibility, not confirmation that any
+  specific surface (e.g. Samsung's Now Bar) actually rendered a card, which no API
+  exposes to a third-party app. The Routine Details debug section's wording was
+  corrected to state this plainly, after an earlier version of this document
+  overclaimed it as confirming the Live Update had appeared. It is not used to change
+  what gets posted — the same builder call is made either way, so an unsupported device
+  or a user who has disabled promoted notifications simply receives a standard ongoing
+  notification automatically, with no separate fallback code path to keep in sync. When
+  notifications are available but promotion currently isn't eligible, the routine
+  details screen also offers a guarded link to Android's own per-app Live Update
+  settings (`Settings.ACTION_APP_NOTIFICATION_PROMOTION_SETTINGS`, wrapped in a
+  resolvability check) — see below.
 - Because `setRequestPromotedOngoing` was only stabilized in `androidx.core` 1.17.0, and
   the next stable release (1.19.0) requires `compileSdk` 37 (one major version beyond
   this project's current 36), the dependency is deliberately held at 1.17.0 rather than
@@ -1027,11 +1057,11 @@ notification-drawer entry:
   departures, survives Blick being swiped from Recent Apps, disappears at the routine's
   end time). Separately, Android's own docs describe a real, permanent, user-facing
   settings control for the platform's own Live Update eligibility —
-  `Settings.ACTION_APP_NOTIFICATION_PROMOTION_SETTINGS` — that a production build could
-  deep-link users to (see "Not yet implemented" above); this is a distinct, general
-  Android control that **cannot enable Samsung's separate "Live notifications for all
-  apps" developer option**, so implementing it would not make Blick's Now Bar card
-  generally available on Samsung devices either way. This project's Android 14 physical
+  `Settings.ACTION_APP_NOTIFICATION_PROMOTION_SETTINGS` — the routine details screen now
+  deep-links to it (guarded behind a resolvability check, for devices without that
+  Settings activity); this is a distinct, general Android control that **cannot enable
+  Samsung's separate "Live notifications for all apps" developer option**, so it does
+  not make Blick's Now Bar card generally available on Samsung devices either way. This project's Android 14 physical
   test device (Lenovo TB350FU) cannot show the promoted surface at all regardless, since
   it's an Android 16-only platform feature — that device correctly falls back to a plain
   ongoing notification instead, the same fallback a regular Samsung Android 16 user

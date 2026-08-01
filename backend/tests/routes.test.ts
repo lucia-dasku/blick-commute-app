@@ -17,7 +17,7 @@ import type { ErrorEnvelope, SuccessEnvelope } from "./testHelpers.js";
 import { createSlDeviationsClient } from "../src/services/slDeviationsClient.js";
 import { vi } from "vitest";
 
-function buildTestApp(options?: { departuresShouldFail?: boolean }) {
+function buildTestApp(options?: { departuresShouldFail?: boolean; receivedForecastMinutes?: (value: number | undefined) => void }) {
   const cache = new InMemoryCache();
   const deduper = new InFlightDeduper();
 
@@ -25,7 +25,8 @@ function buildTestApp(options?: { departuresShouldFail?: boolean }) {
     async fetchAllSites() {
       return sitesFixture as unknown as RawSlSite[];
     },
-    async fetchDepartures() {
+    async fetchDepartures(_siteId, forecastMinutes) {
+      options?.receivedForecastMinutes?.(forecastMinutes);
       if (options?.departuresShouldFail) {
         throw new AppError("UPSTREAM_ERROR", "SL Transport returned HTTP 500 for test");
       }
@@ -122,6 +123,43 @@ describe("GET /api/v1/departures", () => {
     expect(res.status).toBe(502);
     const body = (await res.json()) as ErrorEnvelope;
     expect(body).toEqual({ schemaVersion: 1, error: { code: "UPSTREAM_ERROR", message: expect.any(String) } });
+  });
+
+  it("does not forward a forecast value to the upstream client when omitted", async () => {
+    let received: number | undefined = -1;
+    const app = buildTestApp({ receivedForecastMinutes: (value) => { received = value; } });
+    await app.request("/api/v1/departures?siteId=9192");
+    expect(received).toBeUndefined();
+  });
+
+  it("forwards a valid forecast value to the upstream client", async () => {
+    let received: number | undefined;
+    const app = buildTestApp({ receivedForecastMinutes: (value) => { received = value; } });
+    const res = await app.request("/api/v1/departures?siteId=9192&forecast=1200");
+    expect(res.status).toBe(200);
+    expect(received).toBe(1200);
+  });
+
+  it("returns a validation error envelope when forecast is not a positive integer", async () => {
+    const app = buildTestApp();
+    const res = await app.request("/api/v1/departures?siteId=9192&forecast=0");
+    expect(res.status).toBe(400);
+    const body = (await res.json()) as ErrorEnvelope;
+    expect(body.error.code).toBe("VALIDATION_ERROR");
+  });
+
+  it("returns a validation error envelope when forecast exceeds the real SL Transport upper bound", async () => {
+    const app = buildTestApp();
+    const res = await app.request("/api/v1/departures?siteId=9192&forecast=1201");
+    expect(res.status).toBe(400);
+    const body = (await res.json()) as ErrorEnvelope;
+    expect(body.error.code).toBe("VALIDATION_ERROR");
+  });
+
+  it("returns a validation error envelope when forecast is not numeric", async () => {
+    const app = buildTestApp();
+    const res = await app.request("/api/v1/departures?siteId=9192&forecast=soon");
+    expect(res.status).toBe(400);
   });
 });
 

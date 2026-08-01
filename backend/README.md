@@ -32,15 +32,17 @@ unusable value (see `src/config/env.ts`).
 npm run typecheck   # tsc --noEmit
 npm run lint        # eslint (flat config, eslint.config.js)
 npm run build       # tsc, emits to dist/
-npm test            # vitest — 183 tests
+npm test            # vitest — 188 tests
 npm audit           # dependency vulnerability scan
 ```
 
-Test coverage (183 tests across 16 files): DST resolver (including calendar validation
+Test coverage (188 tests across 16 files): DST resolver (including calendar validation
 — rejecting impossible dates and the spring DST gap, and ISO round-trip consistency),
 cancellation derivation, search ranking, cache/dedup, `fetchedAt` semantics (fresh,
 cached, and deduplicated-concurrent requests), request-filter validation (`future`,
-`transportMode`, `siteId`, `lineId`), runtime (Zod) validation of upstream payloads
+`transportMode`, `siteId`, `lineId`), the departures endpoint's optional `forecast`
+parameter (omitted-value passthrough, valid-value passthrough up to its 1200-minute
+maximum, and rejection of zero/negative/non-integer/above-maximum values), runtime (Zod) validation of upstream payloads
 — including contract integer fields as safe integers (IDs, direction codes, versions,
 priorities, importance levels), SL Deviations' `created`/`modified`/`publish.from`/
 `publish.upto` as explicit-offset RFC 3339 timestamps (rejecting naive/offset-less

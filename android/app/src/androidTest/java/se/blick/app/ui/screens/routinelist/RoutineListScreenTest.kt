@@ -175,4 +175,26 @@ class RoutineListScreenTest {
 
         assertEquals("r7", openedRoutineId)
     }
+
+    @Test
+    fun aboutActionIsAlwaysVisibleAndInvokesOnOpenAbout() {
+        var aboutOpened = false
+
+        composeRule.setContent {
+            RoutineListContent(
+                uiState = RoutineListUiState(routines = emptyList(), isLoading = false),
+                onAddRoutine = {},
+                onOpenRoutine = {},
+                onOpenAbout = { aboutOpened = true },
+            )
+        }
+
+        val aboutDescription = composeRule.activity.getString(R.string.about_action)
+        composeRule.onNodeWithContentDescription(aboutDescription).apply {
+            assertExists()
+            performClick()
+        }
+
+        assertEquals(true, aboutOpened)
+    }
 }

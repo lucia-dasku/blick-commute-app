@@ -73,7 +73,7 @@ class GetLiveDeparturesUseCaseTest {
         var lastSiteId: Long? = null
         var callCount = 0
 
-        override suspend fun getDepartures(siteId: Long): DeparturesResult {
+        override suspend fun getDepartures(siteId: Long, forecastMinutes: Int?): DeparturesResult {
             lastSiteId = siteId
             callCount++
             return result
@@ -83,7 +83,7 @@ class GetLiveDeparturesUseCaseTest {
     /** Throws whatever [error] the test supplies — models both connectivity and
      * non-connectivity failures, and a real coroutine cancellation, with a single fake. */
     private class FailingDepartureRepository(private val error: Throwable) : DepartureRepository {
-        override suspend fun getDepartures(siteId: Long): DeparturesResult = throw error
+        override suspend fun getDepartures(siteId: Long, forecastMinutes: Int?): DeparturesResult = throw error
     }
 
     private fun useCase(repository: DepartureRepository) = GetLiveDeparturesUseCase(repository, clock)

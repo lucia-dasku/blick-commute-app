@@ -148,7 +148,7 @@ class RoutineActiveWindowWorkerTest {
 
     private class FakeDepartureRepository(private val result: () -> DeparturesResult) : DepartureRepository {
         var callCount = 0
-        override suspend fun getDepartures(siteId: Long): DeparturesResult {
+        override suspend fun getDepartures(siteId: Long, forecastMinutes: Int?): DeparturesResult {
             callCount++
             return result()
         }
@@ -475,7 +475,7 @@ class RoutineActiveWindowWorkerTest {
         val notifier = RecordingNotifier()
         var callCount = 0
         val departures = object : DepartureRepository {
-            override suspend fun getDepartures(siteId: Long): DeparturesResult {
+            override suspend fun getDepartures(siteId: Long, forecastMinutes: Int?): DeparturesResult {
                 callCount++
                 if (callCount == 1) return DeparturesResult(clock.instant(), 9145, listOf(sampleDeparture()), emptyList())
                 throw IOException("network down")
@@ -534,7 +534,7 @@ class RoutineActiveWindowWorkerTest {
         val secondRepository = ScriptedRoutineRepository(secondClock) { routine }
         val secondNotifier = RecordingNotifier()
         val secondDepartures = object : DepartureRepository {
-            override suspend fun getDepartures(siteId: Long): DeparturesResult = throw IOException("network down")
+            override suspend fun getDepartures(siteId: Long, forecastMinutes: Int?): DeparturesResult = throw IOException("network down")
         }
         val secondWorker = buildWorker(
             routine.id,

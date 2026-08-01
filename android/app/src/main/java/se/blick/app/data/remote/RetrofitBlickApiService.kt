@@ -17,7 +17,10 @@ interface RetrofitBlickApiService {
     suspend fun searchStops(@Query("query") query: String): SuccessEnvelopeDto<StopSearchResponseDto>
 
     @GET("api/v1/departures")
-    suspend fun getDepartures(@Query("siteId") siteId: Long): SuccessEnvelopeDto<DeparturesResponseDto>
+    suspend fun getDepartures(
+        @Query("siteId") siteId: Long,
+        @Query("forecast") forecastMinutes: Int?,
+    ): SuccessEnvelopeDto<DeparturesResponseDto>
 
     @GET("api/v1/disruptions")
     suspend fun getDisruptions(
@@ -31,7 +34,8 @@ class RetrofitBlickApiClient(
     private val service: RetrofitBlickApiService,
 ) : BlickApiClient {
     override suspend fun searchStops(query: String) = service.searchStops(query).data
-    override suspend fun getDepartures(siteId: Long) = service.getDepartures(siteId).data
+    override suspend fun getDepartures(siteId: Long, forecastMinutes: Int?) =
+        service.getDepartures(siteId, forecastMinutes).data
     override suspend fun getDisruptions(siteId: Long, lineId: Long?, transportMode: String?) =
         service.getDisruptions(siteId, lineId, transportMode).data
 }

@@ -10,10 +10,12 @@ import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.Add
+import androidx.compose.material.icons.filled.Info
 import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.FloatingActionButton
 import androidx.compose.material3.Icon
+import androidx.compose.material3.IconButton
 import androidx.compose.material3.ListItem
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Scaffold
@@ -47,6 +49,7 @@ private val FAB_CLEARANCE = 96.dp
 fun RoutineListScreen(
     onAddRoutine: () -> Unit,
     onOpenRoutine: (String) -> Unit,
+    onOpenAbout: () -> Unit,
     viewModel: RoutineListViewModel = hiltViewModel(),
 ) {
     val uiState by viewModel.uiState.collectAsStateWithLifecycle()
@@ -55,6 +58,7 @@ fun RoutineListScreen(
         uiState = uiState,
         onAddRoutine = onAddRoutine,
         onOpenRoutine = onOpenRoutine,
+        onOpenAbout = onOpenAbout,
     )
 }
 
@@ -75,6 +79,10 @@ fun RoutineListContent(
     uiState: RoutineListUiState,
     onAddRoutine: () -> Unit,
     onOpenRoutine: (String) -> Unit,
+    // Defaulted (unlike onAddRoutine/onOpenRoutine) so existing RoutineListScreenTest call
+    // sites, which predate the About screen, don't need to be touched just to compile --
+    // there's nothing to assert about this control in those FAB/list-focused tests.
+    onOpenAbout: () -> Unit = {},
 ) {
     // Deliberate first-beta constraint (see this composable's own doc below): only one saved
     // routine is supported at a time, and one shared notification id is therefore currently
@@ -83,7 +91,16 @@ fun RoutineListContent(
     var showOneRoutineLimitDialog by remember { mutableStateOf(false) }
 
     Scaffold(
-        topBar = { TopAppBar(title = { Text(stringResource(R.string.routine_list_title)) }) },
+        topBar = {
+            TopAppBar(
+                title = { Text(stringResource(R.string.routine_list_title)) },
+                actions = {
+                    IconButton(onClick = onOpenAbout) {
+                        Icon(Icons.Filled.Info, contentDescription = stringResource(R.string.about_action))
+                    }
+                },
+            )
+        },
         floatingActionButton = {
             // Always visible — both when the list is empty and once it already has saved
             // routines — so there is always an obvious way to see that creating another one

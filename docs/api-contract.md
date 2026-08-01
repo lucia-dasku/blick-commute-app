@@ -85,9 +85,22 @@ stale-while-revalidate=86400` (site data changes rarely, per SL Transport's own 
 | `.lat` / `.lon` | `.lat` / `.lon` (nullable) | `null` when upstream omits or nulls them — confirmed some real sites have no coordinates at all, not just a fixture gap |
 | `.stopAreaIds` | `.stop_areas` | child StopArea IDs — same namespace as Deviations' `scope.stop_areas.id` |
 
-### `GET /api/v1/departures?siteId=`
+### `GET /api/v1/departures?siteId=&forecast=`
 
 Proxies `GET /v1/sites/{siteId}/departures`.
+
+`forecast` is optional: a positive integer, number of minutes to look ahead, forwarded
+to SL Transport's own `forecast` query parameter unchanged. When omitted, nothing is
+forwarded and SL Transport applies its own undocumented default (empirically ~60
+minutes, matching this backend's pre-existing behavior). The maximum accepted value is
+**1200** (20 hours) — empirically confirmed against the real upstream on 2026-08-01:
+values above 1200 do not error, they silently return zero departures, so this backend
+rejects anything above 1200 as a `VALIDATION_ERROR` rather than forwarding a value that
+would silently produce an empty, misleading response. Android's routine-setup direction
+discovery (`LiveDeparturesDirectionOptionsSource`) requests `forecast=1200` specifically
+to surface lines/directions that aren't running right now but will be later today — the
+live routine-details/notification polling paths do not pass this parameter at all and
+keep relying on the short default window.
 
 Response shape: `data: { fetchedAt, timeZone, siteId, departures, siteDeviations }`.
 
@@ -455,15 +468,15 @@ mapping) and `tests/errorHandling.test.ts` (leakage prevention and `no-store` he
 
 Both current upstreams are keyless, but keyless does not mean obligation-free. Before
 any public release, the applicable Trafiklab terms must be registered for/accepted
-(Trafiklab's site-wide terms cover the SL APIs distributed through it). The future
-Android About/Settings screen must carry visible attribution, e.g.:
+(Trafiklab's site-wide terms cover the SL APIs distributed through it). The Android
+About screen (`ui/screens/about/AboutScreen`, reached via an info icon in the routine
+list's top app bar) now carries visible attribution:
 
 > Based on information from Trafiklab.se
 
-...with a link to Trafiklab.se where practical. The app must not imply affiliation with
-or endorsement by SL or Trafiklab. This requirement is tracked here rather than only in
-code comments specifically so it isn't lost before the first public release; the Android
-scaffold's placeholder settings screen has a TODO pointing back to this section.
+...with a link to Trafiklab.se, and an explicit non-affiliation disclaimer. This
+requirement is tracked here rather than only in code comments specifically so it isn't
+lost before the first public release.
 
 ## 10. Platform-neutral design and future roadmap
 
@@ -486,15 +499,22 @@ the HTTP layer directly (`app.request(...)`), not through any Android code path.
 ## 11. Known open limitation: direction discovery
 
 `/api/v1/departures` only reflects lines and directions currently operating within SL
-Transport's live forecast window. During routine setup, a route that isn't running right
-now (e.g. a weekday rush-hour-only bus, checked on a Sunday) may not appear as a
-selectable direction. This is a real, documented product limitation, not silently papered
-over — the MVP does not add a Journey Planner or GTFS static-schedule dependency to solve
-it. Direction-option discovery is kept behind a `DirectionOptionsSource`-shaped interface
-in the Android app (see `android/README.md`) so its data source can be replaced later
-(e.g. with a static schedule fallback) without touching Room or the UI. A saved routine's
-identity is platform-neutral (`siteId`, `lineId`, `transportMode`, `directionCode`);
-destination text may be stored for display only and is never the sole identity.
+Transport's live forecast window. Routine setup now requests that window at its
+empirically-confirmed maximum, `forecast=1200` (20 hours — see the departures endpoint
+entry in §3 above), instead of the
+short live-display default, so a route need only run at least once within roughly the
+next 20 hours to appear as a selectable direction, not at the exact moment of setup. A
+route running less often than that (e.g. a once-a-week special service) may still not
+appear. This is a real, documented product limitation, not silently papered over — the
+MVP does not add a Journey Planner or GTFS static-schedule dependency to solve it fully;
+`/v1/lines` and `/v1/stop-points` were checked directly against the real upstream and
+confirmed not to provide a static site/direction association that could close the gap
+without one. Direction-option discovery is kept behind a `DirectionOptionsSource`-shaped
+interface in the Android app (see `android/README.md`) so its data source can be
+replaced later (e.g. with a static schedule fallback) without touching Room or the UI. A
+saved routine's identity is platform-neutral (`siteId`, `lineId`, `transportMode`,
+`directionCode`); destination text may be stored for display only and is never the sole
+identity.
 
 ## 12. Deployment (Vercel)
 
