@@ -51,8 +51,8 @@
 
   <!-- 5: One ongoing notification shown/updated -->
   <rect x="60" y="510" width="580" height="70" rx="10" fill="#ede9fe" stroke="#6d28d9" stroke-width="2"/>
-  <text x="350" y="542" text-anchor="middle" font-size="15" fill="#4c1d95">5. Show and refresh the next two departures in a promoted</text>
-  <text x="350" y="564" text-anchor="middle" font-size="15" fill="#4c1d95">lock-screen Live Update (Samsung Now Bar where supported)</text>
+  <text x="350" y="542" text-anchor="middle" font-size="15" fill="#4c1d95">5. Show and refresh the next two departures, requesting a</text>
+  <text x="350" y="564" text-anchor="middle" font-size="15" fill="#4c1d95">promoted lock-screen Live Update (Samsung Now Bar if granted)</text>
   <line x1="350" y1="580" x2="350" y2="620" stroke="#334155" stroke-width="2" marker-end="url(#arrow)"/>
 
   <!-- 6: Wait ~30 seconds -->
@@ -72,6 +72,10 @@
   <!-- Loop back to step 2: scheduling the next occurrence -->
   <path d="M 60 765 C -10 765, -10 215, 55 215" fill="none" stroke="#94a3b8" stroke-width="2" stroke-dasharray="6,5" marker-end="url(#arrowMuted)"/>
   <text x="18" y="490" text-anchor="middle" font-size="11" fill="#64748b" transform="rotate(-90 18 490)">schedules next occurrence (step 2)</text>
+
+  <!-- Stop action note: an early exit from the loop, same end state as step 7 -->
+  <text x="350" y="820" text-anchor="middle" font-size="12" fill="#6d28d9">A Stop action on the notification (or pausing the routine) ends the window early —</text>
+  <text x="350" y="838" text-anchor="middle" font-size="12" fill="#6d28d9">same effect as step 7, but immediate, and reachable from the lock screen too.</text>
 
   <!-- ================= RIGHT COLUMN: Routine Details screen's own 30s live refresh, separate from notifications ================= -->
 
@@ -115,5 +119,5 @@
   <text x="700" y="885" text-anchor="middle" font-size="13" fill="#64748b">Blick supports all SL transport modes (metro, bus, tram, train, ferry) for any saved routine —</text>
   <text x="700" y="905" text-anchor="middle" font-size="13" fill="#64748b">this diagram is mode-agnostic and applies regardless of which mode is selected.</text>
   <text x="700" y="925" text-anchor="middle" font-size="13" fill="#64748b">The two loops are independent: the notification loop (left) runs in a background worker tied to the routine's own window and continues even if the app is closed;</text>
-  <text x="700" y="943" text-anchor="middle" font-size="13" font-weight="bold" fill="#0369a1">the Details-screen loop (right) only runs while that screen is on-screen. Both are implemented in source; see docs/Blick_Project_Documentation.md for what has and hasn't been run locally yet.</text>
+  <text x="700" y="943" text-anchor="middle" font-size="13" font-weight="bold" fill="#0369a1">the Details-screen loop (right) only runs while that screen is on-screen. Both are implemented and verified — see docs/Blick_Project_Documentation.md for the full validation record.</text>
 </svg>

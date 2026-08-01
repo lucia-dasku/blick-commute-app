@@ -3,11 +3,12 @@
 A scheduled Android departure display for regular SL commuters, across any SL transport
 mode (bus, metro, train, tram, ferry). Users choose a stop, transport mode, line,
 direction, weekdays, and time window; during that period, upcoming departures appear in
-one quiet, updating lock-screen notification — requesting promotion to Android 16's
-prominent Live Update surface (Samsung's Now Bar where supported), with a plain ongoing
-notification as the automatic, transparent fallback on older devices or wherever the
-OS/OEM doesn't promote it. The backend also retrieves and normalizes SL disruption data,
-though the Android client does not yet surface it anywhere (see
+one quiet, updating lock-screen notification. Blick requests promotion of that
+notification to Android 16's Live Update surface, but Android — and, on Samsung
+devices, One UI — alone decides whether it actually renders as a prominent Now Bar card;
+a plain ongoing notification is the automatic, transparent fallback wherever it doesn't.
+The backend also retrieves and normalizes SL disruption data, though the Android client
+does not yet request, consume, or surface it anywhere (see
 `docs/Blick_Project_Documentation.md`'s "Not yet implemented" list). See
 `docs/Blick_Project_Documentation.md` for the full product specification.
 
@@ -37,15 +38,15 @@ transport modes — bus, metro, train, tram, ferry), which is saved locally and 
 for its next active window via WorkManager (best-effort, not exact — see
 `android/README.md`). Whether or not the app is open, that window activates
 automatically, requesting departures for the routine through the backend (which in
-turn requests SL Transport and, for disruption data, SL Deviations), filtering the
-result down to what matches the saved routine, and showing up to two matching
-departures in one ongoing, lock-screen-visible notification (requesting promotion to
-Android 16's Live Update surface — see the Status section below) that updates silently
-about every 30 seconds and is removed at the routine's configured end time. A
+turn requests SL Transport), filtering the result down to what matches the saved
+routine, and showing up to two matching departures in one ongoing, lock-screen-visible
+notification — requesting Live Update promotion as described above — that updates
+silently about every 30 seconds and is removed at the routine's configured end time. A
 debug-only manual "Show/update test notification" control also remains available in
-debug builds. Separately, opening the routine's details screen fetches immediately and
-again automatically about every 30 seconds while that screen stays open — independent
-of the notification loop — with manual Refresh also available.
+debug builds. Separately, opening the routine's details screen fetches
+immediately and again automatically about every 30 seconds while that screen stays
+open — independent of the notification loop — with manual Refresh also available.
+(SL Deviations is not part of this automatic flow — see the intro above.)
 
 The notification also always carries a Stop action ("Stop/Unpin" the current window
 early — same effect as "pause for today").
@@ -89,9 +90,9 @@ than held only in memory, so it survives the app's process being killed and recr
 and is shared between the foreground preview and the background notification loop.
 271 JVM `@Test` functions and 21 instrumented `@Test` functions exist in source as of
 this update, all passing in a fresh local `./gradlew testDebugUnitTest lintDebug
-assembleDebug connectedDebugAndroidTest` run (0 lint errors, debug APK built, all
-instrumented tests run on a physical device) — see `android/README.md`'s Build section
-for the exact toolchain and test breakdown. **Not yet implemented:** the home-screen
+assembleDebug connectedDebugAndroidTest` run (0 lint errors, 42 warnings, debug APK
+built, all instrumented tests run on a physical device) — see `android/README.md`'s
+Build section for the exact toolchain and test breakdown. **Not yet implemented:** the home-screen
 widget. See each subproject's README for specifics and known limitations.
 
 ## Roadmap beyond this MVP

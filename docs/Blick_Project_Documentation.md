@@ -5,11 +5,11 @@
 **Document status:** Android-first MVP specification — see "Current implementation
 status" immediately below for what already exists in this repository versus what the
 rest of this document specifies as still planned.  
-**Updated:** 31 July 2026
+**Updated:** 1 August 2026
 
 ---
 
-## Current implementation status (as of 31 July 2026)
+## Current implementation status (as of 1 August 2026)
 
 This document specifies the full intended product. Most of the sections below describe
 that end-state design in the present tense, as a specification does — they are **not**
@@ -177,7 +177,7 @@ fully verified total to 271 JVM / 21 instrumented, stated above.
 - Exact-time activation — see "Active-window scheduling" below for why this is
   deliberately best-effort, not exact.
 - A production prompt that detects when promoted-notification eligibility isn't enabled
-  and deep-links the user to `Settings.ACTION_MANAGE_APP_PROMOTED_NOTIFICATIONS` to turn
+  and deep-links the user to `Settings.ACTION_APP_NOTIFICATION_PROMOTION_SETTINGS` to turn
   it on — mirroring the existing notification-permission rationale flow. Today
   `canPostPromotedNotifications()` is only surfaced in the debug notification section,
   not acted on anywhere a real user would see it. Note this is Android's own general
@@ -1027,7 +1027,7 @@ notification-drawer entry:
   departures, survives Blick being swiped from Recent Apps, disappears at the routine's
   end time). Separately, Android's own docs describe a real, permanent, user-facing
   settings control for the platform's own Live Update eligibility —
-  `Settings.ACTION_MANAGE_APP_PROMOTED_NOTIFICATIONS` — that a production build could
+  `Settings.ACTION_APP_NOTIFICATION_PROMOTION_SETTINGS` — that a production build could
   deep-link users to (see "Not yet implemented" above); this is a distinct, general
   Android control that **cannot enable Samsung's separate "Live notifications for all
   apps" developer option**, so implementing it would not make Blick's Now Bar card

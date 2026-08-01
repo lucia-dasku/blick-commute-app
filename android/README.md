@@ -113,7 +113,7 @@ midnight in any zone ahead of UTC (e.g. Sweden), a mismatch against the worker's
 device-zone break condition that the Stop action's introduction surfaced.
 
 **Still not implemented**: the home-screen widget, and a production (non-debug) prompt
-deep-linking to `Settings.ACTION_MANAGE_APP_PROMOTED_NOTIFICATIONS` when promotion isn't
+deep-linking to `Settings.ACTION_APP_NOTIFICATION_PROMOTION_SETTINGS` when promotion isn't
 enabled — see the Known limitations entry on Live Update promotion below.
 
 ## Pinned versions and why
@@ -184,7 +184,7 @@ bump them there as needed.
   on any device — though this has not been separately confirmed to reflect Samsung's own
   developer-option gate one way or the other. Android separately exposes a real,
   permanent per-app settings control for its own Live Update eligibility —
-  `Settings.ACTION_MANAGE_APP_PROMOTED_NOTIFICATIONS` — which a production prompt could
+  `Settings.ACTION_APP_NOTIFICATION_PROMOTION_SETTINGS` — which a production prompt could
   deep-link to (not yet implemented; see "Still not implemented" above), but that is a
   distinct, general Android control: it cannot enable Samsung's separate "Live
   notifications for all apps" developer option, so it would not make Blick's Now Bar
@@ -314,6 +314,12 @@ reflecting the checker on first load and on every lifecycle resume, in both
 directions); and the existing `RoutineListScreenTest` instrumented cases were expanded
 from 3 to 6 to cover the one-routine explanation dialog. That is 23 further JVM tests
 and 3 further instrumented tests, for the 258 JVM / 12 instrumented total stated above.
+Three later sessions (a `BOOT_COMPLETED` receiver plus durable stale-snapshot storage;
+the promoted Live Update request, its Stop action, and a pause-today device-timezone
+fix; and re-checking notification availability on every active-window loop tick) added
+13 further JVM tests with no further instrumented ones, reaching the 271 JVM / 21
+instrumented total stated below — see `../docs/Blick_Project_Documentation.md`'s
+"Validation status" note for the full account of each.
 
 On a machine with a real JDK 17 and Android SDK (or Android Studio, which provides
 both), build with:
@@ -336,9 +342,9 @@ A complete local run — `testDebugUnitTest`, `lintDebug`, `assembleDebug`, and
 `connectedDebugAndroidTest` on the physical Lenovo TB350FU (Android 14) referenced
 above — has since been completed, using Android Studio's own bundled JDK. All 271 JVM
 `@Test` functions and all 21 instrumented `@Test` functions pass; `lintDebug` reports 0
-errors; the debug APK builds and installs; and the ongoing-notification loop, the
-routine details live-preview, and full routine management were all exercised manually
-on that same device.
+errors (42 warnings); the debug APK builds and installs; and the ongoing-notification
+loop, the routine details live-preview, and full routine management were all exercised
+manually on that same device.
 
 Actually compiling and running the 65 JVM / 3 instrumented tests that had only existed
 as source (see above) surfaced three genuine issues, all now fixed:
