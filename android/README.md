@@ -112,7 +112,9 @@ previous zone-less resolution could pause the wrong calendar day shortly after l
 midnight in any zone ahead of UTC (e.g. Sweden), a mismatch against the worker's own
 device-zone break condition that the Stop action's introduction surfaced.
 
-**Still not implemented**: the home-screen widget.
+**Still not implemented**: the home-screen widget, and a production (non-debug) prompt
+deep-linking to `Settings.ACTION_MANAGE_APP_PROMOTED_NOTIFICATIONS` when promotion isn't
+enabled — see the Known limitations entry on Live Update promotion below.
 
 ## Pinned versions and why
 
@@ -152,20 +154,34 @@ bump them there as needed.
 - **Attribution is not yet wired into a real screen.** `R.string.attribution_text`
   ("Based on information from Trafiklab.se") exists, but no About/Settings screen
   displays it yet — see `../docs/api-contract.md` §8 before shipping publicly.
-- **Lock-screen Live Update promotion is not guaranteed on every device**, though it has
-  now been visually confirmed working on a real Samsung Galaxy S23 Ultra (Android 16):
-  the promoted card appears on the lock screen, one stable notification refreshes about
-  every 30 seconds with up to two departures, it survives Blick being swiped from Recent
-  Apps, disappears at the routine's end time, and the Stop action (including tapped
-  directly from the locked screen) removes it immediately and correctly pauses the
-  routine for the rest of the day. Requesting promotion (`setRequestPromotedOngoing(true)`)
-  is unconditional, but actual promotion still requires Android 16+ and remains an
-  OS/OEM decision — this project's own connected-device verification target, a Lenovo
+- **Lock-screen Live Update promotion is not guaranteed on every device, and does not
+  currently appear by default even on the real Android 16 hardware tested.** On a real
+  Samsung Galaxy S23 Ultra, the promoted card only appeared after manually enabling
+  Settings → Developer options → "Live notifications for all apps." This is a
+  Samsung/One UI 8 beta-specific restriction, not a Blick bug or an Android platform
+  requirement: Android's own docs note that "OEMs can enforce additional criteria for
+  Live update eligibility," and Samsung has said third-party Now Bar access is
+  currently limited to a curated app list during the One UI 8 beta, expected to open to
+  everyone once One UI 8 ships stable — with no app-side change required when it does.
+  With that flag off (the default for an ordinary user today), Blick's
+  `setRequestPromotedOngoing(true)` request is simply not honored and the OS silently
+  posts the plain ongoing notification fallback instead — which is exactly what was
+  otherwise fully verified end to end on that same device (single notification, ~30s
+  refresh, up to two departures, lock-screen visibility, survives being swiped from
+  Recent Apps, disappears at window end, Stop works immediately including from the
+  locked screen and correctly pauses the routine, reboot recovery, no duplicate screens
+  on tap, disable/re-enable behavior). Requesting promotion is unconditional in Blick's
+  code, but actual promotion always requires Android 16+ and remains an OS/OEM decision
+  on top of that — this project's own connected-device verification target, a Lenovo
   TB350FU on Android 14, still only ever shows the plain ongoing notification fallback,
-  correctly and silently, with no way to visually confirm the promoted surface on that
-  older hardware. Use the debug notification section's promotion status line (backed by
-  `notification/PromotedNotificationChecker`) to verify eligibility on any device without
-  needing to see the actual card. `androidx.core` is deliberately held at 1.17.0 rather
+  correctly and silently, since promotion is an Android 16+ platform feature regardless
+  of OEM. Use the debug notification section's promotion status line (backed by
+  `notification/PromotedNotificationChecker`) to check `canPostPromotedNotifications()`
+  on any device — though this has not been separately confirmed to reflect the
+  Samsung-specific beta gate one way or the other. A real (non-debug) prompt deep-linking
+  to `Settings.ACTION_MANAGE_APP_PROMOTED_NOTIFICATIONS` — the actual, permanent
+  per-app settings control Android provides for this — is not yet implemented; see
+  "Still not implemented" above. `androidx.core` is deliberately held at 1.17.0 rather
   than the newest stable release for this same reason — see `libs.versions.toml`'s
   `coreKtx` entry.
 

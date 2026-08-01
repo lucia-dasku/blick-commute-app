@@ -57,9 +57,13 @@ planned.
 ## Status
 
 Foundation plus a real, largely end-to-end feature set, device-verified on a physical
-tablet and, for the promoted Live Update surface specifically, on a real Samsung Galaxy
-S23 Ultra (Android 16) — the promoted lock-screen card, its ~30-second refresh, and its
-Stop action have all been visually confirmed working there. The backend's contract,
+tablet and on a real Samsung Galaxy S23 Ultra (Android 16), where the full
+notification/scheduling loop (single stable notification, ~30-second refresh, lock-screen
+visibility, Stop action) was confirmed in its default, non-promoted state — the exact
+experience a regular user has today. The promoted Live Update / Now Bar card itself was
+also confirmed possible on that device, but only behind a Samsung/One UI 8 beta
+developer flag not enabled by default; see `android/README.md`'s Known limitations for
+why that's a Samsung rollout decision, not a Blick gap. The backend's contract,
 normalization, and caching logic are implemented and
 tested (183 passing tests). The Android side has routine creation (live SL stop search,
 transport mode/line/direction discovery, Room persistence), an always-visible
