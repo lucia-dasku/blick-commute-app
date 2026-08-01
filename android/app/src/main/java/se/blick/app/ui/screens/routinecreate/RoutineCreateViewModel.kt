@@ -28,6 +28,7 @@ import se.blick.app.domain.model.Site
 import se.blick.app.domain.model.TransportMode
 import se.blick.app.scheduling.RoutineScheduler
 import se.blick.app.ui.navigation.Routes
+import se.blick.app.widget.RoutineWidgetUpdater
 import java.time.DayOfWeek
 import java.time.LocalTime
 import javax.inject.Inject
@@ -110,6 +111,7 @@ class RoutineCreateViewModel @Inject constructor(
     private val directionOptionsSource: DirectionOptionsSource,
     private val routineRepository: RoutineRepository,
     private val routineScheduler: RoutineScheduler,
+    private val routineWidgetUpdater: RoutineWidgetUpdater,
     private val appSettingsDataStore: AppSettingsDataStore,
 ) : ViewModel() {
 
@@ -481,6 +483,7 @@ class RoutineCreateViewModel @Inject constructor(
                 // is safe to call unconditionally here even for a disabled routine (it cancels
                 // any existing scheduled work instead).
                 routineScheduler.scheduleActivation(toSave)
+                routineWidgetUpdater.reconcile()
                 _uiState.update { it.copy(isSaving = false, saveFailed = false) }
                 onSaved()
             } catch (e: CancellationException) {

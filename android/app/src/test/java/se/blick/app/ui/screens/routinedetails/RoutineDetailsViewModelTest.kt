@@ -47,6 +47,7 @@ import se.blick.app.notification.RoutineNotifier
 import se.blick.app.scheduling.DeviceZoneProvider
 import se.blick.app.scheduling.RoutineScheduler
 import se.blick.app.ui.navigation.Routes
+import se.blick.app.widget.RoutineWidgetUpdater
 import java.io.IOException
 import java.time.Clock
 import java.time.DayOfWeek
@@ -300,6 +301,27 @@ class RoutineDetailsViewModelTest {
         }
     }
 
+    /** Records every call — for proving toggleEnabled/pauseToday/resumeToday/deleteRoutine/
+     * reload each reconcile the widget. See the identical fake in `RoutineListViewModelTest`/
+     * `RoutineCreateViewModelTest` for why each ViewModel test file keeps its own copy. */
+    private class FakeRoutineWidgetUpdater : RoutineWidgetUpdater {
+        var reconcileCallCount = 0
+        var clearCallCount = 0
+        val updateCalls = mutableListOf<CommuteRoutine>()
+
+        override suspend fun updateWithDepartures(routine: CommuteRoutine, departuresState: LiveDeparturesState, now: Instant) {
+            updateCalls += routine
+        }
+
+        override suspend fun clear() {
+            clearCallCount++
+        }
+
+        override suspend fun reconcile() {
+            reconcileCallCount++
+        }
+    }
+
     /** Minimal in-memory [AppSettingsDataStore] fake — see the identical fake in
      * `RoutineCreateViewModelTest` for why each ViewModel test file keeps its own copy rather
      * than sharing one across packages. */
@@ -363,6 +385,7 @@ class RoutineDetailsViewModelTest {
         staleSnapshots: StaleSnapshotRepository = FakeStaleSnapshotRepository(),
         notifier: RoutineNotifier = FakeRoutineNotifier(),
         scheduler: RoutineScheduler = FakeRoutineScheduler(),
+        widgetUpdater: RoutineWidgetUpdater = FakeRoutineWidgetUpdater(),
         appSettingsDataStore: AppSettingsDataStore = FakeAppSettingsDataStore(),
         notificationAvailabilityChecker: NotificationAvailabilityChecker = FakeNotificationAvailabilityChecker(),
         promotedNotificationChecker: PromotedNotificationChecker = FakePromotedNotificationChecker(),
@@ -374,6 +397,7 @@ class RoutineDetailsViewModelTest {
         staleSnapshotRepository = staleSnapshots,
         routineNotifier = notifier,
         routineScheduler = scheduler,
+        routineWidgetUpdater = widgetUpdater,
         appSettingsDataStore = appSettingsDataStore,
         notificationAvailabilityChecker = notificationAvailabilityChecker,
         promotedNotificationChecker = promotedNotificationChecker,
@@ -394,6 +418,7 @@ class RoutineDetailsViewModelTest {
             staleSnapshotRepository = FakeStaleSnapshotRepository(),
             routineNotifier = FakeRoutineNotifier(),
             routineScheduler = FakeRoutineScheduler(),
+            routineWidgetUpdater = FakeRoutineWidgetUpdater(),
             appSettingsDataStore = FakeAppSettingsDataStore(),
             notificationAvailabilityChecker = FakeNotificationAvailabilityChecker(),
             promotedNotificationChecker = FakePromotedNotificationChecker(),
@@ -732,6 +757,7 @@ class RoutineDetailsViewModelTest {
             staleSnapshotRepository = FakeStaleSnapshotRepository(),
             routineNotifier = FakeRoutineNotifier(),
             routineScheduler = FakeRoutineScheduler(),
+            routineWidgetUpdater = FakeRoutineWidgetUpdater(),
             appSettingsDataStore = FakeAppSettingsDataStore(),
             notificationAvailabilityChecker = FakeNotificationAvailabilityChecker(),
             promotedNotificationChecker = FakePromotedNotificationChecker(),
@@ -986,6 +1012,76 @@ class RoutineDetailsViewModelTest {
             listOf("fresh"),
             (vm.uiState.value.departures as LiveDeparturesState.Live).snapshot.departures.map { it.departureId },
         )
+    }
+
+    // ---- Widget reconciliation (see se.blick.app.widget.RoutineWidgetUpdater.reconcile's own
+    // doc on why every routine-lifecycle mutation site outside the active-window worker's loop
+    // must call it) ----
+
+    @Test
+    fun `toggleEnabled reconciles the widget`() = runTest(dispatcher) {
+        val routine = sampleRoutine(enabled = true)
+        val widgetUpdater = FakeRoutineWidgetUpdater()
+        val vm = viewModel(routine = routine, widgetUpdater = widgetUpdater)
+        dispatcher.scheduler.advanceUntilIdle()
+
+        vm.toggleEnabled()
+        dispatcher.scheduler.advanceUntilIdle()
+
+        assertEquals(1, widgetUpdater.reconcileCallCount)
+    }
+
+    @Test
+    fun `pauseToday reconciles the widget`() = runTest(dispatcher) {
+        val routine = sampleRoutine()
+        val widgetUpdater = FakeRoutineWidgetUpdater()
+        val vm = viewModel(routine = routine, widgetUpdater = widgetUpdater)
+        dispatcher.scheduler.advanceUntilIdle()
+
+        vm.pauseToday()
+        dispatcher.scheduler.advanceUntilIdle()
+
+        assertEquals(1, widgetUpdater.reconcileCallCount)
+    }
+
+    @Test
+    fun `resumeToday reconciles the widget`() = runTest(dispatcher) {
+        val routine = sampleRoutine(pausedDate = LocalDate.now(clock))
+        val widgetUpdater = FakeRoutineWidgetUpdater()
+        val vm = viewModel(routine = routine, widgetUpdater = widgetUpdater)
+        dispatcher.scheduler.advanceUntilIdle()
+
+        vm.resumeToday()
+        dispatcher.scheduler.advanceUntilIdle()
+
+        assertEquals(1, widgetUpdater.reconcileCallCount)
+    }
+
+    @Test
+    fun `deleteRoutine reconciles the widget`() = runTest(dispatcher) {
+        val routine = sampleRoutine()
+        val widgetUpdater = FakeRoutineWidgetUpdater()
+        val vm = viewModel(routine = routine, widgetUpdater = widgetUpdater)
+        dispatcher.scheduler.advanceUntilIdle()
+
+        vm.deleteRoutine {}
+        dispatcher.scheduler.advanceUntilIdle()
+
+        assertEquals(1, widgetUpdater.reconcileCallCount)
+    }
+
+    @Test
+    fun `reload reconciles the widget`() = runTest(dispatcher) {
+        val routine = sampleRoutine(id = "r1")
+        val repository = FakeRoutineRepository(routine)
+        val widgetUpdater = FakeRoutineWidgetUpdater()
+        val vm = viewModel(routine = routine, routineId = "r1", routines = repository, widgetUpdater = widgetUpdater)
+        dispatcher.scheduler.advanceUntilIdle()
+
+        vm.reload()
+        dispatcher.scheduler.advanceUntilIdle()
+
+        assertEquals(1, widgetUpdater.reconcileCallCount)
     }
 
     // ---- Stale-snapshot identity regression (edit to a new site/line/direction/mode must

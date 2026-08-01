@@ -14,7 +14,9 @@ import org.junit.Test
 import se.blick.app.data.repository.RoutineRepository
 import se.blick.app.domain.model.CommuteRoutine
 import se.blick.app.domain.model.TransportMode
+import se.blick.app.domain.usecase.LiveDeparturesState
 import se.blick.app.scheduling.RoutineScheduler
+import se.blick.app.widget.RoutineWidgetUpdater
 import java.time.DayOfWeek
 import java.time.LocalDate
 import java.time.LocalTime
@@ -98,10 +100,31 @@ class RoutineListViewModelTest {
         }
     }
 
+    /** Records every call — for proving delete/pause reconcile the widget (see
+     * [se.blick.app.widget.RoutineWidgetUpdater.reconcile]'s own doc on why every routine-
+     * lifecycle mutation site outside the active-window worker must call this). */
+    private class FakeRoutineWidgetUpdater : RoutineWidgetUpdater {
+        var reconcileCallCount = 0
+        var clearCallCount = 0
+        val updateCalls = mutableListOf<CommuteRoutine>()
+
+        override suspend fun updateWithDepartures(routine: CommuteRoutine, departuresState: LiveDeparturesState, now: java.time.Instant) {
+            updateCalls += routine
+        }
+
+        override suspend fun clear() {
+            clearCallCount++
+        }
+
+        override suspend fun reconcile() {
+            reconcileCallCount++
+        }
+    }
+
     @Test
     fun `starts in loading state before the repository emits`() = runTest(dispatcher) {
         val repository = FakeRoutineRepository(listOf(sampleRoutine()))
-        val viewModel = RoutineListViewModel(repository, FakeRoutineScheduler())
+        val viewModel = RoutineListViewModel(repository, FakeRoutineScheduler(), FakeRoutineWidgetUpdater())
 
         assertTrue(viewModel.uiState.value.isLoading)
     }
@@ -110,7 +133,7 @@ class RoutineListViewModelTest {
     fun `reflects routines from the repository once collected`() = runTest(dispatcher) {
         val routine = sampleRoutine()
         val repository = FakeRoutineRepository(listOf(routine))
-        val viewModel = RoutineListViewModel(repository, FakeRoutineScheduler())
+        val viewModel = RoutineListViewModel(repository, FakeRoutineScheduler(), FakeRoutineWidgetUpdater())
 
         dispatcher.scheduler.advanceUntilIdle()
 
@@ -122,7 +145,7 @@ class RoutineListViewModelTest {
     fun `deleteRoutine delegates to the repository and the list updates`() = runTest(dispatcher) {
         val routine = sampleRoutine()
         val repository = FakeRoutineRepository(listOf(routine))
-        val viewModel = RoutineListViewModel(repository, FakeRoutineScheduler())
+        val viewModel = RoutineListViewModel(repository, FakeRoutineScheduler(), FakeRoutineWidgetUpdater())
         dispatcher.scheduler.advanceUntilIdle()
 
         viewModel.deleteRoutine(routine.id)
@@ -137,7 +160,7 @@ class RoutineListViewModelTest {
         val routine = sampleRoutine()
         val repository = FakeRoutineRepository(listOf(routine))
         val scheduler = FakeRoutineScheduler()
-        val viewModel = RoutineListViewModel(repository, scheduler)
+        val viewModel = RoutineListViewModel(repository, scheduler, FakeRoutineWidgetUpdater())
         dispatcher.scheduler.advanceUntilIdle()
 
         viewModel.deleteRoutine(routine.id)
@@ -147,10 +170,24 @@ class RoutineListViewModelTest {
     }
 
     @Test
+    fun `deleteRoutine reconciles the widget`() = runTest(dispatcher) {
+        val routine = sampleRoutine()
+        val repository = FakeRoutineRepository(listOf(routine))
+        val widgetUpdater = FakeRoutineWidgetUpdater()
+        val viewModel = RoutineListViewModel(repository, FakeRoutineScheduler(), widgetUpdater)
+        dispatcher.scheduler.advanceUntilIdle()
+
+        viewModel.deleteRoutine(routine.id)
+        dispatcher.scheduler.advanceUntilIdle()
+
+        assertEquals(1, widgetUpdater.reconcileCallCount)
+    }
+
+    @Test
     fun `pauseForToday records today's date against the routine id`() = runTest(dispatcher) {
         val routine = sampleRoutine()
         val repository = FakeRoutineRepository(listOf(routine))
-        val viewModel = RoutineListViewModel(repository, FakeRoutineScheduler())
+        val viewModel = RoutineListViewModel(repository, FakeRoutineScheduler(), FakeRoutineWidgetUpdater())
         dispatcher.scheduler.advanceUntilIdle()
 
         viewModel.pauseForToday(routine.id)
@@ -158,5 +195,19 @@ class RoutineListViewModelTest {
 
         assertEquals(routine.id, repository.pausedIds.single().first)
         assertEquals(LocalDate.now(), repository.pausedIds.single().second)
+    }
+
+    @Test
+    fun `pauseForToday reconciles the widget`() = runTest(dispatcher) {
+        val routine = sampleRoutine()
+        val repository = FakeRoutineRepository(listOf(routine))
+        val widgetUpdater = FakeRoutineWidgetUpdater()
+        val viewModel = RoutineListViewModel(repository, FakeRoutineScheduler(), widgetUpdater)
+        dispatcher.scheduler.advanceUntilIdle()
+
+        viewModel.pauseForToday(routine.id)
+        dispatcher.scheduler.advanceUntilIdle()
+
+        assertEquals(1, widgetUpdater.reconcileCallCount)
     }
 }

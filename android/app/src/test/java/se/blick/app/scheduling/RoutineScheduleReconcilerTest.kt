@@ -8,7 +8,10 @@ import org.junit.Test
 import se.blick.app.data.repository.RoutineRepository
 import se.blick.app.domain.model.CommuteRoutine
 import se.blick.app.domain.model.TransportMode
+import se.blick.app.domain.usecase.LiveDeparturesState
+import se.blick.app.widget.RoutineWidgetUpdater
 import java.time.DayOfWeek
+import java.time.Instant
 import java.time.LocalDate
 import java.time.LocalTime
 
@@ -55,6 +58,18 @@ class RoutineScheduleReconcilerTest {
         override fun cancelActivation(routineId: String) = Unit
     }
 
+    /** Records every call — for proving `reconcileAll` also reconciles the widget on every run
+     * (process start, timezone change, and reboot via `BootCompletedReceiver`, all of which call
+     * this one function — see [RoutineScheduleReconciler]'s own doc). */
+    private class RecordingWidgetUpdater : RoutineWidgetUpdater {
+        var reconcileCallCount = 0
+        override suspend fun updateWithDepartures(routine: CommuteRoutine, departuresState: LiveDeparturesState, now: Instant) = Unit
+        override suspend fun clear() = Unit
+        override suspend fun reconcile() {
+            reconcileCallCount++
+        }
+    }
+
     @Test
     fun `reconcileAll schedules only enabled routines`() = runTest {
         val repository = FakeRoutineRepository(
@@ -62,7 +77,7 @@ class RoutineScheduleReconcilerTest {
         )
         val scheduler = RecordingScheduler()
 
-        RoutineScheduleReconciler(repository, scheduler).reconcileAll()
+        RoutineScheduleReconciler(repository, scheduler, RecordingWidgetUpdater()).reconcileAll()
 
         assertEquals(listOf("r1", "r3"), scheduler.scheduled)
     }
@@ -72,7 +87,7 @@ class RoutineScheduleReconcilerTest {
         val repository = FakeRoutineRepository(emptyList())
         val scheduler = RecordingScheduler()
 
-        RoutineScheduleReconciler(repository, scheduler).reconcileAll()
+        RoutineScheduleReconciler(repository, scheduler, RecordingWidgetUpdater()).reconcileAll()
 
         assertEquals(emptyList<String>(), scheduler.scheduled)
     }
@@ -85,11 +100,23 @@ class RoutineScheduleReconcilerTest {
         // start, then again on a timezone change) safe.
         val repository = FakeRoutineRepository(listOf(routine("r1", enabled = true)))
         val scheduler = RecordingScheduler()
-        val reconciler = RoutineScheduleReconciler(repository, scheduler)
+        val reconciler = RoutineScheduleReconciler(repository, scheduler, RecordingWidgetUpdater())
 
         reconciler.reconcileAll()
         reconciler.reconcileAll()
 
         assertEquals(listOf("r1", "r1"), scheduler.scheduled)
+    }
+
+    @Test
+    fun `reconcileAll also reconciles the widget every time it runs`() = runTest {
+        val repository = FakeRoutineRepository(listOf(routine("r1", enabled = true)))
+        val widgetUpdater = RecordingWidgetUpdater()
+        val reconciler = RoutineScheduleReconciler(repository, RecordingScheduler(), widgetUpdater)
+
+        reconciler.reconcileAll()
+        reconciler.reconcileAll()
+
+        assertEquals(2, widgetUpdater.reconcileCallCount)
     }
 }

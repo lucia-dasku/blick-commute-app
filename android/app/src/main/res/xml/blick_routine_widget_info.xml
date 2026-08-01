@@ -1,0 +1,25 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!--
+    android:updatePeriodMillis="0" is deliberate and load-bearing — Android's own widget-update
+    scheduler must never fire here. Every update is pushed programmatically by
+    RoutineWidgetUpdater, driven only by RoutineActiveWindowWorker's existing ~30-second loop and
+    the routine-lifecycle call sites listed on RoutineWidgetUpdater.reconcile — see that
+    interface's own doc. android:resizeMode="horizontal|vertical" plus the min/target/max
+    dimensions below support ordinary resizing on every launcher; GlanceAppWidget's default
+    SizeMode.Exact (see BlickRoutineWidget) recomposes with the live exact size on every resize,
+    so no fixed responsive-size set is declared.
+-->
+<appwidget-provider xmlns:android="http://schemas.android.com/apk/res/android"
+    android:minWidth="180dp"
+    android:minHeight="90dp"
+    android:targetCellWidth="3"
+    android:targetCellHeight="2"
+    android:minResizeWidth="120dp"
+    android:minResizeHeight="60dp"
+    android:maxResizeWidth="360dp"
+    android:maxResizeHeight="270dp"
+    android:updatePeriodMillis="0"
+    android:initialLayout="@layout/glance_default_loading_layout"
+    android:resizeMode="horizontal|vertical"
+    android:widgetCategory="home_screen"
+    android:description="@string/widget_description" />

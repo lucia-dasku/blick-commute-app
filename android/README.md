@@ -154,7 +154,44 @@ adaptive launcher icon also gained a `<monochrome>` layer (`ic_launcher_monochro
 for Android 13+ themed-icon support, and the manifest now declares `android:roundIcon`
 pointing at the `ic_launcher_round` resource that already existed but was unused.
 
-**Still not implemented**: the home-screen widget.
+A home-screen widget (`widget/BlickRoutineWidget`, Jetpack Glance — `androidx.glance:glance-appwidget`
+1.1.1, the latest stable release) is now implemented, deliberately reusing every existing
+piece of machinery rather than building a second one: it shows the same routine name,
+station and direction, next and following departure (a minute-only countdown always
+recomputed against the current instant via the same `countdownMinutes` function the
+notification uses — never a fixed or cached value), and the same
+loading/live/stale/offline/unavailable/no-upcoming-departures states, with a cancelled
+departure flagged the same way. `RoutineWidgetMapper` is the widget's exact counterpart
+to `RoutineNotificationMapper`, applying the identical expired-departure filter (a
+departure whose effective time has passed by render time is dropped, exactly like the
+notification) to the identical `LiveDeparturesState` input. `RoutineWidgetUpdater`
+(`updateWithDepartures`/`clear`/`reconcile`) is called from `RoutineActiveWindowWorker`'s
+existing ~30-second loop — right after the same tick's `RoutineNotifier.showOrUpdate`
+call, using the exact same already-fetched `CommuteRoutine`/`LiveDeparturesState` — and
+from its `finally` block (widget cleared exactly when the notification is removed); no
+second worker, timer, foreground service, or departure engine exists. Every other
+routine-lifecycle mutation (create/edit save, enable/disable, pause/resume, delete) and
+`RoutineScheduleReconciler.reconcileAll()` (covering process start, device-timezone
+change, and reboot via `BootCompletedReceiver`) call `RoutineWidgetUpdater.reconcile()`,
+which reuses `NextOccurrenceCalculator` (the same active-window calculation the worker
+and scheduler already use) to decide the correct resulting state from scratch. Outside
+any active window the widget reads exactly **"No active commute."**
+(`R.string.widget_no_active_commute`). Tapping the widget opens the routine details
+screen via `routineDetailsTapIntent`, reusing `MainActivity`'s existing
+`RoutineNotificationIds.EXTRA_ROUTINE_ID` navigation contract unchanged — the same one
+the notification's own tap already uses. All installed widget instances update together
+(`GlanceAppWidgetManager.getGlanceIds` + `BlickRoutineWidget.updateAll`); state
+persists per-instance via Glance's built-in `PreferencesGlanceStateDefinition`. The
+provider (`res/xml/blick_routine_widget_info.xml`) sets `android:updatePeriodMillis="0"`
+deliberately — Android's own widget-update scheduler is never used — and declares both
+the legacy (`minWidth`/`minHeight`/`minResizeWidth`/`minResizeHeight`) and Android 12+
+(`targetCellWidth`/`targetCellHeight`/`maxResizeWidth`/`maxResizeHeight`) sizing
+attributes for ordinary resizing on every supported launcher; `GlanceAppWidget`'s default
+`SizeMode.Exact` recomposes with the live exact size on every resize, so no fixed
+responsive-size set is declared. There is no widget configuration screen — with the
+existing first-beta one-routine limit, every instance simply mirrors whichever one
+routine is currently enabled. The existing notification and Android 16 Live Update
+behaviour is completely unchanged; disruptions remain out of scope for this milestone.
 
 ## Pinned versions and why
 
@@ -236,6 +273,12 @@ bump them there as needed.
   Blick's Now Bar card generally available on Samsung devices either way. `androidx.core` is
   deliberately held at 1.17.0 rather than the newest stable release for this same
   reason — see `libs.versions.toml`'s `coreKtx` entry.
+- **The home-screen widget has no configuration screen and shows one shared state across
+  every placed instance** — with the existing first-beta one-routine limit, there is only
+  ever one routine to show, so every instance simply mirrors it (or "No active commute.");
+  this would need revisiting if the one-routine limit is ever lifted. Its actual on-screen
+  rendering has also not been visually confirmed on a real launcher — see the Full
+  verification pass section's own note on why.
 
 ## Pointing at a deployed backend
 
@@ -381,7 +424,15 @@ explicit decision that a saved routine must never transfer or restore onto a new
 by any mechanism — see their own doc comments — since `allowBackup="false"` alone
 doesn't reliably disable Android 12+ device-to-device transfer on every OEM) and a
 monochrome launcher-icon layer plus `android:roundIcon` for themed-icon support,
-reaching the 280 JVM / 24 instrumented total stated below — see
+reaching 280 JVM / 24 instrumented. A further session then implemented the home-screen
+widget itself (`RoutineWidgetMapper`, `RoutineWidgetUpdater`, `BlickRoutineWidget` — see
+the Status section above for the full design), adding 53 further JVM `@Test` functions
+(mapper state mapping, countdown recalculation, expired-departure filtering,
+active/inactive reconciliation transitions, Preferences round-trip persistence, tap-intent
+contents, and every routine-lifecycle call site's widget-update/reconcile wiring) with no
+further instrumented tests (all widget tests are plain JVM, matching this project's
+stated preference — see `libs.versions.toml`'s `robolectric` entry), reaching the 333
+JVM / 24 instrumented total stated below — see
 `../docs/Blick_Project_Documentation.md`'s "Validation status" note for the full account
 of each.
 
@@ -404,14 +455,33 @@ clone builds without Android Studio or a pre-existing local Gradle install.
 
 A complete local run — `testDebugUnitTest`, `lintDebug`, `assembleDebug`, and
 `connectedDebugAndroidTest` on the physical Lenovo TB350FU (Android 14) referenced
-above — has since been completed, using Android Studio's own bundled JDK. All 280 JVM
+above — has since been completed, using Android Studio's own bundled JDK. All 333 JVM
 `@Test` functions and all 24 instrumented `@Test` functions pass; `lintDebug` reports 0
-errors (39 warnings, including two expected, already-guarded `InlinedApi` findings — the
+errors (43 warnings: two expected, already-guarded `InlinedApi` findings — the
 API-36 `ACTION_APP_NOTIFICATION_PROMOTION_SETTINGS` deep-link and the API-33
-`POST_NOTIFICATIONS` permission constant); the debug APK builds
+`POST_NOTIFICATIONS` permission constant — plus four expected `UnusedAttribute` findings
+on `res/xml/blick_routine_widget_info.xml`'s Android-12+-only sizing attributes, present
+alongside their legacy fallbacks specifically so both old and new launchers get correct
+resize behaviour, exactly like Google's own official widget-provider XML example); the
+debug APK builds
 and installs; and the ongoing-notification
 loop, the routine details live-preview, and full routine management were all exercised
 manually on that same device.
+
+**Widget verification limitation, stated plainly:** installing the debug APK on that
+same device confirmed the widget provider registers correctly with the system launcher
+(it appears in the launcher's own widget picker as "Blick", correct 2×1 declared size,
+correct app icon, and the exact `widget_description` string rendered by the OS from the
+provider XML) — but placing the widget onto a home screen to visually confirm its actual
+rendered content (the "No active commute." idle state, and a live departures state) was
+not achieved: this device's OEM launcher (Lenovo's `TabUILauncher`) did not respond to
+scripted drag-and-drop widget placement (`adb shell input draganddrop`) the way the
+stock Pixel Launcher does, and manually placing a widget requires touch interaction this
+verification pass could not perform. The widget's actual UI code was therefore verified
+by compilation, lint, and its full JVM test suite (mapping, countdown, filtering,
+persistence round-trip, and tap-intent contents) — not by eyes-on confirmation of pixels
+on a real launcher. This should be confirmed manually (place the widget, watch it through
+a real active window) before relying on its visual output.
 
 Actually compiling and running the 65 JVM / 3 instrumented tests that had only existed
 as source (see above) surfaced three genuine issues, all now fixed:

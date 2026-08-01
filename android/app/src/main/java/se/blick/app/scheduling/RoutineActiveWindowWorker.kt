@@ -24,6 +24,7 @@ import se.blick.app.notification.RoutineNotificationBuilder
 import se.blick.app.notification.RoutineNotificationIds
 import se.blick.app.notification.RoutineNotificationMapper
 import se.blick.app.notification.RoutineNotifier
+import se.blick.app.widget.RoutineWidgetUpdater
 import java.time.Clock
 import java.time.ZonedDateTime
 
@@ -108,6 +109,7 @@ class RoutineActiveWindowWorker @AssistedInject constructor(
     private val staleSnapshotRepository: StaleSnapshotRepository,
     private val routineNotifier: RoutineNotifier,
     private val routineNotificationBuilder: RoutineNotificationBuilder,
+    private val routineWidgetUpdater: RoutineWidgetUpdater,
     private val routineScheduler: RoutineScheduler,
     private val notificationAvailabilityChecker: NotificationAvailabilityChecker,
     private val clock: Clock,
@@ -162,13 +164,17 @@ class RoutineActiveWindowWorker @AssistedInject constructor(
                     staleSnapshotRepository.save(routineId, identity, departuresState.snapshot)
                 }
 
-                val model = RoutineNotificationMapper.map(current, departuresState, clock.instant())
+                val now = clock.instant()
+                val model = RoutineNotificationMapper.map(current, departuresState, now)
                 // The real NotificationPostResult is intentionally not surfaced anywhere from
                 // here (there is no UI attached to a background worker to report it to) --
                 // but it is also never used to claim success; showOrUpdate itself already
                 // fails safely (see AndroidRoutineNotifier) if app notifications or the Blick
                 // channel are disabled, which this worker relies on rather than duplicating.
                 routineNotifier.showOrUpdate(model)
+                // Same tick, same already-fetched departuresState -- no separate fetch, no
+                // separate timer (see RoutineWidgetUpdater's own doc).
+                routineWidgetUpdater.updateWithDepartures(current, departuresState, now)
 
                 delay(ACTIVE_WINDOW_REFRESH_INTERVAL_MS)
             }
@@ -186,7 +192,10 @@ class RoutineActiveWindowWorker @AssistedInject constructor(
             // run rather than an unhandled crash with no next occurrence ever scheduled. Falls
             // through to the reschedule call below, same as a normal window-end completion.
         } finally {
-            if (enteredForeground) routineNotifier.remove()
+            if (enteredForeground) {
+                routineNotifier.remove()
+                routineWidgetUpdater.clear()
+            }
         }
 
         rescheduleNext(routineId)

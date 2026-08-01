@@ -132,6 +132,9 @@ dependencies {
     ksp(libs.hilt.compiler)
     ksp(libs.androidx.hilt.compiler)
 
+    // Home-screen widget milestone -- see widget/BlickRoutineWidget.kt.
+    implementation(libs.androidx.glance.appwidget)
+
     testImplementation(libs.junit)
     testImplementation(libs.mockk)
     testImplementation(libs.kotlinx.coroutines.test)

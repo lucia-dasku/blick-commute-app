@@ -18,13 +18,19 @@ what is actually built today; where the two disagree, this section wins.
 
 **Validation status of this update, stated plainly up front:** a complete local run —
 `testDebugUnitTest`, `lintDebug`, `assembleDebug`, and `connectedDebugAndroidTest` on a
-physical Lenovo TB350FU (Android 14) — has now passed in full: all 280 JVM `@Test`
-functions and all 24 instrumented `@Test` functions, `lintDebug` with 0 errors (39
-warnings, including two expected, already-guarded `InlinedApi` findings — the API-36
+physical Lenovo TB350FU (Android 14) — has now passed in full: all 333 JVM `@Test`
+functions and all 24 instrumented `@Test` functions, `lintDebug` with 0 errors (43
+warnings: two expected, already-guarded `InlinedApi` findings — the API-36
 `ACTION_APP_NOTIFICATION_PROMOTION_SETTINGS` deep-link and the API-33
-`POST_NOTIFICATIONS` permission constant), and a working debug APK,
+`POST_NOTIFICATIONS` permission constant — plus four expected `UnusedAttribute` findings
+on the widget provider XML's Android-12+-only sizing attributes, kept alongside their
+legacy fallbacks deliberately), and a working debug APK,
 with the ongoing-notification loop, routine details live-preview, and full routine
-management additionally exercised manually on that same device.
+management additionally exercised manually on that same device. **The home-screen
+widget's own on-screen rendering has not yet been visually confirmed** — see
+`android/README.md`'s Full verification pass section for exactly why and what was
+confirmed instead (provider registration, description, icon, and declared size, plus its
+full JVM test suite).
 
 Getting there took three work sessions of source beyond the earlier 193-JVM-test
 baseline. First: the FAB restoration, the Routine Details 30-second auto-refresh, the
@@ -96,8 +102,16 @@ disruptions overclaim in `docs/api-contract.md`; and added an explicit backup/tr
 decision (`xml/data_extraction_rules.xml`, `xml/full_backup_content.xml`) that a saved
 routine must never transfer or restore onto a new device by any mechanism, and a
 monochrome launcher-icon layer with `android:roundIcon`. This added 2 further JVM
-`@Test` functions, bringing the fully verified total to 280 JVM / 24 instrumented,
-stated above.
+`@Test` functions, reaching 280 JVM / 24 instrumented. A further session then
+implemented the home-screen widget itself: `RoutineWidgetMapper` (the widget's exact
+counterpart to `RoutineNotificationMapper`, reusing the same `LiveDeparturesState` input,
+`countdownMinutes` recomputation, and expired-departure filter), `RoutineWidgetUpdater`
+(driven only by `RoutineActiveWindowWorker`'s existing ~30-second loop and every
+routine-lifecycle mutation site — no second worker, timer, foreground service, or
+departure engine), and `BlickRoutineWidget` (Jetpack Glance, `updatePeriodMillis="0"` so
+Android's own widget-update scheduler is never used). This added 53 further JVM `@Test`
+functions with no further instrumented ones, bringing the fully verified total to 333
+JVM / 24 instrumented, stated above.
 
 **Implemented today (Android client + backend):**
 
@@ -227,6 +241,18 @@ stated above.
 - A monochrome layer (`ic_launcher_monochrome.xml`) on the adaptive launcher icon for
   Android 13+ themed-icon support, and `android:roundIcon` in the manifest, now pointing
   at the `ic_launcher_round` adaptive-icon resource that already existed but was unused.
+- A home-screen widget (`widget/BlickRoutineWidget`, built with Jetpack Glance) — see
+  "Home-screen widget" under §8 below for the full functional description. Deliberately
+  reuses every existing piece rather than building a second departure engine:
+  `RoutineWidgetMapper` mirrors `RoutineNotificationMapper` exactly (same
+  `LiveDeparturesState` input, same `countdownMinutes` recomputation, same
+  expired-departure filtering), and `RoutineWidgetUpdater` is driven only by
+  `RoutineActiveWindowWorker`'s existing ~30-second loop plus every routine-lifecycle
+  mutation site — no second worker, timer, foreground service, or refresh mechanism.
+  Android's own widget-update scheduler is explicitly disabled
+  (`updatePeriodMillis="0"`). Its actual on-screen rendering has not yet been visually
+  confirmed on a real launcher — see `android/README.md`'s Full verification pass
+  section for why, and for the complete design account.
 
 **Not yet implemented** (described in the sections below purely as the plan):
 
@@ -236,7 +262,6 @@ stated above.
   DTO, and `DisruptionRepository`/`RemoteDisruptionRepository` — but nothing in the
   notification, the routine details screen, or any ViewModel calls that repository yet,
   so no disruption message ever reaches the user today.
-- A home-screen widget.
 - Exact-time activation — see "Active-window scheduling" below for why this is
   deliberately best-effort, not exact.
 
@@ -514,9 +539,27 @@ where exactly it appears, and any OEM-specific eligibility rules) is controlled 
 Android and, on Samsung devices, One UI — Blick requests promotion but cannot guarantee
 that every device grants it.
 
-### Future widget
+### Home-screen widget
 
-A home-screen widget is outside the first MVP. A later Android version may add a widget that displays the saved route and next departures, provides manual refresh, and opens the routine when tapped.
+Implemented (`widget/BlickRoutineWidget`, Jetpack Glance — see "Current implementation
+status" above and `android/README.md`'s Status section for the full account; its actual
+on-screen rendering has not yet been visually confirmed, only its provider registration,
+compilation, and full JVM test suite — see `android/README.md`'s Full verification pass
+section). Shows the saved routine's name, station, and direction; the next and following
+departure as a minute-only countdown recomputed at render time (never a fixed or cached
+value, reusing the exact same `countdownMinutes` function and expired-departure filter
+the notification uses); and the same loading/live/stale/offline/unavailable/
+no-upcoming-departures states, with a cancelled departure flagged the same way. Outside
+any active window it reads exactly "No active commute." Tapping it opens the routine
+details screen, reusing `MainActivity`'s existing notification-tap navigation contract
+unchanged. Updated only from `RoutineActiveWindowWorker`'s existing ~30-second active-
+window loop and from every routine-lifecycle mutation (create/edit, enable/disable,
+pause/resume, delete, and reboot/timezone/process-start reconciliation) — no second
+worker, timer, foreground service, or departure-fetching engine, and Android's own
+widget-update scheduler is explicitly disabled (`updatePeriodMillis="0"`). All installed
+widget instances update together; there is no per-instance configuration screen, since
+the existing first-beta one-routine limit means every instance has only one possible
+routine to show.
 
 ---
 
@@ -644,8 +687,11 @@ correction pass fixing that deep-link's missing Android-16+ gate (`shouldOfferLi
 added 3 further JVM `@Test` functions with no further instrumented ones, reaching 278
 JVM / 24 instrumented. A second correction pass, fixing the settings link's remaining
 silent-failure fallback case (`launchLiveUpdateSettings`), added 2 further JVM `@Test`
-functions with no further instrumented ones —
-**280 JVM `@Test` functions and 24 instrumented `@Test` functions now exist in source,
+functions with no further instrumented ones, reaching 280 JVM / 24 instrumented. The
+home-screen widget implementation (`RoutineWidgetMapper`, `RoutineWidgetUpdater`,
+`BlickRoutineWidget`) added 53 further JVM `@Test` functions with no further instrumented
+ones —
+**333 JVM `@Test` functions and 24 instrumented `@Test` functions now exist in source,
 and all of them pass.** See `android/README.md`'s Build section for the exact toolchain
 versions, the up-to-date per-file test breakdown, and the real issues that first full
 run found and fixed (including a genuine production bug, not just test-suite
@@ -1295,8 +1341,7 @@ Outside the MVP:
 - walking-time advice;
 - predictive "Can I catch it?" messages;
 - aggressive alert sounds;
-- smartwatch support;
-- home-screen widget.
+- smartwatch support.
 
 ---
 
@@ -1334,7 +1379,6 @@ No TV, casting, pairing, or cloud-synchronization code is included now.
 
 - multiple visible routines;
 - separate morning and evening schedules;
-- Android home-screen widget;
 - holiday and temporary schedule controls;
 - improved direction discovery;
 - accessibility and theme options;

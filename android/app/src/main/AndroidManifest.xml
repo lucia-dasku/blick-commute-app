@@ -107,5 +107,24 @@
             android:name=".notification.StopRoutineNotificationReceiver"
             android:exported="false"
             android:enabled="true" />
+
+        <!--
+            See widget/BlickRoutineWidget.kt's own doc — exported="true" is required for the
+            launcher to deliver APPWIDGET_UPDATE broadcasts (not a real attack surface: the OS
+            enforces the BIND_APPWIDGET permission on binding a widget instance to this
+            provider regardless). android:updatePeriodMillis is set to 0 in
+            res/xml/blick_routine_widget_info.xml specifically so Android's own widget-update
+            scheduler is never used — every update is pushed by RoutineWidgetUpdater instead.
+        -->
+        <receiver
+            android:name=".widget.BlickRoutineWidgetReceiver"
+            android:exported="true">
+            <intent-filter>
+                <action android:name="android.appwidget.action.APPWIDGET_UPDATE" />
+            </intent-filter>
+            <meta-data
+                android:name="android.appwidget.provider"
+                android:resource="@xml/blick_routine_widget_info" />
+        </receiver>
     </application>
 </manifest>

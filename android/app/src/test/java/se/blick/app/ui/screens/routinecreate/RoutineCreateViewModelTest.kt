@@ -26,9 +26,12 @@ import se.blick.app.data.repository.StopRepository
 import se.blick.app.domain.model.CommuteRoutine
 import se.blick.app.domain.model.Site
 import se.blick.app.domain.model.TransportMode
+import se.blick.app.domain.usecase.LiveDeparturesState
 import se.blick.app.scheduling.RoutineScheduler
 import se.blick.app.ui.navigation.Routes
+import se.blick.app.widget.RoutineWidgetUpdater
 import java.time.DayOfWeek
+import java.time.Instant
 import java.time.LocalDate
 import java.time.LocalTime
 
@@ -255,6 +258,27 @@ class RoutineCreateViewModelTest {
         }
     }
 
+    /** Records every call — for proving save() reconciles the widget. See the identical fake
+     * in `RoutineDetailsViewModelTest`/`RoutineListViewModelTest` for why each ViewModel test
+     * file keeps its own copy. */
+    private class FakeRoutineWidgetUpdater : RoutineWidgetUpdater {
+        var reconcileCallCount = 0
+        var clearCallCount = 0
+        val updateCalls = mutableListOf<CommuteRoutine>()
+
+        override suspend fun updateWithDepartures(routine: CommuteRoutine, departuresState: LiveDeparturesState, now: Instant) {
+            updateCalls += routine
+        }
+
+        override suspend fun clear() {
+            clearCallCount++
+        }
+
+        override suspend fun reconcile() {
+            reconcileCallCount++
+        }
+    }
+
     /** Minimal in-memory [AppSettingsDataStore] fake — see the identical fake in
      * `RoutineDetailsViewModelTest` for why each ViewModel test file keeps its own copy rather
      * than sharing one across packages. */
@@ -277,6 +301,7 @@ class RoutineCreateViewModelTest {
         directions: DirectionOptionsSource = FakeDirectionOptionsSource(mapOf(9145L to listOf(busOption, metroOption))),
         routines: RoutineRepository = FakeRoutineRepository(),
         scheduler: RoutineScheduler = FakeRoutineScheduler(),
+        widgetUpdater: RoutineWidgetUpdater = FakeRoutineWidgetUpdater(),
         appSettingsDataStore: AppSettingsDataStore = FakeAppSettingsDataStore(),
         routineId: String? = null,
     ) = RoutineCreateViewModel(
@@ -285,6 +310,7 @@ class RoutineCreateViewModelTest {
         directions,
         routines,
         scheduler,
+        widgetUpdater,
         appSettingsDataStore,
     )
 
@@ -618,6 +644,25 @@ class RoutineCreateViewModelTest {
         assertEquals(metroOption.lineId, routine.lineId)
         assertEquals(metroOption.directionCode, routine.directionCode)
         assertEquals(setOf(DayOfWeek.MONDAY, DayOfWeek.TUESDAY), routine.activeDays)
+    }
+
+    @Test
+    fun `a successful save reconciles the widget`() = runTest(dispatcher) {
+        val widgetUpdater = FakeRoutineWidgetUpdater()
+        val vm = viewModel(widgetUpdater = widgetUpdater)
+
+        vm.selectSite(fruangen)
+        dispatcher.scheduler.advanceUntilIdle()
+        vm.selectTransportMode(TransportMode.METRO)
+        vm.selectDirection(metroOption)
+        vm.toggleDay(DayOfWeek.MONDAY)
+        vm.setStartTime(LocalTime.of(7, 0))
+        vm.setEndTime(LocalTime.of(9, 0))
+
+        vm.save {}
+        dispatcher.scheduler.advanceUntilIdle()
+
+        assertEquals(1, widgetUpdater.reconcileCallCount)
     }
 
     @Test

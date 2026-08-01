@@ -42,6 +42,8 @@ import se.blick.app.notification.RoutineNotificationBuilder
 import se.blick.app.notification.RoutineNotificationContent
 import se.blick.app.notification.RoutineNotificationModel
 import se.blick.app.notification.RoutineNotifier
+import se.blick.app.domain.usecase.LiveDeparturesState
+import se.blick.app.widget.RoutineWidgetUpdater
 import java.io.IOException
 import java.time.Clock
 import java.time.DayOfWeek
@@ -176,6 +178,25 @@ class RoutineActiveWindowWorkerTest {
         }
     }
 
+    /** Records every widget-update/clear call — for proving each loop tick updates the widget
+     * with the exact same [CommuteRoutine]/[LiveDeparturesState] already fetched for the
+     * notification (no separate fetch), and that the `finally` block clears the widget exactly
+     * when [RoutineNotifier.remove] also runs. */
+    private class RecordingWidgetUpdater : RoutineWidgetUpdater {
+        val updateCalls = mutableListOf<Pair<CommuteRoutine, LiveDeparturesState>>()
+        var clearCallCount = 0
+        var reconcileCallCount = 0
+        override suspend fun updateWithDepartures(routine: CommuteRoutine, departuresState: LiveDeparturesState, now: Instant) {
+            updateCalls += routine to departuresState
+        }
+        override suspend fun clear() {
+            clearCallCount++
+        }
+        override suspend fun reconcile() {
+            reconcileCallCount++
+        }
+    }
+
     private class RecordingScheduler : RoutineScheduler {
         val scheduledRoutines = mutableListOf<CommuteRoutine>()
         override fun scheduleActivation(routine: CommuteRoutine) {
@@ -238,6 +259,7 @@ class RoutineActiveWindowWorkerTest {
         notificationBuilder: RoutineNotificationBuilder = this.notificationBuilder,
         deviceZoneProvider: DeviceZoneProvider = zoneProvider,
         staleSnapshotRepository: StaleSnapshotRepository = FakeStaleSnapshotRepository(),
+        widgetUpdater: RoutineWidgetUpdater = RecordingWidgetUpdater(),
     ): RoutineActiveWindowWorker =
         TestListenableWorkerBuilder<RoutineActiveWindowWorker>(context)
             .setInputData(workDataOf(RoutineActiveWindowWorker.KEY_ROUTINE_ID to routineId))
@@ -254,6 +276,7 @@ class RoutineActiveWindowWorkerTest {
                     staleSnapshotRepository,
                     notifier,
                     notificationBuilder,
+                    widgetUpdater,
                     scheduler,
                     notificationAvailabilityChecker,
                     clock,
@@ -275,6 +298,7 @@ class RoutineActiveWindowWorkerTest {
                         FakeStaleSnapshotRepository(),
                         RecordingNotifier(),
                         notificationBuilder,
+                        RecordingWidgetUpdater(),
                         RecordingScheduler(),
                         FakeNotificationAvailabilityChecker(),
                         Clock.systemUTC(),
@@ -361,6 +385,87 @@ class RoutineActiveWindowWorkerTest {
         assertEquals(2, notifier.shown.size)
         assertEquals(1, notifier.removeCallCount)
         assertEquals(1, scheduler.scheduledRoutines.size)
+    }
+
+    // ---- Widget updates mirror the notification loop exactly (same tick, same already-fetched
+    // departuresState -- no separate fetch, no separate timer; see RoutineWidgetUpdater's doc) ----
+
+    @Test
+    fun `each tick updates the widget with the same routine and departures state as the notification`() = runTest {
+        val clock = TickingClock(Instant.parse("2026-07-27T05:00:00Z"), zone) // 07:00 local
+        val routine = routine()
+        val repository = ScriptedRoutineRepository(clock) { routine }
+        val notifier = RecordingNotifier()
+        val widgetUpdater = RecordingWidgetUpdater()
+        val departures = FakeDepartureRepository { DeparturesResult(clock.instant(), 9145, listOf(sampleDeparture()), emptyList()) }
+
+        val worker = buildWorker(
+            routine.id,
+            repository,
+            GetLiveDeparturesUseCase(departures, clock),
+            notifier,
+            RecordingScheduler(),
+            clock,
+            widgetUpdater = widgetUpdater,
+        )
+        worker.doWork()
+
+        // Same tick count as the notification (see the test above), and each one carries a
+        // real Live state -- proving the exact fetched departuresState was reused, not a
+        // second independent fetch.
+        assertEquals(2, widgetUpdater.updateCalls.size)
+        assertTrue(widgetUpdater.updateCalls.all { (r, state) -> r.id == routine.id && state is LiveDeparturesState.Live })
+    }
+
+    @Test
+    fun `the widget is cleared exactly when the notification is removed, at window end`() = runTest {
+        val clock = TickingClock(Instant.parse("2026-07-27T05:00:00Z"), zone)
+        val routine = routine()
+        val repository = ScriptedRoutineRepository(clock) { routine }
+        val notifier = RecordingNotifier()
+        val widgetUpdater = RecordingWidgetUpdater()
+        val departures = FakeDepartureRepository { DeparturesResult(clock.instant(), 9145, listOf(sampleDeparture()), emptyList()) }
+
+        val worker = buildWorker(
+            routine.id,
+            repository,
+            GetLiveDeparturesUseCase(departures, clock),
+            notifier,
+            RecordingScheduler(),
+            clock,
+            widgetUpdater = widgetUpdater,
+        )
+        worker.doWork()
+
+        assertEquals(1, notifier.removeCallCount)
+        assertEquals(1, widgetUpdater.clearCallCount)
+    }
+
+    @Test
+    fun `notifications unavailable -- the widget is never updated and never cleared`() = runTest {
+        val clock = TickingClock(Instant.parse("2026-07-27T05:00:00Z"), zone)
+        val routine = routine()
+        val repository = ScriptedRoutineRepository(clock) { routine }
+        val notifier = RecordingNotifier()
+        val widgetUpdater = RecordingWidgetUpdater()
+        val checker = FakeNotificationAvailabilityChecker(NotificationAvailability.AppDisabled)
+
+        val worker = buildWorker(
+            routine.id,
+            repository,
+            GetLiveDeparturesUseCase(FakeDepartureRepository { error("unused") }, clock),
+            notifier,
+            RecordingScheduler(),
+            clock,
+            notificationAvailabilityChecker = checker,
+            widgetUpdater = widgetUpdater,
+        )
+        worker.doWork()
+
+        assertTrue(widgetUpdater.updateCalls.isEmpty())
+        // enteredForeground never became true (see notifier.removeCallCount's own assertion
+        // elsewhere), so the widget-clear in the same `finally` never ran either.
+        assertEquals(0, widgetUpdater.clearCallCount)
     }
 
     @Test

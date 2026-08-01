@@ -152,4 +152,10 @@
     <string name="debug_notification_permission_denied">Notification permission denied — can\'t show the test notification.</string>
     <string name="debug_notification_disabled">Not posted — notifications are disabled for this app. Enable them in system settings and try again.</string>
     <string name="debug_notification_failed">Couldn\'t post the test notification. Try again.</string>
+
+    <!-- Home-screen widget (widget/BlickRoutineWidget.kt) — shown outside any active routine
+         window. All other widget state text reuses the notification_*/routine_details_departure_*
+         strings above verbatim, the same copy for the same states. -->
+    <string name="widget_no_active_commute">No active commute.</string>
+    <string name="widget_description">Shows your commute\'s next departures while its active window is open.</string>
 </resources>

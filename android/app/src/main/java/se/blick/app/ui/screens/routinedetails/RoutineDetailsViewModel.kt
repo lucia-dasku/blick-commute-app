@@ -35,6 +35,7 @@ import se.blick.app.notification.RoutineNotifier
 import se.blick.app.scheduling.DeviceZoneProvider
 import se.blick.app.scheduling.RoutineScheduler
 import se.blick.app.ui.navigation.Routes
+import se.blick.app.widget.RoutineWidgetUpdater
 import java.time.Clock
 import java.time.LocalDate
 import java.time.ZonedDateTime
@@ -108,6 +109,7 @@ class RoutineDetailsViewModel @Inject constructor(
     private val staleSnapshotRepository: StaleSnapshotRepository,
     private val routineNotifier: RoutineNotifier,
     private val routineScheduler: RoutineScheduler,
+    private val routineWidgetUpdater: RoutineWidgetUpdater,
     private val appSettingsDataStore: AppSettingsDataStore,
     private val notificationAvailabilityChecker: NotificationAvailabilityChecker,
     private val promotedNotificationChecker: PromotedNotificationChecker,
@@ -318,6 +320,7 @@ class RoutineDetailsViewModel @Inject constructor(
             // when this routine's active window should next run — always recompute, not only
             // when the departure-relevant identity changed.
             routineScheduler.scheduleActivation(fresh)
+            routineWidgetUpdater.reconcile()
         }
     }
 
@@ -345,6 +348,7 @@ class RoutineDetailsViewModel @Inject constructor(
                 _uiState.update {
                     it.copy(isTogglingEnabled = false, routine = it.routine?.copy(enabled = newEnabled))
                 }
+                routineWidgetUpdater.reconcile()
             } catch (e: CancellationException) {
                 _uiState.update { it.copy(isTogglingEnabled = false) }
                 throw e
@@ -373,6 +377,7 @@ class RoutineDetailsViewModel @Inject constructor(
                 _uiState.update {
                     it.copy(isTogglingPause = false, isPausedToday = true, routine = it.routine?.copy(pausedDate = today))
                 }
+                routineWidgetUpdater.reconcile()
             } catch (e: CancellationException) {
                 _uiState.update { it.copy(isTogglingPause = false) }
                 throw e
@@ -397,6 +402,7 @@ class RoutineDetailsViewModel @Inject constructor(
                 _uiState.update {
                     it.copy(isTogglingPause = false, isPausedToday = false, routine = it.routine?.copy(pausedDate = null))
                 }
+                routineWidgetUpdater.reconcile()
             } catch (e: CancellationException) {
                 _uiState.update { it.copy(isTogglingPause = false) }
                 throw e
@@ -425,6 +431,7 @@ class RoutineDetailsViewModel @Inject constructor(
                 routineRepository.delete(routine.id)
                 routineScheduler.cancelActivation(routine.id)
                 routineNotifier.remove()
+                routineWidgetUpdater.reconcile()
                 _uiState.update { it.copy(isDeleting = false) }
                 onDeleted()
             } catch (e: CancellationException) {
