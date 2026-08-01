@@ -1,5 +1,8 @@
 <?xml version="1.0" encoding="utf-8"?>
-<!-- Placeholder launcher background; replace with real brand artwork before release. -->
+<!-- Brand background: the dark navy behind the ic_launcher_foreground glyph. Kept as a
+     solid-color shape (not baked into the foreground artwork) since the adaptive icon
+     system applies its own corner/shape masking on top of this full, unrounded square —
+     see mipmap-anydpi-v26/ic_launcher.xml. -->
 <shape xmlns:android="http://schemas.android.com/apk/res/android" android:shape="rectangle">
-    <solid android:color="#3A5A78" />
+    <solid android:color="#010C2F" />
 </shape>
