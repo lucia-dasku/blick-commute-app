@@ -57,13 +57,14 @@ planned.
 ## Status
 
 Foundation plus a real, largely end-to-end feature set, device-verified on a physical
-tablet and on a real Samsung Galaxy S23 Ultra (Android 16), where the full
+tablet and on a real Samsung Galaxy S23 Ultra (One UI 8.5, Android 16), where the full
 notification/scheduling loop (single stable notification, ~30-second refresh, lock-screen
 visibility, Stop action) was confirmed in its default, non-promoted state — the exact
-experience a regular user has today. The promoted Live Update / Now Bar card itself was
-also confirmed possible on that device, but only behind a Samsung/One UI 8 beta
-developer flag not enabled by default; see `android/README.md`'s Known limitations for
-why that's a Samsung rollout decision, not a Blick gap. The backend's contract,
+experience a regular user has today. The promoted Live Update / Now Bar card itself only
+appeared on that device behind Settings → Developer options → "Live notifications for
+all apps," a Samsung-imposed restriction with no known removal date — see
+`android/README.md`'s Known limitations for why that's Samsung's decision, not a fixable
+Blick gap. The backend's contract,
 normalization, and caching logic are implemented and
 tested (183 passing tests). The Android side has routine creation (live SL stop search,
 transport mode/line/direction discovery, Room persistence), an always-visible

@@ -180,7 +180,9 @@ fully verified total to 271 JVM / 21 instrumented, stated above.
   and deep-links the user to `Settings.ACTION_MANAGE_APP_PROMOTED_NOTIFICATIONS` to turn
   it on — mirroring the existing notification-permission rationale flow. Today
   `canPostPromotedNotifications()` is only surfaced in the debug notification section,
-  not acted on anywhere a real user would see it — see "Requesting a promoted Live
+  not acted on anywhere a real user would see it. Note this is Android's own general
+  per-app control, distinct from and unable to affect Samsung's separate "Live
+  notifications for all apps" developer-only gate — see "Requesting a promoted Live
   Update" below.
 
 ---
@@ -413,12 +415,13 @@ above for the full local run (JVM unit tests, `lintDebug`, `assembleDebug`, and
 `connectedDebugAndroidTest`) plus manual exercising on a physical device, covering the
 ongoing-notification loop, mid-window edits, and full routine management. Promotion to
 Android 16's Live Update surface has been confirmed possible on a real Samsung Galaxy
-S23 Ultra, but only after manually enabling a One UI 8 beta developer flag — Samsung
-currently restricts third-party Now Bar access to a curated app list during the One UI 8
-beta and has stated this opens to all apps once One UI 8 ships stable, so a regular user
-on that same real Android 16 device sees no promoted card by default today, through no
-fault of Blick's own implementation; see "Requesting a promoted Live Update" below for
-the full account.*
+S23 Ultra, but only after manually enabling a Samsung-specific Developer options flag —
+Samsung currently blocks third-party Now Bar access for ordinary users on both One UI 8
+and 8.5, with no official removal date found, so a regular user on that same real
+Android 16 device sees no promoted card by default today, through no fault of Blick's
+own implementation, and this should be treated as device/firmware-dependent rather than
+a guaranteed feature; see "Requesting a promoted Live Update" below for the full
+account.*
 
 The application must:
 
@@ -998,30 +1001,41 @@ notification-drawer entry:
   the latest available version — see `android/README.md`'s Build section.
 - **On a real Android 16 device (Samsung Galaxy S23 Ultra), the promoted card did not
   appear by default — only after manually enabling Settings → Developer options → "Live
-  notifications for all apps."** This is a Samsung/One UI 8 beta-specific restriction,
-  not an Android platform requirement and not anything Blick's own implementation can
-  affect: the official Android docs explicitly note that "OEMs can enforce additional
-  criteria for Live update eligibility," and Samsung has confirmed that during the
-  One UI 8 beta, third-party Now Bar access is restricted to a curated list of partner
-  apps unless that developer flag is enabled — expected to open to all apps once One UI 8
-  ships stable, with no app-side change required. With the flag off (the default for any
-  ordinary user on this beta build), the app's `setRequestPromotedOngoing(true)` request
-  is simply not honored: the OS posts a plain ongoing notification instead, with no
-  error and nothing in `canPostPromotedNotifications()`'s result visibly distinguishing
-  it from the designed fallback path — this project's debug promotion-status line has not
-  been separately confirmed to reflect this specific OEM-beta gate one way or the other.
-  Once the developer flag was enabled, the promoted card appeared on the lock screen near
-  the routine's configured start time, with the same behavior otherwise exercised through
-  the regular-notification testing below (single notification, ~30-second refresh, up to
-  two departures, survives Blick being swiped from Recent Apps, disappears at the
-  routine's end time). Separately, Android's own docs describe a real, permanent,
-  user-facing settings control for this — `Settings.ACTION_MANAGE_APP_PROMOTED_NOTIFICATIONS`
-  — that a production build could deep-link users to; Blick does not yet do this (see
-  "Not yet implemented" above). This project's Android 14 physical test device (Lenovo
-  TB350FU) cannot show the promoted surface at all regardless, since it's an Android
-  16-only platform feature — that device correctly falls back to a plain ongoing
-  notification instead, the same fallback a regular Samsung Android 16 user currently
-  gets by default during the One UI 8 beta.
+  notifications for all apps."** Blick's own implementation is standard and correct;
+  this restriction is entirely Samsung's, not Blick's, and not fixable in app code. The
+  official Android docs explicitly note that "OEMs can enforce additional criteria for
+  Live update eligibility," and current, independent reporting confirms third-party Now
+  Bar access remains restricted on **both One UI 8 and One UI 8.5** (this device's actual
+  build, not a beta) unless that developer flag is manually enabled. **An earlier version
+  of this document claimed the restriction was beta-only and would lift once One UI 8
+  shipped stable — that was tech-press speculation, not an official Samsung statement,
+  and this device (already on 8.5) still requiring the flag disproves it. No official
+  Samsung source for a removal date has been found; treat the Now Bar experience as
+  device/firmware-dependent, not a guaranteed feature, and do not restate a resolution
+  timeline without a real source.** There is no manifest flag, permission, or API call
+  available to a third-party app that enables Samsung's developer option — Blick cannot
+  bypass it — and **ordinary users must never be instructed to enable Developer options**
+  as a workaround. With the flag off (the default for any ordinary user), the app's
+  `setRequestPromotedOngoing(true)` request is simply not honored: the OS posts a plain
+  ongoing notification instead, with no error and nothing in
+  `canPostPromotedNotifications()`'s result visibly distinguishing it from the designed
+  fallback path — this project's debug promotion-status line has not been separately
+  confirmed to reflect Samsung's own gate one way or the other. Once the developer flag
+  was enabled, the promoted card appeared on the lock screen near the routine's
+  configured start time, with the same behavior otherwise exercised through the
+  regular-notification testing below (single notification, ~30-second refresh, up to two
+  departures, survives Blick being swiped from Recent Apps, disappears at the routine's
+  end time). Separately, Android's own docs describe a real, permanent, user-facing
+  settings control for the platform's own Live Update eligibility —
+  `Settings.ACTION_MANAGE_APP_PROMOTED_NOTIFICATIONS` — that a production build could
+  deep-link users to (see "Not yet implemented" above); this is a distinct, general
+  Android control that **cannot enable Samsung's separate "Live notifications for all
+  apps" developer option**, so implementing it would not make Blick's Now Bar card
+  generally available on Samsung devices either way. This project's Android 14 physical
+  test device (Lenovo TB350FU) cannot show the promoted surface at all regardless, since
+  it's an Android 16-only platform feature — that device correctly falls back to a plain
+  ongoing notification instead, the same fallback a regular Samsung Android 16 user
+  currently gets by default.
 - Separately from promotion specifically, the full notification/scheduling loop was
   manually verified end to end on the Samsung Galaxy S23 Ultra in its default
   (non-promoted) state — the exact experience a regular user has today: exactly one
