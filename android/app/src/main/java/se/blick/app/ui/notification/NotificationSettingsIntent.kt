@@ -16,11 +16,13 @@ fun notificationSettingsIntent(context: Context): Intent =
 /** The system intent to open this app's own Live Update / promoted-notification settings
  * screen (Android 16+ only — see
  * [se.blick.app.notification.PromotedNotificationChecker]'s own doc on why "eligible" is not
- * the same as "will actually render"). Only ever launched from behind a
- * [android.content.pm.PackageManager] resolvability guard at the call site — this action
- * (`Settings.ACTION_APP_NOTIFICATION_PROMOTION_SETTINGS`) may not resolve on pre-Android-16
- * devices or on an OEM build that doesn't ship this settings screen, and launching an intent
- * with no matching activity throws [android.content.ActivityNotFoundException]. */
+ * the same as "will actually render"). The call site only ever shows the control that launches
+ * this on Android 16+, and additionally wraps the launch in a
+ * try/catch([android.content.ActivityNotFoundException]) rather than a
+ * [android.content.pm.PackageManager] resolvability query beforehand — this action
+ * (`Settings.ACTION_APP_NOTIFICATION_PROMOTION_SETTINGS`) may still not resolve on an OEM build
+ * that doesn't ship this settings screen even on Android 16+, and launching an intent with no
+ * matching activity throws that exception. */
 fun promotedNotificationSettingsIntent(context: Context): Intent =
     Intent(Settings.ACTION_APP_NOTIFICATION_PROMOTION_SETTINGS)
         .putExtra(Settings.EXTRA_APP_PACKAGE, context.packageName)

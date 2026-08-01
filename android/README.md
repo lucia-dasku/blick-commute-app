@@ -118,17 +118,21 @@ permits requesting promotion, not that any specific OEM surface (e.g. Samsung's 
 actually rendered a card — see `PromotedNotificationChecker`'s KDoc and the Known
 limitations entry below. When the routine details screen's notification status is
 `Available` but promotion isn't currently eligible, a `LiveUpdatePromotionRow` now offers a
-guarded link straight to Android's own per-app Live Update settings
+link straight to Android's own per-app Live Update settings
 (`Settings.ACTION_APP_NOTIFICATION_PROMOTION_SETTINGS` via
-`ui/notification/promotedNotificationSettingsIntent`, wrapped in a
-`try`/`catch (ActivityNotFoundException)` for devices without that Settings activity) — a
-real Android control, but distinct from and unable to reach Samsung's separate Now Bar
-developer gate (see Known limitations below). A simple `ui/screens/about/AboutScreen`
+`ui/notification/promotedNotificationSettingsIntent`) — but only on Android 16+
+(`Build.VERSION.SDK_INT >= Build.VERSION_CODES.BAKLAVA`), since
+`isLiveUpdatePromotable` is unconditionally `false` below that and the settings screen
+itself doesn't exist there either; the tap is additionally wrapped in a
+`try`/`catch (ActivityNotFoundException)` for an OEM build that omits the screen even on
+Android 16+. A real Android control, but distinct from and unable to reach Samsung's
+separate Now Bar developer gate (see Known limitations below). A simple `ui/screens/about/AboutScreen`
 (reached via an info icon in the routine list's top app bar) now shows the app name,
 version, `R.string.attribution_text`, a link to Trafiklab.se, and a non-affiliation
-disclaimer, closing the `../docs/api-contract.md` §8 attribution requirement.
-`LiveDeparturesDirectionOptionsSource` now requests SL Transport's maximum supported
-`forecast` window (1200 minutes ≈ 20 hours, empirically bounded — see
+disclaimer, closing the `../docs/api-contract.md` §9 attribution requirement.
+`LiveDeparturesDirectionOptionsSource` now requests the `forecast` window at Blick's own
+tested cap (1200 minutes ≈ 20 hours — an empirically observed value, not a maximum
+documented or guaranteed by Trafiklab/SL; see
 `../docs/api-contract.md`'s departures endpoint entry) instead of the live-display
 default, so routine setup can offer directions for routes that aren't running at the
 exact moment of setup but do run at least once every 20 hours; see Known limitations
@@ -208,8 +212,10 @@ bump them there as needed.
   developer-option gate one way or the other. Android separately exposes a real,
   permanent per-app settings control for its own Live Update eligibility —
   `Settings.ACTION_APP_NOTIFICATION_PROMOTION_SETTINGS` — which the routine details
-  screen now links to (guarded behind a resolvability check, see the Status section
-  above), but that is a distinct, general Android control: it cannot enable Samsung's
+  screen now links to, only on Android 16+ and wrapped in a
+  `try`/`catch (ActivityNotFoundException)` rather than a `PackageManager` resolvability
+  query (see the Status section above), but that is a distinct, general Android control:
+  it cannot enable Samsung's
   separate "Live notifications for all apps" developer option, so it would not make
   Blick's Now Bar card generally available on Samsung devices either way. `androidx.core` is
   deliberately held at 1.17.0 rather than the newest stable release for this same
@@ -345,9 +351,13 @@ instrumented. A further session (correcting the debug Live Update status wording
 guarded Settings deep-link, the About screen, and the `forecast`-based direction-discovery
 fix) added 4 more JVM tests (`LiveDeparturesDirectionOptionsSourceTest`) and 3 more
 instrumented tests (`AboutScreenTest`'s 2, plus one more in `RoutineListScreenTest` for the
-new info action), reaching the 275 JVM / 24 instrumented total stated below — see
-`../docs/Blick_Project_Documentation.md`'s "Validation status" note for the full account of
-each.
+new info action), reaching 275 JVM / 24 instrumented. A correction pass then fixed a real
+bug the previous session had introduced — the Live Update settings row rendered (with a
+dead link) on every Android version instead of only Android 16+ — by extracting the gating
+decision into `shouldOfferLiveUpdateSettingsLink` and covering it with 3 new JVM tests
+(`ShouldOfferLiveUpdateSettingsLinkTest`), reaching the 278 JVM / 24 instrumented total
+stated below — see `../docs/Blick_Project_Documentation.md`'s "Validation status" note for
+the full account of each.
 
 On a machine with a real JDK 17 and Android SDK (or Android Studio, which provides
 both), build with:
@@ -368,7 +378,7 @@ clone builds without Android Studio or a pre-existing local Gradle install.
 
 A complete local run — `testDebugUnitTest`, `lintDebug`, `assembleDebug`, and
 `connectedDebugAndroidTest` on the physical Lenovo TB350FU (Android 14) referenced
-above — has since been completed, using Android Studio's own bundled JDK. All 275 JVM
+above — has since been completed, using Android Studio's own bundled JDK. All 278 JVM
 `@Test` functions and all 24 instrumented `@Test` functions pass; `lintDebug` reports 0
 errors (42 warnings, including one new, expected, already-guarded `InlinedApi` finding on
 the API-36 `ACTION_APP_NOTIFICATION_PROMOTION_SETTINGS` deep-link); the debug APK builds

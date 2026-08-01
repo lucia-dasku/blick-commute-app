@@ -67,7 +67,7 @@ all apps," a Samsung-imposed restriction with no known removal date — see
 `android/README.md`'s Known limitations for why that's Samsung's decision, not a fixable
 Blick gap. The backend's contract,
 normalization, and caching logic are implemented and
-tested (188 passing tests). The Android side has routine creation (live SL stop search,
+tested (192 passing tests). The Android side has routine creation (live SL stop search,
 transport mode/line/direction discovery, Room persistence), an always-visible
 Add-routine control (with an explicit, in-place explanation — never a creation flow
 that can't save — once the current first-beta one-routine limit is reached), a
@@ -88,7 +88,7 @@ The last successful departure snapshot used for the `Stale` fallback is durably
 persisted (Room-backed, scoped to the routine's exact site/line/direction/mode) rather
 than held only in memory, so it survives the app's process being killed and recreated,
 and is shared between the foreground preview and the background notification loop.
-275 JVM `@Test` functions and 24 instrumented `@Test` functions exist in source as of
+278 JVM `@Test` functions and 24 instrumented `@Test` functions exist in source as of
 this update, all passing in a fresh local `./gradlew testDebugUnitTest lintDebug
 assembleDebug connectedDebugAndroidTest` run (0 lint errors, 42 warnings, debug APK
 built, all instrumented tests run on a physical device) — see `android/README.md`'s

@@ -32,17 +32,20 @@ unusable value (see `src/config/env.ts`).
 npm run typecheck   # tsc --noEmit
 npm run lint        # eslint (flat config, eslint.config.js)
 npm run build       # tsc, emits to dist/
-npm test            # vitest — 188 tests
+npm test            # vitest — 192 tests
 npm audit           # dependency vulnerability scan
 ```
 
-Test coverage (188 tests across 16 files): DST resolver (including calendar validation
+Test coverage (192 tests across 17 files): DST resolver (including calendar validation
 — rejecting impossible dates and the spring DST gap, and ISO round-trip consistency),
 cancellation derivation, search ranking, cache/dedup, `fetchedAt` semantics (fresh,
 cached, and deduplicated-concurrent requests), request-filter validation (`future`,
 `transportMode`, `siteId`, `lineId`), the departures endpoint's optional `forecast`
 parameter (omitted-value passthrough, valid-value passthrough up to its 1200-minute
-maximum, and rejection of zero/negative/non-integer/above-maximum values), runtime (Zod) validation of upstream payloads
+cap, and rejection of zero/negative/fractional/non-numeric/above-cap values), the real
+(non-fake) `createSlTransportClient`'s own URL construction (confirming it actually
+appends `?forecast=1200` to the real upstream URL, not just a hand-rolled fake client
+elsewhere in the suite), runtime (Zod) validation of upstream payloads
 — including contract integer fields as safe integers (IDs, direction codes, versions,
 priorities, importance levels), SL Deviations' `created`/`modified`/`publish.from`/
 `publish.upto` as explicit-offset RFC 3339 timestamps (rejecting naive/offset-less
@@ -59,7 +62,7 @@ review), route validation/error-envelope behavior, and the actual Vercel entry p
 (`api/index.ts`, imported directly rather than re-testing a copy of it).
 
 All of the above passed clean in the authoring sandbox (0 type errors, 0 lint
-errors/warnings, 183/183 tests passing, `npm audit`: 0 vulnerabilities). A live smoke
+errors/warnings, 192/192 tests passing, `npm audit`: 0 vulnerabilities). A live smoke
 test of the running server against the real SL endpoints could not be completed from
 that sandbox — its outbound network proxy blocks `transport.integration.sl.se` /
 `deviations.integration.sl.se` / `vercel.com` / `api.vercel.com` by allowlist. The

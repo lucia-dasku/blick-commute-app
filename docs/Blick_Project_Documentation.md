@@ -18,7 +18,7 @@ what is actually built today; where the two disagree, this section wins.
 
 **Validation status of this update, stated plainly up front:** a complete local run —
 `testDebugUnitTest`, `lintDebug`, `assembleDebug`, and `connectedDebugAndroidTest` on a
-physical Lenovo TB350FU (Android 14) — has now passed in full: all 275 JVM `@Test`
+physical Lenovo TB350FU (Android 14) — has now passed in full: all 278 JVM `@Test`
 functions and all 24 instrumented `@Test` functions, `lintDebug` with 0 errors (42
 warnings, including one new, expected, already-guarded `InlinedApi` finding on the
 API-36 `ACTION_APP_NOTIFICATION_PROMOTION_SETTINGS` deep-link), and a working debug APK,
@@ -65,15 +65,25 @@ until the window's own end; this added one further JVM `@Test` function, reachin
 JVM / 21 instrumented. A further session then: corrected the debug notification
 section's promotion-status wording to state plainly that `canPostPromotedNotifications()`
 is an eligibility check, not confirmation that any OEM surface actually rendered a card;
-added a guarded deep-link from the routine details screen to Android's own per-app Live
-Update settings (`Settings.ACTION_APP_NOTIFICATION_PROMOTION_SETTINGS`, wrapped in a
-resolvability check for devices without that Settings activity); added a simple About
-screen carrying the required Trafiklab.se attribution, reachable from the routine list's
-top app bar; and fixed routine setup so a route needs only to run at least once within
-roughly the next 20 hours to be selectable, not at the exact moment of setup, by
-requesting SL Transport's maximum supported forecast window instead of the live-display
-default (see "Initial setup" under §7 below). This added 4 further JVM `@Test` functions
-and 3 further instrumented ones, bringing the fully verified total to 275 JVM / 24
+added a deep-link from the routine details screen to Android's own per-app Live
+Update settings (`Settings.ACTION_APP_NOTIFICATION_PROMOTION_SETTINGS`); added a simple
+About screen carrying the required Trafiklab.se attribution, reachable from the routine
+list's top app bar; and fixed routine setup so a route needs only to run at least once
+within roughly the next 20 hours to be selectable, not at the exact moment of setup, by
+requesting SL Transport's forecast window at Blick's own tested 20-hour cap instead of
+the live-display default (see "Initial setup" under §7 below). This added 4 further JVM
+`@Test` functions and 3 further instrumented ones, reaching 275 JVM / 24 instrumented.
+A correction pass then fixed a real bug that session had introduced — the Live Update
+settings link was shown (and tapped, doing nothing) on every Android version, not only
+16+ where its target settings screen exists — by gating it behind
+`Build.VERSION.SDK_INT >= Build.VERSION_CODES.BAKLAVA`, and fixed a handful of
+documentation inaccuracies alongside it: an incorrectly named "resolvability check" that
+the code never actually performed (it only ever catches
+`ActivityNotFoundException`), the `forecast` cap described as an officially "supported
+maximum" rather than Blick's own empirically observed value, a stale backend test count,
+an overclaim that disruptions appear in the notification today, and a direction-discovery
+empty-state message that still said "right now" despite the 20-hour window. This added 3
+further JVM `@Test` functions, bringing the fully verified total to 278 JVM / 24
 instrumented, stated above.
 
 **Implemented today (Android client + backend):**
@@ -108,7 +118,7 @@ instrumented, stated above.
   scoped to the exact departure identity (site, line, direction, transport mode) that
   produced it, and is discarded rather than reused across an identity change.
 - The backend's full contract, request validation, upstream normalization, and caching
-  logic (188 passing automated tests as of this update).
+  logic (192 passing automated tests as of this update).
 - The ongoing-notification foundation (a pure mapper from a routine + the
   live-departures engine's state + the current time to a notification presentation
   model, recomputing each departure's countdown rather than trusting a cached value; a
@@ -177,13 +187,15 @@ instrumented, stated above.
   by routine id and scoped to the exact site/line/direction/mode that produced it, and
   shared between the routine details screen and the background worker — it survives
   process death, unlike the previous in-memory-only session scope.
-- A guarded deep-link to Android's own per-app Live Update settings
+- A deep-link to Android's own per-app Live Update settings
   (`Settings.ACTION_APP_NOTIFICATION_PROMOTION_SETTINGS`): the routine details screen
   now offers this when notifications are available but promotion currently isn't
-  eligible, wrapped in a resolvability check for devices without that Settings activity.
-  This is Android's own general per-app control, distinct from and unable to affect
-  Samsung's separate "Live notifications for all apps" developer-only gate — see
-  "Requesting a promoted Live Update" below.
+  eligible, shown only on Android 16+ (promotion eligibility is unconditionally `false`
+  below that, and the settings screen itself doesn't exist there) and wrapped in a
+  `try`/`catch (ActivityNotFoundException)` for an OEM build that omits the screen even
+  on Android 16+. This is Android's own general per-app control, distinct from and
+  unable to affect Samsung's separate "Live notifications for all apps" developer-only
+  gate — see "Requesting a promoted Live Update" below.
 - A simple About screen (`ui/screens/about/AboutScreen`, reached via an info icon in the
   routine list's top app bar) satisfying MVP requirement 17: app name, version, the
   required Trafiklab.se attribution text with a link to Trafiklab.se, and a
@@ -337,7 +349,7 @@ see "Current implementation status" above.*
 7. The user saves the commute routine.
 8. The application requests notification permission and explains lock-screen visibility.
 
-Line and direction options are initially discovered from live departures at the selected site, requesting the SL Transport departures endpoint's maximum supported forecast window (1200 minutes, ≈20 hours — empirically confirmed; see `docs/api-contract.md`'s departures endpoint entry) rather than the shorter window used for live display, so a route need only run at least once within roughly the next 20 hours to be selectable during setup, not at the exact moment of setup. A route that runs less often than that may still be unavailable during setup. This is a documented MVP limitation. Direction discovery must remain behind an application interface so a more complete source can replace it later without changing the saved-routine model.
+Line and direction options are initially discovered from live departures at the selected site, requesting the SL Transport departures endpoint's `forecast` parameter at Blick's own tested cap of 1200 minutes (≈20 hours — an empirically observed value, not a maximum documented or guaranteed by Trafiklab/SL; see `docs/api-contract.md`'s departures endpoint entry) rather than the shorter window used for live display, so a route need only run at least once within roughly the next 20 hours to be selectable during setup, not at the exact moment of setup. A route that runs less often than that may still be unavailable during setup. This is a documented MVP limitation. Direction discovery must remain behind an application interface so a more complete source can replace it later without changing the saved-routine model.
 
 ### Daily operation
 
@@ -598,10 +610,12 @@ and the pause-today device-timezone fix added 10 further JVM `@Test` functions w
 further instrumented ones, reaching 270 JVM / 21 instrumented. The active-window
 worker's notification-availability re-check on every loop tick added 1 further JVM
 `@Test` function with no further instrumented ones, reaching 271 JVM / 21 instrumented.
-The corrected debug promotion-status wording, the guarded Settings deep-link, the About
+The corrected debug promotion-status wording, the Settings deep-link, the About
 screen, and the forecast-based direction-discovery fix added 4 further JVM `@Test`
-functions and 3 further instrumented ones —
-**275 JVM `@Test` functions and 24 instrumented `@Test` functions now exist in source,
+functions and 3 further instrumented ones, reaching 275 JVM / 24 instrumented. A
+correction pass fixing that deep-link's missing Android-16+ gate (`shouldOfferLiveUpdateSettingsLink`)
+added 3 further JVM `@Test` functions with no further instrumented ones —
+**278 JVM `@Test` functions and 24 instrumented `@Test` functions now exist in source,
 and all of them pass.** See `android/README.md`'s Build section for the exact toolchain
 versions, the up-to-date per-file test breakdown, and the real issues that first full
 run found and fixed (including a genuine production bug, not just test-suite
@@ -735,8 +749,10 @@ Cache-Control: public, s-maxage=3600, stale-while-revalidate=86400
 `GET /api/v1/departures?siteId=&forecast=`
 
 `siteId` is required and must be a valid positive SL Site ID. `forecast` is optional: a
-positive integer number of minutes to look ahead, capped at 1200 (20 hours, the upstream's
-empirically-confirmed real maximum — see `docs/api-contract.md` §3). When omitted, the
+positive integer number of minutes to look ahead, capped at 1200 (20 hours) — an
+empirically observed point past which the real upstream silently returns zero departures
+rather than erroring, not a maximum documented or guaranteed by Trafiklab/SL (see
+`docs/api-contract.md` §3). When omitted, the
 upstream's own short undocumented default applies, as before. Android's routine-setup
 direction discovery passes `forecast=1200` specifically; the live routine-details and
 notification polling paths never pass it.
@@ -1022,9 +1038,10 @@ notification-drawer entry:
   or a user who has disabled promoted notifications simply receives a standard ongoing
   notification automatically, with no separate fallback code path to keep in sync. When
   notifications are available but promotion currently isn't eligible, the routine
-  details screen also offers a guarded link to Android's own per-app Live Update
-  settings (`Settings.ACTION_APP_NOTIFICATION_PROMOTION_SETTINGS`, wrapped in a
-  resolvability check) — see below.
+  details screen also offers a link to Android's own per-app Live Update
+  settings (`Settings.ACTION_APP_NOTIFICATION_PROMOTION_SETTINGS`), shown only on
+  Android 16+ and wrapped in a `try`/`catch (ActivityNotFoundException)` for an OEM
+  build that omits the screen even there — see below.
 - Because `setRequestPromotedOngoing` was only stabilized in `androidx.core` 1.17.0, and
   the next stable release (1.19.0) requires `compileSdk` 37 (one major version beyond
   this project's current 36), the dependency is deliberately held at 1.17.0 rather than
@@ -1058,8 +1075,9 @@ notification-drawer entry:
   end time). Separately, Android's own docs describe a real, permanent, user-facing
   settings control for the platform's own Live Update eligibility —
   `Settings.ACTION_APP_NOTIFICATION_PROMOTION_SETTINGS` — the routine details screen now
-  deep-links to it (guarded behind a resolvability check, for devices without that
-  Settings activity); this is a distinct, general Android control that **cannot enable
+  deep-links to it, shown only on Android 16+ and wrapped in a
+  `try`/`catch (ActivityNotFoundException)` for an OEM build that omits the screen even
+  there; this is a distinct, general Android control that **cannot enable
   Samsung's separate "Live notifications for all apps" developer option**, so it does
   not make Blick's Now Bar card generally available on Samsung devices either way. This project's Android 14 physical
   test device (Lenovo TB350FU) cannot show the promoted surface at all regardless, since
@@ -1441,4 +1459,4 @@ Technical success includes:
 
 ## 21. Short project description
 
-**Blick is an Android-first scheduled departure display for regular SL commuters. Users choose a site, transport mode, line, direction, weekdays, and time window. During that period, upcoming departures and relevant disruptions appear automatically in one calm, updating Android notification. The platform-neutral backend is designed to support a planned native iPhone client and possible future household displays without expanding the initial MVP.**
+**Blick is an Android-first scheduled departure display for regular SL commuters. Users choose a site, transport mode, line, direction, weekdays, and time window. During that period, upcoming departures appear automatically in one calm, updating Android notification (relevant disruptions are specified but not yet surfaced there — see "Current implementation status" above). The platform-neutral backend is designed to support a planned native iPhone client and possible future household displays without expanding the initial MVP.**

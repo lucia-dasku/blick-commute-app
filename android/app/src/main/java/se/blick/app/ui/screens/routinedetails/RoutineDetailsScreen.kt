@@ -564,22 +564,36 @@ private fun NotificationStatusRow(notificationAvailability: NotificationAvailabi
 }
 
 /**
+ * Pure gating decision for [LiveUpdatePromotionRow], pulled out of the composable so it can be
+ * unit-tested in a plain JVM test without Robolectric — this project's Robolectric pin
+ * (`@Config(sdk = [34])`, see `libs.versions.toml`'s `robolectric` entry) can't exercise
+ * `Build.VERSION_CODES.BAKLAVA` (36) behavior directly, so [sdkInt] is passed in rather than
+ * read from [Build.VERSION.SDK_INT] internally. `Settings.ACTION_APP_NOTIFICATION_PROMOTION_SETTINGS`
+ * is an Android 16+ system screen; below that, [isLiveUpdatePromotable] is already
+ * unconditionally `false` (see [se.blick.app.notification.PromotedNotificationChecker]), so
+ * without this check the row would always render there with a settings link that can never
+ * resolve, and the tap would silently do nothing.
+ */
+internal fun shouldOfferLiveUpdateSettingsLink(isLiveUpdatePromotable: Boolean, sdkInt: Int): Boolean =
+    !isLiveUpdatePromotable && sdkInt >= Build.VERSION_CODES.BAKLAVA
+
+/**
  * Production (not [BuildConfig.DEBUG]-gated) hint shown only when base notification delivery
  * is already [NotificationAvailability.Available] but Live Update promotion specifically is
  * not — see [se.blick.app.notification.PromotedNotificationChecker]'s own doc for why "not
  * eligible" only ever means "currently not eligible," never "broken," since
  * [se.blick.app.notification.RoutineNotificationBuilder] already produces a perfectly valid
- * plain ongoing notification either way. Renders nothing when already eligible.
+ * plain ongoing notification either way. Renders nothing when already eligible or below
+ * Android 16 — see [shouldOfferLiveUpdateSettingsLink].
  *
  * [promotedNotificationSettingsIntent] targets `Settings.ACTION_APP_NOTIFICATION_PROMOTION_SETTINGS`,
- * an Android 16+ system screen that may not exist on this device/OEM at all (older Android, or
- * an OEM build that doesn't ship it) — [android.content.ActivityNotFoundException] is caught
- * rather than left to crash the tap, since there is nothing more this app can do about a
- * missing system screen.
+ * which may still not exist on this device/OEM even on Android 16+ (an OEM build that omits it)
+ * — [android.content.ActivityNotFoundException] is caught rather than left to crash the tap,
+ * since there is nothing more this app can do about a missing system screen.
  */
 @Composable
 private fun LiveUpdatePromotionRow(isLiveUpdatePromotable: Boolean) {
-    if (isLiveUpdatePromotable) return
+    if (!shouldOfferLiveUpdateSettingsLink(isLiveUpdatePromotable, Build.VERSION.SDK_INT)) return
     val context = LocalContext.current
 
     Column {

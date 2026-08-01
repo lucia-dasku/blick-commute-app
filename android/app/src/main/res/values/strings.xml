@@ -74,7 +74,7 @@
          logged for developers via Log.e, not shown to the user. -->
     <string name="routine_create_search_error">Couldn\'t reach the server. Check your connection and try again.</string>
     <string name="routine_create_checking_departures">Checking live departures at %1$s…</string>
-    <string name="routine_create_no_departures_error">No live departures right now for %1$s. Try a different stop, or check back during service hours.</string>
+    <string name="routine_create_no_departures_error">No departures found for %1$s in the next 20 hours. Try a different stop, or check back later.</string>
     <string name="routine_create_directions_failed_error">Couldn\'t load departures for %1$s. Check your connection and try again.</string>
     <string name="routine_create_retry">Try again</string>
 

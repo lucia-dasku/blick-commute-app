@@ -161,6 +161,22 @@ describe("GET /api/v1/departures", () => {
     const res = await app.request("/api/v1/departures?siteId=9192&forecast=soon");
     expect(res.status).toBe(400);
   });
+
+  it("returns a validation error envelope when forecast is negative", async () => {
+    const app = buildTestApp();
+    const res = await app.request("/api/v1/departures?siteId=9192&forecast=-5");
+    expect(res.status).toBe(400);
+    const body = (await res.json()) as ErrorEnvelope;
+    expect(body.error.code).toBe("VALIDATION_ERROR");
+  });
+
+  it("returns a validation error envelope when forecast is fractional", async () => {
+    const app = buildTestApp();
+    const res = await app.request("/api/v1/departures?siteId=9192&forecast=60.5");
+    expect(res.status).toBe(400);
+    const body = (await res.json()) as ErrorEnvelope;
+    expect(body.error.code).toBe("VALIDATION_ERROR");
+  });
 });
 
 describe("GET /api/v1/disruptions", () => {
