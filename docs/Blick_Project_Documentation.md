@@ -18,10 +18,11 @@ what is actually built today; where the two disagree, this section wins.
 
 **Validation status of this update, stated plainly up front:** a complete local run —
 `testDebugUnitTest`, `lintDebug`, `assembleDebug`, and `connectedDebugAndroidTest` on a
-physical Lenovo TB350FU (Android 14) — has now passed in full: all 278 JVM `@Test`
-functions and all 24 instrumented `@Test` functions, `lintDebug` with 0 errors (42
-warnings, including one new, expected, already-guarded `InlinedApi` finding on the
-API-36 `ACTION_APP_NOTIFICATION_PROMOTION_SETTINGS` deep-link), and a working debug APK,
+physical Lenovo TB350FU (Android 14) — has now passed in full: all 280 JVM `@Test`
+functions and all 24 instrumented `@Test` functions, `lintDebug` with 0 errors (39
+warnings, including two expected, already-guarded `InlinedApi` findings — the API-36
+`ACTION_APP_NOTIFICATION_PROMOTION_SETTINGS` deep-link and the API-33
+`POST_NOTIFICATIONS` permission constant), and a working debug APK,
 with the ongoing-notification loop, routine details live-preview, and full routine
 management additionally exercised manually on that same device.
 
@@ -83,8 +84,19 @@ the code never actually performed (it only ever catches
 maximum" rather than Blick's own empirically observed value, a stale backend test count,
 an overclaim that disruptions appear in the notification today, and a direction-discovery
 empty-state message that still said "right now" despite the 20-hour window. This added 3
-further JVM `@Test` functions, bringing the fully verified total to 278 JVM / 24
-instrumented, stated above.
+further JVM `@Test` functions, reaching 278 JVM / 24 instrumented. A second correction
+pass then fixed the settings link's remaining silent-failure case — tapping it on an
+Android 16+ OEM build without that specific Settings screen still did nothing — by
+falling back to the ordinary per-app notification settings screen instead; corrected a
+stale "will actually promote" comment in `RoutineDetailsViewModel` to "is currently
+eligible for promotion"; made the framework diagram explicitly show
+"request promotion → OEM decides placement → ordinary notification is the fallback";
+corrected the remaining "resolvability check"/"supported maximum" overclaims and a
+disruptions overclaim in `docs/api-contract.md`; and added an explicit
+device-transfer/backup decision (`xml/data_extraction_rules.xml`) and a monochrome
+launcher-icon layer with `android:roundIcon`. This added 2 further JVM `@Test`
+functions, bringing the fully verified total to 280 JVM / 24 instrumented, stated
+above.
 
 **Implemented today (Android client + backend):**
 
@@ -191,15 +203,25 @@ instrumented, stated above.
   (`Settings.ACTION_APP_NOTIFICATION_PROMOTION_SETTINGS`): the routine details screen
   now offers this when notifications are available but promotion currently isn't
   eligible, shown only on Android 16+ (promotion eligibility is unconditionally `false`
-  below that, and the settings screen itself doesn't exist there) and wrapped in a
-  `try`/`catch (ActivityNotFoundException)` for an OEM build that omits the screen even
-  on Android 16+. This is Android's own general per-app control, distinct from and
+  below that, and the settings screen itself doesn't exist there). On an OEM build that
+  omits the screen even on Android 16+, `launchLiveUpdateSettings` catches the resulting
+  `ActivityNotFoundException` and falls back to the ordinary per-app notification
+  settings screen rather than leaving the tap do nothing. This is Android's own general per-app control, distinct from and
   unable to affect Samsung's separate "Live notifications for all apps" developer-only
   gate — see "Requesting a promoted Live Update" below.
 - A simple About screen (`ui/screens/about/AboutScreen`, reached via an info icon in the
   routine list's top app bar) satisfying MVP requirement 17: app name, version, the
   required Trafiklab.se attribution text with a link to Trafiklab.se, and a
   non-affiliation disclaimer.
+- An explicit device-transfer/backup decision: `AndroidManifest.xml` declares
+  `android:dataExtractionRules` and `android:fullBackupContent` (see the referenced XML
+  files' own doc comments). A saved routine (site/line/direction/mode, weekdays, times —
+  no account, no location, no credentials) is allowed to transfer to a new phone during
+  Android 12+ device-to-device setup, since `android:allowBackup="false"` alone doesn't
+  reliably disable that on every OEM; cloud backup stays excluded either way.
+- A monochrome layer (`ic_launcher_monochrome.xml`) on the adaptive launcher icon for
+  Android 13+ themed-icon support, and `android:roundIcon` in the manifest, now pointing
+  at the `ic_launcher_round` adaptive-icon resource that already existed but was unused.
 
 **Not yet implemented** (described in the sections below purely as the plan):
 
@@ -614,8 +636,11 @@ The corrected debug promotion-status wording, the Settings deep-link, the About
 screen, and the forecast-based direction-discovery fix added 4 further JVM `@Test`
 functions and 3 further instrumented ones, reaching 275 JVM / 24 instrumented. A
 correction pass fixing that deep-link's missing Android-16+ gate (`shouldOfferLiveUpdateSettingsLink`)
-added 3 further JVM `@Test` functions with no further instrumented ones —
-**278 JVM `@Test` functions and 24 instrumented `@Test` functions now exist in source,
+added 3 further JVM `@Test` functions with no further instrumented ones, reaching 278
+JVM / 24 instrumented. A second correction pass, fixing the settings link's remaining
+silent-failure fallback case (`launchLiveUpdateSettings`), added 2 further JVM `@Test`
+functions with no further instrumented ones —
+**280 JVM `@Test` functions and 24 instrumented `@Test` functions now exist in source,
 and all of them pass.** See `android/README.md`'s Build section for the exact toolchain
 versions, the up-to-date per-file test breakdown, and the real issues that first full
 run found and fixed (including a genuine production bug, not just test-suite
@@ -1040,8 +1065,9 @@ notification-drawer entry:
   notifications are available but promotion currently isn't eligible, the routine
   details screen also offers a link to Android's own per-app Live Update
   settings (`Settings.ACTION_APP_NOTIFICATION_PROMOTION_SETTINGS`), shown only on
-  Android 16+ and wrapped in a `try`/`catch (ActivityNotFoundException)` for an OEM
-  build that omits the screen even there — see below.
+  Android 16+; on an OEM build that omits the screen even there, launching it falls back
+  to the ordinary per-app notification settings screen instead of leaving the tap do
+  nothing — see below.
 - Because `setRequestPromotedOngoing` was only stabilized in `androidx.core` 1.17.0, and
   the next stable release (1.19.0) requires `compileSdk` 37 (one major version beyond
   this project's current 36), the dependency is deliberately held at 1.17.0 rather than
@@ -1075,9 +1101,9 @@ notification-drawer entry:
   end time). Separately, Android's own docs describe a real, permanent, user-facing
   settings control for the platform's own Live Update eligibility —
   `Settings.ACTION_APP_NOTIFICATION_PROMOTION_SETTINGS` — the routine details screen now
-  deep-links to it, shown only on Android 16+ and wrapped in a
-  `try`/`catch (ActivityNotFoundException)` for an OEM build that omits the screen even
-  there; this is a distinct, general Android control that **cannot enable
+  deep-links to it, shown only on Android 16+, falling back to the ordinary per-app
+  notification settings screen on an OEM build that omits it even there; this is a
+  distinct, general Android control that **cannot enable
   Samsung's separate "Live notifications for all apps" developer option**, so it does
   not make Blick's Now Bar card generally available on Samsung devices either way. This project's Android 14 physical
   test device (Lenovo TB350FU) cannot show the promoted surface at all regardless, since

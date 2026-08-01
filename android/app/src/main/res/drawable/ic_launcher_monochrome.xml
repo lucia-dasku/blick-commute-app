@@ -1,0 +1,48 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!--
+    Themed-icon (Android 13+ Material You) monochrome layer for the adaptive launcher icon —
+    see mipmap-anydpi-v26/ic_launcher.xml and ic_launcher_round.xml, and Android's adaptive
+    icon guidance on the <monochrome> element. A simplified, centered clock/stopwatch
+    silhouette matching ic_launcher_foreground's motif (a departure-time glyph), recreated as
+    a single-color vector since the foreground itself is only shipped as per-density PNGs with
+    no vector source to reuse directly. The system applies its own tint on top of this shape,
+    so the exact color here is not meaningful beyond being fully opaque.
+-->
+<vector xmlns:android="http://schemas.android.com/apk/res/android"
+    android:width="108dp"
+    android:height="108dp"
+    android:viewportWidth="108"
+    android:viewportHeight="108">
+    <!-- Clock-face ring -->
+    <path
+        android:fillColor="#00000000"
+        android:strokeColor="#FFFFFF"
+        android:strokeWidth="6"
+        android:pathData="M28,62 A26,26 0 1,0 80,62 A26,26 0 1,0 28,62 Z" />
+    <!-- Crown button -->
+    <path
+        android:fillColor="#FFFFFF"
+        android:pathData="M49,24 A5,5 0 1,0 59,24 A5,5 0 1,0 49,24 Z" />
+    <!-- Stem connecting the crown to the clock face -->
+    <path
+        android:fillColor="#00000000"
+        android:strokeColor="#FFFFFF"
+        android:strokeWidth="6"
+        android:strokeLineCap="round"
+        android:pathData="M54,29 L54,36" />
+    <!-- Hand -->
+    <path
+        android:fillColor="#00000000"
+        android:strokeColor="#FFFFFF"
+        android:strokeWidth="6"
+        android:strokeLineCap="round"
+        android:pathData="M54,62 L66,50" />
+    <!-- Center dot -->
+    <path
+        android:fillColor="#FFFFFF"
+        android:pathData="M50,62 A4,4 0 1,0 58,62 A4,4 0 1,0 50,62 Z" />
+    <!-- Rim marker dot -->
+    <path
+        android:fillColor="#FFFFFF"
+        android:pathData="M50,88 A4,4 0 1,0 58,88 A4,4 0 1,0 50,88 Z" />
+</vector>

@@ -4,6 +4,8 @@ package se.blick.app.ui.screens.routinedetails
 
 import android.Manifest
 import android.content.ActivityNotFoundException
+import android.content.Context
+import android.content.Intent
 import android.content.pm.PackageManager
 import android.os.Build
 import androidx.activity.compose.rememberLauncherForActivityResult
@@ -578,6 +580,26 @@ internal fun shouldOfferLiveUpdateSettingsLink(isLiveUpdatePromotable: Boolean, 
     !isLiveUpdatePromotable && sdkInt >= Build.VERSION_CODES.BAKLAVA
 
 /**
+ * Pulled out of [LiveUpdatePromotionRow] so the fallback path can be unit-tested without
+ * Compose: [android.provider.Settings.ACTION_APP_NOTIFICATION_PROMOTION_SETTINGS] may still
+ * not resolve even on Android 16+ (an OEM build that omits it — Android's own docs
+ * acknowledge a matching activity isn't guaranteed to exist), and a tap that silently does
+ * nothing is a real dead end for the user. Falls back to the ordinary per-app notification
+ * settings screen ([notificationSettingsIntent], `Settings.ACTION_APP_NOTIFICATION_SETTINGS`),
+ * which every supported Android version resolves — still notification-relevant, and strictly
+ * better than no feedback at all. [startActivity] is injected (rather than calling
+ * `context.startActivity` directly) purely so a test can observe/fail the first launch without
+ * a real Android runtime resolving intents.
+ */
+internal fun launchLiveUpdateSettings(context: Context, startActivity: (Intent) -> Unit) {
+    try {
+        startActivity(promotedNotificationSettingsIntent(context))
+    } catch (e: ActivityNotFoundException) {
+        startActivity(notificationSettingsIntent(context))
+    }
+}
+
+/**
  * Production (not [BuildConfig.DEBUG]-gated) hint shown only when base notification delivery
  * is already [NotificationAvailability.Available] but Live Update promotion specifically is
  * not — see [se.blick.app.notification.PromotedNotificationChecker]'s own doc for why "not
@@ -586,10 +608,9 @@ internal fun shouldOfferLiveUpdateSettingsLink(isLiveUpdatePromotable: Boolean, 
  * plain ongoing notification either way. Renders nothing when already eligible or below
  * Android 16 — see [shouldOfferLiveUpdateSettingsLink].
  *
- * [promotedNotificationSettingsIntent] targets `Settings.ACTION_APP_NOTIFICATION_PROMOTION_SETTINGS`,
- * which may still not exist on this device/OEM even on Android 16+ (an OEM build that omits it)
- * — [android.content.ActivityNotFoundException] is caught rather than left to crash the tap,
- * since there is nothing more this app can do about a missing system screen.
+ * Tapping the settings action goes through [launchLiveUpdateSettings], which falls back to
+ * the ordinary notification settings screen rather than leaving the tap silently do nothing
+ * on an OEM build without the Live Update settings screen.
  */
 @Composable
 private fun LiveUpdatePromotionRow(isLiveUpdatePromotable: Boolean) {
@@ -603,14 +624,7 @@ private fun LiveUpdatePromotionRow(isLiveUpdatePromotable: Boolean) {
             color = MaterialTheme.colorScheme.secondary,
         )
         TextButton(
-            onClick = {
-                try {
-                    context.startActivity(promotedNotificationSettingsIntent(context))
-                } catch (e: ActivityNotFoundException) {
-                    // No Live Update settings screen on this device/OEM -- nothing else this
-                    // app can do; it already falls back to a plain ongoing notification.
-                }
-            },
+            onClick = { launchLiveUpdateSettings(context, context::startActivity) },
         ) {
             Text(stringResource(R.string.routine_details_live_update_settings_action))
         }

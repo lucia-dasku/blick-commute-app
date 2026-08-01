@@ -1,0 +1,23 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!--
+    Explicit device-transfer/backup decision (Android 12+, see developer.android.com's
+    autobackup guidance): android:allowBackup="false" on the <application> element disables
+    cloud backup everywhere, but Android's own docs note that on some device manufacturers it
+    does NOT also disable device-to-device (D2D) "Copy your data" transfer — that requires its
+    own explicit rule set here, independent of allowBackup.
+
+    Decision: a saved routine (SL site/line/direction/transport mode, weekdays, start/end
+    time) is low-sensitivity local preference data — no account, no location history, no
+    credentials — so letting it follow the user to a new phone during D2D setup is a
+    reasonable convenience, not a privacy concern. D2D transfer is therefore explicitly
+    allowed below. Cloud backup stays excluded, consistent with allowBackup="false" and with
+    there being no server-side account to reconcile a cloud-restored install against.
+-->
+<data-extraction-rules>
+    <cloud-backup>
+        <exclude domain="root" />
+    </cloud-backup>
+    <device-transfer>
+        <include domain="root" />
+    </device-transfer>
+</data-extraction-rules>

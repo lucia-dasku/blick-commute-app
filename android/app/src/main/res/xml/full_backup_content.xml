@@ -1,0 +1,12 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!--
+    Pre-Android-12 counterpart to xml/data_extraction_rules.xml — see that file for the
+    backup/transfer decision. Referenced via android:fullBackupContent so lint's
+    DataExtractionRules check is satisfied for this app's minSdkVersion 26. Currently a no-op
+    in practice since android:allowBackup="false" already disables every backup/restore form
+    on every supported Android version, but keeps behavior explicit and consistent if that
+    ever changes.
+-->
+<full-backup-content>
+    <exclude domain="root" />
+</full-backup-content>

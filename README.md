@@ -88,13 +88,13 @@ The last successful departure snapshot used for the `Stale` fallback is durably
 persisted (Room-backed, scoped to the routine's exact site/line/direction/mode) rather
 than held only in memory, so it survives the app's process being killed and recreated,
 and is shared between the foreground preview and the background notification loop.
-278 JVM `@Test` functions and 24 instrumented `@Test` functions exist in source as of
+280 JVM `@Test` functions and 24 instrumented `@Test` functions exist in source as of
 this update, all passing in a fresh local `./gradlew testDebugUnitTest lintDebug
-assembleDebug connectedDebugAndroidTest` run (0 lint errors, 42 warnings, debug APK
+assembleDebug connectedDebugAndroidTest` run (0 lint errors, 39 warnings, debug APK
 built, all instrumented tests run on a physical device) — see `android/README.md`'s
 Build section for the exact toolchain and test breakdown. A simple About screen (info
 icon in the routine list's top app bar) now carries the Trafiklab.se attribution, and the
-routine details screen offers a guarded deep-link to Android's own per-app Live Update
+routine details screen offers a deep-link (Android 16+ only) to Android's own per-app Live Update
 settings when promotion isn't currently eligible — see `android/README.md`'s Status
 section. **Not yet implemented:** the home-screen widget. See each subproject's README
 for specifics and known limitations.

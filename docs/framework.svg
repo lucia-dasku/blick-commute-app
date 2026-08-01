@@ -1,4 +1,4 @@
-<svg viewBox="0 0 1400 950" xmlns="http://www.w3.org/2000/svg" font-family="Helvetica, Arial, sans-serif">
+<svg viewBox="0 0 1400 980" xmlns="http://www.w3.org/2000/svg" font-family="Helvetica, Arial, sans-serif">
   <defs>
     <marker id="arrow" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse">
       <path d="M 0 0 L 10 5 L 0 10 z" fill="#334155"/>
@@ -11,7 +11,7 @@
     </marker>
   </defs>
 
-  <rect width="1400" height="950" fill="#ffffff"/>
+  <rect width="1400" height="980" fill="#ffffff"/>
 
   <!-- Column headers -->
   <rect x="40" y="15" width="620" height="38" rx="6" fill="#dbeafe" stroke="#1d4ed8" stroke-width="2"/>
@@ -21,7 +21,7 @@
   <text x="1050" y="40" text-anchor="middle" font-size="17" font-weight="bold" fill="#134e4a">ROUTINE DETAILS SCREEN — SEPARATE 30s LIVE REFRESH</text>
 
   <!-- Vertical divider between the two flows -->
-  <line x1="700" y1="60" x2="700" y2="850" stroke="#cbd5e1" stroke-width="2" stroke-dasharray="6,6"/>
+  <line x1="700" y1="60" x2="700" y2="870" stroke="#cbd5e1" stroke-width="2" stroke-dasharray="6,6"/>
 
   <!-- ================= LEFT COLUMN: routine setup + WorkManager-scheduled active-window notification loop ================= -->
 
@@ -50,32 +50,33 @@
   <line x1="350" y1="470" x2="350" y2="510" stroke="#334155" stroke-width="2" marker-end="url(#arrow)"/>
 
   <!-- 5: One ongoing notification shown/updated -->
-  <rect x="60" y="510" width="580" height="70" rx="10" fill="#ede9fe" stroke="#6d28d9" stroke-width="2"/>
-  <text x="350" y="542" text-anchor="middle" font-size="15" fill="#4c1d95">5. Show and refresh the next two departures, requesting a</text>
-  <text x="350" y="564" text-anchor="middle" font-size="15" fill="#4c1d95">promoted lock-screen Live Update (Samsung Now Bar if granted)</text>
-  <line x1="350" y1="580" x2="350" y2="620" stroke="#334155" stroke-width="2" marker-end="url(#arrow)"/>
+  <rect x="60" y="510" width="580" height="90" rx="10" fill="#ede9fe" stroke="#6d28d9" stroke-width="2"/>
+  <text x="350" y="534" text-anchor="middle" font-size="15" fill="#4c1d95">5. Show and refresh the next two departures, requesting a</text>
+  <text x="350" y="556" text-anchor="middle" font-size="15" fill="#4c1d95">promoted lock-screen Live Update (Samsung Now Bar if granted)</text>
+  <text x="350" y="580" text-anchor="middle" font-size="12" fill="#5b21b6">→ Android/the OEM decides placement; an ordinary notification is the automatic fallback</text>
+  <line x1="350" y1="600" x2="350" y2="640" stroke="#334155" stroke-width="2" marker-end="url(#arrow)"/>
 
   <!-- 6: Wait ~30 seconds -->
-  <rect x="60" y="620" width="580" height="70" rx="10" fill="#fee2e2" stroke="#b91c1c" stroke-width="2"/>
-  <text x="350" y="662" text-anchor="middle" font-size="16" fill="#7f1d1d">6. Wait ~30 seconds, then fetch again</text>
-  <line x1="350" y1="690" x2="350" y2="730" stroke="#334155" stroke-width="2" marker-end="url(#arrow)"/>
+  <rect x="60" y="640" width="580" height="70" rx="10" fill="#fee2e2" stroke="#b91c1c" stroke-width="2"/>
+  <text x="350" y="682" text-anchor="middle" font-size="16" fill="#7f1d1d">6. Wait ~30 seconds, then fetch again</text>
+  <line x1="350" y1="710" x2="350" y2="750" stroke="#334155" stroke-width="2" marker-end="url(#arrow)"/>
 
   <!-- Loop back to step 3: repeats every ~30s while inside the window -->
-  <path d="M 640 655 C 690 655, 690 325, 645 325" fill="none" stroke="#334155" stroke-width="2" marker-end="url(#arrow)"/>
-  <text x="672" y="490" text-anchor="middle" font-size="12" fill="#475569" transform="rotate(90 672 490)">repeats every ~30s while inside the active window</text>
+  <path d="M 640 675 C 690 675, 690 325, 645 325" fill="none" stroke="#334155" stroke-width="2" marker-end="url(#arrow)"/>
+  <text x="672" y="500" text-anchor="middle" font-size="12" fill="#475569" transform="rotate(90 672 500)">repeats every ~30s while inside the active window</text>
 
   <!-- 7: Window ends -->
-  <rect x="60" y="730" width="580" height="70" rx="10" fill="#e0f2fe" stroke="#0369a1" stroke-width="2"/>
-  <text x="350" y="762" text-anchor="middle" font-size="15" fill="#0c4a6e">7. At the routine's end time: work stops, the notification</text>
-  <text x="350" y="784" text-anchor="middle" font-size="15" fill="#0c4a6e">is removed, and the next eligible occurrence is scheduled</text>
+  <rect x="60" y="750" width="580" height="70" rx="10" fill="#e0f2fe" stroke="#0369a1" stroke-width="2"/>
+  <text x="350" y="782" text-anchor="middle" font-size="15" fill="#0c4a6e">7. At the routine's end time: work stops, the notification</text>
+  <text x="350" y="804" text-anchor="middle" font-size="15" fill="#0c4a6e">is removed, and the next eligible occurrence is scheduled</text>
 
   <!-- Loop back to step 2: scheduling the next occurrence -->
-  <path d="M 60 765 C -10 765, -10 215, 55 215" fill="none" stroke="#94a3b8" stroke-width="2" stroke-dasharray="6,5" marker-end="url(#arrowMuted)"/>
-  <text x="18" y="490" text-anchor="middle" font-size="11" fill="#64748b" transform="rotate(-90 18 490)">schedules next occurrence (step 2)</text>
+  <path d="M 60 785 C -10 785, -10 215, 55 215" fill="none" stroke="#94a3b8" stroke-width="2" stroke-dasharray="6,5" marker-end="url(#arrowMuted)"/>
+  <text x="18" y="500" text-anchor="middle" font-size="11" fill="#64748b" transform="rotate(-90 18 500)">schedules next occurrence (step 2)</text>
 
   <!-- Stop action note: an early exit from the loop, same end state as step 7 -->
-  <text x="350" y="820" text-anchor="middle" font-size="12" fill="#6d28d9">A Stop action on the notification (or pausing the routine) ends the window early —</text>
-  <text x="350" y="838" text-anchor="middle" font-size="12" fill="#6d28d9">same effect as step 7, but immediate, and reachable from the lock screen too.</text>
+  <text x="350" y="840" text-anchor="middle" font-size="12" fill="#6d28d9">A Stop action on the notification (or pausing the routine) ends the window early —</text>
+  <text x="350" y="858" text-anchor="middle" font-size="12" fill="#6d28d9">same effect as step 7, but immediate, and reachable from the lock screen too.</text>
 
   <!-- ================= RIGHT COLUMN: Routine Details screen's own 30s live refresh, separate from notifications ================= -->
 
@@ -116,8 +117,8 @@
   <text x="1050" y="564" text-anchor="middle" font-size="15" fill="#134e4a">is cancelled; reopening it restarts at step B, immediately</text>
 
   <!-- Footer notes -->
-  <text x="700" y="885" text-anchor="middle" font-size="13" fill="#64748b">Blick supports all SL transport modes (metro, bus, tram, train, ferry) for any saved routine —</text>
-  <text x="700" y="905" text-anchor="middle" font-size="13" fill="#64748b">this diagram is mode-agnostic and applies regardless of which mode is selected.</text>
-  <text x="700" y="925" text-anchor="middle" font-size="13" fill="#64748b">The two loops are independent: the notification loop (left) runs in a background worker tied to the routine's own window and continues even if the app is closed;</text>
-  <text x="700" y="943" text-anchor="middle" font-size="13" font-weight="bold" fill="#0369a1">the Details-screen loop (right) only runs while that screen is on-screen. Both are implemented and verified — see docs/Blick_Project_Documentation.md for the full validation record.</text>
+  <text x="700" y="905" text-anchor="middle" font-size="13" fill="#64748b">Blick supports all SL transport modes (metro, bus, tram, train, ferry) for any saved routine —</text>
+  <text x="700" y="925" text-anchor="middle" font-size="13" fill="#64748b">this diagram is mode-agnostic and applies regardless of which mode is selected.</text>
+  <text x="700" y="945" text-anchor="middle" font-size="13" fill="#64748b">The two loops are independent: the notification loop (left) runs in a background worker tied to the routine's own window and continues even if the app is closed;</text>
+  <text x="700" y="963" text-anchor="middle" font-size="13" font-weight="bold" fill="#0369a1">the Details-screen loop (right) only runs while that screen is on-screen. Both are implemented and verified — see docs/Blick_Project_Documentation.md for the full validation record.</text>
 </svg>

@@ -123,9 +123,10 @@ link straight to Android's own per-app Live Update settings
 `ui/notification/promotedNotificationSettingsIntent`) — but only on Android 16+
 (`Build.VERSION.SDK_INT >= Build.VERSION_CODES.BAKLAVA`), since
 `isLiveUpdatePromotable` is unconditionally `false` below that and the settings screen
-itself doesn't exist there either; the tap is additionally wrapped in a
-`try`/`catch (ActivityNotFoundException)` for an OEM build that omits the screen even on
-Android 16+. A real Android control, but distinct from and unable to reach Samsung's
+itself doesn't exist there either; on an OEM build that omits the screen even on
+Android 16+, `launchLiveUpdateSettings` catches the resulting `ActivityNotFoundException`
+and falls back to the ordinary per-app notification settings screen instead of leaving
+the tap do nothing. A real Android control, but distinct from and unable to reach Samsung's
 separate Now Bar developer gate (see Known limitations below). A simple `ui/screens/about/AboutScreen`
 (reached via an info icon in the routine list's top app bar) now shows the app name,
 version, `R.string.attribution_text`, a link to Trafiklab.se, and a non-affiliation
@@ -137,6 +138,16 @@ documented or guaranteed by Trafiklab/SL; see
 default, so routine setup can offer directions for routes that aren't running at the
 exact moment of setup but do run at least once every 20 hours; see Known limitations
 below for the residual gap this doesn't close.
+
+`AndroidManifest.xml` now declares `android:dataExtractionRules` (`xml/data_extraction_rules.xml`)
+and `android:fullBackupContent` (`xml/full_backup_content.xml`) — an explicit decision
+that a saved routine (site/line/direction/mode, weekdays, times — no account, no
+location, no credentials) may transfer to a new phone during Android 12+ device-to-device
+setup, since `android:allowBackup="false"` alone doesn't reliably disable that on every
+OEM (see the XML files' own doc comments); cloud backup stays excluded either way. The
+adaptive launcher icon also gained a `<monochrome>` layer (`ic_launcher_monochrome.xml`)
+for Android 13+ themed-icon support, and the manifest now declares `android:roundIcon`
+pointing at the `ic_launcher_round` resource that already existed but was unused.
 
 **Still not implemented**: the home-screen widget.
 
@@ -212,10 +223,10 @@ bump them there as needed.
   developer-option gate one way or the other. Android separately exposes a real,
   permanent per-app settings control for its own Live Update eligibility —
   `Settings.ACTION_APP_NOTIFICATION_PROMOTION_SETTINGS` — which the routine details
-  screen now links to, only on Android 16+ and wrapped in a
-  `try`/`catch (ActivityNotFoundException)` rather than a `PackageManager` resolvability
-  query (see the Status section above), but that is a distinct, general Android control:
-  it cannot enable Samsung's
+  screen now links to, only on Android 16+, falling back to the ordinary per-app
+  notification settings screen (rather than a `PackageManager` resolvability query
+  beforehand) on an OEM build that omits it even there (see the Status section above),
+  but that is a distinct, general Android control: it cannot enable Samsung's
   separate "Live notifications for all apps" developer option, so it would not make
   Blick's Now Bar card generally available on Samsung devices either way. `androidx.core` is
   deliberately held at 1.17.0 rather than the newest stable release for this same
@@ -355,9 +366,17 @@ new info action), reaching 275 JVM / 24 instrumented. A correction pass then fix
 bug the previous session had introduced — the Live Update settings row rendered (with a
 dead link) on every Android version instead of only Android 16+ — by extracting the gating
 decision into `shouldOfferLiveUpdateSettingsLink` and covering it with 3 new JVM tests
-(`ShouldOfferLiveUpdateSettingsLinkTest`), reaching the 278 JVM / 24 instrumented total
-stated below — see `../docs/Blick_Project_Documentation.md`'s "Validation status" note for
-the full account of each.
+(`ShouldOfferLiveUpdateSettingsLinkTest`), reaching 278 JVM / 24 instrumented. A second
+correction pass fixed a related silent-failure case — tapping the settings link on an
+OEM build without that Settings screen did nothing, with no fallback — by extracting
+`launchLiveUpdateSettings`, which now falls back to the ordinary per-app notification
+settings screen, and adding 2 new JVM tests (`LaunchLiveUpdateSettingsTest`); the same
+pass also added `xml/data_extraction_rules.xml` (an explicit device-transfer/cloud-backup
+decision — see its own doc comment — since `allowBackup="false"` alone doesn't reliably
+disable device-to-device transfer on every Android 12+ OEM) and a monochrome launcher-icon
+layer plus `android:roundIcon` for themed-icon support, reaching the 280 JVM / 24
+instrumented total stated below — see `../docs/Blick_Project_Documentation.md`'s
+"Validation status" note for the full account of each.
 
 On a machine with a real JDK 17 and Android SDK (or Android Studio, which provides
 both), build with:
@@ -378,10 +397,11 @@ clone builds without Android Studio or a pre-existing local Gradle install.
 
 A complete local run — `testDebugUnitTest`, `lintDebug`, `assembleDebug`, and
 `connectedDebugAndroidTest` on the physical Lenovo TB350FU (Android 14) referenced
-above — has since been completed, using Android Studio's own bundled JDK. All 278 JVM
+above — has since been completed, using Android Studio's own bundled JDK. All 280 JVM
 `@Test` functions and all 24 instrumented `@Test` functions pass; `lintDebug` reports 0
-errors (42 warnings, including one new, expected, already-guarded `InlinedApi` finding on
-the API-36 `ACTION_APP_NOTIFICATION_PROMOTION_SETTINGS` deep-link); the debug APK builds
+errors (39 warnings, including two expected, already-guarded `InlinedApi` findings — the
+API-36 `ACTION_APP_NOTIFICATION_PROMOTION_SETTINGS` deep-link and the API-33
+`POST_NOTIFICATIONS` permission constant); the debug APK builds
 and installs; and the ongoing-notification
 loop, the routine details live-preview, and full routine management were all exercised
 manually on that same device.

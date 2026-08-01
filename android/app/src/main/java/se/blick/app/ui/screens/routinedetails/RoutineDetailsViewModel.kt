@@ -468,13 +468,13 @@ class RoutineDetailsViewModel @Inject constructor(
         routineNotifier.remove()
     }
 
-    /** Debug-only: whether the system currently reports it will actually promote Blick's
-     * ongoing notification to the lock-screen Live Update surface (see
-     * [PromotedNotificationChecker]'s own doc on why this is separate from
-     * [NotificationAvailability], and on why "eligible" is not the same as "will actually
-     * render") — lets the debug notification section report this alongside
-     * [showDebugTestNotification]'s own result, as a platform-eligibility check only, not a
-     * substitute for real device verification. */
+    /** Whether the system currently reports Blick's ongoing notification is eligible for
+     * promotion to the lock-screen Live Update surface (see [PromotedNotificationChecker]'s own
+     * doc on why this is separate from [NotificationAvailability], and on why "eligible" is not
+     * the same as "will actually render"). Used by both the debug notification section
+     * (alongside [showDebugTestNotification]'s own result, as a platform-eligibility check
+     * only, not a substitute for real device verification) and, in production, to decide
+     * whether to offer a link to Android's own Live Update settings screen. */
     fun isLiveUpdatePromotable(): Boolean = promotedNotificationChecker.isPromotable()
 
     private fun loadDepartures(routine: CommuteRoutine, trigger: RefreshTrigger) {

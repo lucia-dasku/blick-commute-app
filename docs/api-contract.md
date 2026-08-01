@@ -13,8 +13,11 @@ The backend talks to two keyless, official SL/Trafiklab APIs:
   points, lines, and real-time departures. Primary upstream for everything the app shows
   during a commute window.
 - **SL Deviations** (`https://deviations.integration.sl.se/v1`) — the full disruption
-  feed, with validity windows, multi-language messages, and a weblink. Used for the
-  disruptions section of the UI.
+  feed, with validity windows, multi-language messages, and a weblink. The backend fully
+  implements and tests this contract (`/api/v1/disruptions`, §3 below), but the Android
+  client does not currently call it or display disruptions anywhere — see
+  `docs/Blick_Project_Documentation.md`'s "Current implementation status" for the
+  authoritative account of what's actually built versus still planned.
 
 Trafiklab Timetables and Trafiklab Stop Lookup, considered during initial architecture
 review, were **dropped entirely**. They cover every Swedish operator (unnecessary scope
@@ -197,9 +200,14 @@ publish window, no multi-language variants, and no weblink. The dedicated SL Dev
 endpoint adds real value beyond that: a stable `deviation_case_id` for
 dedup/updates, `created`/`modified` timestamps, `publish.from/upto` (needed to correctly
 hide expired disruptions), full `header`/`details`/`weblink`/`language`, and a three-part
-priority breakdown. The MVP calls both: the embedded fields are surfaced as-is for a
-free, no-extra-request signal; the full disruptions section of the UI is still backed by
-`/api/v1/disruptions`.
+priority breakdown. The MVP design calls both: the embedded fields are intended to be
+surfaced as-is for a free, no-extra-request signal, with a full disruptions section of
+the UI still backed by `/api/v1/disruptions`. **Neither is implemented in the Android
+client today** — `siteDeviations`/`tripDeviations` are normalized and present in the
+`/api/v1/departures` response, and `/api/v1/disruptions` is fully implemented and
+tested on the backend, but nothing in the Android app currently reads either one; see
+`docs/Blick_Project_Documentation.md`'s "Current implementation status" for the
+authoritative account.
 
 #### 3.5 Request validation vs. response compatibility
 
