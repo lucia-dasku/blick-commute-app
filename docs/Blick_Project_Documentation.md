@@ -406,9 +406,8 @@ loop are all implemented in source and verified — see "Current implementation 
 above for the full local run (JVM unit tests, `lintDebug`, `assembleDebug`, and
 `connectedDebugAndroidTest`) plus manual exercising on a physical device, covering the
 ongoing-notification loop, mid-window edits, and full routine management. Promotion to
-Android 16's Live Update surface specifically cannot be visually confirmed on that
-device (Android 14) — see "Requesting a promoted Live Update" below for what has and
-hasn't been verified there.*
+Android 16's Live Update surface has now also been visually confirmed on a real Samsung
+Galaxy S23 Ultra — see "Requesting a promoted Live Update" below for the full account.*
 
 The application must:
 
@@ -986,11 +985,19 @@ notification-drawer entry:
   the next stable release (1.19.0) requires `compileSdk` 37 (one major version beyond
   this project's current 36), the dependency is deliberately held at 1.17.0 rather than
   the latest available version — see `android/README.md`'s Build section.
-- Promotion cannot be visually verified on this project's Android 14 physical test
-  device, since promoted ongoing notifications are an Android 16 platform feature; only
-  the debug-surfaced `canPostPromotedNotifications()` result and the underlying unit
-  tests (asserting `NotificationCompat.isRequestPromotedOngoing` and
-  `getShortCriticalText` on the built `Notification`) have been verified so far.
+- Promotion has been visually confirmed on a real Android 16 device — a Samsung Galaxy
+  S23 Ultra — in addition to the debug-surfaced `canPostPromotedNotifications()` result
+  and the underlying unit tests (asserting `NotificationCompat.isRequestPromotedOngoing`
+  and `getShortCriticalText` on the built `Notification`). On that device: the promoted
+  card appears on the lock screen near the routine's configured start time; only one
+  notification is ever shown, refreshing roughly every 30 seconds with up to two
+  departures; it survives Blick being swiped away from Recent Apps (the foreground
+  worker keeps running); it disappears at the routine's end time; and re-enabling a
+  routine while its window is still active restores the notification, matching disabling
+  an active routine removing it. This project's Android 14 physical test device (Lenovo
+  TB350FU) still cannot show the promoted surface itself, since it's an Android
+  16-only platform feature — that device correctly falls back to a plain ongoing
+  notification instead.
 - The notification always carries a Stop action (a plain `NotificationCompat.Action`,
   not a custom view, so it stays valid on the promoted surface too) fulfilling the
   spec's "Stop/Unpin" requirement. Its `PendingIntent` targets
@@ -1012,7 +1019,11 @@ notification-drawer entry:
   `di/TimeModule.kt`), so shortly after local midnight in any zone ahead of UTC (e.g.
   Sweden), "pause today" could pause yesterday instead, disagreeing with the worker's
   own device-zone break condition. Fixed to resolve "today" the same
-  `DeviceZoneProvider`-based way everywhere in this screen.
+  `DeviceZoneProvider`-based way everywhere in this screen. Verified on the same real
+  Samsung Galaxy S23 Ultra: Stop removes the notification immediately and marks the
+  routine "Paused today"; the notification does not return while paused, including when
+  Stop is tapped directly from the locked screen; and Resume today both clears the pause
+  and restarts the notification immediately if the routine's window is still active.
 
 ### Reboot and process death
 

@@ -57,7 +57,10 @@ planned.
 ## Status
 
 Foundation plus a real, largely end-to-end feature set, device-verified on a physical
-tablet. The backend's contract, normalization, and caching logic are implemented and
+tablet and, for the promoted Live Update surface specifically, on a real Samsung Galaxy
+S23 Ultra (Android 16) — the promoted lock-screen card, its ~30-second refresh, and its
+Stop action have all been visually confirmed working there. The backend's contract,
+normalization, and caching logic are implemented and
 tested (183 passing tests). The Android side has routine creation (live SL stop search,
 transport mode/line/direction discovery, Room persistence), an always-visible
 Add-routine control (with an explicit, in-place explanation — never a creation flow

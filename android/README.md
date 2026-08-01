@@ -152,13 +152,18 @@ bump them there as needed.
 - **Attribution is not yet wired into a real screen.** `R.string.attribution_text`
   ("Based on information from Trafiklab.se") exists, but no About/Settings screen
   displays it yet — see `../docs/api-contract.md` §8 before shipping publicly.
-- **Lock-screen Live Update promotion cannot be verified on every device.** Requesting it
-  (`setRequestPromotedOngoing(true)`) is unconditional, but actually being promoted to the
-  prominent lock-screen card/Now Bar requires Android 16+ specifically — any older device
-  (including this project's own documented connected-device verification target, a Lenovo
-  TB350FU on Android 14) will only ever show the plain ongoing notification, correctly and
-  silently, with no way to visually confirm the promoted surface on that hardware. Use the
-  debug notification section's promotion status line (backed by
+- **Lock-screen Live Update promotion is not guaranteed on every device**, though it has
+  now been visually confirmed working on a real Samsung Galaxy S23 Ultra (Android 16):
+  the promoted card appears on the lock screen, one stable notification refreshes about
+  every 30 seconds with up to two departures, it survives Blick being swiped from Recent
+  Apps, disappears at the routine's end time, and the Stop action (including tapped
+  directly from the locked screen) removes it immediately and correctly pauses the
+  routine for the rest of the day. Requesting promotion (`setRequestPromotedOngoing(true)`)
+  is unconditional, but actual promotion still requires Android 16+ and remains an
+  OS/OEM decision — this project's own connected-device verification target, a Lenovo
+  TB350FU on Android 14, still only ever shows the plain ongoing notification fallback,
+  correctly and silently, with no way to visually confirm the promoted surface on that
+  older hardware. Use the debug notification section's promotion status line (backed by
   `notification/PromotedNotificationChecker`) to verify eligibility on any device without
   needing to see the actual card. `androidx.core` is deliberately held at 1.17.0 rather
   than the newest stable release for this same reason — see `libs.versions.toml`'s
