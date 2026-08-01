@@ -1,23 +1,34 @@
 <?xml version="1.0" encoding="utf-8"?>
 <!--
-    Explicit device-transfer/backup decision (Android 12+, see developer.android.com's
-    autobackup guidance): android:allowBackup="false" on the <application> element disables
-    cloud backup everywhere, but Android's own docs note that on some device manufacturers it
-    does NOT also disable device-to-device (D2D) "Copy your data" transfer — that requires its
-    own explicit rule set here, independent of allowBackup.
+    Backup/transfer decision (Android 12+, see developer.android.com's autobackup guidance):
+    android:allowBackup="false" on the <application> element disables cloud backup
+    everywhere, but Android's own docs note that on some device manufacturers it does NOT
+    also disable device-to-device (D2D) "Copy your data" transfer — that requires its own
+    explicit rule set here, independent of allowBackup.
 
-    Decision: a saved routine (SL site/line/direction/transport mode, weekdays, start/end
-    time) is low-sensitivity local preference data — no account, no location history, no
-    credentials — so letting it follow the user to a new phone during D2D setup is a
-    reasonable convenience, not a privacy concern. D2D transfer is therefore explicitly
-    allowed below. Cloud backup stays excluded, consistent with allowBackup="false" and with
-    there being no server-side account to reconcile a cloud-restored install against.
+    Decision: keep Blick simple for now — a saved routine must not transfer or restore onto
+    a new device by any mechanism. Every domain is explicitly excluded from both cloud
+    backup and device transfer below (not just domain="root": Android's schema treats
+    "root", "file", "database", "sharedpref", and "external" as separate, non-overlapping
+    domains, so relying on "root" alone would not reliably cover the Room database or
+    DataStore preferences file). This is belt-and-suspenders on top of allowBackup="false",
+    which already blocks cloud backup and adb backup on every version, and is the actual
+    mechanism relied on to also block D2D transfer on manufacturers where allowBackup alone
+    does not.
 -->
 <data-extraction-rules>
     <cloud-backup>
-        <exclude domain="root" />
+        <exclude domain="root" path="." />
+        <exclude domain="file" path="." />
+        <exclude domain="database" path="." />
+        <exclude domain="sharedpref" path="." />
+        <exclude domain="external" path="." />
     </cloud-backup>
     <device-transfer>
-        <include domain="root" />
+        <exclude domain="root" path="." />
+        <exclude domain="file" path="." />
+        <exclude domain="database" path="." />
+        <exclude domain="sharedpref" path="." />
+        <exclude domain="external" path="." />
     </device-transfer>
 </data-extraction-rules>

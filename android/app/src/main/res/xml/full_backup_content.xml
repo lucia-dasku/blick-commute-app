@@ -1,12 +1,17 @@
 <?xml version="1.0" encoding="utf-8"?>
 <!--
     Pre-Android-12 counterpart to xml/data_extraction_rules.xml — see that file for the
-    backup/transfer decision. Referenced via android:fullBackupContent so lint's
-    DataExtractionRules check is satisfied for this app's minSdkVersion 26. Currently a no-op
-    in practice since android:allowBackup="false" already disables every backup/restore form
-    on every supported Android version, but keeps behavior explicit and consistent if that
-    ever changes.
+    backup/transfer decision (routines must not transfer or restore onto a new device).
+    Referenced via android:fullBackupContent so lint's DataExtractionRules check is
+    satisfied for this app's minSdkVersion 26. Already a no-op in practice since
+    android:allowBackup="false" fully disables every backup/restore form on every supported
+    Android version, but every domain is still excluded explicitly here too, for the same
+    belt-and-suspenders reason given in data_extraction_rules.xml.
 -->
 <full-backup-content>
-    <exclude domain="root" />
+    <exclude domain="root" path="." />
+    <exclude domain="file" path="." />
+    <exclude domain="database" path="." />
+    <exclude domain="sharedpref" path="." />
+    <exclude domain="external" path="." />
 </full-backup-content>

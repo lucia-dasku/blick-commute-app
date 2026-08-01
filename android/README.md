@@ -141,10 +141,15 @@ below for the residual gap this doesn't close.
 
 `AndroidManifest.xml` now declares `android:dataExtractionRules` (`xml/data_extraction_rules.xml`)
 and `android:fullBackupContent` (`xml/full_backup_content.xml`) — an explicit decision
-that a saved routine (site/line/direction/mode, weekdays, times — no account, no
-location, no credentials) may transfer to a new phone during Android 12+ device-to-device
-setup, since `android:allowBackup="false"` alone doesn't reliably disable that on every
-OEM (see the XML files' own doc comments); cloud backup stays excluded either way. The
+to keep Blick simple by never letting a saved routine transfer or restore onto a new
+device by any mechanism. `android:allowBackup="false"` already disables cloud backup and
+adb backup everywhere, but Android's own docs note it doesn't reliably disable Android
+12+ device-to-device "Copy your data" transfer on every OEM; both XML files explicitly
+exclude every backup/transfer domain (`root`, `file`, `database`, `sharedpref`,
+`external` — not just `root` alone, since Android's schema treats these as separate,
+non-overlapping domains) from both cloud backup and device transfer, so the Room
+database and DataStore preferences are covered either way (see the XML files' own doc
+comments). The
 adaptive launcher icon also gained a `<monochrome>` layer (`ic_launcher_monochrome.xml`)
 for Android 13+ themed-icon support, and the manifest now declares `android:roundIcon`
 pointing at the `ic_launcher_round` resource that already existed but was unused.
@@ -371,12 +376,14 @@ correction pass fixed a related silent-failure case — tapping the settings lin
 OEM build without that Settings screen did nothing, with no fallback — by extracting
 `launchLiveUpdateSettings`, which now falls back to the ordinary per-app notification
 settings screen, and adding 2 new JVM tests (`LaunchLiveUpdateSettingsTest`); the same
-pass also added `xml/data_extraction_rules.xml` (an explicit device-transfer/cloud-backup
-decision — see its own doc comment — since `allowBackup="false"` alone doesn't reliably
-disable device-to-device transfer on every Android 12+ OEM) and a monochrome launcher-icon
-layer plus `android:roundIcon` for themed-icon support, reaching the 280 JVM / 24
-instrumented total stated below — see `../docs/Blick_Project_Documentation.md`'s
-"Validation status" note for the full account of each.
+pass also added `xml/data_extraction_rules.xml` and `xml/full_backup_content.xml` (an
+explicit decision that a saved routine must never transfer or restore onto a new device
+by any mechanism — see their own doc comments — since `allowBackup="false"` alone
+doesn't reliably disable Android 12+ device-to-device transfer on every OEM) and a
+monochrome launcher-icon layer plus `android:roundIcon` for themed-icon support,
+reaching the 280 JVM / 24 instrumented total stated below — see
+`../docs/Blick_Project_Documentation.md`'s "Validation status" note for the full account
+of each.
 
 On a machine with a real JDK 17 and Android SDK (or Android Studio, which provides
 both), build with:

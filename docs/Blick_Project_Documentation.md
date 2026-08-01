@@ -92,11 +92,12 @@ stale "will actually promote" comment in `RoutineDetailsViewModel` to "is curren
 eligible for promotion"; made the framework diagram explicitly show
 "request promotion → OEM decides placement → ordinary notification is the fallback";
 corrected the remaining "resolvability check"/"supported maximum" overclaims and a
-disruptions overclaim in `docs/api-contract.md`; and added an explicit
-device-transfer/backup decision (`xml/data_extraction_rules.xml`) and a monochrome
-launcher-icon layer with `android:roundIcon`. This added 2 further JVM `@Test`
-functions, bringing the fully verified total to 280 JVM / 24 instrumented, stated
-above.
+disruptions overclaim in `docs/api-contract.md`; and added an explicit backup/transfer
+decision (`xml/data_extraction_rules.xml`, `xml/full_backup_content.xml`) that a saved
+routine must never transfer or restore onto a new device by any mechanism, and a
+monochrome launcher-icon layer with `android:roundIcon`. This added 2 further JVM
+`@Test` functions, bringing the fully verified total to 280 JVM / 24 instrumented,
+stated above.
 
 **Implemented today (Android client + backend):**
 
@@ -213,12 +214,16 @@ above.
   routine list's top app bar) satisfying MVP requirement 17: app name, version, the
   required Trafiklab.se attribution text with a link to Trafiklab.se, and a
   non-affiliation disclaimer.
-- An explicit device-transfer/backup decision: `AndroidManifest.xml` declares
-  `android:dataExtractionRules` and `android:fullBackupContent` (see the referenced XML
-  files' own doc comments). A saved routine (site/line/direction/mode, weekdays, times —
-  no account, no location, no credentials) is allowed to transfer to a new phone during
-  Android 12+ device-to-device setup, since `android:allowBackup="false"` alone doesn't
-  reliably disable that on every OEM; cloud backup stays excluded either way.
+- An explicit backup/transfer decision to keep Blick simple: `AndroidManifest.xml`
+  declares `android:dataExtractionRules` and `android:fullBackupContent` (see the
+  referenced XML files' own doc comments), and a saved routine must never transfer or
+  restore onto a new device by any mechanism. `android:allowBackup="false"` already
+  disables cloud backup and adb backup everywhere, but Android's own docs note it
+  doesn't reliably disable Android 12+ device-to-device transfer on every OEM; both XML
+  files explicitly exclude every backup/transfer domain (`root`, `file`, `database`,
+  `sharedpref`, `external` — treated as separate, non-overlapping domains by Android's
+  schema, not a hierarchy under `root`) from both cloud backup and device transfer, so
+  the Room database and DataStore preferences are covered either way.
 - A monochrome layer (`ic_launcher_monochrome.xml`) on the adaptive launcher icon for
   Android 13+ themed-icon support, and `android:roundIcon` in the manifest, now pointing
   at the `ic_launcher_round` adaptive-icon resource that already existed but was unused.
