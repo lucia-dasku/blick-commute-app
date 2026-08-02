@@ -52,9 +52,13 @@ private val disruptionPriorityComparator: Comparator<Disruption> =
  * filtering, since a value served from [se.blick.app.data.remote.cache.DisruptionCache] can be
  * up to a minute old by the time this runs), duplicate [disruptionId]s collapsed to their
  * highest [Disruption.version] (upstream has been observed to repeat the same case under
- * multiple scope entries), and the remainder ordered by [disruptionPriorityComparator] — the
- * single ordering both the Routine Details section and the notification's "highest-priority
- * disruption" pick rely on.
+ * multiple scope entries), ordered by [disruptionPriorityComparator] — the single ordering both
+ * the Routine Details section and the notification's "highest-priority disruption" pick rely
+ * on — and finally collapsed once more by identical message content: SL Deviations can publish
+ * the very same rider-facing text (header + details) as separate deviation cases scoped to
+ * different, overlapping stop-area/line combinations, which the [disruptionId]-based step above
+ * does not catch since each case has its own id. Applied AFTER the priority sort, so of two
+ * entries sharing the same text, the higher-priority one is always the one kept.
  */
 fun List<Disruption>.relevantDisruptions(now: Instant): List<Disruption> =
     asSequence()
@@ -62,3 +66,4 @@ fun List<Disruption>.relevantDisruptions(now: Instant): List<Disruption> =
         .groupBy { it.disruptionId }
         .map { (_, versions) -> versions.maxBy { it.version } }
         .sortedWith(disruptionPriorityComparator)
+        .distinctBy { it.message.header to it.message.details }

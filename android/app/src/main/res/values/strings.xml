@@ -36,9 +36,10 @@
     <string name="routine_details_minutes_remaining">%1$d min</string>
 
     <string name="routine_details_disruptions_heading">Disruptions</string>
-    <string name="routine_details_disruptions_none">No disruptions right now.</string>
     <!-- Deliberately generic, same rationale as the departures section's own error strings. -->
     <string name="routine_details_disruptions_unavailable">Couldn\'t load disruptions right now.</string>
+    <string name="routine_details_disruption_expand">Show disruption details</string>
+    <string name="routine_details_disruption_collapse">Hide disruption details</string>
 
     <string name="routine_details_actions_heading">Manage routine</string>
     <string name="routine_details_edit_action">Edit routine</string>
@@ -139,6 +140,9 @@
     <string name="notification_unavailable">Couldn\'t load departures right now. Will try again soon.</string>
     <string name="notification_no_departures">No upcoming departures right now.</string>
     <string name="notification_stale_warning">Couldn\'t refresh — showing the last departures we could load.</string>
+    <!-- The one collapsed-view hint that a disruption exists — see RoutineNotificationBuilder's
+         own doc on why the disruption's actual header/details never appear here. -->
+    <string name="notification_disruptions_indicator">Disruptions…</string>
     <!-- The ongoing/promoted notification's Stop action (see RoutineNotificationBuilder,
          StopRoutineNotificationReceiver) — stops today's active window early, same effect
          as "pause for today" on the routine details screen. -->

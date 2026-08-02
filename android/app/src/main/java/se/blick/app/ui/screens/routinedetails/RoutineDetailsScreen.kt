@@ -23,6 +23,8 @@ import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.ArrowBack
+import androidx.compose.material.icons.filled.KeyboardArrowDown
+import androidx.compose.material.icons.filled.KeyboardArrowUp
 import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.Button
 import androidx.compose.material3.ButtonDefaults
@@ -35,6 +37,7 @@ import androidx.compose.material3.LinearProgressIndicator
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.OutlinedButton
 import androidx.compose.material3.Scaffold
+import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
 import androidx.compose.material3.TopAppBar
@@ -204,7 +207,7 @@ private fun CenteredBox(modifier: Modifier = Modifier, content: @Composable () -
 }
 
 @Composable
-private fun RoutineDetailsContent(
+internal fun RoutineDetailsContent(
     modifier: Modifier,
     routine: CommuteRoutine,
     isPausedToday: Boolean,
@@ -295,13 +298,20 @@ private fun RoutineDetailsContent(
 
         DeparturesSection(departuresState, locale, onRefresh)
 
-        Spacer(Modifier.height(20.dp))
-        HorizontalDivider()
-        Spacer(Modifier.height(16.dp))
+        // The whole disruptions section -- heading included -- is skipped entirely once a
+        // fetch has actually completed and found nothing relevant: a "Disruptions" heading
+        // over an empty/"none" message is noise once that's confirmed, not useful signal.
+        // Loading and Unavailable are each still shown -- neither one means "no disruptions",
+        // just "don't know yet" / "couldn't check".
+        if (disruptionsState !is DisruptionsState.NoDisruptions) {
+            Spacer(Modifier.height(20.dp))
+            HorizontalDivider()
+            Spacer(Modifier.height(16.dp))
 
-        Text(stringResource(R.string.routine_details_disruptions_heading), style = MaterialTheme.typography.titleMedium)
-        Spacer(Modifier.height(12.dp))
-        DisruptionsSection(disruptionsState)
+            Text(stringResource(R.string.routine_details_disruptions_heading), style = MaterialTheme.typography.titleMedium)
+            Spacer(Modifier.height(12.dp))
+            DisruptionsSection(disruptionsState)
+        }
 
         // Debug-only manual notification trigger (Part 6 of the ongoing-notification
         // foundation milestone) — see RoutineDetailsViewModel.showDebugTestNotification's
@@ -689,11 +699,13 @@ private fun DeparturesSection(
 
 /**
  * Dedicated disruptions section for one routine's site/line/mode (see [DisruptionsState] and
- * [se.blick.app.domain.usecase.GetDisruptionsUseCase]) — loading, no-disruptions, and
- * unavailable are each their own clear, distinct message, matching [DeparturesSection]'s own
- * per-state convention rather than a single ambiguous empty state covering all three. Entries
- * are rendered in the order [se.blick.app.domain.model.relevantDisruptions] already sorted
- * them in (highest priority first) — no re-sorting here.
+ * [se.blick.app.domain.usecase.GetDisruptionsUseCase]) — loading and unavailable are each their
+ * own clear, distinct message, matching [DeparturesSection]'s own per-state convention.
+ * [DisruptionsState.NoDisruptions] renders nothing here -- the caller ([RoutineDetailsContent])
+ * skips this whole section, heading included, before ever reaching this composable in that
+ * state; the branch below only exists because a sealed [DisruptionsState] `when` must stay
+ * exhaustive. Entries are rendered in the order [se.blick.app.domain.model.relevantDisruptions]
+ * already sorted them in (highest priority first) — no re-sorting here.
  */
 @Composable
 private fun DisruptionsSection(state: DisruptionsState) {
@@ -702,11 +714,7 @@ private fun DisruptionsSection(state: DisruptionsState) {
             CircularProgressIndicator()
         }
         is DisruptionsState.Loaded -> DisruptionsList(state.disruptions)
-        is DisruptionsState.NoDisruptions -> Text(
-            stringResource(R.string.routine_details_disruptions_none),
-            style = MaterialTheme.typography.bodyMedium,
-            color = MaterialTheme.colorScheme.secondary,
-        )
+        is DisruptionsState.NoDisruptions -> Unit
         is DisruptionsState.Unavailable -> Text(
             stringResource(R.string.routine_details_disruptions_unavailable),
             style = MaterialTheme.typography.bodyMedium,
@@ -717,20 +725,53 @@ private fun DisruptionsSection(state: DisruptionsState) {
 
 @Composable
 private fun DisruptionsList(disruptions: List<Disruption>) {
-    Column {
-        disruptions.forEachIndexed { index, disruption ->
-            DisruptionRow(disruption)
-            if (index != disruptions.lastIndex) Spacer(Modifier.height(12.dp))
-        }
+    Column(verticalArrangement = Arrangement.spacedBy(12.dp)) {
+        disruptions.forEach { disruption -> DisruptionRow(disruption) }
     }
 }
 
+/**
+ * One disruption as a muted-red card — [MaterialTheme.colorScheme.errorContainer] (a
+ * low-opacity, theme-derived red tint that Material3 already keeps readable against
+ * [MaterialTheme.colorScheme.onErrorContainer] text in both light and dark mode, rather than a
+ * hand-picked alpha over the bright [MaterialTheme.colorScheme.error] red used for genuine
+ * failure states elsewhere on this screen) so a disruption is clearly noticeable without being
+ * visually harsh. Collapsed by default, showing only [se.blick.app.domain.model.DisruptionMessage.header];
+ * the expand/collapse icon button reveals [se.blick.app.domain.model.DisruptionMessage.details]
+ * below it, mirroring the same collapsed-header/expanded-details split the notification's own
+ * [se.blick.app.notification.RoutineNotificationBuilder] uses.
+ */
 @Composable
 private fun DisruptionRow(disruption: Disruption) {
-    Column(Modifier.fillMaxWidth().padding(vertical = 4.dp)) {
-        Text(disruption.message.header, style = MaterialTheme.typography.bodyLarge)
-        Spacer(Modifier.height(2.dp))
-        Text(disruption.message.details, style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.secondary)
+    var expanded by remember(disruption.disruptionId) { mutableStateOf(false) }
+
+    Surface(
+        modifier = Modifier.fillMaxWidth(),
+        shape = MaterialTheme.shapes.medium,
+        color = MaterialTheme.colorScheme.errorContainer,
+        contentColor = MaterialTheme.colorScheme.onErrorContainer,
+    ) {
+        Column(Modifier.fillMaxWidth().padding(12.dp)) {
+            Row(
+                modifier = Modifier.fillMaxWidth(),
+                horizontalArrangement = Arrangement.SpaceBetween,
+                verticalAlignment = Alignment.CenterVertically,
+            ) {
+                Text(disruption.message.header, style = MaterialTheme.typography.bodyLarge, modifier = Modifier.weight(1f))
+                IconButton(onClick = { expanded = !expanded }) {
+                    Icon(
+                        imageVector = if (expanded) Icons.Filled.KeyboardArrowUp else Icons.Filled.KeyboardArrowDown,
+                        contentDescription = stringResource(
+                            if (expanded) R.string.routine_details_disruption_collapse else R.string.routine_details_disruption_expand,
+                        ),
+                    )
+                }
+            }
+            if (expanded) {
+                Spacer(Modifier.height(4.dp))
+                Text(disruption.message.details, style = MaterialTheme.typography.bodySmall)
+            }
+        }
     }
 }
 

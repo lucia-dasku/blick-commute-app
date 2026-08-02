@@ -4,8 +4,9 @@ import org.junit.Assert.assertEquals
 import org.junit.Test
 import java.time.Instant
 
-/** Pure JVM tests for [relevantDisruptions] — expiry filtering, de-duplication, and priority
- * ordering, entirely independent of any repository/cache/network concern. */
+/** Pure JVM tests for [relevantDisruptions] — expiry filtering, disruptionId- and content-based
+ * de-duplication, and priority ordering, entirely independent of any repository/cache/network
+ * concern. */
 class DisruptionTest {
 
     private val now = Instant.parse("2026-07-28T08:00:00Z")
@@ -18,6 +19,7 @@ class DisruptionTest {
         influence: Int = 1,
         urgency: Int = 1,
         header: String = "Header $id",
+        details: String = "Details $id",
     ) = Disruption(
         disruptionId = id,
         version = version,
@@ -26,7 +28,7 @@ class DisruptionTest {
         validFrom = null,
         validUntil = validUntil,
         priority = DisruptionPriority(importance, influence, urgency),
-        message = DisruptionMessage(header, "Details $id", null, null, "en"),
+        message = DisruptionMessage(header, details, null, null, "en"),
         affectedStopAreas = emptyList(),
         affectedLines = emptyList(),
         affectedModes = emptyList(),
@@ -83,6 +85,32 @@ class DisruptionTest {
         val b = disruption(id = "b")
         val result = listOf(a, b).relevantDisruptions(now)
         assertEquals(setOf("a", "b"), result.map { it.disruptionId }.toSet())
+    }
+
+    // ---- Content-based de-duplication (distinct disruptionIds, identical message text) ----
+
+    @Test
+    fun `two distinct disruptionIds with identical header and details collapse to one entry`() {
+        val a = disruption(id = "a", header = "Delays on line 14", details = "Expect longer travel times.")
+        val b = disruption(id = "b", header = "Delays on line 14", details = "Expect longer travel times.")
+        val result = listOf(a, b).relevantDisruptions(now)
+        assertEquals(1, result.size)
+    }
+
+    @Test
+    fun `of two duplicate-text disruptions, the higher-priority one is kept`() {
+        val low = disruption(id = "a", header = "Delays on line 14", details = "Expect longer travel times.", importance = 1)
+        val high = disruption(id = "b", header = "Delays on line 14", details = "Expect longer travel times.", importance = 5)
+        val result = listOf(low, high).relevantDisruptions(now)
+        assertEquals("b", result.single().disruptionId)
+    }
+
+    @Test
+    fun `disruptions with the same header but different details are not deduplicated`() {
+        val a = disruption(id = "a", header = "Delays on line 14", details = "Expect longer travel times.")
+        val b = disruption(id = "b", header = "Delays on line 14", details = "A different explanation.")
+        val result = listOf(a, b).relevantDisruptions(now)
+        assertEquals(2, result.size)
     }
 
     // ---- Priority ordering ----

@@ -318,12 +318,14 @@ class RoutineNotificationBuilderTest {
         assertTrue(bigTextLines(notification).any { it.contains(expectedTimeText) })
     }
 
-    // ---- Disruption in the expanded view only ----
+    // ---- Disruption content: full text expanded-only, fixed indicator collapsed ----
     //
-    // See RoutineNotificationBuilder's own class doc: a disruption is only ever rendered in
-    // the expanded (BigTextStyle) body, appended AFTER whatever departure/last-checked lines
-    // that state already produces -- collapsed-view slots (contentText, subText,
-    // shortCriticalText) and the Stop action are never touched by it.
+    // See RoutineNotificationBuilder's own class doc: a disruption's own header/details are
+    // only ever rendered in the expanded (BigTextStyle) body, appended AFTER whatever
+    // departure/last-checked lines that state already produces. The one collapsed-view change
+    // a disruption is allowed to make is a fixed "Disruptions…" indicator line appended to
+    // contentText (see the tests below this section) -- subText, shortCriticalText, and the
+    // Stop action are still never touched by it.
 
     @Test
     fun `no disruption adds no expanded-view line beyond Live's own departure rows`() {
@@ -398,12 +400,70 @@ class RoutineNotificationBuilderTest {
     }
 
     @Test
-    fun `a disruption never changes the collapsed contentText`() {
+    fun `a disruption appends a fixed Disruptions indicator line to the collapsed contentText`() {
         val withoutDisruption = builder.build(model(content = RoutineNotificationContent.Live(listOf(sampleRow()))))
         val withDisruption = builder.build(
             model(content = RoutineNotificationContent.Live(listOf(sampleRow())), disruptionHeadline = "Delays on line 14"),
         )
-        assertEquals(contentText(withoutDisruption), contentText(withDisruption))
+        val indicator = context.getString(R.string.notification_disruptions_indicator)
+        assertEquals(contentText(withoutDisruption) + "\n\n" + indicator, contentText(withDisruption))
+    }
+
+    @Test
+    fun `the collapsed contentText never contains the disruption's own header or details`() {
+        val notification = builder.build(
+            model(
+                content = RoutineNotificationContent.Live(listOf(sampleRow())),
+                disruptionHeadline = "Delays on line 14",
+                disruptionDetails = "Expect longer travel times.",
+            ),
+        )
+        assertFalse(contentText(notification).contains("Delays on line 14"))
+        assertFalse(contentText(notification).contains("Expect longer travel times."))
+    }
+
+    @Test
+    fun `the collapsed contentText keeps the departure information ahead of the Disruptions indicator`() {
+        val notification = builder.build(
+            model(content = RoutineNotificationContent.Live(listOf(sampleRow())), disruptionHeadline = "Delays on line 14"),
+        )
+        val text = contentText(notification)
+        val indicator = context.getString(R.string.notification_disruptions_indicator)
+        assertTrue("expected departure row to precede the indicator in: $text", text.indexOf(indicator) > 0)
+    }
+
+    @Test
+    fun `states with no disruption never show the Disruptions indicator, in every state`() {
+        val states = listOf(
+            RoutineNotificationContent.Offline,
+            RoutineNotificationContent.Unavailable,
+            RoutineNotificationContent.Loading,
+            RoutineNotificationContent.NoUpcomingDepartures(now),
+            RoutineNotificationContent.Stale(listOf(sampleRow()), now),
+            RoutineNotificationContent.Live(listOf(sampleRow())),
+        )
+        val indicator = context.getString(R.string.notification_disruptions_indicator)
+        states.forEach { content ->
+            val notification = builder.build(model(content = content))
+            assertFalse("expected no indicator for $content", contentText(notification).contains(indicator))
+        }
+    }
+
+    @Test
+    fun `a disruption adds the Disruptions indicator to the collapsed text in every state`() {
+        val states = listOf(
+            RoutineNotificationContent.Offline,
+            RoutineNotificationContent.Unavailable,
+            RoutineNotificationContent.Loading,
+            RoutineNotificationContent.NoUpcomingDepartures(now),
+            RoutineNotificationContent.Stale(listOf(sampleRow()), now),
+            RoutineNotificationContent.Live(listOf(sampleRow())),
+        )
+        val indicator = context.getString(R.string.notification_disruptions_indicator)
+        states.forEach { content ->
+            val notification = builder.build(model(content = content, disruptionHeadline = "Delays on line 14"))
+            assertTrue("expected the indicator for $content", contentText(notification).contains(indicator))
+        }
     }
 
     @Test

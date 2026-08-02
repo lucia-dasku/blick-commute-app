@@ -92,11 +92,12 @@ class RoutineNotificationBuilder @Inject constructor(
 
         // Appended to whichever expanded-view line list each state below builds, always
         // AFTER the existing departure/last-checked lines -- see this class's own doc on why
-        // a disruption is only ever shown in the expanded view, and only ever follows the
-        // countdown/departure/Stop action/Live Update content, never replacing or preceding
-        // any of it. Collapsed-view slots (setContentText/setSubText/setShortCriticalText,
-        // the Stop action, and Live Update promotion) are untouched by this list.
+        // a disruption's full header/details are only ever shown in the expanded view, and
+        // only ever follow the countdown/departure/Stop action/Live Update content, never
+        // replacing or preceding any of it. setSubText/setShortCriticalText and the Stop
+        // action are never touched by disruption content at all.
         val disruptionLines = disruptionExpandedLines(model)
+        val hasDisruption = disruptionLines.isNotEmpty()
 
         when (val content = model.content) {
             is RoutineNotificationContent.Live -> {
@@ -104,13 +105,13 @@ class RoutineNotificationBuilder @Inject constructor(
                 // The collapsed content line shows the soonest departure's own row at a
                 // glance rather than repeating `summary` a second time (already shown via
                 // setSubText above).
-                builder.setContentText(rows.firstOrNull())
+                builder.setContentText(collapsedContentText(rows.firstOrNull(), hasDisruption))
                 builder.setStyle(bigTextStyle(summary, rows + disruptionLines))
                 shortCriticalText(content.departures)?.let { builder.setShortCriticalText(it) }
             }
             is RoutineNotificationContent.Stale -> {
                 val staleText = context.getString(R.string.notification_stale_warning)
-                builder.setContentText(staleText)
+                builder.setContentText(collapsedContentText(staleText, hasDisruption))
                 val lines = rowLines(content.departures).ifEmpty { listOf(context.getString(R.string.notification_no_departures)) } +
                     lastCheckedLine(content.lastCheckedAt)
                 builder.setStyle(bigTextStyle(staleText, lines + disruptionLines))
@@ -118,20 +119,20 @@ class RoutineNotificationBuilder @Inject constructor(
             }
             is RoutineNotificationContent.NoUpcomingDepartures -> {
                 val text = context.getString(R.string.notification_no_departures)
-                builder.setContentText(text)
+                builder.setContentText(collapsedContentText(text, hasDisruption))
                 builder.setStyle(bigTextStyle(text, listOf(lastCheckedLine(content.lastCheckedAt)) + disruptionLines))
             }
             is RoutineNotificationContent.Offline -> {
-                builder.setContentText(context.getString(R.string.notification_offline))
-                if (disruptionLines.isNotEmpty()) builder.setStyle(bigTextStyle(summary, disruptionLines))
+                builder.setContentText(collapsedContentText(context.getString(R.string.notification_offline), hasDisruption))
+                if (hasDisruption) builder.setStyle(bigTextStyle(summary, disruptionLines))
             }
             is RoutineNotificationContent.Unavailable -> {
-                builder.setContentText(context.getString(R.string.notification_unavailable))
-                if (disruptionLines.isNotEmpty()) builder.setStyle(bigTextStyle(summary, disruptionLines))
+                builder.setContentText(collapsedContentText(context.getString(R.string.notification_unavailable), hasDisruption))
+                if (hasDisruption) builder.setStyle(bigTextStyle(summary, disruptionLines))
             }
             is RoutineNotificationContent.Loading -> {
-                builder.setContentText(context.getString(R.string.notification_loading))
-                if (disruptionLines.isNotEmpty()) builder.setStyle(bigTextStyle(summary, disruptionLines))
+                builder.setContentText(collapsedContentText(context.getString(R.string.notification_loading), hasDisruption))
+                if (hasDisruption) builder.setStyle(bigTextStyle(summary, disruptionLines))
             }
         }
     }
@@ -143,6 +144,21 @@ class RoutineNotificationBuilder @Inject constructor(
     private fun disruptionExpandedLines(model: RoutineNotificationModel): List<String> {
         val headline = model.disruptionHeadline ?: return emptyList()
         return listOfNotNull(headline, model.disruptionDetails)
+    }
+
+    /**
+     * [base] (the state's own departure/status text, untouched) with a fixed, translation-safe
+     * "Disruptions…" indicator line appended below a blank spacer line when [hasDisruption] --
+     * never the disruption's own header or details, which stay expanded-only (see
+     * [disruptionExpandedLines]). This is the one collapsed-view change a disruption is allowed
+     * to make: it flags that something exists without ever leaking what it says, so a user must
+     * expand the notification to read it, matching this class's own doc on why the full text
+     * cannot and does not appear here.
+     */
+    private fun collapsedContentText(base: CharSequence?, hasDisruption: Boolean): CharSequence? {
+        if (!hasDisruption) return base
+        val indicator = context.getString(R.string.notification_disruptions_indicator)
+        return if (base.isNullOrEmpty()) indicator else "$base\n\n$indicator"
     }
 
     private fun rowLines(departures: List<NotificationDepartureRow>): List<String> = departures.map { row ->

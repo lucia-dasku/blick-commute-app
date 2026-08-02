@@ -511,7 +511,12 @@ looked ragged (not centered) once it wrapped to multiple lines on a narrow phone
 seven weekday selector chips overflowed a single row on a narrow phone (Saturday
 wrapping, Sunday pushed off-screen entirely) — see "UI fixes: icon padding, centered
 empty state, responsive weekday selector" below, adding 9 further instrumented `@Test`
-functions with no further JVM ones, reaching the 425 JVM / 33 instrumented total stated
+functions with no further JVM ones, reaching 425 JVM / 33 instrumented. A further session
+then fixed the notification's disruption layout and tightened disruption filtering — see
+"Notification layout, dedup, and disruption card restyle" below — adding 7 further JVM
+`@Test` functions (content-based dedup, plus the collapsed indicator/never-leaks-full-text
+cases in `RoutineNotificationBuilderTest`) and 7 further instrumented ones
+(`RoutineDetailsScreenTest`, new), reaching the 432 JVM / 40 instrumented total stated
 below — see `../docs/Blick_Project_Documentation.md`'s "Validation status" note for the
 full account of each.
 
@@ -533,9 +538,10 @@ clone builds without Android Studio or a pre-existing local Gradle install.
 ### Full verification pass
 
 A complete local run — `testDebugUnitTest`, `lintDebug`, `assembleDebug`, and
-`connectedDebugAndroidTest` on the physical Lenovo TB350FU (Android 14) referenced
-above — has since been completed, using Android Studio's own bundled JDK. All 425 JVM
-`@Test` functions and all 33 instrumented `@Test` functions pass; `lintDebug` reports 0
+`connectedDebugAndroidTest`, most recently on the physical Samsung Galaxy S23 Ultra
+(`SM-S918B`) referenced below, previously on the Lenovo TB350FU (Android 14) — has since
+been completed, using Android Studio's own bundled JDK. All 432 JVM
+`@Test` functions and all 40 instrumented `@Test` functions pass; `lintDebug` reports 0
 errors (43 warnings: two expected, already-guarded `InlinedApi` findings — the
 API-36 `ACTION_APP_NOTIFICATION_PROMOTION_SETTINGS` deep-link and the API-33
 `POST_NOTIFICATIONS` permission constant — plus four expected `UnusedAttribute` findings
@@ -650,6 +656,43 @@ original bug report was about, on the exact class of device (a current flagship 
 portrait) most likely to hit it. The launcher icon's extra padding was also confirmed on
 this device's own app-drawer icon, rendered under One UI's own squircle mask — a second,
 independent real-world mask shape beyond the Lenovo tablet's.
+
+**Notification layout, dedup, and disruption card restyle:** `RoutineNotificationBuilder`
+now appends a fixed, translation-safe "Disruptions…" indicator line to the collapsed
+`contentText` (after a blank spacer line, and always after the state's own departure/status
+text) whenever a relevant disruption exists, across all six content states — the
+disruption's own header/details are still only ever rendered in the expanded `BigTextStyle`
+body, never in the collapsed indicator, so the platform constraint described above (a
+promoted-ongoing notification cannot show custom content while collapsed) still holds; the
+one new collapsed-view change is the fixed indicator text itself, never the disruption's
+actual wording. `relevantDisruptions` gained a second de-duplication pass, applied after the
+existing `disruptionId`+version step and the priority sort: SL Deviations can publish the
+identical rider-facing text as separate deviation cases scoped to different, overlapping
+stop-area/line combinations, which the `disruptionId`-based step alone does not catch since
+each case has its own id; entries are now also collapsed by identical
+`(header, details)` text, keeping whichever duplicate has the higher priority. On the
+Routine Details screen, the "Disruptions" heading and section are now skipped entirely once
+`DisruptionsState.NoDisruptions` is confirmed (Loading and Unavailable still render, since
+neither means "confirmed nothing relevant"), and each disruption renders as a card using
+`MaterialTheme.colorScheme.errorContainer`/`onErrorContainer` — Material3's own low-opacity,
+theme-derived red-tint role, already tuned for readable contrast in both light and dark mode
+without a hand-picked alpha over the brighter `error` red used for genuine failure states
+elsewhere — collapsed by default to the disruption's header only, with a
+`KeyboardArrowDown`/`KeyboardArrowUp` icon button (content-described, not color-only)
+revealing the details below it, mirroring the notification's own collapsed-header/
+expanded-details split. Journey-segment/direction-specific filtering (beyond the existing
+site + line + transport-mode scoping the backend already applies) was investigated and
+found not achievable with the data upstream (SL Deviations) actually provides: neither
+`RawDeviationSchema` nor the normalized `Disruption` model carries a direction or stop-
+sequence field to filter by, and `CommuteRoutine` itself only has a free-text
+`destinationLabel`, not a structured destination stop id — recorded here rather than
+papering over it with unverified logic. Adds 7 further JVM `@Test` functions
+(`DisruptionTest`'s new content-dedup cases, plus `RoutineNotificationBuilderTest`'s
+collapsed-indicator/never-leaks-full-text cases replacing the one test whose asserted
+behaviour this milestone deliberately changed) and a new instrumented
+`RoutineDetailsScreenTest` (7 `@Test` functions) covering the hidden-when-none-relevant
+section, the collapsed/expanded card content, and the expand/collapse toggle — run and
+passing on the same physical Galaxy S23 Ultra.
 
 **Widget re-audit and correction, since verified end to end on-device:** an earlier pass
 of this widget shipped with several real lifecycle/visual gaps — `StopRoutineNotificationAction`

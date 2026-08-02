@@ -17,9 +17,10 @@ a claim that all of it already exists. This section is the authoritative summary
 what is actually built today; where the two disagree, this section wins.
 
 **Validation status of this update, stated plainly up front:** a complete local run —
-`testDebugUnitTest`, `lintDebug`, `assembleDebug`, and `connectedDebugAndroidTest` on a
-physical Lenovo TB350FU (Android 14) — has now passed in full: all 425 JVM `@Test`
-functions and all 33 instrumented `@Test` functions, `lintDebug` with 0 errors (43
+`testDebugUnitTest`, `lintDebug`, `assembleDebug`, and `connectedDebugAndroidTest`, most
+recently on a physical Samsung Galaxy S23 Ultra, previously on a Lenovo TB350FU
+(Android 14) — has now passed in full: all 432 JVM `@Test`
+functions and all 40 instrumented `@Test` functions, `lintDebug` with 0 errors (43
 warnings: two expected, already-guarded `InlinedApi` findings — the API-36
 `ACTION_APP_NOTIFICATION_PROMOTION_SETTINGS` deep-link and the API-33
 `POST_NOTIFICATIONS` permission constant — plus four expected `UnusedAttribute` findings
@@ -47,7 +48,16 @@ balanced row where space permits, two balanced rows of four and three otherwise)
 of Saturday wrapping and Sunday being pushed off-screen — each verified live on the same
 device, including by temporarily forcing its display to phone-narrow resolutions; see "UI
 fixes: icon padding, centered empty state, responsive weekday selector" in
-`android/README.md` for the full account.
+`android/README.md` for the full account. **The notification's disruption layout was then
+fixed and disruption de-duplication tightened**: the collapsed notification now shows a
+fixed "Disruptions…" indicator line (never the disruption's own text, which stays
+expanded-only), `relevantDisruptions` now also collapses entries with identical message
+text under different `disruptionId`s, and the Routine Details "Disruptions" section is
+skipped entirely once no relevant disruption is confirmed, with each remaining disruption
+shown as a collapsible, muted-red-tinted card; see "Notification layout, dedup, and
+disruption card restyle" in `android/README.md` for the full account, including why
+direction/journey-segment-specific filtering was investigated and found unsupported by the
+data SL Deviations actually provides.
 
 Getting there took three work sessions of source beyond the earlier 193-JVM-test
 baseline. First: the FAB restoration, the Routine Details 30-second auto-refresh, the
@@ -814,8 +824,13 @@ section, and the notification's expanded view) added 61 further JVM `@Test` func
 with no further instrumented ones, reaching 425 JVM / 24 instrumented. A further session
 fixing three reported UI issues (launcher icon padding, centered empty-routines text, and
 a responsive weekday selector replacing the overflowing single row) added 9 further
-instrumented `@Test` functions with no further JVM ones —
-**425 JVM `@Test` functions and 33 instrumented `@Test` functions now exist in source,
+instrumented `@Test` functions with no further JVM ones, reaching 425 JVM / 33
+instrumented. A further session fixing the notification's disruption layout and
+tightening disruption de-duplication (a fixed collapsed "Disruptions…" indicator,
+content-based de-duplication in `relevantDisruptions`, hiding the Routine Details section
+entirely once no relevant disruption is confirmed, and a collapsible muted-red-tinted
+disruption card) added 7 further JVM `@Test` functions and 7 further instrumented ones —
+**432 JVM `@Test` functions and 40 instrumented `@Test` functions now exist in source,
 and all of them pass.** See `android/README.md`'s Build section for the exact toolchain
 versions, the up-to-date per-file test breakdown, and the real issues that first full
 run found and fixed (including a genuine production bug, not just test-suite
