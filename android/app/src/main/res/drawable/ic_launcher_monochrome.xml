@@ -13,36 +13,46 @@
     android:height="108dp"
     android:viewportWidth="108"
     android:viewportHeight="108">
-    <!-- Clock-face ring -->
-    <path
-        android:fillColor="#00000000"
-        android:strokeColor="#FFFFFF"
-        android:strokeWidth="6"
-        android:pathData="M28,62 A26,26 0 1,0 80,62 A26,26 0 1,0 28,62 Z" />
-    <!-- Crown button -->
-    <path
-        android:fillColor="#FFFFFF"
-        android:pathData="M49,24 A5,5 0 1,0 59,24 A5,5 0 1,0 49,24 Z" />
-    <!-- Stem connecting the crown to the clock face -->
-    <path
-        android:fillColor="#00000000"
-        android:strokeColor="#FFFFFF"
-        android:strokeWidth="6"
-        android:strokeLineCap="round"
-        android:pathData="M54,29 L54,36" />
-    <!-- Hand -->
-    <path
-        android:fillColor="#00000000"
-        android:strokeColor="#FFFFFF"
-        android:strokeWidth="6"
-        android:strokeLineCap="round"
-        android:pathData="M54,62 L66,50" />
-    <!-- Center dot -->
-    <path
-        android:fillColor="#FFFFFF"
-        android:pathData="M50,62 A4,4 0 1,0 58,62 A4,4 0 1,0 50,62 Z" />
-    <!-- Rim marker dot -->
-    <path
-        android:fillColor="#FFFFFF"
-        android:pathData="M50,88 A4,4 0 1,0 58,88 A4,4 0 1,0 50,88 Z" />
+    <!-- Scaled 0.9x around the icon's center to match ic_launcher_foreground's own
+         10%-shrink-for-more-padding pass (its per-density PNGs have no vector source to
+         apply a matching transform to directly, so this group is hand-kept in sync with
+         that same factor instead). -->
+    <group
+        android:scaleX="0.9"
+        android:scaleY="0.9"
+        android:pivotX="54"
+        android:pivotY="54">
+        <!-- Clock-face ring -->
+        <path
+            android:fillColor="#00000000"
+            android:strokeColor="#FFFFFF"
+            android:strokeWidth="6"
+            android:pathData="M28,62 A26,26 0 1,0 80,62 A26,26 0 1,0 28,62 Z" />
+        <!-- Crown button -->
+        <path
+            android:fillColor="#FFFFFF"
+            android:pathData="M49,24 A5,5 0 1,0 59,24 A5,5 0 1,0 49,24 Z" />
+        <!-- Stem connecting the crown to the clock face -->
+        <path
+            android:fillColor="#00000000"
+            android:strokeColor="#FFFFFF"
+            android:strokeWidth="6"
+            android:strokeLineCap="round"
+            android:pathData="M54,29 L54,36" />
+        <!-- Hand -->
+        <path
+            android:fillColor="#00000000"
+            android:strokeColor="#FFFFFF"
+            android:strokeWidth="6"
+            android:strokeLineCap="round"
+            android:pathData="M54,62 L66,50" />
+        <!-- Center dot -->
+        <path
+            android:fillColor="#FFFFFF"
+            android:pathData="M50,62 A4,4 0 1,0 58,62 A4,4 0 1,0 50,62 Z" />
+        <!-- Rim marker dot -->
+        <path
+            android:fillColor="#FFFFFF"
+            android:pathData="M50,88 A4,4 0 1,0 58,88 A4,4 0 1,0 50,88 Z" />
+    </group>
 </vector>

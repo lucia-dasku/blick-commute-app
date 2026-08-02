@@ -1,10 +1,19 @@
 package se.blick.app.ui.screens.routinelist
 
 import androidx.activity.ComponentActivity
+import androidx.compose.foundation.layout.Box
+import androidx.compose.foundation.layout.fillMaxHeight
+import androidx.compose.foundation.layout.requiredWidth
+import androidx.compose.ui.Modifier
+import androidx.compose.ui.platform.testTag
+import androidx.compose.ui.test.assertIsDisplayed
 import androidx.compose.ui.test.junit4.v2.createAndroidComposeRule
 import androidx.compose.ui.test.onNodeWithContentDescription
+import androidx.compose.ui.test.onNodeWithTag
 import androidx.compose.ui.test.onNodeWithText
 import androidx.compose.ui.test.performClick
+import androidx.compose.ui.unit.Dp
+import androidx.compose.ui.unit.dp
 import androidx.test.ext.junit.runners.AndroidJUnit4
 import java.time.DayOfWeek
 import java.time.LocalTime
@@ -73,6 +82,57 @@ class RoutineListScreenTest {
         }
 
         assertEquals(true, addRoutineClicked)
+    }
+
+    /** Forces a specific width regardless of the real test device's actual screen size —
+     * [requiredWidth] (not [androidx.compose.foundation.layout.width], which would just be
+     * coerced down to whatever the real device already provides) is the standard technique
+     * for deterministically exercising a narrow-phone vs. tablet-width layout in an
+     * instrumented test. */
+    private fun horizontalCenterOfEmptyMessage(width: Dp): Pair<Float, Float> {
+        composeRule.setContent {
+            Box(Modifier.requiredWidth(width).fillMaxHeight().testTag("container")) {
+                RoutineListContent(
+                    uiState = RoutineListUiState(routines = emptyList(), isLoading = false),
+                    onAddRoutine = {},
+                    onOpenRoutine = {},
+                )
+            }
+        }
+        val message = composeRule.activity.getString(R.string.routine_list_empty)
+        val containerBounds = composeRule.onNodeWithTag("container").fetchSemanticsNode().boundsInRoot
+        val textBounds = composeRule.onNodeWithText(message).fetchSemanticsNode().boundsInRoot
+        return (containerBounds.left + containerBounds.right) / 2 to (textBounds.left + textBounds.right) / 2
+    }
+
+    @Test
+    fun emptyMessage_isHorizontallyCenteredAtNarrowPhoneWidth() {
+        // Narrow enough that this message (see strings.xml) reliably wraps to multiple
+        // lines -- exactly the case where un-centered text alignment previously looked
+        // ragged even though the block itself was already centered as a whole.
+        val (containerCenterX, textCenterX) = horizontalCenterOfEmptyMessage(320.dp)
+        assertEquals(containerCenterX, textCenterX, 2f)
+    }
+
+    @Test
+    fun emptyMessage_isHorizontallyCenteredAtTabletWidth() {
+        val (containerCenterX, textCenterX) = horizontalCenterOfEmptyMessage(900.dp)
+        assertEquals(containerCenterX, textCenterX, 2f)
+    }
+
+    @Test
+    fun emptyMessage_isDisplayedAtNarrowPhoneWidth() {
+        val message = composeRule.activity.getString(R.string.routine_list_empty)
+        composeRule.setContent {
+            Box(Modifier.requiredWidth(320.dp).fillMaxHeight()) {
+                RoutineListContent(
+                    uiState = RoutineListUiState(routines = emptyList(), isLoading = false),
+                    onAddRoutine = {},
+                    onOpenRoutine = {},
+                )
+            }
+        }
+        composeRule.onNodeWithText(message).assertIsDisplayed()
     }
 
     @Test

@@ -5,6 +5,7 @@ package se.blick.app.ui.screens.routinecreate
 import androidx.activity.compose.BackHandler
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Box
+import androidx.compose.foundation.layout.BoxWithConstraints
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Arrangement
@@ -327,15 +328,7 @@ private fun ScheduleStep(
     Column(Modifier.fillMaxSize().verticalScroll(rememberScrollState())) {
         Text(stringResource(R.string.routine_create_days_label), style = MaterialTheme.typography.labelLarge)
         Spacer(Modifier.height(8.dp))
-        Row(horizontalArrangement = Arrangement.spacedBy(4.dp)) {
-            DayOfWeek.values().forEach { day ->
-                FilterChip(
-                    selected = day in uiState.activeDays,
-                    onClick = { onToggleDay(day) },
-                    label = { Text(day.getDisplayName(TextStyle.SHORT, locale)) },
-                )
-            }
-        }
+        WeekdaySelector(activeDays = uiState.activeDays, onToggleDay = onToggleDay, locale = locale)
         if (!uiState.hasSelectedDays) {
             Text(
                 stringResource(R.string.routine_create_error_no_days),
@@ -397,6 +390,71 @@ private fun ScheduleStep(
             },
             onDismiss = { editingField = null },
         )
+    }
+}
+
+/** Below this available width, all seven day chips in a single row would either overflow
+ * (forcing horizontal scrolling) or squeeze under the 48dp minimum touch-target size on a
+ * typical phone — see [WeekdaySelector]'s own doc. Comfortably above what a single row of
+ * seven short day labels needs on any tablet or landscape width actually seen in testing. */
+internal val WEEKDAY_SINGLE_ROW_MIN_WIDTH = 400.dp
+
+/**
+ * All seven [DayOfWeek] values as equally-weighted [FilterChip]s, laid out responsively so
+ * every day is always visible and selectable with no horizontal scrolling, on both phones and
+ * tablets: a single row spanning the full width when [BoxWithConstraints]' measured
+ * `maxWidth` is at least [WEEKDAY_SINGLE_ROW_MIN_WIDTH] (comfortably true for tablets and
+ * landscape phones), otherwise two balanced rows (Monday–Thursday, then Friday–Sunday) so no
+ * day ever wraps off-screen or requires scrolling on a narrow phone in portrait.
+ *
+ * Each [WeekdayRow] gives every chip in it an equal [Modifier.weight] share of the row's
+ * width — the same mechanism that makes both the seven-chip and the four/three-chip split
+ * "balanced" (every chip in a row is the same width) and that keeps each day's short label on
+ * one line (`maxLines = 1`) even at the narrowest supported width, since dividing by 4 (the
+ * narrower of the two split rows) still leaves comfortably more than the 48dp minimum
+ * interactive size Material's own [FilterChip] already enforces.
+ */
+@Composable
+internal fun WeekdaySelector(
+    activeDays: Set<DayOfWeek>,
+    onToggleDay: (DayOfWeek) -> Unit,
+    locale: java.util.Locale,
+) {
+    val days = DayOfWeek.values().toList()
+    BoxWithConstraints(Modifier.fillMaxWidth()) {
+        if (maxWidth >= WEEKDAY_SINGLE_ROW_MIN_WIDTH) {
+            WeekdayRow(days, activeDays, onToggleDay, locale)
+        } else {
+            Column(verticalArrangement = Arrangement.spacedBy(4.dp)) {
+                WeekdayRow(days.subList(0, 4), activeDays, onToggleDay, locale)
+                WeekdayRow(days.subList(4, 7), activeDays, onToggleDay, locale)
+            }
+        }
+    }
+}
+
+@Composable
+private fun WeekdayRow(
+    days: List<DayOfWeek>,
+    activeDays: Set<DayOfWeek>,
+    onToggleDay: (DayOfWeek) -> Unit,
+    locale: java.util.Locale,
+) {
+    Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(4.dp)) {
+        days.forEach { day ->
+            FilterChip(
+                selected = day in activeDays,
+                onClick = { onToggleDay(day) },
+                label = {
+                    Text(
+                        day.getDisplayName(TextStyle.SHORT, locale),
+                        maxLines = 1,
+                        softWrap = false,
+                    )
+                },
+                modifier = Modifier.weight(1f),
+            )
+        }
     }
 }
 

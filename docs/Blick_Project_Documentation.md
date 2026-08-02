@@ -19,7 +19,7 @@ what is actually built today; where the two disagree, this section wins.
 **Validation status of this update, stated plainly up front:** a complete local run —
 `testDebugUnitTest`, `lintDebug`, `assembleDebug`, and `connectedDebugAndroidTest` on a
 physical Lenovo TB350FU (Android 14) — has now passed in full: all 425 JVM `@Test`
-functions and all 24 instrumented `@Test` functions, `lintDebug` with 0 errors (43
+functions and all 33 instrumented `@Test` functions, `lintDebug` with 0 errors (43
 warnings: two expected, already-guarded `InlinedApi` findings — the API-36
 `ACTION_APP_NOTIFICATION_PROMOTION_SETTINGS` deep-link and the API-33
 `POST_NOTIFICATIONS` permission constant — plus four expected `UnusedAttribute` findings
@@ -39,6 +39,15 @@ including live confirmation that a disruptions failure never affects departures 
 for a disruption actually being present, since none was active on the tested line at
 verification time; see "Disruptions integration, verified end to end on-device" in
 `android/README.md` for the full account of what was and wasn't observed directly.
+**Three reported UI issues were then fixed without changing app behaviour** — the
+launcher icon's foreground silhouette now has more padding on every side, the
+empty-routines message centers correctly once it wraps to multiple lines on a narrow
+phone, and all seven weekday selector chips now fit a narrow phone's width (a single
+balanced row where space permits, two balanced rows of four and three otherwise) instead
+of Saturday wrapping and Sunday being pushed off-screen — each verified live on the same
+device, including by temporarily forcing its display to phone-narrow resolutions; see "UI
+fixes: icon padding, centered empty state, responsive weekday selector" in
+`android/README.md` for the full account.
 
 Getting there took three work sessions of source beyond the earlier 193-JVM-test
 baseline. First: the FAB restoration, the Routine Details 30-second auto-refresh, the
@@ -158,8 +167,19 @@ all) was being unconditionally excluded regardless of the requested line, becaus
 `scope.stop_areas` array made the siteId check always fail; it is now included when both
 the requested line and transport mode match the deviation's own scope, while a deviation
 scoped to an unrelated station continues to be excluded exactly as before. This added 61
-further JVM `@Test` functions with no further instrumented ones, bringing the fully
-verified total to 425 JVM / 24 instrumented, stated above.
+further JVM `@Test` functions with no further instrumented ones, reaching 425 JVM / 24
+instrumented. A further session then fixed three reported UI issues without changing app
+behaviour: the adaptive launcher icon's foreground silhouette was shrunk 10% and
+re-centered on its canvas (both the per-density PNGs and the monochrome themed-icon
+vector) for more padding on every side; the empty-routines message gained centered text
+alignment so it no longer looks ragged once it wraps to multiple lines on a narrow phone;
+and the seven weekday selector chips — previously a single unwrapped row that overflowed
+a narrow phone's width, wrapping Saturday and pushing Sunday off-screen — were replaced
+with a width-aware selector rendering one balanced row when space permits and two
+balanced rows (Monday–Thursday, Friday–Sunday) otherwise, with every chip's label capped
+at one line and touch targets comfortably above Material's 48dp minimum at every
+supported width. This added 9 further instrumented `@Test` functions with no further JVM
+ones, bringing the fully verified total to 425 JVM / 33 instrumented, stated above.
 
 **Implemented today (Android client + backend):**
 
@@ -787,8 +807,15 @@ reconcile fix, responsive sizing, and the readable theme background) added 8 fur
 `@Test` functions with no further instrumented ones, reaching 341 JVM / 24 instrumented.
 A "Design 1" visual redesign session (the colored line-number badge via
 `LineBadgeColorMapping`, the large-countdown layout, and the width-driven responsive
-size tiers) added 23 further JVM `@Test` functions with no further instrumented ones —
-**364 JVM `@Test` functions and 24 instrumented `@Test` functions now exist in source,
+size tiers) added 23 further JVM `@Test` functions with no further instrumented ones,
+reaching 364 JVM / 24 instrumented. A further session integrating disruptions into the
+Android client (a shared `DisruptionCache`, `GetDisruptionsUseCase`, a Routine Details
+section, and the notification's expanded view) added 61 further JVM `@Test` functions
+with no further instrumented ones, reaching 425 JVM / 24 instrumented. A further session
+fixing three reported UI issues (launcher icon padding, centered empty-routines text, and
+a responsive weekday selector replacing the overflowing single row) added 9 further
+instrumented `@Test` functions with no further JVM ones —
+**425 JVM `@Test` functions and 33 instrumented `@Test` functions now exist in source,
 and all of them pass.** See `android/README.md`'s Build section for the exact toolchain
 versions, the up-to-date per-file test breakdown, and the real issues that first full
 run found and fixed (including a genuine production bug, not just test-suite

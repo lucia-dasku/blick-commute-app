@@ -5,6 +5,7 @@ import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.PaddingValues
 import androidx.compose.foundation.layout.fillMaxSize
+import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
@@ -30,6 +31,7 @@ import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.res.stringResource
+import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.unit.dp
 import androidx.hilt.navigation.compose.hiltViewModel
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
@@ -121,10 +123,18 @@ fun RoutineListContent(
         },
     ) { paddingValues ->
         if (!uiState.isLoading && uiState.routines.isEmpty()) {
+            // contentAlignment centers the whole text block both axes; textAlign additionally
+            // centers each wrapped line *within* that block on narrow phones, where this
+            // message wraps to two or three lines -- without it, wrapped lines default to
+            // start-aligned and look ragged even though the block itself is centered. The
+            // horizontal padding caps the line length on wide tablets so text doesn't stretch
+            // edge to edge there.
             Box(Modifier.fillMaxSize().padding(paddingValues), contentAlignment = Alignment.Center) {
                 Text(
                     text = stringResource(R.string.routine_list_empty),
                     style = MaterialTheme.typography.bodyLarge,
+                    textAlign = TextAlign.Center,
+                    modifier = Modifier.fillMaxWidth().padding(horizontal = 32.dp),
                 )
             }
         } else {

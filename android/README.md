@@ -504,9 +504,16 @@ described above, adding 23 further JVM `@Test` functions (17 in
 reaching 364 JVM / 24 instrumented. A further session then integrated disruptions into
 the Android client for the first time — see "Disruptions integration, verified end to
 end on-device" below — adding 61 further JVM `@Test` functions with no further
-instrumented ones, reaching the 425 JVM / 24 instrumented total stated below — see
-`../docs/Blick_Project_Documentation.md`'s "Validation status" note for the full account
-of each.
+instrumented ones, reaching 425 JVM / 24 instrumented. A further session then fixed three
+reported UI issues without changing app behaviour — the adaptive launcher icon's
+foreground silhouette sat too close to its safe-zone edges, the empty-routines message
+looked ragged (not centered) once it wrapped to multiple lines on a narrow phone, and all
+seven weekday selector chips overflowed a single row on a narrow phone (Saturday
+wrapping, Sunday pushed off-screen entirely) — see "UI fixes: icon padding, centered
+empty state, responsive weekday selector" below, adding 9 further instrumented `@Test`
+functions with no further JVM ones, reaching the 425 JVM / 33 instrumented total stated
+below — see `../docs/Blick_Project_Documentation.md`'s "Validation status" note for the
+full account of each.
 
 On a machine with a real JDK 17 and Android SDK (or Android Studio, which provides
 both), build with:
@@ -528,7 +535,7 @@ clone builds without Android Studio or a pre-existing local Gradle install.
 A complete local run — `testDebugUnitTest`, `lintDebug`, `assembleDebug`, and
 `connectedDebugAndroidTest` on the physical Lenovo TB350FU (Android 14) referenced
 above — has since been completed, using Android Studio's own bundled JDK. All 425 JVM
-`@Test` functions and all 24 instrumented `@Test` functions pass; `lintDebug` reports 0
+`@Test` functions and all 33 instrumented `@Test` functions pass; `lintDebug` reports 0
 errors (43 warnings: two expected, already-guarded `InlinedApi` findings — the
 API-36 `ACTION_APP_NOTIFICATION_PROMOTION_SETTINGS` deep-link and the API-33
 `POST_NOTIFICATIONS` permission constant — plus four expected `UnusedAttribute` findings
@@ -572,6 +579,55 @@ only through the automated suite's explicit fixtures (`DisruptionTest`,
 `GetDisruptionsUseCaseTest`, `RoutineDetailsViewModelTest`,
 `RoutineNotificationMapperTest`, `RoutineNotificationBuilderTest`), not by direct visual
 confirmation of a real disruption rendering on-screen.
+
+**UI fixes: icon padding, centered empty state, responsive weekday selector — verified
+end to end on-device:** three reported UI issues, fixed without changing any app
+behaviour:
+
+- **Launcher icon margins.** `ic_launcher_foreground`'s five per-density PNGs (no vector
+  source exists to reuse — see `ic_launcher_monochrome.xml`'s own doc) had their content
+  uniformly shrunk 10% and re-centered on the same canvas (a plain resize-and-recenter, so
+  colours and relative proportions are pixel-identical, just smaller and better-padded);
+  `ic_launcher_monochrome.xml`'s vector paths got the equivalent transform via a `<group
+  android:scaleX="0.9" android:scaleY="0.9" android:pivotX="54" android:pivotY="54">`
+  wrapper, kept in sync with the same factor by hand since the two layers have no shared
+  source. Verified on the physical device's own app-drawer icon (this launcher's squircle
+  mask) after reinstalling, and separately by compositing the same updated background/
+  foreground assets under both a circular mask and a rounded-square mask in a throwaway
+  script — both previews show the silhouette centered with visibly more padding on every
+  side than before, never touching either mask's edge.
+- **Empty-routines message centering.** `RoutineListContent`'s empty state already
+  centered the whole text block via its `Box`'s `contentAlignment = Alignment.Center`, but
+  once the message wrapped to multiple lines on a narrow phone, the wrapped lines
+  themselves defaulted to start-aligned text within that (already-centered) block, looking
+  ragged. Fixed with `textAlign = TextAlign.Center` plus `Modifier.fillMaxWidth()` and
+  horizontal padding (so line length stays reasonable on a wide tablet too). Verified live
+  on the physical device by temporarily forcing its display to phone-narrow resolutions
+  (`adb shell wm size 480x800`, then `360x640`) — at both, the message visibly wrapped to
+  two lines with the second line correctly centered under the first, not flush left; `wm
+  size reset` restored the device's native resolution afterward.
+- **Weekday selector overflow.** The seven day chips were a single, unwrapped `Row` that
+  overflowed a narrow phone's width (Saturday wrapping to a clipped second line, Sunday
+  pushed off-screen entirely — exactly what the bug report described). Replaced with
+  `WeekdaySelector`: a `BoxWithConstraints` that renders one full-width row when the
+  measured available width is at least 400dp (comfortably true for tablets and landscape
+  phones), or two balanced rows (Monday–Thursday, then Friday–Sunday) below that — each
+  row gives every one of its chips an equal `Modifier.weight(1f)` share, which is what
+  makes both the seven-chip and the four/three-chip split "balanced," keeps each day's
+  short label on one line (`maxLines = 1`) at every supported width, and keeps every
+  chip's touch target comfortably above Material's 48dp minimum even in the narrower
+  four-chip row. Verified live on the physical device at the same forced phone-narrow
+  resolutions: at ~480x800, all seven days rendered fully visible in one row (matching the
+  balanced-single-row path — evidently still above the 400dp threshold at this device's
+  density); the two-row split itself was additionally confirmed deterministically via the
+  new instrumented `RoutineCreateScreenTest`, which forces an exact 320dp width regardless
+  of the real device (`Modifier.requiredWidth`) and asserts Monday–Thursday share one row's
+  vertical position while Friday–Sunday share a different, lower one — run and passing on
+  this same physical device, not just in principle.
+
+Adds 9 new instrumented `@Test` functions (`RoutineCreateScreenTest`, plus new cases in
+`RoutineListScreenTest`) covering narrow-phone and tablet widths for the centering and
+weekday-row fixes; no JVM-level behaviour changed, so the JVM suite stays at 425.
 
 **Widget re-audit and correction, since verified end to end on-device:** an earlier pass
 of this widget shipped with several real lifecycle/visual gaps — `StopRoutineNotificationAction`
