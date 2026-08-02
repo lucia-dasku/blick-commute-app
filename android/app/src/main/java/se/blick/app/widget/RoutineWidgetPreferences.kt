@@ -5,6 +5,8 @@ import androidx.datastore.preferences.core.Preferences
 import androidx.datastore.preferences.core.booleanPreferencesKey
 import androidx.datastore.preferences.core.longPreferencesKey
 import androidx.datastore.preferences.core.stringPreferencesKey
+import se.blick.app.domain.model.TransportMode
+import se.blick.app.domain.model.toTransportMode
 import java.time.Instant
 
 /**
@@ -21,6 +23,8 @@ private object WidgetKeys {
     val ROUTINE_NAME = stringPreferencesKey("routineName")
     val STATION_NAME = stringPreferencesKey("stationName")
     val DIRECTION_LABEL = stringPreferencesKey("directionLabel")
+    val LINE_DESIGNATION = stringPreferencesKey("lineDesignation")
+    val TRANSPORT_MODE = stringPreferencesKey("transportMode")
     val LAST_CHECKED_AT_EPOCH_MILLIS = longPreferencesKey("lastCheckedAtEpochMillis")
     val NEXT_LINE = stringPreferencesKey("nextLine")
     val NEXT_DESTINATION = stringPreferencesKey("nextDestination")
@@ -47,7 +51,9 @@ internal fun RoutineWidgetUiState.writeInto(prefs: MutablePreferences) {
             prefs[WidgetKeys.ROUTINE_ID] = model.routineId
             prefs[WidgetKeys.ROUTINE_NAME] = model.routineName
             prefs[WidgetKeys.STATION_NAME] = model.stationName
+            prefs[WidgetKeys.TRANSPORT_MODE] = model.transportMode.name
             model.directionLabel?.let { prefs[WidgetKeys.DIRECTION_LABEL] = it }
+            model.lineDesignation?.let { prefs[WidgetKeys.LINE_DESIGNATION] = it }
             when (val content = model.content) {
                 RoutineWidgetContent.Loading -> prefs[WidgetKeys.CONTENT_TYPE] = ContentType.LOADING.name
                 is RoutineWidgetContent.Live -> {
@@ -102,6 +108,12 @@ internal fun Preferences.toWidgetUiState(): RoutineWidgetUiState {
     val routineName = this[WidgetKeys.ROUTINE_NAME].orEmpty()
     val stationName = this[WidgetKeys.STATION_NAME].orEmpty()
     val directionLabel = this[WidgetKeys.DIRECTION_LABEL]
+    val lineDesignation = this[WidgetKeys.LINE_DESIGNATION]
+    // .toTransportMode() defaults to TransportMode.UNKNOWN both for a genuinely unrecognized
+    // value and for a widget instance whose prefs were written by an app version before this
+    // key existed (this[...] is then simply null) -- either way, a safe grey badge, never a
+    // decode failure.
+    val transportMode = this[WidgetKeys.TRANSPORT_MODE]?.toTransportMode() ?: TransportMode.UNKNOWN
     val next = readNext()
     val following = readFollowing()
     val lastCheckedAt = this[WidgetKeys.LAST_CHECKED_AT_EPOCH_MILLIS]?.let { Instant.ofEpochMilli(it) }
@@ -117,7 +129,15 @@ internal fun Preferences.toWidgetUiState(): RoutineWidgetUiState {
         ContentType.NO_ACTIVE_COMMUTE -> return RoutineWidgetUiState.NoActiveCommute
     }
     return RoutineWidgetUiState.ActiveRoutine(
-        RoutineWidgetModel(routineId = routineId, routineName = routineName, stationName = stationName, directionLabel = directionLabel, content = content),
+        RoutineWidgetModel(
+            routineId = routineId,
+            routineName = routineName,
+            stationName = stationName,
+            directionLabel = directionLabel,
+            content = content,
+            lineDesignation = lineDesignation,
+            transportMode = transportMode,
+        ),
     )
 }
 

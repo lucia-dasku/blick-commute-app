@@ -3,7 +3,11 @@ package se.blick.app.widget
 import android.appwidget.AppWidgetManager
 import android.content.Context
 import androidx.compose.runtime.Composable
+import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.unit.Dp
+import androidx.compose.ui.unit.TextUnit
 import androidx.compose.ui.unit.dp
+import androidx.compose.ui.unit.sp
 import androidx.datastore.preferences.core.Preferences
 import androidx.glance.GlanceId
 import androidx.glance.GlanceModifier
@@ -16,13 +20,18 @@ import androidx.glance.appwidget.GlanceAppWidgetReceiver
 import androidx.glance.appwidget.SizeMode
 import androidx.glance.appwidget.action.actionStartActivity
 import androidx.glance.appwidget.components.Scaffold
+import androidx.glance.appwidget.cornerRadius
 import androidx.glance.appwidget.provideContent
+import androidx.glance.background
 import androidx.glance.currentState
 import androidx.glance.layout.Alignment
+import androidx.glance.layout.Box
 import androidx.glance.layout.Column
+import androidx.glance.layout.Row
 import androidx.glance.layout.fillMaxSize
 import androidx.glance.layout.fillMaxWidth
 import androidx.glance.layout.padding
+import androidx.glance.layout.size
 import androidx.glance.state.PreferencesGlanceStateDefinition
 import androidx.glance.text.FontWeight
 import androidx.glance.text.Text
@@ -116,11 +125,58 @@ class BlickRoutineWidgetReceiver : GlanceAppWidgetReceiver() {
     }
 }
 
-/** Below this height, only the routine identity plus a single content line reliably fit without
- * clipping (`blick_routine_widget_info.xml`'s declared `minHeight` is 90dp) — the "following"
- * departure row, and the stale/no-upcoming explanatory line, are dropped rather than clipped or
- * left to overflow the widget's bounds. */
+/** Below this height, only the header (line badge + destination) plus the single big countdown
+ * reliably fit without clipping (`blick_routine_widget_info.xml`'s declared `minHeight` is
+ * 90dp) — the station/direction + "Next" secondary block and the live/scheduled/cancelled
+ * status row are dropped rather than clipped or left to overflow the widget's bounds. */
 private val COMPACT_HEIGHT_THRESHOLD = 110.dp
+
+/** Font sizes for one responsive breakpoint — chosen by [sizeTierFor] from the widget's live
+ * [LocalSize] width on every resize (`SizeMode.Exact`, see [BlickRoutineWidget]'s own doc). The
+ * "Design 1" reference mock was captured on a tablet-sized placement, whose widget grid cells
+ * are physically much larger than a typical phone's — using those same absolute point sizes
+ * unconditionally would overflow or clip badly on an ordinary phone-sized placement, so the
+ * countdown/badge/secondary text sizes scale down through [TIER_COMPACT]/[TIER_MEDIUM] for
+ * realistic phone widths and only reach the mock's own large sizes at [TIER_EXTRA_LARGE]. */
+private data class WidgetSizeTier(
+    val headerSize: TextUnit,
+    val badgeSize: TextUnit,
+    val countdownSize: TextUnit,
+    val secondarySize: TextUnit,
+    val statusSize: TextUnit,
+)
+
+private val TIER_COMPACT = WidgetSizeTier(headerSize = 12.sp, badgeSize = 10.sp, countdownSize = 24.sp, secondarySize = 11.sp, statusSize = 10.sp)
+private val TIER_MEDIUM = WidgetSizeTier(headerSize = 13.sp, badgeSize = 11.sp, countdownSize = 32.sp, secondarySize = 12.sp, statusSize = 11.sp)
+private val TIER_LARGE = WidgetSizeTier(headerSize = 15.sp, badgeSize = 13.sp, countdownSize = 44.sp, secondarySize = 14.sp, statusSize = 12.sp)
+private val TIER_EXTRA_LARGE = WidgetSizeTier(headerSize = 17.sp, badgeSize = 14.sp, countdownSize = 58.sp, secondarySize = 16.sp, statusSize = 13.sp)
+
+/** Phone home-screen widget grid cells are typically well under 220dp per placed instance;
+ * beyond ~480dp is realistically only reachable on a tablet-class launcher grid (see
+ * `blick_routine_widget_info.xml`'s own `minWidth`/`maxResizeWidth`, and the manual on-device
+ * verification note in `android/README.md`'s Full verification pass section for a real
+ * measurement of how large this got on an actual tablet). */
+private fun sizeTierFor(width: Dp): WidgetSizeTier = when {
+    width < 220.dp -> TIER_COMPACT
+    width < 320.dp -> TIER_MEDIUM
+    width < 480.dp -> TIER_LARGE
+    else -> TIER_EXTRA_LARGE
+}
+
+private val BADGE_PINK = Color(0xFFFF49A5)
+private val BADGE_BLUE = Color(0xFF177BC0)
+private val BADGE_RED = Color(0xFFEE2D28)
+private val BADGE_GREEN = Color(0xFF51BA5B)
+private val BADGE_GREY = Color(0xFF6B7280)
+private val BADGE_TEXT_WHITE = ColorProvider(Color.White)
+
+private fun LineBadgeColor.toBadgeColor(): Color = when (this) {
+    LineBadgeColor.Pink -> BADGE_PINK
+    LineBadgeColor.Blue -> BADGE_BLUE
+    LineBadgeColor.Red -> BADGE_RED
+    LineBadgeColor.Green -> BADGE_GREEN
+    LineBadgeColor.Unknown -> BADGE_GREY
+}
 
 @Composable
 private fun BlickWidgetContent(state: RoutineWidgetUiState) {
@@ -138,80 +194,168 @@ private fun BlickWidgetContent(state: RoutineWidgetUiState) {
 @Composable
 private fun NoActiveCommuteContent() {
     val context = LocalContext.current
+    val tier = sizeTierFor(LocalSize.current.width)
     Column(
         modifier = GlanceModifier.fillMaxSize(),
         horizontalAlignment = Alignment.CenterHorizontally,
         verticalAlignment = Alignment.CenterVertically,
     ) {
-        BodyText(context.getString(R.string.widget_no_active_commute))
+        BodyText(context.getString(R.string.widget_no_active_commute), tier)
     }
 }
 
+/** "Design 1": a line badge + destination header, a large next-departure countdown with a
+ * smaller station/direction + following-departure block beside it, and a live/scheduled/
+ * cancelled status row — see [WidgetContentBody]/[DepartureMainContent]/[StatusFooter]. */
 @Composable
 private fun ActiveRoutineContent(context: Context, model: RoutineWidgetModel) {
     val clickAction = actionStartActivity(routineDetailsTapIntent(context, model.routineId))
     // Read once per composition: SizeMode.Exact recomposes this whole tree on every resize, so
     // every use below always reflects the widget's current on-screen size.
-    val compact = LocalSize.current.height < COMPACT_HEIGHT_THRESHOLD
+    val size = LocalSize.current
+    val compact = size.height < COMPACT_HEIGHT_THRESHOLD
+    val tier = sizeTierFor(size.width)
+    val destination = model.directionLabel ?: model.stationName
     Column(modifier = GlanceModifier.fillMaxSize().clickable(clickAction)) {
-        Text(
-            text = model.routineName,
-            maxLines = 1,
-            style = TextStyle(fontWeight = FontWeight.Bold, color = onBackgroundColor()),
-        )
-        val subtitle = model.directionLabel?.let { "${model.stationName} → $it" } ?: model.stationName
-        Text(text = subtitle, maxLines = 1, style = TextStyle(color = onSurfaceVariantColor()))
-        Column(modifier = GlanceModifier.fillMaxWidth().padding(top = 4.dp)) {
-            WidgetContentBody(context, model.content, compact)
+        WidgetHeader(model, tier, destination)
+        Column(modifier = GlanceModifier.fillMaxWidth().padding(top = 6.dp)) {
+            WidgetContentBody(context, model, compact, tier)
         }
     }
 }
 
 @Composable
-private fun WidgetContentBody(context: Context, content: RoutineWidgetContent, compact: Boolean) {
-    when (content) {
-        RoutineWidgetContent.Loading -> BodyText(context.getString(R.string.notification_loading))
-        is RoutineWidgetContent.Live -> {
-            DepartureRowText(context, content.next)
-            if (!compact) content.following?.let { DepartureRowText(context, it) }
+private fun WidgetHeader(model: RoutineWidgetModel, tier: WidgetSizeTier, destination: String) {
+    Row(modifier = GlanceModifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
+        model.lineDesignation?.let { line ->
+            LineBadge(line, LineBadgeColorMapping.colorFor(model.transportMode, line), tier.badgeSize)
+            Text(
+                text = "  •  ",
+                maxLines = 1,
+                style = TextStyle(fontWeight = FontWeight.Bold, fontSize = tier.headerSize, color = onBackgroundColor()),
+            )
         }
+        Text(
+            text = destination,
+            maxLines = 1,
+            style = TextStyle(fontWeight = FontWeight.Bold, fontSize = tier.headerSize, color = onBackgroundColor()),
+        )
+    }
+}
+
+/** A small rounded badge with the real line number, colored by [LineBadgeColorMapping] — bold
+ * white text on every color (including [BADGE_GREY] for an unmapped line), for reliable
+ * contrast regardless of which family color is picked. */
+@Composable
+private fun LineBadge(text: String, color: LineBadgeColor, textSize: TextUnit) {
+    Box(
+        modifier = GlanceModifier
+            .background(color.toBadgeColor())
+            .cornerRadius(6.dp)
+            .padding(horizontal = 7.dp, vertical = 2.dp),
+        contentAlignment = Alignment.Center,
+    ) {
+        Text(text = text, maxLines = 1, style = TextStyle(color = BADGE_TEXT_WHITE, fontWeight = FontWeight.Bold, fontSize = textSize))
+    }
+}
+
+@Composable
+private fun WidgetContentBody(context: Context, model: RoutineWidgetModel, compact: Boolean, tier: WidgetSizeTier) {
+    when (val content = model.content) {
+        RoutineWidgetContent.Loading -> BodyText(context.getString(R.string.notification_loading), tier)
+        is RoutineWidgetContent.Live -> DepartureMainContent(context, model, content.next, content.following, compact, tier)
         is RoutineWidgetContent.Stale -> {
-            if (!compact) BodyText(context.getString(R.string.notification_stale_warning))
-            content.next?.let { DepartureRowText(context, it) }
-            if (!compact) content.following?.let { DepartureRowText(context, it) }
-            if (content.next == null) {
-                BodyText(context.getString(R.string.notification_no_departures))
+            val next = content.next
+            if (next != null) {
+                if (!compact) BodyText(context.getString(R.string.notification_stale_warning), tier)
+                DepartureMainContent(context, model, next, content.following, compact, tier)
+            } else {
+                BodyText(context.getString(R.string.notification_no_departures), tier)
             }
         }
-        is RoutineWidgetContent.NoUpcomingDepartures -> BodyText(context.getString(R.string.notification_no_departures))
-        RoutineWidgetContent.Offline -> BodyText(context.getString(R.string.notification_offline))
-        RoutineWidgetContent.Unavailable -> BodyText(context.getString(R.string.notification_unavailable))
-        RoutineWidgetContent.NotificationsUnavailable -> BodyText(context.getString(R.string.widget_notifications_unavailable))
+        is RoutineWidgetContent.NoUpcomingDepartures -> BodyText(context.getString(R.string.notification_no_departures), tier)
+        RoutineWidgetContent.Offline -> BodyText(context.getString(R.string.notification_offline), tier)
+        RoutineWidgetContent.Unavailable -> BodyText(context.getString(R.string.notification_unavailable), tier)
+        RoutineWidgetContent.NotificationsUnavailable -> BodyText(context.getString(R.string.widget_notifications_unavailable), tier)
+    }
+}
+
+/** The "6 min" big countdown on the left, and — outside [compact] heights only — the
+ * station → direction line plus the following departure's own smaller countdown on the right,
+ * and the live/scheduled/cancelled status row underneath. */
+@Composable
+private fun DepartureMainContent(
+    context: Context,
+    model: RoutineWidgetModel,
+    next: WidgetDepartureRow,
+    following: WidgetDepartureRow?,
+    compact: Boolean,
+    tier: WidgetSizeTier,
+) {
+    Column(modifier = GlanceModifier.fillMaxWidth()) {
+        Row(modifier = GlanceModifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
+            Box(modifier = GlanceModifier.defaultWeight(), contentAlignment = Alignment.CenterStart) {
+                CountdownText(context, next, tier)
+            }
+            if (!compact) {
+                Column(horizontalAlignment = Alignment.End) {
+                    val subtitle = model.directionLabel?.let { "${model.stationName} → $it" } ?: model.stationName
+                    Text(text = subtitle, maxLines = 1, style = TextStyle(fontSize = tier.secondarySize, color = onSurfaceVariantColor()))
+                    following?.let { row ->
+                        val nextLabel = context.getString(R.string.widget_next_departure_label)
+                        val minutesText = context.getString(R.string.widget_countdown_minutes_format, row.minutesRemaining)
+                        Text(text = "$nextLabel  $minutesText", maxLines = 1, style = TextStyle(fontSize = tier.secondarySize, color = onSurfaceVariantColor()))
+                    }
+                }
+            }
+        }
+        if (!compact) {
+            StatusFooter(context, next, tier)
+        }
     }
 }
 
 @Composable
-private fun BodyText(text: String) {
-    Text(text = text, maxLines = 2, style = TextStyle(color = onBackgroundColor()))
-}
-
-@Composable
-private fun DepartureRowText(context: Context, row: WidgetDepartureRow) {
-    val destination = row.destinationLabel ?: context.getString(R.string.direction_unknown_destination)
+private fun CountdownText(context: Context, row: WidgetDepartureRow, tier: WidgetSizeTier) {
     val text = if (row.isCancelled) {
-        context.getString(
-            R.string.notification_row_cancelled_format,
-            context.getString(R.string.routine_details_departure_cancelled),
-            row.lineDesignation,
-            destination,
-        )
+        context.getString(R.string.routine_details_departure_cancelled)
     } else {
-        val statusText = context.getString(
-            if (row.isRealTime) R.string.routine_details_departure_live else R.string.routine_details_departure_scheduled,
-        )
-        context.getString(R.string.notification_row_format, row.minutesRemaining, statusText, row.lineDesignation, destination)
+        context.getString(R.string.widget_countdown_minutes_format, row.minutesRemaining)
     }
-    Text(text = text, maxLines = 1, style = TextStyle(color = onBackgroundColor()))
+    Text(text = text, maxLines = 1, style = TextStyle(fontWeight = FontWeight.Bold, fontSize = tier.countdownSize, color = onBackgroundColor()))
+}
+
+/** A small colored dot plus a "Live"/"Scheduled"/"Cancelled" label — green+"Live" for a
+ * real-time departure (reusing [BADGE_GREEN], the same green given for the line-badge family,
+ * as this widget's one shared "positive/live" color), a theme-neutral outline dot for a merely
+ * scheduled one, and [GlanceTheme.colors.error] for a cancelled one. */
+@Composable
+private fun StatusFooter(context: Context, next: WidgetDepartureRow, tier: WidgetSizeTier) {
+    val dotColor: ColorProvider
+    val label: String
+    when {
+        next.isCancelled -> {
+            dotColor = GlanceTheme.colors.error
+            label = context.getString(R.string.routine_details_departure_cancelled)
+        }
+        next.isRealTime -> {
+            dotColor = ColorProvider(BADGE_GREEN)
+            label = context.getString(R.string.routine_details_departure_live)
+        }
+        else -> {
+            dotColor = GlanceTheme.colors.outline
+            label = context.getString(R.string.routine_details_departure_scheduled)
+        }
+    }
+    Row(modifier = GlanceModifier.padding(top = 4.dp), verticalAlignment = Alignment.CenterVertically) {
+        Box(modifier = GlanceModifier.size(8.dp).background(dotColor).cornerRadius(4.dp)) {}
+        Text(text = "  $label", maxLines = 1, style = TextStyle(fontSize = tier.statusSize, color = onSurfaceVariantColor()))
+    }
+}
+
+@Composable
+private fun BodyText(text: String, tier: WidgetSizeTier) {
+    Text(text = text, maxLines = 2, style = TextStyle(fontSize = tier.secondarySize, color = onBackgroundColor()))
 }
 
 // [androidx.glance.text.TextStyle]'s own default color is a fixed Color.Black (see its own

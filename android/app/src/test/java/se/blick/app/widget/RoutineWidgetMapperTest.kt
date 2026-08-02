@@ -27,14 +27,16 @@ class RoutineWidgetMapperTest {
         name: String = "Morning commute",
         siteName: String = "Fruängen",
         destinationLabel: String? = "Fruängen",
+        transportMode: TransportMode = TransportMode.METRO,
+        lineDesignation: String? = "14",
     ) = CommuteRoutine(
         id = id,
         name = name,
         siteId = 9145,
         siteName = siteName,
-        transportMode = TransportMode.METRO,
+        transportMode = transportMode,
         lineId = null,
-        lineDesignation = "14",
+        lineDesignation = lineDesignation,
         directionCode = null,
         destinationLabel = destinationLabel,
         activeDays = setOf(DayOfWeek.MONDAY),
@@ -90,6 +92,23 @@ class RoutineWidgetMapperTest {
     fun `a missing pinned direction falls back to null, not an empty string`() {
         val model = RoutineWidgetMapper.map(routine(destinationLabel = null), LiveDeparturesState.Loading, now)
         assertNull(model.directionLabel)
+    }
+
+    @Test
+    fun `the routine's own line designation and transport mode are carried into the model, for the header badge`() {
+        val model = RoutineWidgetMapper.map(
+            routine(transportMode = TransportMode.TRAIN, lineDesignation = "43X"),
+            LiveDeparturesState.Loading,
+            now,
+        )
+        assertEquals("43X", model.lineDesignation)
+        assertEquals(TransportMode.TRAIN, model.transportMode)
+    }
+
+    @Test
+    fun `a routine with no pinned line designation carries null, not an empty string`() {
+        val model = RoutineWidgetMapper.map(routine(lineDesignation = null), LiveDeparturesState.Loading, now)
+        assertNull(model.lineDesignation)
     }
 
     // ---- Loading ----
@@ -287,5 +306,12 @@ class RoutineWidgetMapperTest {
     fun `notificationsUnavailable falls back direction to null, not an empty string, exactly like map`() {
         val model = RoutineWidgetMapper.notificationsUnavailable(routine(destinationLabel = null))
         assertNull(model.directionLabel)
+    }
+
+    @Test
+    fun `notificationsUnavailable also carries the routine's own line designation and transport mode`() {
+        val model = RoutineWidgetMapper.notificationsUnavailable(routine(transportMode = TransportMode.TRAIN, lineDesignation = "42X"))
+        assertEquals("42X", model.lineDesignation)
+        assertEquals(TransportMode.TRAIN, model.transportMode)
     }
 }

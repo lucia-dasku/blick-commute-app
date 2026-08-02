@@ -18,7 +18,7 @@ what is actually built today; where the two disagree, this section wins.
 
 **Validation status of this update, stated plainly up front:** a complete local run —
 `testDebugUnitTest`, `lintDebug`, `assembleDebug`, and `connectedDebugAndroidTest` on a
-physical Lenovo TB350FU (Android 14) — has now passed in full: all 341 JVM `@Test`
+physical Lenovo TB350FU (Android 14) — has now passed in full: all 364 JVM `@Test`
 functions and all 24 instrumented `@Test` functions, `lintDebug` with 0 errors (43
 warnings: two expected, already-guarded `InlinedApi` findings — the API-36
 `ACTION_APP_NOTIFICATION_PROMOTION_SETTINGS` deep-link and the API-33
@@ -28,9 +28,11 @@ legacy fallbacks deliberately), and a working debug APK,
 with the ongoing-notification loop, routine details live-preview, and full routine
 management additionally exercised manually on that same device. **The home-screen
 widget's placement, resizing, live updates, and Stop-action behavior have since been
-manually confirmed on that same device** — see `android/README.md`'s Full verification
-pass section, "Widget re-audit and correction," for the full account, including the one
-compact-layout sub-case this device's launcher grid couldn't directly exercise.
+manually confirmed on that same device, including its "Design 1" visual redesign — a
+colored line-number badge, a large countdown, and a live/scheduled/cancelled status
+row** — see `android/README.md`'s Full verification pass section for the full account,
+including the one compact-layout sub-case this device's launcher grid couldn't directly
+exercise.
 
 Getting there took three work sessions of source beyond the earlier 193-JVM-test
 baseline. First: the FAB restoration, the Routine Details 30-second auto-refresh, the
@@ -124,7 +126,16 @@ real current state immediately; `GlanceAppWidget`'s actual default `SizeMode.Sin
 `Exact`, as first assumed) meant it never responded to resizing; and its default
 un-themed text color would have been unreadable against a themed background. All fixed —
 see "Home-screen widget" below for the design of each — and covered by 8 further JVM
-`@Test` functions, bringing the fully verified total to 341 JVM / 24 instrumented, stated
+`@Test` functions, reaching 341 JVM / 24 instrumented. A "Design 1" visual redesign
+session then replaced the simple departure-row list with a colored line-number badge
+(`LineBadgeColorMapping`, mapping Stockholm's own per-line-family colors — Pendeltåg
+pink, Metro blue/red/green lines — see "Home-screen widget" below for the exact
+mapping), a large next-departure countdown with the station → direction and following
+departure beside it, and a live/scheduled/cancelled status row, with font sizes scaling
+through width-driven responsive tiers rather than one fixed size (the reference mock was
+captured on a tablet-sized placement, whose grid cells are physically much larger than an
+ordinary phone's). This added 23 further JVM `@Test` functions with no further
+instrumented ones, bringing the fully verified total to 364 JVM / 24 instrumented, stated
 above.
 
 **Implemented today (Android client + backend):**
@@ -563,14 +574,24 @@ that every device grants it.
 
 Implemented (`widget/BlickRoutineWidget`, Jetpack Glance — see "Current implementation
 status" above and `android/README.md`'s Status section for the full account; its
-placement, resizing, live updates, and Stop-action behavior have been manually confirmed
-on a real launcher — see `android/README.md`'s Full verification pass section). Shows the
-saved routine's name, station, and direction; the next and following
-departure as a minute-only countdown recomputed at render time (never a fixed or cached
-value, reusing the exact same `countdownMinutes` function and expired-departure filter
-the notification uses); and the same loading/live/stale/offline/unavailable/
-no-upcoming-departures states, with a cancelled departure flagged the same way, plus a
-widget-only `NotificationsUnavailable` state (no notification counterpart) shown when a
+placement, resizing, live updates, and Stop-action behavior — including its "Design 1"
+visual redesign — have been manually confirmed on a real launcher — see
+`android/README.md`'s Full verification pass section). A header row shows the routine's
+own pinned line number in a small rounded badge, colored by `LineBadgeColorMapping`
+(`widget/LineBadgeColorMapping.kt`) per Stockholm's own per-line-family convention —
+Pendeltåg (commuter rail) lines 40/41/42X/43/43X/44/48 in pink (`#FF49A5`), Metro
+blue-line 10-11 in blue (`#177BC0`), Metro red-line 13-14 in red (`#EE2D28`), Metro
+green-line 17-19 in green (`#51BA5B`), bold white badge text on every color, every other
+mode/line combination in a neutral grey — followed by the destination. Below that: a
+large, bold next-departure countdown on the left, the station → direction line and the
+following departure's own smaller countdown on the right (a minute-only countdown
+recomputed at render time, never a fixed or cached value, reusing the exact same
+`countdownMinutes` function and expired-departure filter the notification uses), and a
+colored dot plus "Live"/"Scheduled"/"Cancelled" label underneath reflecting the next
+departure's own real-time/cancelled state. The same loading/live/stale/offline/
+unavailable/no-upcoming-departures states apply, with a cancelled departure represented
+in the countdown/status area rather than a separate top-level case, plus a widget-only
+`NotificationsUnavailable` state (no notification counterpart) shown when a
 window is active but notifications are blocked — live widget updates depend on
 notification availability by design, since the worker's loop is the widget's only data
 source, exactly like the notification. Outside
@@ -586,9 +607,12 @@ freshly-placed widget instance's own first render — no second
 worker, timer, foreground service, or departure-fetching engine, and Android's own
 widget-update scheduler is explicitly disabled (`updatePeriodMillis="0"`). Explicitly
 overrides `SizeMode.Exact` (`GlanceAppWidget`'s own default, `SizeMode.Single`, would not
-respond to resizing) so the layout adapts to the widget's live size without clipping,
-dropping the following-departure row below a height threshold, against a theme-aware
-readable background. All installed
+respond to resizing) so the layout adapts to the widget's live size without clipping —
+badge, countdown, and secondary text scale through four `LocalSize`-width-driven
+responsive tiers (chosen because the "Design 1" reference mock was captured on a
+tablet-sized placement, whose grid cells are physically much larger than an ordinary
+phone's), and the secondary block/status row are dropped below a height threshold —
+against a theme-aware readable background. All installed
 widget instances update together; there is no per-instance configuration screen, since
 the existing first-beta one-routine limit means every instance has only one possible
 routine to show.
@@ -726,8 +750,11 @@ ones, reaching 333 JVM / 24 instrumented. A final re-audit session fixing that w
 lifecycle/visual gaps (Stop-action wiring, every worker exit path, the
 `NotificationsUnavailable` state, the zero-delay reschedule fix, the freshly-placed-widget
 reconcile fix, responsive sizing, and the readable theme background) added 8 further JVM
-`@Test` functions with no further instrumented ones —
-**341 JVM `@Test` functions and 24 instrumented `@Test` functions now exist in source,
+`@Test` functions with no further instrumented ones, reaching 341 JVM / 24 instrumented.
+A "Design 1" visual redesign session (the colored line-number badge via
+`LineBadgeColorMapping`, the large-countdown layout, and the width-driven responsive
+size tiers) added 23 further JVM `@Test` functions with no further instrumented ones —
+**364 JVM `@Test` functions and 24 instrumented `@Test` functions now exist in source,
 and all of them pass.** See `android/README.md`'s Build section for the exact toolchain
 versions, the up-to-date per-file test breakdown, and the real issues that first full
 run found and fixed (including a genuine production bug, not just test-suite

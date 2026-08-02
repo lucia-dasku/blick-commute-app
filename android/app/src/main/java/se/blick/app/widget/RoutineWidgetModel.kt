@@ -1,5 +1,6 @@
 package se.blick.app.widget
 
+import se.blick.app.domain.model.TransportMode
 import java.time.Instant
 
 /**
@@ -23,6 +24,24 @@ data class RoutineWidgetModel(
     val stationName: String,
     val directionLabel: String?,
     val content: RoutineWidgetContent,
+    /** The routine's own pinned line — unlike [WidgetDepartureRow.lineDesignation] (only
+     * present once a departure has actually been fetched), this is available in every
+     * [RoutineWidgetContent] state, including [RoutineWidgetContent.Loading] and every other
+     * state with no departure data at all, so the header line badge can render identically
+     * regardless of content state. Null only for a routine somehow saved without a line
+     * (defensive — [se.blick.app.domain.model.CommuteRoutine.lineDesignation] is nullable in
+     * the type system even though setup never actually completes without one), in which case
+     * no badge is rendered rather than one showing nothing meaningful. */
+    val lineDesignation: String? = null,
+    /** Drives [LineBadgeColorMapping.colorFor] for the widget's line-number badge, alongside
+     * [lineDesignation] — every departure shown for a single routine shares this same mode,
+     * since a [se.blick.app.domain.model.CommuteRoutine] tracks exactly one line. Defaults to
+     * [TransportMode.UNKNOWN] (resolving to a grey badge) purely so existing positional test
+     * construction and decoding an older, pre-this-field persisted
+     * [Preferences][androidx.datastore.preferences.core.Preferences] instance both stay safe;
+     * every real production call site ([RoutineWidgetMapper]) always passes the routine's own
+     * mode explicitly. */
+    val transportMode: TransportMode = TransportMode.UNKNOWN,
 )
 
 /** Mirrors [se.blick.app.notification.RoutineNotificationContent] one-for-one, except [Live] and

@@ -224,6 +224,31 @@ whichever one routine is currently enabled. The existing notification and Androi
 Live Update behaviour is completely unchanged; disruptions remain out of scope for this
 milestone.
 
+**Widget layout ("Design 1"):** a header row shows the routine's own pinned line number
+in a small rounded, colored badge (`RoutineWidgetModel.lineDesignation`/`transportMode`,
+carried through by `RoutineWidgetMapper` and persisted by `RoutineWidgetPreferences`
+alongside every other identity field, so the badge renders correctly in every content
+state, not only once a departure has actually been fetched) followed by the destination;
+a large, bold next-departure countdown sits on the left with the station → direction
+line and the following departure's own smaller countdown ("Next  X min") on the right;
+and a colored dot plus "Live"/"Scheduled"/"Cancelled" label sits underneath, reflecting
+the next departure's own `isRealTime`/`isCancelled` flags. `LineBadgeColorMapping`
+(`widget/LineBadgeColorMapping.kt`) maps Stockholm's own per-line-family colors — bold
+white badge text on every color, for reliable contrast: Pendeltåg (commuter rail) lines
+40/41/42X/43/43X/44/48 in pink (`#FF49A5`), Metro blue-line 10-11 in blue (`#177BC0`),
+Metro red-line 13-14 in red (`#EE2D28`), Metro green-line 17-19 in green (`#51BA5B`),
+and every other mode/line combination in a neutral grey — a plain, Android-independent
+function (mode AND line number both matter: a bus or train sharing a metro line's own
+number, e.g. a bus "14", is never colored as if it were that metro line, and vice versa),
+covered by a dedicated `LineBadgeColorMappingTest` (17 JVM tests: every colour group, the
+X/express-line suffix, normalization of case and whitespace, overlapping mode/number
+combinations, and unmapped values). Font sizes for the badge, countdown, and secondary
+text scale through four `LocalSize`-width-driven tiers (`sizeTierFor` in
+`BlickRoutineWidget.kt`) rather than a single fixed size — the original "Design 1"
+reference mock was captured on a tablet-sized placement, whose grid cells are physically
+much larger than an ordinary phone's, so using those same absolute point sizes
+unconditionally would overflow or clip badly on a realistic phone-sized placement.
+
 ## Pinned versions and why
 
 | Setting | Value | Source |
@@ -470,7 +495,13 @@ JVM / 24 instrumented. A final re-audit session then fixed the widget lifecycle/
 gaps described in "Widget re-audit and correction" below (Stop-action wiring, every
 worker exit path, the `NotificationsUnavailable` state, responsive sizing, and the
 readable theme background) and added 8 further JVM `@Test` functions with no further
-instrumented ones, reaching the 341 JVM / 24 instrumented total stated below — see
+instrumented ones, reaching 341 JVM / 24 instrumented. A "Design 1" visual redesign
+session then added the colored line-number badge (`LineBadgeColorMapping`), the large
+countdown/secondary-block/status-row layout, and the width-driven responsive size tiers
+described above, adding 23 further JVM `@Test` functions (17 in
+`LineBadgeColorMappingTest`, plus mapper/preferences/reconciler coverage for the new
+`lineDesignation`/`transportMode` model fields) with no further instrumented ones,
+reaching the 364 JVM / 24 instrumented total stated below — see
 `../docs/Blick_Project_Documentation.md`'s "Validation status" note for the full account
 of each.
 
@@ -493,7 +524,7 @@ clone builds without Android Studio or a pre-existing local Gradle install.
 
 A complete local run — `testDebugUnitTest`, `lintDebug`, `assembleDebug`, and
 `connectedDebugAndroidTest` on the physical Lenovo TB350FU (Android 14) referenced
-above — has since been completed, using Android Studio's own bundled JDK. All 341 JVM
+above — has since been completed, using Android Studio's own bundled JDK. All 364 JVM
 `@Test` functions and all 24 instrumented `@Test` functions pass; `lintDebug` reports 0
 errors (43 warnings: two expected, already-guarded `InlinedApi` findings — the
 API-36 `ACTION_APP_NOTIFICATION_PROMOTION_SETTINGS` deep-link and the API-33
@@ -536,6 +567,22 @@ exercised by reasoning about the measured widget height against the threshold, n
 direct visual observation of the row disappearing; it remains covered in principle by the
 same `SizeMode.Exact`/`LocalSize` mechanism confirmed working for every other resize
 observed.
+
+**"Design 1" visual redesign, also verified end to end on-device:** the colored
+line-number badge, big-countdown layout, and responsive size tiers described in the
+Status section above were confirmed on the same physical device and the same
+already-placed widget instance — reinstalling the debug APK over an existing install
+un-bound the previously-placed widget on this launcher (its host `dumpsys appwidget`
+entry disappeared even though the app's own data/package were preserved), so placement
+was repeated by hand exactly as before. With the routine's own window edited to cover
+the current time, the widget immediately rendered: a red "14" badge (Metro red-line 13-14,
+confirming `LineBadgeColorMapping` picks the right family for a real routine's own line
+and mode) next to the destination, a large bold countdown, the station → direction line
+with the following departure's own smaller countdown beside it, and a green dot with
+"Live" underneath — matching the reference mock. Shrinking the widget to this launcher's
+same ~145dp minimum height (see above) kept every element legible with no clipping,
+confirming the new layout is at least as robust as the previous one at every size this
+launcher's grid actually reaches.
 
 Actually compiling and running the 65 JVM / 3 instrumented tests that had only existed
 as source (see above) surfaced three genuine issues, all now fixed:

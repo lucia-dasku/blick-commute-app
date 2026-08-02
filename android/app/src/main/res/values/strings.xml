@@ -163,4 +163,8 @@
          widget's only data source cannot run, so it says so rather than staying on "Updating
          departures…" indefinitely. -->
     <string name="widget_notifications_unavailable">Turn on notifications to see live departures here.</string>
+    <!-- "Design 1" layout: the big next-departure countdown ("6 min"), and the label in front
+         of the smaller following-departure countdown ("Next  16 min"). -->
+    <string name="widget_countdown_minutes_format">%1$d min</string>
+    <string name="widget_next_departure_label">Next</string>
 </resources>

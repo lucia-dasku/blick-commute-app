@@ -4,6 +4,7 @@ import androidx.datastore.preferences.core.mutablePreferencesOf
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertNull
 import org.junit.Test
+import se.blick.app.domain.model.TransportMode
 import java.time.Instant
 
 /**
@@ -122,5 +123,47 @@ class RoutineWidgetPreferencesTest {
 
         val restored = prefs.toPreferences().toWidgetUiState() as RoutineWidgetUiState.ActiveRoutine
         assertEquals(RoutineWidgetContent.Live(next, null), restored.model.content)
+    }
+
+    // ---- lineDesignation / transportMode -- drive the header line badge ----
+
+    @Test
+    fun `lineDesignation and transportMode round-trip exactly, for the header line badge`() {
+        val model = RoutineWidgetModel(
+            routineId = "r1",
+            routineName = "Morning commute",
+            stationName = "Fruängen",
+            directionLabel = "T-Centralen",
+            content = RoutineWidgetContent.Loading,
+            lineDesignation = "42X",
+            transportMode = TransportMode.TRAIN,
+        )
+        val restored = roundTrip(RoutineWidgetUiState.ActiveRoutine(model)) as RoutineWidgetUiState.ActiveRoutine
+        assertEquals(model, restored.model)
+        assertEquals("42X", restored.model.lineDesignation)
+        assertEquals(TransportMode.TRAIN, restored.model.transportMode)
+    }
+
+    @Test
+    fun `a null lineDesignation round-trips as null, not an empty string`() {
+        val model = RoutineWidgetModel(
+            routineId = "r1",
+            routineName = "Morning commute",
+            stationName = "Fruängen",
+            directionLabel = "T-Centralen",
+            content = RoutineWidgetContent.Loading,
+            lineDesignation = null,
+        )
+        val restored = roundTrip(RoutineWidgetUiState.ActiveRoutine(model)) as RoutineWidgetUiState.ActiveRoutine
+        assertNull(restored.model.lineDesignation)
+    }
+
+    @Test
+    fun `a model with the default UNKNOWN transportMode round-trips correctly`() {
+        // RoutineWidgetModel's own transportMode default (see its own doc: also covers decoding
+        // a widget instance whose prefs were written by an app version before this key existed).
+        val model = RoutineWidgetModel("r1", "Morning commute", "Fruängen", "T-Centralen", RoutineWidgetContent.Loading)
+        val restored = roundTrip(RoutineWidgetUiState.ActiveRoutine(model)) as RoutineWidgetUiState.ActiveRoutine
+        assertEquals(TransportMode.UNKNOWN, restored.model.transportMode)
     }
 }

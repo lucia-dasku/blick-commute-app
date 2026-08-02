@@ -104,9 +104,14 @@ own widget-update scheduler is explicitly disabled (`updatePeriodMillis="0"`). L
 updates depend on notification availability by design — its only data source is the same
 worker loop the notification depends on. Outside any active window it reads exactly "No
 active commute." It responds to resizing (`SizeMode.Exact`) without clipping, and uses a
-theme-aware, readable background. Tapping it opens the routine details screen via the
-same navigation contract the notification's tap already uses.
-341 JVM `@Test` functions and 24 instrumented `@Test` functions exist in source as of
+theme-aware, readable background. The header shows the routine's real line number in a
+small rounded badge, colored by Stockholm's own per-line-family convention (Pendeltåg
+pink, Metro blue/red/green lines — see `android/README.md`'s Status section for the
+exact mapping), next to a large next-departure countdown, the station → direction and
+following-departure countdown, and a live/scheduled/cancelled status row. Tapping it
+opens the routine details screen via the same navigation contract the notification's
+tap already uses.
+364 JVM `@Test` functions and 24 instrumented `@Test` functions exist in source as of
 this update, all passing in a fresh local `./gradlew testDebugUnitTest lintDebug
 assembleDebug connectedDebugAndroidTest` run (0 lint errors, 43 warnings, debug APK
 built, all instrumented tests run on a physical device), and the widget's placement,

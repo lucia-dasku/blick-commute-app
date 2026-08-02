@@ -75,6 +75,10 @@ class RoutineWidgetReconcilerTest {
         state as RoutineWidgetUiState.ActiveRoutine
         assertEquals(r.id, state.model.routineId)
         assertEquals(RoutineWidgetContent.Loading, state.model.content)
+        // The routine's own line/mode -- not just departure data -- must be available
+        // immediately for the header line badge, even in the Loading state.
+        assertEquals("14", state.model.lineDesignation)
+        assertEquals(TransportMode.METRO, state.model.transportMode)
     }
 
     @Test

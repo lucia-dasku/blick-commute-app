@@ -27,6 +27,8 @@ object RoutineWidgetMapper {
             stationName = routine.siteName,
             directionLabel = routine.destinationLabel,
             content = departuresState.toWidgetContent(now),
+            lineDesignation = routine.lineDesignation,
+            transportMode = routine.transportMode,
         )
 
     /** No [LiveDeparturesState] counterpart exists for this case — see
@@ -40,6 +42,8 @@ object RoutineWidgetMapper {
             stationName = routine.siteName,
             directionLabel = routine.destinationLabel,
             content = RoutineWidgetContent.NotificationsUnavailable,
+            lineDesignation = routine.lineDesignation,
+            transportMode = routine.transportMode,
         )
 
     private fun LiveDeparturesState.toWidgetContent(now: Instant): RoutineWidgetContent = when (this) {
