@@ -2,19 +2,9 @@ import { Hono } from "hono";
 import { successEnvelope, RequestTransportModeSchema } from "../models/common.js";
 import { AppError } from "../lib/errors.js";
 import { normalizeDisruption } from "../normalize/normalizeDisruption.js";
-import type { Disruption } from "../models/disruption.js";
-import type { SlDeviationsClient } from "../services/slDeviationsClient.js";
-import type { Cache, InFlightDeduper } from "../lib/cache.js";
-
-// SL's fair-use guidance says at most one request per minute to this upstream (see
-// docs/api-contract.md, "Caching and fair use"). 60s is a floor, not a target to shave
-// down later.
-const DEVIATIONS_CACHE_TTL_SECONDS = 60;
-
-interface CachedDisruptions {
-  fetchedAt: string;
-  disruptions: Disruption[];
-}
+import { matchesDeviationsQuery, resolveSiteStopAreaIds } from "../services/deviationsFilter.js";
+import type { DeviationsSnapshotService } from "../services/deviationsSnapshotService.js";
+import type { SiteDirectory } from "../services/siteDirectory.js";
 
 /**
  * `future` may only be absent, `"true"`, or `"false"` — any other value (e.g.
@@ -48,11 +38,16 @@ function parseTransportModeFilter(raw: string | undefined): string | undefined {
   return result.data;
 }
 
-export function createDisruptionsRoute(
-  client: SlDeviationsClient,
-  cache: Cache,
-  deduper: InFlightDeduper,
-) {
+/**
+ * Request validation and response structure are UNCHANGED from the previous per-query
+ * implementation (see docs/api-contract.md §3.2) — only where the disruption data comes
+ * from has changed: `snapshotService.getSnapshot()` returns the one shared, network-wide
+ * snapshot (see deviationsSnapshotService.ts), and `matchesDeviationsQuery` filters it
+ * locally per request (see deviationsFilter.ts), rather than this route forwarding
+ * `siteId`/`lineId`/`transportMode`/`future` to SL Deviations as its own upstream query
+ * parameters and caching/deduplicating per exact filter combination.
+ */
+export function createDisruptionsRoute(snapshotService: DeviationsSnapshotService, siteDirectory: SiteDirectory) {
   const route = new Hono();
 
   route.get("/", async (c) => {
@@ -78,27 +73,21 @@ export function createDisruptionsRoute(
     const transportMode = parseTransportModeFilter(c.req.query("transportMode") ?? undefined);
     const future = parseFutureFlag(c.req.query("future") ?? undefined);
 
-    const cacheKey = `sl-deviations:${siteId}:${lineId ?? ""}:${transportMode ?? ""}:${future}`;
+    // The shared snapshot's own fetchedAt is what every response reports — it reflects
+    // when SL Deviations was actually last called, never a freshly generated time (see
+    // docs/api-contract.md, "fetchedAt semantics"). Filtering below is pure, local, and
+    // does not affect fetchedAt regardless of which filters this specific request used.
+    const snapshot = await snapshotService.getSnapshot();
+    const sites = await siteDirectory.getAllSites();
+    const siteStopAreaIds = resolveSiteStopAreaIds(siteId, sites);
+    const now = new Date();
 
-    // The `{fetchedAt, disruptions}` pair is cached and deduplicated together, as one
-    // unit: a cache hit returns the ORIGINAL upstream-fetch time, never a freshly
-    // generated one, and N concurrent identical requests (via `deduper.run`) share
-    // exactly one upstream call and therefore one fetchedAt (see
-    // docs/api-contract.md, "fetchedAt semantics").
-    const result = await deduper.run(cacheKey, async (): Promise<CachedDisruptions> => {
-      const cached = await cache.get<CachedDisruptions>(cacheKey);
-      if (cached) return cached;
-
-      const raw = await client.fetchDeviations({ siteId, lineId, transportMode, future });
-      const fetchedAt = new Date();
-      const disruptions = raw.map(normalizeDisruption);
-      const fresh: CachedDisruptions = { fetchedAt: fetchedAt.toISOString(), disruptions };
-      await cache.set(cacheKey, fresh, DEVIATIONS_CACHE_TTL_SECONDS);
-      return fresh;
-    });
+    const disruptions = snapshot.deviations
+      .filter((raw) => matchesDeviationsQuery(raw, { siteId, lineId, transportMode, future }, siteStopAreaIds, now))
+      .map(normalizeDisruption);
 
     c.header("Cache-Control", "public, s-maxage=60, stale-while-revalidate=60");
-    return c.json(successEnvelope(result));
+    return c.json(successEnvelope({ fetchedAt: snapshot.fetchedAt, disruptions }));
   });
 
   return route;

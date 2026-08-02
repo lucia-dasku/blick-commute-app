@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { readPort, readUpstreamTimeoutMs } from "../src/config/env.js";
+import { readPort, readUpstreamTimeoutMs, readRedisConfig } from "../src/config/env.js";
 
 describe("readPort", () => {
   it("defaults to 8787 when unset", () => {
@@ -70,5 +70,57 @@ describe("readUpstreamTimeoutMs", () => {
 
   it("rejects Infinity", () => {
     expect(() => readUpstreamTimeoutMs("Infinity")).toThrow(/Invalid UPSTREAM_TIMEOUT_MS/);
+  });
+});
+
+describe("readRedisConfig", () => {
+  it("returns undefined outside production when both variables are unset", () => {
+    expect(readRedisConfig(undefined, undefined, "development")).toBeUndefined();
+    expect(readRedisConfig(undefined, undefined, "test")).toBeUndefined();
+  });
+
+  it("throws in production when both variables are unset", () => {
+    expect(() => readRedisConfig(undefined, undefined, "production")).toThrow(
+      /UPSTASH_REDIS_REST_URL and UPSTASH_REDIS_REST_TOKEN are required in production/,
+    );
+  });
+
+  it("returns the parsed config when both variables are valid, in any environment", () => {
+    const result = readRedisConfig("https://example.upstash.io", "secret-token", "production");
+    expect(result).toEqual({ url: "https://example.upstash.io", token: "secret-token" });
+  });
+
+  it("returns the parsed config outside production too", () => {
+    const result = readRedisConfig("https://example.upstash.io", "secret-token", "development");
+    expect(result).toEqual({ url: "https://example.upstash.io", token: "secret-token" });
+  });
+
+  it("throws when only the URL is set (partial configuration)", () => {
+    expect(() => readRedisConfig("https://example.upstash.io", undefined, "development")).toThrow(
+      /must both be set, or both left unset/,
+    );
+  });
+
+  it("throws when only the token is set (partial configuration)", () => {
+    expect(() => readRedisConfig(undefined, "secret-token", "development")).toThrow(
+      /must both be set, or both left unset/,
+    );
+  });
+
+  it("throws when the URL is not a valid URL", () => {
+    expect(() => readRedisConfig("not-a-url", "secret-token", "development")).toThrow(
+      /Invalid UPSTASH_REDIS_REST_URL/,
+    );
+  });
+
+  it("treats an empty or whitespace-only value the same as unset", () => {
+    expect(readRedisConfig("", "", "development")).toBeUndefined();
+    expect(readRedisConfig("   ", "   ", "development")).toBeUndefined();
+  });
+
+  it("treats an empty URL alongside a real token as a partial configuration", () => {
+    expect(() => readRedisConfig("", "secret-token", "development")).toThrow(
+      /must both be set, or both left unset/,
+    );
   });
 });

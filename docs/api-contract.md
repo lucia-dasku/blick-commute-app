@@ -145,31 +145,54 @@ going on at this stop, right now") but are intentionally not treated as a substi
 
 ### `GET /api/v1/disruptions?siteId=&lineId=&transportMode=&future=`
 
-Proxies `GET /v1/messages` on SL Deviations, using the same site/line IDs SL Transport
-already returned — no conversion. **`siteId` is required** (not optional): a routine
-always has a site, and requiring it keeps every disruption request properly scoped
-instead of allowing a call that pulls the entire SL network's deviations at once.
+**Request validation and response shape are unchanged from the original per-query
+design** (retained below) — what changed is where the disruption data actually comes
+from. This route no longer forwards `siteId`/`lineId`/`transportMode`/`future` to SL
+Deviations as upstream query parameters at all. Instead, exactly one shared,
+network-wide `GET /v1/messages?future=true` snapshot (no `site`/`line`/`transport_mode`
+filter) is fetched — coordinated across every Vercel instance via a distributed
+lock/shared cache, see §7 below — and every request's own filters are applied **locally**
+against that one snapshot (`src/services/deviationsFilter.ts`). This is what makes SL's
+"at most one request per minute" fair-use guidance enforceable in aggregate, across every
+distinct filter combination, not just repeat requests for the identical one (see §7 for
+why the old per-query design could never actually guarantee that).
 
-`lineId` is an optional positive integer filter. `transportMode` is an optional filter,
-strictly validated against the closed set of modes SL actually documents as filterable
-(`BUS`, `METRO`, `TRAIN`, `TRAM`, `SHIP`, `FERRY`, `TAXI`) — an unsupported, empty, or
-malformed value is a `VALIDATION_ERROR` (400), not silently ignored or forwarded as-is.
-`future` may only be absent, `"true"`, or `"false"`; defaulting to `false` when absent —
-a normal active-routine request only sees currently published disruptions, and a caller
-must opt in explicitly (`future=true`) to also see disruptions published for the future.
-Any other value for `future` (e.g. `"banana"`, `"True"`, empty) is a `VALIDATION_ERROR`
-(400) rather than being silently coerced to `false`. **This request-filter validation is
-intentionally a different, stricter check than how the response's own `transportMode`
-fields are validated** — see "Request validation vs. response compatibility" below.
+**`siteId` is required** (not optional): a routine always has a site, and requiring it
+keeps every disruption request properly scoped to what it actually needs, even though the
+underlying fetch itself is now always network-wide. Locally, `siteId` matches a deviation
+whose `scope.stop_areas[].id` is either the site's own ID or one of its child stop-area
+IDs (`Site.stopAreaIds`, from the same site directory `/api/v1/stops/search` uses) —
+confirmed live during architecture review that a site's deviations are scoped by its
+child stop areas' IDs (§1, "Verified namespace result"). A deviation with no
+`scope.stop_areas` at all (line-only or network-wide) never matches a `siteId` filter,
+mirroring the previous upstream-side `site=` filter's own behavior.
+
+`lineId` is an optional positive integer filter, matched locally against
+`scope.lines[].id`. `transportMode` is an optional filter, strictly validated against the
+closed set of modes SL actually documents as filterable (`BUS`, `METRO`, `TRAIN`, `TRAM`,
+`SHIP`, `FERRY`, `TAXI`) — an unsupported, empty, or malformed value is a
+`VALIDATION_ERROR` (400), not silently ignored or forwarded as-is — then matched locally
+against `scope.lines[].transport_mode`. `future` may only be absent, `"true"`, or
+`"false"`; defaulting to `false` when absent — a normal active-routine request only sees
+currently published disruptions, and a caller must opt in explicitly (`future=true`) to
+also see disruptions published for the future. Any other value for `future` (e.g.
+`"banana"`, `"True"`, empty) is a `VALIDATION_ERROR` (400) rather than being silently
+coerced to `false`. Locally, a deviation is always excluded once `publish.upto` is in the
+past regardless of `future`; `future=false` additionally excludes one whose `publish.from`
+is still in the future (not yet started), `future=true` includes it. **This request-filter
+validation is intentionally a different, stricter check than how the response's own
+`transportMode` fields are validated** — see "Request validation vs. response
+compatibility" below.
 
 `Cache-Control: public, s-maxage=60, stale-while-revalidate=60` (see §7, fair use).
 
-Response shape: `data: { fetchedAt, disruptions }`. `fetchedAt` and `disruptions` are
-cached and deduplicated together, as one unit, keyed by the full filter set
-(`siteId`/`lineId`/`transportMode`/`future`): a cache hit returns the *original*
-upstream-fetch time, never a freshly generated one, and concurrent identical requests
-(via the in-flight deduper) share exactly one upstream call and therefore one
-`fetchedAt` (see §7 and `tests/fetchedAt.test.ts`).
+Response shape: `data: { fetchedAt, disruptions }`. `fetchedAt` is the shared snapshot's
+own fetch time — the *original* upstream-fetch time, never a freshly generated one,
+whenever the snapshot is served from cache (fresh or stale) rather than freshly fetched.
+Concurrent requests, from any Vercel instance and with any filter combination, that all
+land while the same snapshot is still fresh (or while a refresh is already in flight)
+share exactly one upstream call and therefore one `fetchedAt` (see §7 and
+`tests/fetchedAt.test.ts`, `tests/deviationsSnapshotService.test.ts`).
 
 | Normalized field | Upstream field (`RawDeviation`) | Notes |
 |---|---|---|
@@ -373,37 +396,88 @@ exactly one upstream fetch, not N — tested in `tests/cache.test.ts`.
 | `/api/v1/departures` | `public, s-maxage=30, stale-while-revalidate=30` | near-real-time data |
 | `/api/v1/disruptions` | `public, s-maxage=60, stale-while-revalidate=60` | see fair use below |
 
-SL Deviations' own guidance asks for **at most one request per minute**. This backend
-does **not** currently guarantee that limit is honored in production, for two distinct,
-compounding reasons — this is a known gap, not a solved problem, and it is a **blocker
-for public production traffic** until addressed:
+The shared, cross-instance protection described below is scoped specifically to SL
+Deviations — SL's own fair-use guidance is a per-minute limit unique to that upstream.
+`/api/v1/stops/search`'s site-directory snapshot (§6 above) and `/api/v1/departures`
+remain exactly as before: best-effort, per-instance `InMemoryCache`/`InFlightDeduper`,
+not Redis-backed. Site data changes "at most once per day" per SL Transport's own docs
+and departures are already near-real-time (30s `Cache-Control`), so neither is subject to
+a per-minute fair-use constraint the way SL Deviations is.
 
-1. **Per-instance, not global.** The in-memory `Cache`/`InFlightDeduper` implementations
-   are best-effort and scoped to a single serverless instance. Vercel does not guarantee
-   shared memory across invocations or even across concurrent invocations of the "same"
-   function — under real traffic, multiple cold instances could each independently
-   decide it's time to call SL Deviations, each believing it is the only caller.
-2. **Per query combination, not per upstream overall.** The 60s cache/dedup key is
-   `siteId:lineId:transportMode:future` (see `createDisruptionsRoute` in
-   `src/routes/disruptions.ts`) — so the ≥60s TTL only limits repeat requests for the
-   *same* filter combination to once a minute. If real traffic spans many distinct
-   site/line/transport-mode/future combinations within the same minute (which is
-   expected: different users track different stops), the aggregate request rate to SL
-   Deviations across all combinations can still exceed one request per minute, even with
-   this cache working exactly as designed and even on a single instance.
+SL Deviations' own guidance asks for **at most one request per minute**. Two distinct,
+compounding gaps used to make that unenforceable in production — both are now closed:
 
-The HTTP `Cache-Control` headers in the table above are real and do help at the edge/CDN
-layer, and the in-process cache/dedup do eliminate redundant calls for the identical
-filter set within one instance's lifetime — neither is fake. But **do not read either of
-those as full fair-use compliance**: this backend, as it stands, cannot promise SL
-Deviations sees at most one request per minute in aggregate once there is real,
-multi-user, multi-instance traffic. **Before any significant public deployment, a shared
-cache (e.g. Upstash Redis) plus a real global rate limiter in front of the SL Deviations
-call path is a production-readiness requirement, not an optional enhancement** — the
-`Cache` interface exists specifically so that swap can happen without touching call
-sites. Preview/development-scale traffic (a handful of manual testers) stays well under
-SL's guidance in practice even with today's implementation; the risk is specifically
-about uncoordinated production-scale traffic.
+1. **Per-instance, not global**, used to be true of the in-memory `Cache`/
+   `InFlightDeduper` implementations: Vercel does not guarantee shared memory across
+   invocations, so multiple cold instances could each independently decide it's time to
+   call SL Deviations, each believing it is the only caller.
+2. **Per query combination, not per upstream overall**, used to be true because the old
+   60s cache/dedup key was `siteId:lineId:transportMode:future` — so the ≥60s TTL only
+   limited repeat requests for the *same* filter combination to once a minute. Real
+   traffic spanning many distinct site/line/transport-mode/future combinations within the
+   same minute (expected: different users track different stops) could still exceed one
+   request per minute in aggregate, even with that cache working exactly as designed.
+
+**Both are fixed by fetching one shared, network-wide SL Deviations snapshot — never one
+upstream call per query — and coordinating every Vercel instance's access to it through a
+Redis-backed distributed lock and cache**, rather than trying to rate-limit each distinct
+query combination separately:
+
+- `src/services/slDeviationsClient.ts`'s `fetchAllDeviations()` calls
+  `GET /v1/messages?future=true` with **no** `site`/`line`/`transport_mode` filter — the
+  entire network's currently- and future-published deviations, in one response. Every
+  request's own `siteId`/`lineId`/`transportMode`/`future` filters are applied **locally**
+  against that one snapshot instead (`src/services/deviationsFilter.ts`, §3.2 above).
+- `src/services/deviationsSnapshotService.ts` is the one thing across the whole backend
+  allowed to call `fetchAllDeviations()`. It keeps the snapshot in a shared `Cache`
+  (`RedisCache`, backed by Upstash Redis's REST API — `@upstash/redis` — in production;
+  see "Redis setup" below) and treats it as fresh for 60 seconds from its own `fetchedAt`.
+  Once no longer fresh, refreshing is coordinated by a `DistributedLock`
+  (`src/lib/distributedLock.ts`, `RedisLock` in production): only the one instance that
+  wins the lock actually calls `fetchAllDeviations()`; every other concurrent caller,
+  across every instance and regardless of its own filters, either waits briefly for that
+  winner's result or falls back to the last known-good snapshot — **never** makes an
+  upstream call of its own.
+- **The 60-second floor covers failed attempts too**, exactly as SL's guidance implies:
+  before calling upstream, the winning instance claims a *separate* 60-second key
+  (deliberately never released early — see the service's own doc for why) that blocks
+  every instance, including itself, from attempting again for the rest of that window,
+  whether the attempt that follows succeeds or fails.
+- **A failed refresh serves the last successful snapshot instead of erroring**, with that
+  snapshot's *original* `fetchedAt` untouched — kept in the shared cache for 6 hours (far
+  longer than the 60s freshness window), a deliberately generous stale-fallback period so
+  a prolonged SL Deviations outage degrades to "possibly-outdated disruption data" rather
+  than a hard failure on every request. Only when there has never been a successful
+  snapshot at all does the real upstream error (`UPSTREAM_ERROR`/`UPSTREAM_TIMEOUT`/
+  `UPSTREAM_RATE_LIMITED`, unchanged and unwrapped) reach the client.
+
+Tested in `tests/deviationsSnapshotService.test.ts` (concurrent requests from separate
+simulated instances sharing one cache/lock produce exactly one upstream call; the 60s
+limit, including a failed attempt's own cooldown; stale fallback with the original
+`fetchedAt` preserved; the controlled error when no snapshot has ever succeeded; refresh-
+lock expiry and recovery after a simulated stuck holder), `tests/deviationsFilter.test.ts`
+(local `siteId`/`lineId`/`transportMode`/validity-period filtering, pure and
+Android/Redis-independent), `tests/distributedLock.test.ts` (`DistributedLock`'s own
+contract: safe expiry, and ownership-protected release — a late release from an
+already-expired holder must never delete a different, legitimate new holder's lock), and
+`tests/fetchedAt.test.ts` (concurrent requests with *different* site/line filters still
+share one upstream call and one `fetchedAt`, alongside the pre-existing identical-request
+case).
+
+### Redis setup (Upstash)
+
+`src/config/env.ts`'s `readRedisConfig` validates `UPSTASH_REDIS_REST_URL` and
+`UPSTASH_REDIS_REST_TOKEN` — the exact variable names Vercel's own Upstash marketplace
+integration populates automatically once a Redis database is connected to the project.
+**In production (`NODE_ENV=production`), both are required — the backend refuses to
+start without them**, rather than silently falling back to the in-memory
+`InMemoryCache`/`InMemoryLock` implementations, which provide no cross-instance
+protection at all (see `src/lib/cache.ts`, `src/lib/distributedLock.ts`, and each one's
+own "best-effort, per-process" doc). Outside production — local development and the
+automated test suite — both are optional and simply unset by default, which selects the
+in-memory implementations instead; this is correct and expected there, never a
+misconfiguration. See `backend/README.md`, "Redis (Upstash) setup", for the concrete
+setup steps, and `.env.example` for the full variable documentation.
 
 ## 8. Upstream networking, runtime validation, and error handling
 

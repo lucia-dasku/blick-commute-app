@@ -1311,15 +1311,15 @@ SL Deviations already emits timestamps with offsets; they are validated and pres
 
 ### Serverless caching
 
-The backend uses a `Cache` interface with an in-memory implementation for local development and best-effort per-instance reuse on Vercel.
+The backend uses a `Cache` interface with an in-memory implementation for local development and tests, and for best-effort per-instance reuse of the site-directory snapshot (which is not subject to a per-minute fair-use limit).
 
-Important limitations:
+Important limitations and, for SL Deviations specifically, how they are now closed:
 
 - Vercel serverless instances do not share dependable process memory;
-- a daily site snapshot in memory is not a guaranteed global daily cache;
+- a daily site snapshot in memory is not a guaranteed global daily cache — this is fine for site data, which changes at most once per day per SL Transport's own docs;
 - HTTP cache headers are the dependable initial shared layer for public GET responses;
 - simultaneous identical requests within one instance should be deduplicated;
-- **the SL Deviations one-request-per-minute limit is not currently guaranteed in production, and this is a blocker for public deployment, not a solved problem.** Two compounding gaps: the cache/dedup is per-serverless-instance only (Vercel does not guarantee shared memory across instances), and it is keyed per query combination (site/line/transport-mode/future), so real multi-user traffic spanning many different combinations can exceed one request per minute in aggregate even with the cache working exactly as designed. A shared cache (e.g. Redis) plus a real global rate limiter in front of the SL Deviations call path is required before any significant public traffic — preview/manual-testing-scale usage stays within SL's guidance in practice, but that is not the same as the backend enforcing it.
+- **the SL Deviations one-request-per-minute limit is now enforced in production, closing what was previously a blocker for public deployment.** The two compounding gaps that used to make it unenforceable — per-instance-only cache/dedup, and a cache keyed per query combination rather than per upstream overall — are both closed by fetching exactly one shared, network-wide SL Deviations snapshot (never one call per query) and coordinating every Vercel instance's access to it through a Redis-backed (Upstash) distributed lock and cache, with the 60-second floor covering failed attempts too and a 6-hour stale-fallback snapshot for when a refresh does fail. See `docs/api-contract.md`, "Caching and fair use", for the full design, and `backend/README.md`, "Redis (Upstash) setup", for the required production configuration (`UPSTASH_REDIS_REST_URL`/`UPSTASH_REDIS_REST_TOKEN` — the backend refuses to start in production without them, never silently falling back to the per-instance-only implementation).
 
 ### Stale and unavailable information
 

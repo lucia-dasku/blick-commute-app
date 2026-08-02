@@ -6,9 +6,12 @@ import { createStopsRoute } from "../src/routes/stops.js";
 import { createDeparturesRoute } from "../src/routes/departures.js";
 import { createDisruptionsRoute } from "../src/routes/disruptions.js";
 import { createSiteDirectory } from "../src/services/siteDirectory.js";
+import { createDeviationsSnapshotService } from "../src/services/deviationsSnapshotService.js";
 import { InFlightDeduper, InMemoryCache } from "../src/lib/cache.js";
+import { InMemoryLock } from "../src/lib/distributedLock.js";
 import type { SlTransportClient } from "../src/services/slTransportClient.js";
 import type { SlDeviationsClient } from "../src/services/slDeviationsClient.js";
+import type { SiteDirectory } from "../src/services/siteDirectory.js";
 import departuresFixture from "../fixtures/slTransportDeparturesSlussen.sample.json" with { type: "json" };
 import sitesFixture from "../fixtures/slSites.sample.json" with { type: "json" };
 import type { RawDeparturesResponse, RawSlSite } from "../src/services/upstreamTypes.js";
@@ -16,6 +19,15 @@ import { AppError } from "../src/lib/errors.js";
 import type { ErrorEnvelope, SuccessEnvelope } from "./testHelpers.js";
 import { createSlDeviationsClient } from "../src/services/slDeviationsClient.js";
 import { vi } from "vitest";
+
+const emptySiteDirectory: SiteDirectory = {
+  async search() {
+    return [];
+  },
+  async getAllSites() {
+    return [];
+  },
+};
 
 function buildTestApp(options?: { departuresShouldFail?: boolean; receivedForecastMinutes?: (value: number | undefined) => void }) {
   const cache = new InMemoryCache();
@@ -35,18 +47,19 @@ function buildTestApp(options?: { departuresShouldFail?: boolean; receivedForeca
   };
 
   const fakeDeviationsClient: SlDeviationsClient = {
-    async fetchDeviations() {
+    async fetchAllDeviations() {
       return [];
     },
   };
 
   const siteDirectory = createSiteDirectory(fakeTransportClient, cache, deduper);
+  const deviationsSnapshotService = createDeviationsSnapshotService(fakeDeviationsClient, new InMemoryCache(), new InMemoryLock());
 
   const app = new Hono().basePath("/api/v1");
   app.route("/health", healthRoute);
   app.route("/stops", createStopsRoute(siteDirectory));
   app.route("/departures", createDeparturesRoute(fakeTransportClient));
-  app.route("/disruptions", createDisruptionsRoute(fakeDeviationsClient, cache, deduper));
+  app.route("/disruptions", createDisruptionsRoute(deviationsSnapshotService, siteDirectory));
   app.notFound(notFoundHandler);
   app.onError(onError);
 
@@ -245,10 +258,9 @@ describe("GET /api/v1/disruptions — malformed upstream data", () => {
 
     try {
       const realDeviationsClient = createSlDeviationsClient("https://example.invalid/v1");
-      const cache = new InMemoryCache();
-      const deduper = new InFlightDeduper();
+      const snapshotService = createDeviationsSnapshotService(realDeviationsClient, new InMemoryCache(), new InMemoryLock());
       const app = new Hono().basePath("/api/v1");
-      app.route("/disruptions", createDisruptionsRoute(realDeviationsClient, cache, deduper));
+      app.route("/disruptions", createDisruptionsRoute(snapshotService, emptySiteDirectory));
       app.notFound(notFoundHandler);
       app.onError(onError);
 
@@ -286,10 +298,9 @@ describe("GET /api/v1/disruptions — malformed upstream data", () => {
 
     try {
       const realDeviationsClient = createSlDeviationsClient("https://example.invalid/v1");
-      const cache = new InMemoryCache();
-      const deduper = new InFlightDeduper();
+      const snapshotService = createDeviationsSnapshotService(realDeviationsClient, new InMemoryCache(), new InMemoryLock());
       const app = new Hono().basePath("/api/v1");
-      app.route("/disruptions", createDisruptionsRoute(realDeviationsClient, cache, deduper));
+      app.route("/disruptions", createDisruptionsRoute(snapshotService, emptySiteDirectory));
       app.notFound(notFoundHandler);
       app.onError(onError);
 
