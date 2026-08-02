@@ -39,11 +39,11 @@ value, or an unprotected fallback (see `src/config/env.ts`).
 npm run typecheck   # tsc --noEmit
 npm run lint        # eslint (flat config, eslint.config.js)
 npm run build       # tsc, emits to dist/
-npm test            # vitest — 243 tests
+npm test            # vitest — 265 tests
 npm audit           # dependency vulnerability scan
 ```
 
-Test coverage (243 tests across 20 files): DST resolver (including calendar validation
+Test coverage (265 tests across 21 files): DST resolver (including calendar validation
 — rejecting impossible dates and the spring DST gap, and ISO round-trip consistency),
 cancellation derivation, search ranking, cache/dedup, `fetchedAt` semantics (fresh,
 cached, and deduplicated-concurrent requests — including concurrent requests with
@@ -69,10 +69,22 @@ upstream call, the 60-second fair-use limit including a failed attempt's own coo
 stale fallback with the original `fetchedAt` preserved, the controlled error when no
 snapshot has ever succeeded, and refresh-lock expiry/recovery after a simulated stuck
 holder), the local deviations filter (`deviationsFilter.ts` — `siteId` resolved via the
-site directory's own child stop-area IDs, `lineId`/`transportMode`, and the
-validity-period/`future` window), the `DistributedLock` contract on its in-memory
-implementation (safe expiry, and ownership-protected release — a late release from an
-already-expired holder must never delete a different, legitimate new holder's lock),
+site directory's own child stop-area IDs, `lineId`/`transportMode`, the validity-period/
+`future` window, and — since this is the one dimension with genuinely different
+semantics depending on the deviation's own shape — line-only deviations with no
+`scope.stop_areas` at all being included only when both `lineId` and `transportMode` are
+requested and match, station-specific deviations continuing to require a `siteId` match
+regardless of any line/mode overlap, deviations scoped to an unrelated station staying
+excluded even when their line/mode also matches, and combined queries mixing
+station-specific and line-only deviations selecting the correct subset of each), the
+`DistributedLock` contract on its in-memory implementation (safe expiry, and
+ownership-protected release — a late release from an already-expired holder must never
+delete a different, legitimate new holder's lock), the `RedisCache`/`RedisLock` adapters
+against a fake Redis client implementing real GET/SET/EVAL semantics (not just the
+in-memory simulations — proving `RedisCache.get`/`.set` and `RedisLock.acquire`/
+`.release` translate correctly into `{ex}`/`{nx, px}`/`eval(script, keys, args)`, TTL
+expiry in both seconds and milliseconds, NX refusal, and the same ownership-protected
+release guarantee as the in-memory lock),
 upstream networking (timeout
 covering both headers and a stalled response body, vs. ordinary network failure,
 vs. HTTP 429, vs. malformed response), `Retry-After` header validation (valid

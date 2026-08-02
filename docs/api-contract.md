@@ -163,16 +163,28 @@ underlying fetch itself is now always network-wide. Locally, `siteId` matches a 
 whose `scope.stop_areas[].id` is either the site's own ID or one of its child stop-area
 IDs (`Site.stopAreaIds`, from the same site directory `/api/v1/stops/search` uses) —
 confirmed live during architecture review that a site's deviations are scoped by its
-child stop areas' IDs (§1, "Verified namespace result"). A deviation with no
-`scope.stop_areas` at all (line-only or network-wide) never matches a `siteId` filter,
-mirroring the previous upstream-side `site=` filter's own behavior.
+child stop areas' IDs (§1, "Verified namespace result").
+
+A deviation with no `scope.stop_areas` at all (line-only or network-wide) has no station
+to compare `siteId` against, so `siteId` is skipped for it — instead it is included only
+when the request names one specific line: **both** `lineId` **and** `transportMode` are
+given and both match one of the deviation's `scope.lines[]` entries. A bare `lineId` or a
+bare `transportMode` alone is deliberately not enough — without a station to anchor it,
+that single signal isn't enough to safely attribute a line-only deviation to one specific
+routine, so it stays excluded. Deviations scoped to an unrelated station are unaffected by
+this and remain excluded exactly as before: having any `scope.stop_areas` at all always
+takes the `siteId`-matching path, never the line-only fallback
+(`src/services/deviationsFilter.ts`, `matchesDeviationsQuery`).
 
 `lineId` is an optional positive integer filter, matched locally against
 `scope.lines[].id`. `transportMode` is an optional filter, strictly validated against the
 closed set of modes SL actually documents as filterable (`BUS`, `METRO`, `TRAIN`, `TRAM`,
 `SHIP`, `FERRY`, `TAXI`) — an unsupported, empty, or malformed value is a
 `VALIDATION_ERROR` (400), not silently ignored or forwarded as-is — then matched locally
-against `scope.lines[].transport_mode`. `future` may only be absent, `"true"`, or
+against `scope.lines[].transport_mode`. For a station-scoped deviation (one with
+`scope.stop_areas`), these two apply as independent optional filters exactly as described
+above; for a line-only deviation, see the `siteId` paragraph above — both are required
+together there. `future` may only be absent, `"true"`, or
 `"false"`; defaulting to `false` when absent — a normal active-routine request only sees
 currently published disruptions, and a caller must opt in explicitly (`future=true`) to
 also see disruptions published for the future. Any other value for `future` (e.g.

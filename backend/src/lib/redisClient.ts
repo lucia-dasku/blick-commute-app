@@ -1,7 +1,20 @@
-import type { Redis } from "@upstash/redis";
 import { randomUUID } from "node:crypto";
 import type { Cache } from "./cache.js";
 import type { DistributedLock } from "./distributedLock.js";
+
+/**
+ * The minimal subset of `@upstash/redis`'s `Redis` client that `RedisCache`/`RedisLock`
+ * actually call. Depending on this narrow interface — rather than the full `Redis`
+ * class, which exposes dozens of unrelated commands — is what makes these two classes
+ * testable with a lightweight fake standing in for a real Redis connection (see
+ * `tests/redisClient.test.ts`); a real `Redis` instance satisfies this structurally, so
+ * production wiring (src/app.ts) is unaffected.
+ */
+export interface RedisLike {
+  get<T>(key: string): Promise<T | null>;
+  set<T>(key: string, value: T, opts?: { ex?: number; px?: number; nx?: true }): Promise<"OK" | T | null>;
+  eval<TArgs extends unknown[], TData = unknown>(script: string, keys: string[], args: TArgs): Promise<TData>;
+}
 
 /**
  * Atomically deletes `KEYS[1]` only if its current value equals `ARGV[1]` — the
@@ -25,7 +38,7 @@ end
  * development and tests. Constructed in src/app.ts from `config.redis`.
  */
 export class RedisCache implements Cache {
-  constructor(private readonly redis: Redis) {}
+  constructor(private readonly redis: RedisLike) {}
 
   async get<T>(key: string): Promise<T | undefined> {
     const value = await this.redis.get<T>(key);
@@ -45,7 +58,7 @@ export class RedisCache implements Cache {
  * `DistributedLock`'s own doc for what "safe expiry and ownership protection" means here.
  */
 export class RedisLock implements DistributedLock {
-  constructor(private readonly redis: Redis) {}
+  constructor(private readonly redis: RedisLike) {}
 
   async acquire(key: string, ttlMs: number): Promise<string | undefined> {
     const token = randomUUID();

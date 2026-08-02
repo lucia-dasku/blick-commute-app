@@ -25,13 +25,21 @@ export interface DeviationsQuery {
  *   `siteStopAreaIds` (the site's own ID plus its child stop-area IDs — see
  *   `resolveSiteStopAreaIds`). Confirmed live during architecture review that a site's
  *   deviations are scoped by its child stop areas' IDs, in the same ID namespace as SL
- *   Transport (docs/api-contract.md §1, "Verified namespace result"). A deviation with
- *   no `scope.stop_areas` at all (e.g. line-only or network-wide) never matches a
- *   `siteId` filter — this mirrors the previous upstream-side `site=` filter, which only
- *   ever returned site-scoped deviations.
- * - `lineId` (optional): matches if any of `scope.lines[].id` equals it.
- * - `transportMode` (optional): matches if any of `scope.lines[].transport_mode` equals
- *   it.
+ *   Transport (docs/api-contract.md §1, "Verified namespace result").
+ *
+ *   A deviation with no `scope.stop_areas` at all (line-only or network-wide) has no
+ *   station to match a `siteId` against, so `siteId` is skipped for it entirely — instead
+ *   it matches only when the request names a SPECIFIC line: both `lineId` AND
+ *   `transportMode` must be given and both must match one of the deviation's
+ *   `scope.lines[]` entries. Requiring both (rather than treating them as independent
+ *   optional filters, as below) keeps this path conservative: a bare `lineId` or a bare
+ *   `transportMode` alone isn't enough signal to safely attribute a station-less
+ *   deviation to one specific routine, so it stays excluded rather than risk showing
+ *   unrelated disruptions.
+ * - `lineId` (optional) / `transportMode` (optional): for a deviation that DOES have
+ *   `scope.stop_areas` (and already matched `siteId` above), these apply as independent
+ *   optional filters — matching if any of `scope.lines[].id` / `scope.lines[].transport_mode`
+ *   equals the requested value.
  * - `future`: a deviation is EXPIRED if `publish.upto` is set and in the past — always
  *   excluded, regardless of `future`. A deviation is NOT YET STARTED if `publish.from`
  *   is set and in the future; `future=false` (the default) excludes these, `future=true`
@@ -48,16 +56,28 @@ export function matchesDeviationsQuery(
   now: Date,
 ): boolean {
   const stopAreaIds = deviation.scope.stop_areas?.map((a) => a.id) ?? [];
-  if (!stopAreaIds.some((id) => siteStopAreaIds.has(id))) {
-    return false;
-  }
-
   const lines = deviation.scope.lines ?? [];
-  if (query.lineId != null && !lines.some((l) => l.id === query.lineId)) {
-    return false;
-  }
-  if (query.transportMode != null && !lines.some((l) => l.transport_mode === query.transportMode)) {
-    return false;
+
+  if (stopAreaIds.length === 0) {
+    if (query.lineId == null || query.transportMode == null) {
+      return false;
+    }
+    const matchesLine = lines.some(
+      (l) => l.id === query.lineId && l.transport_mode === query.transportMode,
+    );
+    if (!matchesLine) {
+      return false;
+    }
+  } else {
+    if (!stopAreaIds.some((id) => siteStopAreaIds.has(id))) {
+      return false;
+    }
+    if (query.lineId != null && !lines.some((l) => l.id === query.lineId)) {
+      return false;
+    }
+    if (query.transportMode != null && !lines.some((l) => l.transport_mode === query.transportMode)) {
+      return false;
+    }
   }
 
   const nowMs = now.getTime();
