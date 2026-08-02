@@ -109,16 +109,29 @@
             android:enabled="true" />
 
         <!--
-            See widget/BlickRoutineWidget.kt's own doc — exported="true" is required for the
-            launcher to deliver APPWIDGET_UPDATE broadcasts (not a real attack surface: the OS
-            enforces the BIND_APPWIDGET permission on binding a widget instance to this
-            provider regardless). android:updatePeriodMillis is set to 0 in
+            exported="false" — verified safe, correcting an earlier assumption here that
+            exported="true" was required. android.appwidget.action.APPWIDGET_UPDATE is NOT on
+            the platform's protected-broadcast allowlist (checked directly against AOSP's
+            frameworks/base core/res/AndroidManifest.xml: APPWIDGET_UPDATE_OPTIONS/DELETED/
+            DISABLED/ENABLED/HOST_RESTORED/RESTORED/ENABLE_AND_UPDATE are all listed there,
+            APPWIDGET_UPDATE itself is not) — but AppWidgetServiceImpl (frameworks/base
+            services/appwidget) always delivers it via intent.setComponent(providerComponent)
+            before sendBroadcastAsUser, i.e. an EXPLICIT broadcast naming this exact receiver,
+            sent from system_server. The platform's exported check gates whether OTHER
+            (non-system) apps can target a component; it does not block the system's own
+            explicitly-addressed delivery to an app's own component, exported or not — the
+            same reasoning notification/StopRoutineNotificationReceiver.kt's own doc already
+            applies to this app's own explicit PendingIntents. The widget picker/launcher never
+            needs direct visibility into this receiver either: AppWidgetManager.getInstalledProviders()
+            is a Binder call into system_server, which does its own PackageManager lookup with
+            full (not exported-gated) visibility and returns the result — launchers never query
+            this receiver directly. android:updatePeriodMillis is set to 0 in
             res/xml/blick_routine_widget_info.xml specifically so Android's own widget-update
             scheduler is never used — every update is pushed by RoutineWidgetUpdater instead.
         -->
         <receiver
             android:name=".widget.BlickRoutineWidgetReceiver"
-            android:exported="true">
+            android:exported="false">
             <intent-filter>
                 <action android:name="android.appwidget.action.APPWIDGET_UPDATE" />
             </intent-filter>

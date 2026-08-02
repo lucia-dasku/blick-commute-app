@@ -176,4 +176,10 @@
          of the smaller following-departure countdown ("Next  16 min"). -->
     <string name="widget_countdown_minutes_format">%1$d min</string>
     <string name="widget_next_departure_label">Next</string>
+    <!-- A short, always-visible header marker for RoutineWidgetContent.Stale — shown
+         regardless of compact/full layout or whether any stale departure is still upcoming, see
+         StaleIndicator's own doc for why this is the one guaranteed place a stale-data warning
+         renders. Deliberately short: this sits inline in the header row next to the line badge
+         and destination, not a full sentence. -->
+    <string name="widget_stale_indicator">Stale</string>
 </resources>

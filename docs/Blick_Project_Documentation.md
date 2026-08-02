@@ -18,8 +18,8 @@ what is actually built today; where the two disagree, this section wins.
 
 **Validation status of this update, stated plainly up front:** a complete local run —
 `testDebugUnitTest`, `lintDebug`, `assembleDebug`, and `connectedDebugAndroidTest`, most
-recently on a physical Samsung Galaxy S23 Ultra, previously on a Lenovo TB350FU
-(Android 14) — has now passed in full: all 432 JVM `@Test`
+recently on a physical Lenovo TB350FU, previously on a Samsung Galaxy S23 Ultra
+(Android 14) — has now passed in full: all 443 JVM `@Test`
 functions and all 40 instrumented `@Test` functions, `lintDebug` with 0 errors (43
 warnings: two expected, already-guarded `InlinedApi` findings — the API-36
 `ACTION_APP_NOTIFICATION_PROMOTION_SETTINGS` deep-link and the API-33
@@ -57,7 +57,23 @@ skipped entirely once no relevant disruption is confirmed, with each remaining d
 shown as a collapsible, muted-red-tinted card; see "Notification layout, dedup, and
 disruption card restyle" in `android/README.md` for the full account, including why
 direction/journey-segment-specific filtering was investigated and found unsupported by the
-data SL Deviations actually provides.
+data SL Deviations actually provides. **A set of home-screen widget fixes was then
+completed**: a short, always-visible "Stale" header marker (compact layout included, and
+when every stale departure has since expired), the compact/full layout decision now checks
+width as well as height, the routine's own name is now actually displayed (previously
+computed but never rendered), the line badge's pink/red/green colors were darkened to meet
+WCAG AA contrast against their white text, the widget receiver's self-correcting reconcile
+call now runs through a WorkManager-backed `@HiltWorker` instead of an untracked coroutine
+that a process kill could silently drop, the receiver's manifest entry was changed to
+`exported="false"` (verified safe against AOSP's own protected-broadcast list and
+`AppWidgetServiceImpl` source), and the provider XML's `minResizeWidth`/`minResizeHeight`
+were raised to match what the compact layout's real content needs given
+`androidx.glance.appwidget.components.Scaffold`'s actual (horizontal-only) padding; see
+"Widget fixes: stale indicator, responsive compact layout, routine name, badge contrast,
+reliable reconcile scheduling" in `android/README.md` for the full account, including
+which parts were confirmed by test versus by source/dimensional analysis rather than an
+on-device screenshot (the connected device's OEM launcher does not support scripted widget
+placement/resizing).
 
 Getting there took three work sessions of source beyond the earlier 193-JVM-test
 baseline. First: the FAB restoration, the Routine Details 30-second auto-refresh, the
@@ -829,8 +845,13 @@ instrumented. A further session fixing the notification's disruption layout and
 tightening disruption de-duplication (a fixed collapsed "Disruptions…" indicator,
 content-based de-duplication in `relevantDisruptions`, hiding the Routine Details section
 entirely once no relevant disruption is confirmed, and a collapsible muted-red-tinted
-disruption card) added 7 further JVM `@Test` functions and 7 further instrumented ones —
-**432 JVM `@Test` functions and 40 instrumented `@Test` functions now exist in source,
+disruption card) added 7 further JVM `@Test` functions and 7 further instrumented ones,
+reaching 432 JVM / 40 instrumented. A further session completing a set of home-screen
+widget fixes (a short always-visible stale marker, width-aware compact layout, the
+routine name actually rendering, WCAG-AA badge contrast, a WorkManager-backed reconcile
+worker, and `exported="false"` on the widget receiver) added 11 further JVM `@Test`
+functions with no further instrumented ones —
+**443 JVM `@Test` functions and 40 instrumented `@Test` functions now exist in source,
 and all of them pass.** See `android/README.md`'s Build section for the exact toolchain
 versions, the up-to-date per-file test breakdown, and the real issues that first full
 run found and fixed (including a genuine production bug, not just test-suite

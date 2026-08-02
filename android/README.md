@@ -516,9 +516,13 @@ then fixed the notification's disruption layout and tightened disruption filteri
 "Notification layout, dedup, and disruption card restyle" below — adding 7 further JVM
 `@Test` functions (content-based dedup, plus the collapsed indicator/never-leaks-full-text
 cases in `RoutineNotificationBuilderTest`) and 7 further instrumented ones
-(`RoutineDetailsScreenTest`, new), reaching the 432 JVM / 40 instrumented total stated
-below — see `../docs/Blick_Project_Documentation.md`'s "Validation status" note for the
-full account of each.
+(`RoutineDetailsScreenTest`, new), reaching 432 JVM / 40 instrumented. A further session
+then completed a set of widget fixes — see "Widget fixes: stale indicator, responsive
+compact layout, routine name, badge contrast, reliable reconcile scheduling" below —
+adding 11 further JVM `@Test` functions (`BlickRoutineWidgetTest`, new; plus
+`WidgetReconcileWorkerTest`) with no further instrumented ones, reaching the 443 JVM / 40
+instrumented total stated below — see `../docs/Blick_Project_Documentation.md`'s
+"Validation status" note for the full account of each.
 
 On a machine with a real JDK 17 and Android SDK (or Android Studio, which provides
 both), build with:
@@ -538,9 +542,9 @@ clone builds without Android Studio or a pre-existing local Gradle install.
 ### Full verification pass
 
 A complete local run — `testDebugUnitTest`, `lintDebug`, `assembleDebug`, and
-`connectedDebugAndroidTest`, most recently on the physical Samsung Galaxy S23 Ultra
-(`SM-S918B`) referenced below, previously on the Lenovo TB350FU (Android 14) — has since
-been completed, using Android Studio's own bundled JDK. All 432 JVM
+`connectedDebugAndroidTest`, most recently on the physical Lenovo TB350FU (Android 14),
+previously on a Samsung Galaxy S23 Ultra (`SM-S918B`) — has since
+been completed, using Android Studio's own bundled JDK. All 443 JVM
 `@Test` functions and all 40 instrumented `@Test` functions pass; `lintDebug` reports 0
 errors (43 warnings: two expected, already-guarded `InlinedApi` findings — the
 API-36 `ACTION_APP_NOTIFICATION_PROMOTION_SETTINGS` deep-link and the API-33
@@ -693,6 +697,60 @@ behaviour this milestone deliberately changed) and a new instrumented
 `RoutineDetailsScreenTest` (7 `@Test` functions) covering the hidden-when-none-relevant
 section, the collapsed/expanded card content, and the expand/collapse toggle — run and
 passing on the same physical Galaxy S23 Ultra.
+
+**Widget fixes: stale indicator, responsive compact layout, routine name, badge contrast,
+reliable reconcile scheduling:** `BlickRoutineWidget` now shows a short, fixed "Stale"
+marker as part of the header row (`StaleIndicator`) whenever `RoutineWidgetContent.Stale`
+is the current content — the header renders identically in every layout this widget can
+produce, including the compact (header + countdown only) one and the case where every
+stale departure has since expired to `null`, so this is the one place a stale-data warning
+is now guaranteed visible rather than only appearing in the fuller body-text sentence the
+non-compact, still-has-a-departure case already showed. The compact/full layout decision
+(`isCompactLayout`, pulled out as its own pure, unit-tested function) now checks BOTH
+`LocalSize`'s width and height — previously height alone, which left a narrow-but-tall
+single-column placement rendering the full (not compact) layout despite having too little
+width for the un-weighted secondary station/direction block beside the countdown. The
+routine's own user-given name (already computed by `RoutineWidgetMapper`/persisted by
+`RoutineWidgetPreferences`, but never actually rendered) is now shown as a small label
+above the header in non-compact layouts. The line badge's pink/red/green family colors
+were darkened (hue preserved, each channel scaled toward black) after computing their real
+WCAG contrast against the badge's white text: the original values measured 3.11/4.17/2.46
+against the 4.5:1 AA minimum for normal-size text — green badly so — while blue (4.54) and
+grey (4.83) already passed narrowly enough to get a small safety-margin nudge too; exact
+contrast ratios for all five are now asserted directly in `BlickRoutineWidgetTest`.
+`BlickRoutineWidgetReceiver.onUpdate` no longer launches a raw, untracked
+`CoroutineScope(...).launch { }` for its self-correcting `reconcile()` call — a process
+kill in the moments after `onUpdate` returns could previously drop that coroutine
+silently, with no retry — it now enqueues a small `@HiltWorker` (`WidgetReconcileWorker`,
+unique work, `ExistingWorkPolicy.REPLACE`) via WorkManager instead, the same
+persists-across-process-death guarantee every other scheduled unit of work in this app
+already gets. The widget receiver's manifest entry was changed from `exported="true"` to
+`exported="false"`, correcting an earlier assumption that `exported="true"` was required
+for launcher-delivered `APPWIDGET_UPDATE` broadcasts: checked directly against AOSP's own
+`frameworks/base` sources, `android.appwidget.action.APPWIDGET_UPDATE` is NOT on the
+platform's protected-broadcast allowlist, but `AppWidgetServiceImpl` always delivers it via
+an explicit `intent.setComponent(...)` broadcast from `system_server` — the platform's
+`exported` check gates other apps targeting a component, not the system's own
+explicitly-addressed delivery — and the widget picker/launcher never queries this receiver
+directly either (`AppWidgetManager.getInstalledProviders()` is a Binder call into
+`system_server`, which does its own unrestricted lookup). See the manifest's own comment
+for the full citation trail. `blick_routine_widget_info.xml`'s `minResizeWidth`/
+`minResizeHeight` were raised (120dp→160dp, 60dp→80dp) after checking
+`androidx.glance.appwidget.components.Scaffold`'s real source: it applies only 12dp of
+*horizontal* padding (no vertical padding at all), which left the old declared minimums
+with too little real margin above the compact layout's own content once accessibility
+font-scaling is accounted for — `minWidth`/`minHeight` (the default, non-resized placement
+size) were already comfortably above this floor and left unchanged. **Not fully confirmed
+by an on-device screenshot, stated plainly:** the connected device for this session's
+verification (a Lenovo TB350FU) runs the OEM `com.tblenovo.launcher.TabUILauncher`, which
+— as already noted in the "Widget re-audit" entry below from an earlier session — does not
+support scripted widget placement or resizing via `adb shell input`, only physical by-hand
+interaction; the `minResizeWidth`/`minResizeHeight` values above are grounded in
+`Scaffold`'s real source and this layout's own font-size constants, not a rendered
+screenshot at those exact dimensions. Everything else in this entry — the compact/width
+decision logic, the badge color contrast ratios, and the reconcile worker actually running
+and calling through to `RoutineWidgetUpdater` — is covered by 11 new JVM `@Test` functions
+(`BlickRoutineWidgetTest`, `WidgetReconcileWorkerTest`) and confirmed passing.
 
 **Widget re-audit and correction, since verified end to end on-device:** an earlier pass
 of this widget shipped with several real lifecycle/visual gaps — `StopRoutineNotificationAction`

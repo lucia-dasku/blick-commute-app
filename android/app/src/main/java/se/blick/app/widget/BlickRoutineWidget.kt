@@ -37,12 +37,6 @@ import androidx.glance.text.FontWeight
 import androidx.glance.text.Text
 import androidx.glance.text.TextStyle
 import androidx.glance.unit.ColorProvider
-import dagger.hilt.android.AndroidEntryPoint
-import javax.inject.Inject
-import kotlinx.coroutines.CoroutineScope
-import kotlinx.coroutines.Dispatchers
-import kotlinx.coroutines.SupervisorJob
-import kotlinx.coroutines.launch
 import se.blick.app.R
 
 /**
@@ -88,16 +82,13 @@ class BlickRoutineWidget : GlanceAppWidget() {
 /** [BlickRoutineWidgetReceiver.glanceAppWidget]'s counterpart in `AndroidManifest.xml` — see
  * that receiver's own `<intent-filter>`/`<meta-data>` and `res/xml/blick_routine_widget_info.xml`.
  *
- * `@AndroidEntryPoint` field-injects [RoutineWidgetUpdater] like every other class in this
- * codebase (see [se.blick.app.notification.StopRoutineNotificationReceiver] for the identical
- * pattern on a plain [android.content.BroadcastReceiver]) so [onUpdate] can call
- * [RoutineWidgetUpdater.reconcile].
+ * No Hilt entry point/field injection needed here — [onUpdate] only enqueues
+ * [WidgetReconcileWorker] (itself `@HiltWorker`-injected by [se.blick.app.BlickApplication]'s
+ * `HiltWorkerFactory` when WorkManager actually runs it), rather than resolving
+ * [RoutineWidgetUpdater] directly on this receiver.
  */
-@AndroidEntryPoint
 class BlickRoutineWidgetReceiver : GlanceAppWidgetReceiver() {
     override val glanceAppWidget: GlanceAppWidget = BlickRoutineWidget()
-
-    @Inject lateinit var routineWidgetUpdater: RoutineWidgetUpdater
 
     /** [onUpdate] fires not only on `android:updatePeriodMillis` (disabled here, see
      * [BlickRoutineWidget]'s class doc) but also, per the platform's own [AppWidgetManager]
@@ -105,23 +96,25 @@ class BlickRoutineWidgetReceiver : GlanceAppWidgetReceiver() {
      * renders that fresh instance from its own (empty, never-yet-written) per-instance
      * preferences — [RoutineWidgetPreferences]'s `toWidgetUiState` defaults an empty
      * [Preferences] to [RoutineWidgetUiState.NoActiveCommute] — even if a routine's window is
-     * genuinely active (or notifications are unavailable) right this moment. Calling
-     * [RoutineWidgetUpdater.reconcile] here re-derives the real current state and pushes a
-     * corrected render moments later, exactly like every other `reconcile()` call site — this
-     * is a self-correction, not a second data source (see that method's own doc).
+     * genuinely active (or notifications are unavailable) right this moment. Enqueuing
+     * [WidgetReconcileWorker] here re-derives the real current state and pushes a corrected
+     * render moments later, exactly like every other `reconcile()` call site — this is a
+     * self-correction, not a second data source (see [RoutineWidgetUpdater.reconcile]'s own
+     * doc).
      *
-     * Deliberately does NOT call [goAsync] itself — [GlanceAppWidgetReceiver.onUpdate] (invoked
-     * via [super.onUpdate]) already calls it once for this dispatch, and calling it twice for
-     * the same [android.content.BroadcastReceiver.onReceive] throws (see that class's own doc:
-     * "you must not call goAsync, as it will be called by the super implementation"). This is a
-     * fast, best-effort correction: if the process is killed before this plain coroutine
-     * completes, the next reconcile()-triggering lifecycle event (or the worker's own next
-     * tick) still self-corrects it, exactly as for every other missed reconcile(). */
+     * Enqueues via [WidgetReconcileWorker.enqueue] rather than launching a raw, untracked
+     * coroutine — WorkManager persists this across process death and guarantees it eventually
+     * runs, unlike a `CoroutineScope(...).launch { }` tied to nothing, which a process kill
+     * moments after this method returns could silently drop entirely with no retry (see that
+     * worker's own doc). Deliberately does NOT call [goAsync] — [GlanceAppWidgetReceiver.onUpdate]
+     * (invoked via [super.onUpdate]) already calls it once for this dispatch, and calling it
+     * twice for the same [android.content.BroadcastReceiver.onReceive] throws (see that class's
+     * own doc: "you must not call goAsync, as it will be called by the super implementation") —
+     * not a concern here anyway, since enqueueing work is itself synchronous and fast, with no
+     * need to extend this receiver's own lifetime to wait on it. */
     override fun onUpdate(context: Context, appWidgetManager: AppWidgetManager, appWidgetIds: IntArray) {
         super.onUpdate(context, appWidgetManager, appWidgetIds)
-        CoroutineScope(SupervisorJob() + Dispatchers.Default).launch {
-            routineWidgetUpdater.reconcile()
-        }
+        WidgetReconcileWorker.enqueue(context)
     }
 }
 
@@ -130,6 +123,23 @@ class BlickRoutineWidgetReceiver : GlanceAppWidgetReceiver() {
  * 90dp) — the station/direction + "Next" secondary block and the live/scheduled/cancelled
  * status row are dropped rather than clipped or left to overflow the widget's bounds. */
 private val COMPACT_HEIGHT_THRESHOLD = 110.dp
+
+/** Below this width, the secondary station/direction + "Next" block (an un-weighted column
+ * placed beside the big countdown — see [DepartureMainContent]) has too little room to render
+ * its own text without wrapping into the countdown's own space or clipping — a narrow-but-tall
+ * grid cell (e.g. a single-column placement) needs the same compact layout as a short-but-wide
+ * one, not just smaller fonts. Matches [sizeTierFor]'s own smallest width tier boundary (see
+ * that function's doc on why 220dp is "a realistic phone grid cell") so anything narrow enough
+ * to already get the smallest font tier also drops to the compact layout, not just smaller text
+ * within the full one. */
+private val COMPACT_WIDTH_THRESHOLD = 220.dp
+
+/** Whether [ActiveRoutineContent] should render the compact (header + countdown only) layout —
+ * a pure function of the widget's live [LocalSize] so it can be unit-tested directly, without a
+ * Glance/Robolectric composition. See [COMPACT_HEIGHT_THRESHOLD]/[COMPACT_WIDTH_THRESHOLD] for
+ * why EITHER dimension being too small is enough to force it, not just height alone. */
+internal fun isCompactLayout(width: Dp, height: Dp): Boolean =
+    height < COMPACT_HEIGHT_THRESHOLD || width < COMPACT_WIDTH_THRESHOLD
 
 /** Font sizes for one responsive breakpoint — chosen by [sizeTierFor] from the widget's live
  * [LocalSize] width on every resize (`SizeMode.Exact`, see [BlickRoutineWidget]'s own doc). The
@@ -163,14 +173,24 @@ private fun sizeTierFor(width: Dp): WidgetSizeTier = when {
     else -> TIER_EXTRA_LARGE
 }
 
-private val BADGE_PINK = Color(0xFFFF49A5)
-private val BADGE_BLUE = Color(0xFF177BC0)
-private val BADGE_RED = Color(0xFFEE2D28)
-private val BADGE_GREEN = Color(0xFF51BA5B)
+// Darkened from SL's own brighter line-family colors specifically so white badge text stays at
+// or above the WCAG AA 4.5:1 contrast minimum for normal-size text — the original, brighter
+// values measured at only 3.11 (pink), 4.17 (red), and 2.46 (green) against white, all below
+// 4.5, with green badly so. Blue (4.54) and grey (4.83) already passed but blue's own margin was
+// razor-thin, so it got a small nudge too, for a safer margin against real-device subpixel/
+// anti-aliasing variance rather than a paper-thin pass. Hue is preserved (each channel scaled by
+// the same factor toward black) so the SL line-family color is still recognizably the same
+// family, just deep enough to stay readable. Exact contrast ratios are asserted directly against
+// these literal values in LineBadgeColorMappingTest, so a future edit here that regresses
+// contrast fails a test rather than shipping unnoticed.
+private val BADGE_PINK = Color(0xFFC73981)
+private val BADGE_BLUE = Color(0xFF1676B8)
+private val BADGE_RED = Color(0xFFDB2925)
+private val BADGE_GREEN = Color(0xFF38803F)
 private val BADGE_GREY = Color(0xFF6B7280)
 private val BADGE_TEXT_WHITE = ColorProvider(Color.White)
 
-private fun LineBadgeColor.toBadgeColor(): Color = when (this) {
+internal fun LineBadgeColor.toBadgeColor(): Color = when (this) {
     LineBadgeColor.Pink -> BADGE_PINK
     LineBadgeColor.Blue -> BADGE_BLUE
     LineBadgeColor.Red -> BADGE_RED
@@ -204,20 +224,40 @@ private fun NoActiveCommuteContent() {
     }
 }
 
-/** "Design 1": a line badge + destination header, a large next-departure countdown with a
- * smaller station/direction + following-departure block beside it, and a live/scheduled/
- * cancelled status row — see [WidgetContentBody]/[DepartureMainContent]/[StatusFooter]. */
+/** "Design 1": a routine-name label, a line badge + destination header, a large next-departure
+ * countdown with a smaller station/direction + following-departure block beside it, and a
+ * live/scheduled/cancelled status row — see [WidgetContentBody]/[DepartureMainContent]/
+ * [StatusFooter]. */
 @Composable
 private fun ActiveRoutineContent(context: Context, model: RoutineWidgetModel) {
     val clickAction = actionStartActivity(routineDetailsTapIntent(context, model.routineId))
     // Read once per composition: SizeMode.Exact recomposes this whole tree on every resize, so
     // every use below always reflects the widget's current on-screen size.
     val size = LocalSize.current
-    val compact = size.height < COMPACT_HEIGHT_THRESHOLD
+    val compact = isCompactLayout(size.width, size.height)
     val tier = sizeTierFor(size.width)
     val destination = model.directionLabel ?: model.stationName
+    // Only ever a Stale case's own doc for why this must be rendered as a short, ALWAYS-visible
+    // header marker rather than the fuller body-text sentence WidgetContentBody's Stale branch
+    // already shows in non-compact mode with a next departure -- that longer sentence is dropped
+    // in compact mode, and dropped entirely once every stale departure has since expired
+    // (WidgetContentBody falls back to a plain "no departures" body then), so without this
+    // header-level marker a genuinely failed refresh could look identical to a healthy state in
+    // either case.
+    val isStale = model.content is RoutineWidgetContent.Stale
     Column(modifier = GlanceModifier.fillMaxSize().clickable(clickAction)) {
-        WidgetHeader(model, tier, destination)
+        // The routine's own user-given name -- distinct from the station/destination text the
+        // header already shows -- dropped in compact mode along with the rest of the secondary
+        // context (see WidgetContentBody's own compact handling) to protect the tight
+        // header+countdown-only space budget that mode is built around.
+        if (!compact) {
+            Text(
+                text = model.routineName,
+                maxLines = 1,
+                style = TextStyle(fontSize = tier.statusSize, color = onSurfaceVariantColor()),
+            )
+        }
+        WidgetHeader(model, tier, destination, isStale)
         Column(modifier = GlanceModifier.fillMaxWidth().padding(top = 6.dp)) {
             WidgetContentBody(context, model, compact, tier)
         }
@@ -225,7 +265,7 @@ private fun ActiveRoutineContent(context: Context, model: RoutineWidgetModel) {
 }
 
 @Composable
-private fun WidgetHeader(model: RoutineWidgetModel, tier: WidgetSizeTier, destination: String) {
+private fun WidgetHeader(model: RoutineWidgetModel, tier: WidgetSizeTier, destination: String, isStale: Boolean) {
     Row(modifier = GlanceModifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
         model.lineDesignation?.let { line ->
             LineBadge(line, LineBadgeColorMapping.colorFor(model.transportMode, line), tier.badgeSize)
@@ -240,7 +280,29 @@ private fun WidgetHeader(model: RoutineWidgetModel, tier: WidgetSizeTier, destin
             maxLines = 1,
             style = TextStyle(fontWeight = FontWeight.Bold, fontSize = tier.headerSize, color = onBackgroundColor()),
         )
+        if (isStale) {
+            StaleIndicator(tier)
+        }
     }
+}
+
+/** A short, fixed marker that this content is stale (the last successful refresh, not a live
+ * one) — rendered as part of [WidgetHeader], which is shown identically regardless of
+ * [isCompactLayout] or whether any departure is still upcoming, so this is the one place a
+ * stale-data warning is GUARANTEED visible in every layout this widget can render, unlike the
+ * fuller body-text sentence [WidgetContentBody]'s `Stale` branch only shows in non-compact mode
+ * when a departure is still upcoming. Uses [GlanceTheme.colors.tertiary] — the same
+ * "attention, not alarm" role the Routine Details screen's own stale warning uses via
+ * `MaterialTheme.colorScheme.tertiary` (see `R.string.routine_details_stale_warning`'s call
+ * site). */
+@Composable
+private fun StaleIndicator(tier: WidgetSizeTier) {
+    val context = LocalContext.current
+    Text(
+        text = "  " + context.getString(R.string.widget_stale_indicator),
+        maxLines = 1,
+        style = TextStyle(fontWeight = FontWeight.Bold, fontSize = tier.statusSize, color = GlanceTheme.colors.tertiary),
+    )
 }
 
 /** A small rounded badge with the real line number, colored by [LineBadgeColorMapping] — bold
