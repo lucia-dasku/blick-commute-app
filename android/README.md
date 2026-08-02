@@ -525,8 +525,13 @@ instrumented. A further session then fixed a zero-delay rescheduling regression,
 every widget operation genuinely best-effort, decoupled disruption fetch timing from
 departure notifications, and corrected disruption-relevance wording — see "Zero-delay fix,
 widget best-effort, decoupled disruption timing, and corrected relevance wording" below —
-adding 16 further JVM `@Test` functions with no further instrumented ones, reaching the
-459 JVM / 40 instrumented total stated below — see
+adding 16 further JVM `@Test` functions with no further instrumented ones, reaching
+459 JVM / 40 instrumented. A further session then fixed two more real bugs found during a
+broader project audit — notification re-enabling not resuming today's already-active
+routine, and `WidgetReconcileWorker`'s one remaining unprotected widget call — see "Audit
+follow-up: notification re-enable resumes today, WidgetReconcileWorker retries" below —
+adding 6 further JVM `@Test` functions with no further instrumented ones, reaching the
+465 JVM / 40 instrumented total stated below — see
 `../docs/Blick_Project_Documentation.md`'s "Validation status" note for the full account
 of each.
 
@@ -550,8 +555,8 @@ clone builds without Android Studio or a pre-existing local Gradle install.
 A complete local run — `testDebugUnitTest`, `lintDebug`, `assembleDebug`, and
 `connectedDebugAndroidTest`, most recently on both the physical Lenovo TB350FU (Android 14)
 and a Samsung Galaxy S23 Ultra (`SM-S918B`) connected simultaneously — has since
-been completed, using Android Studio's own bundled JDK. All 459 JVM
-`@Test` functions and all 40 instrumented `@Test` functions pass; `lintDebug` reports 0
+been completed, using Android Studio's own bundled JDK. All 465 JVM
+`@Test` functions pass; `lintDebug` reports 0
 errors (43 warnings: two expected, already-guarded `InlinedApi` findings — the
 API-36 `ACTION_APP_NOTIFICATION_PROMOTION_SETTINGS` deep-link and the API-33
 `POST_NOTIFICATIONS` permission constant — plus four expected `UnusedAttribute` findings

@@ -19,8 +19,11 @@ what is actually built today; where the two disagree, this section wins.
 **Validation status of this update, stated plainly up front:** a complete local run —
 `testDebugUnitTest`, `lintDebug`, `assembleDebug`, and `connectedDebugAndroidTest`, most
 recently on a physical Lenovo TB350FU and a Samsung Galaxy S23 Ultra connected
-simultaneously (Android 14) — has now passed in full: all 459 JVM `@Test`
-functions and all 40 instrumented `@Test` functions, `lintDebug` with 0 errors (43
+simultaneously (Android 14) — has now passed in full: all 465 JVM `@Test`
+functions (the 40 instrumented `@Test` functions are unchanged since that combined-device
+run and were not re-run for the most recent, JVM-only audit-follow-up session, since no
+device was connected at the time — stated plainly rather than silently implied),
+`lintDebug` with 0 errors (43
 warnings: two expected, already-guarded `InlinedApi` findings — the API-36
 `ACTION_APP_NOTIFICATION_PROMOTION_SETTINGS` deep-link and the API-33
 `POST_NOTIFICATIONS` permission constant — plus four expected `UnusedAttribute` findings
@@ -868,8 +871,13 @@ functions with no further instrumented ones, reaching 443 JVM / 40 instrumented.
 session fixing the zero-delay rescheduling regression, making every widget operation
 best-effort, decoupling disruption fetch timing from departure notifications, and
 correcting disruption-relevance wording added 16 further JVM `@Test` functions with no
+further instrumented ones, reaching 459 JVM / 40 instrumented. A further session, found
+during a broader project audit, fixing two remaining real bugs — notification
+re-enabling not resuming today's already-active routine, and `WidgetReconcileWorker`'s
+one remaining unprotected widget call now returning `Result.retry()` on ordinary
+failure instead of silently giving up — added 6 further JVM `@Test` functions with no
 further instrumented ones —
-**459 JVM `@Test` functions and 40 instrumented `@Test` functions now exist in source,
+**465 JVM `@Test` functions and 40 instrumented `@Test` functions now exist in source,
 and all of them pass.** See `android/README.md`'s Build section for the exact toolchain
 versions, the up-to-date per-file test breakdown, and the real issues that first full
 run found and fixed (including a genuine production bug, not just test-suite

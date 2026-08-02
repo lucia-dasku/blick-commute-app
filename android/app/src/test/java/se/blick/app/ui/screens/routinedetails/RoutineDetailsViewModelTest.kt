@@ -1593,6 +1593,85 @@ class RoutineDetailsViewModelTest {
         assertEquals(NotificationAvailability.Available, vm.uiState.value.notificationAvailability)
     }
 
+    // ---- Notification re-enabling resumes today's routine (Fix: reschedule + reconcile on the
+    // unavailable-to-available transition) ----
+    //
+    // Without this, an enabled routine whose active window RoutineActiveWindowWorker already
+    // cut short (via its own rescheduleSkippingToday, once it noticed notifications were
+    // unavailable) stayed silent until the routine's next eligible occurrence -- tomorrow at the
+    // earliest -- even if the user re-enabled notifications while today's window was still open.
+
+    @Test
+    fun `refreshNotificationAvailability reschedules and reconciles the widget on the unavailable-to-available transition`() =
+        runTest(dispatcher) {
+            val routine = sampleRoutine(enabled = true)
+            val checker = FakeNotificationAvailabilityChecker(current = NotificationAvailability.AppDisabled)
+            val scheduler = FakeRoutineScheduler()
+            val widgetUpdater = FakeRoutineWidgetUpdater()
+            val vm = viewModel(routine = routine, notificationAvailabilityChecker = checker, scheduler = scheduler, widgetUpdater = widgetUpdater)
+            dispatcher.scheduler.advanceUntilIdle()
+            // The very first check (in init) landing on Unavailable must not itself trigger a
+            // reschedule -- there is no PRIOR "available" state to be transitioning away from.
+            assertTrue(scheduler.scheduledRoutines.isEmpty())
+
+            checker.current = NotificationAvailability.Available
+            vm.refreshNotificationAvailability()
+            dispatcher.scheduler.advanceUntilIdle()
+
+            assertEquals(NotificationAvailability.Available, vm.uiState.value.notificationAvailability)
+            assertEquals(listOf(routine.id), scheduler.scheduledRoutines.map { it.id })
+            assertEquals(1, widgetUpdater.reconcileCallCount)
+        }
+
+    @Test
+    fun `refreshNotificationAvailability does not reschedule when availability was already available`() = runTest(dispatcher) {
+        val routine = sampleRoutine(enabled = true)
+        val checker = FakeNotificationAvailabilityChecker(current = NotificationAvailability.Available)
+        val scheduler = FakeRoutineScheduler()
+        val widgetUpdater = FakeRoutineWidgetUpdater()
+        val vm = viewModel(routine = routine, notificationAvailabilityChecker = checker, scheduler = scheduler, widgetUpdater = widgetUpdater)
+        dispatcher.scheduler.advanceUntilIdle()
+
+        // Still available -- not a transition, so no reschedule.
+        vm.refreshNotificationAvailability()
+        dispatcher.scheduler.advanceUntilIdle()
+
+        assertTrue(scheduler.scheduledRoutines.isEmpty())
+        assertEquals(0, widgetUpdater.reconcileCallCount)
+    }
+
+    @Test
+    fun `refreshNotificationAvailability does not reschedule a disabled routine on the unavailable-to-available transition`() =
+        runTest(dispatcher) {
+            val routine = sampleRoutine(enabled = false)
+            val checker = FakeNotificationAvailabilityChecker(current = NotificationAvailability.AppDisabled)
+            val scheduler = FakeRoutineScheduler()
+            val vm = viewModel(routine = routine, notificationAvailabilityChecker = checker, scheduler = scheduler)
+            dispatcher.scheduler.advanceUntilIdle()
+
+            checker.current = NotificationAvailability.Available
+            vm.refreshNotificationAvailability()
+            dispatcher.scheduler.advanceUntilIdle()
+
+            assertTrue(scheduler.scheduledRoutines.isEmpty())
+        }
+
+    @Test
+    fun `markNotificationRationaleSeen also reschedules on the unavailable-to-available transition`() = runTest(dispatcher) {
+        val routine = sampleRoutine(enabled = true)
+        val checker = FakeNotificationAvailabilityChecker(current = NotificationAvailability.PermissionMissing)
+        val scheduler = FakeRoutineScheduler()
+        val vm = viewModel(routine = routine, notificationAvailabilityChecker = checker, scheduler = scheduler)
+        dispatcher.scheduler.advanceUntilIdle()
+
+        // The permission-grant result flow always calls markNotificationRationaleSeen().
+        checker.current = NotificationAvailability.Available
+        vm.markNotificationRationaleSeen()
+        dispatcher.scheduler.advanceUntilIdle()
+
+        assertEquals(listOf(routine.id), scheduler.scheduledRoutines.map { it.id })
+    }
+
     // ---- Scheduler integration (save/enable/disable/pause/resume/delete) ----
 
     @Test

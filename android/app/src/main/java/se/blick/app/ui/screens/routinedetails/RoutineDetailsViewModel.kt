@@ -223,9 +223,49 @@ class RoutineDetailsViewModel @Inject constructor(
      * backgrounded and resumed, navigating away and back, or a rotation) — exactly the cases a
      * one-shot `remember(context)` snapshot in the UI layer would otherwise miss. Also called
      * from [markNotificationRationaleSeen] for the permission-result case.
+     *
+     * Also detects the specific TRANSITION from unavailable to available and, when it happens,
+     * calls [onNotificationsBecameAvailable] — see that function's own doc for why this is
+     * needed: without it, an enabled routine whose active window
+     * [se.blick.app.scheduling.RoutineActiveWindowWorker] already cut short (via its own
+     * `rescheduleSkippingToday`, once it noticed notifications were unavailable) would stay
+     * silent until the routine's next eligible occurrence — tomorrow at the earliest — even if
+     * the user re-enables notifications while today's window is still genuinely open.
      */
     fun refreshNotificationAvailability() {
-        _uiState.update { it.copy(notificationAvailability = notificationAvailabilityChecker.check()) }
+        val previous = _uiState.value.notificationAvailability
+        val current = notificationAvailabilityChecker.check()
+        _uiState.update { it.copy(notificationAvailability = current) }
+        if (previous != NotificationAvailability.Available && current == NotificationAvailability.Available) {
+            onNotificationsBecameAvailable()
+        }
+    }
+
+    /**
+     * Fires the moment [RoutineDetailsUiState.notificationAvailability] transitions from
+     * anything other than [NotificationAvailability.Available] TO
+     * [NotificationAvailability.Available] — e.g. the user grants the runtime permission,
+     * re-enables the app-wide notifications toggle, or re-enables the Blick channel
+     * specifically, all from outside this screen (system Settings). A no-op if no routine has
+     * loaded yet, or the loaded routine is disabled — there is nothing to (re)schedule for
+     * either case.
+     *
+     * Calling [RoutineScheduler.scheduleActivation] again re-derives the correct occurrence
+     * from scratch exactly like every other lifecycle call site in this class
+     * ([toggleEnabled]/[pauseToday]/[resumeToday]/[reload]) already does: if the routine's
+     * active window is still genuinely open right now, `WorkManagerRoutineScheduler` enqueues
+     * it with a ZERO initial delay, so [se.blick.app.scheduling.RoutineActiveWindowWorker]
+     * resumes within moments instead of waiting for the routine's next eligible occurrence; if
+     * the window has since closed, this simply reconfirms the already-correct next occurrence,
+     * a harmless no-op. [RoutineWidgetUpdater.reconcile] is best-effort, same reasoning as
+     * every other widget call site in this class (see [runWidgetUpdateSafely]'s own doc).
+     */
+    private fun onNotificationsBecameAvailable() {
+        val routine = _uiState.value.routine?.takeIf { it.enabled } ?: return
+        routineScheduler.scheduleActivation(routine)
+        viewModelScope.launch {
+            runWidgetUpdateSafely { routineWidgetUpdater.reconcile() }
+        }
     }
 
     /**
