@@ -18,8 +18,8 @@ what is actually built today; where the two disagree, this section wins.
 
 **Validation status of this update, stated plainly up front:** a complete local run —
 `testDebugUnitTest`, `lintDebug`, `assembleDebug`, and `connectedDebugAndroidTest`, most
-recently on a physical Lenovo TB350FU, previously on a Samsung Galaxy S23 Ultra
-(Android 14) — has now passed in full: all 443 JVM `@Test`
+recently on a physical Lenovo TB350FU and a Samsung Galaxy S23 Ultra connected
+simultaneously (Android 14) — has now passed in full: all 459 JVM `@Test`
 functions and all 40 instrumented `@Test` functions, `lintDebug` with 0 errors (43
 warnings: two expected, already-guarded `InlinedApi` findings — the API-36
 `ACTION_APP_NOTIFICATION_PROMOTION_SETTINGS` deep-link and the API-33
@@ -73,7 +73,21 @@ were raised to match what the compact layout's real content needs given
 reliable reconcile scheduling" in `android/README.md` for the full account, including
 which parts were confirmed by test versus by source/dimensional analysis rather than an
 on-device screenshot (the connected device's OEM launcher does not support scripted widget
-placement/resizing).
+placement/resizing). **Four further fixes were then made**: a genuine zero-delay
+rescheduling bug (a stale `pausedDate` from an earlier "pause today" could suppress
+today's own skip-today reschedule, recomputing the same still-open window with a zero
+initial delay); every `RoutineWidgetUpdater` call site now genuinely treats a widget
+failure as best-effort, never cutting the notification loop short, never crashing an
+unguarded coroutine, and never reporting an already-successful create/edit/delete/enable/
+pause/resume action as failed; the active-window loop's departures notification no longer
+waits on disruptions at all, which — despite an existing doc comment's claim otherwise —
+it previously did, fetching disruptions only afterward with a bounded timeout and a
+last-known-value fallback instead; and the Routine Details "Disruptions" heading (and this
+document's own "Relevant" product principle) were corrected to describe matching as
+station + line + transport mode only, never direction, since SL Deviations provides no
+direction field to match against. See "Zero-delay fix, widget best-effort, decoupled
+disruption timing, and corrected relevance wording" in `android/README.md` for the full
+account.
 
 Getting there took three work sessions of source beyond the earlier 193-JVM-test
 baseline. First: the FAB restoration, the Routine Details 30-second auto-refresh, the
@@ -445,7 +459,7 @@ Once a routine has been configured, the user should not need to open the applica
 
 ### Relevant
 
-Only departures and disruptions connected to the selected site, transport mode, line, and direction should be displayed.
+Only departures and disruptions connected to the selected site, transport mode, and line should be displayed. Departures are additionally matched to the selected direction; disruption matching, as actually implemented, is not — SL Deviations provides no direction or stop-sequence field to match against, and a disruption is matched by station + line + transport mode alone (see "Current implementation status" above and the Routine Details/notification copy, which describes disruption results accordingly rather than claiming direction- or route-specific matching).
 
 ### Glanceable
 
@@ -850,8 +864,12 @@ reaching 432 JVM / 40 instrumented. A further session completing a set of home-s
 widget fixes (a short always-visible stale marker, width-aware compact layout, the
 routine name actually rendering, WCAG-AA badge contrast, a WorkManager-backed reconcile
 worker, and `exported="false"` on the widget receiver) added 11 further JVM `@Test`
-functions with no further instrumented ones —
-**443 JVM `@Test` functions and 40 instrumented `@Test` functions now exist in source,
+functions with no further instrumented ones, reaching 443 JVM / 40 instrumented. A further
+session fixing the zero-delay rescheduling regression, making every widget operation
+best-effort, decoupling disruption fetch timing from departure notifications, and
+correcting disruption-relevance wording added 16 further JVM `@Test` functions with no
+further instrumented ones —
+**459 JVM `@Test` functions and 40 instrumented `@Test` functions now exist in source,
 and all of them pass.** See `android/README.md`'s Build section for the exact toolchain
 versions, the up-to-date per-file test breakdown, and the real issues that first full
 run found and fixed (including a genuine production bug, not just test-suite

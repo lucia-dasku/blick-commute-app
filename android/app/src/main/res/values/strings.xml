@@ -35,7 +35,12 @@
     <string name="routine_details_departure_cancelled">Cancelled</string>
     <string name="routine_details_minutes_remaining">%1$d min</string>
 
-    <string name="routine_details_disruptions_heading">Disruptions</string>
+    <!-- Deliberately describes matching precisely rather than implying more than is true:
+         matching is by station + line + transport mode only (see deviationsFilter.ts and
+         Disruption.kt/relevantDisruptions) — SL Deviations provides no direction or
+         stop-sequence field, so a result here is never claimed to definitely affect the
+         selected direction or the full journey, only this station and line. -->
+    <string name="routine_details_disruptions_heading">Disruptions related to this station and line</string>
     <!-- Deliberately generic, same rationale as the departures section's own error strings. -->
     <string name="routine_details_disruptions_unavailable">Couldn\'t load disruptions right now.</string>
     <string name="routine_details_disruption_expand">Show disruption details</string>

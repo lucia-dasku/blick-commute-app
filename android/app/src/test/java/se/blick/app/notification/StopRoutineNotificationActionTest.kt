@@ -86,6 +86,19 @@ class StopRoutineNotificationActionTest {
         override suspend fun showNotificationsUnavailable(routine: CommuteRoutine) = throw NotImplementedError()
     }
 
+    /** Throws from every method — proves stop() wraps its [RoutineWidgetUpdater] call with
+     * `runWidgetUpdateSafely` rather than letting a widget/Glance/DataStore failure propagate
+     * out of stop() itself, even though the pause/reschedule/notification-removal above already
+     * genuinely succeeded (see runWidgetUpdateSafely's own doc, and
+     * StopRoutineNotificationReceiver's own doc on why an uncaught exception here would
+     * otherwise crash the app). */
+    private class FailingWidgetUpdater : RoutineWidgetUpdater {
+        override suspend fun updateWithDepartures(routine: CommuteRoutine, departuresState: LiveDeparturesState, now: Instant) = throw NotImplementedError()
+        override suspend fun clear() = throw RuntimeException("widget update failed")
+        override suspend fun reconcile() = throw RuntimeException("widget update failed")
+        override suspend fun showNotificationsUnavailable(routine: CommuteRoutine) = throw NotImplementedError()
+    }
+
     // 2026-07-31T22:30:00Z is 2026-08-01 in Stockholm's summer UTC+2 offset -- deliberately
     // chosen to prove "today" is resolved in the device's own zone, not the clock's UTC instant.
     private val fixedInstant = Instant.parse("2026-07-31T22:30:00Z")
@@ -125,5 +138,20 @@ class StopRoutineNotificationActionTest {
         // reconcile() (not a null-check branch) correctly handles "already deleted" too -- see
         // RoutineWidgetUpdater.reconcile's own doc.
         assertEquals(1, widgetUpdater.reconcileCallCount)
+    }
+
+    @Test
+    fun `stop still pauses, reschedules, and removes the notification when the widget updater throws`() = runTest {
+        val repository = FakeRoutineRepository(routine())
+        val scheduler = RecordingScheduler()
+        val notifier = RecordingNotifier()
+
+        // If the widget failure below were left unwrapped, stop() would throw and none of the
+        // assertions below would even run.
+        StopRoutineNotificationAction(repository, scheduler, notifier, FailingWidgetUpdater(), clock, stockholmZone).stop("r1")
+
+        assertEquals("r1" to LocalDate.of(2026, 8, 1), repository.lastPaused)
+        assertEquals(listOf(LocalDate.of(2026, 8, 1)), scheduler.scheduled.map { it.pausedDate })
+        assertEquals(1, notifier.removeCallCount)
     }
 }

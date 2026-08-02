@@ -374,6 +374,25 @@ class RoutineDetailsViewModelTest {
         override suspend fun showNotificationsUnavailable(routine: CommuteRoutine) = Unit
     }
 
+    /** Throws from every method — proves each call site wraps its [RoutineWidgetUpdater] call
+     * with `runWidgetUpdateSafely` rather than letting a widget/Glance/DataStore failure escape
+     * into this ViewModel's own success/failure state, or crash `viewModelScope` (which has no
+     * default exception handler on Android). */
+    private class FailingRoutineWidgetUpdater : RoutineWidgetUpdater {
+        override suspend fun updateWithDepartures(routine: CommuteRoutine, departuresState: LiveDeparturesState, now: Instant) {
+            throw RuntimeException("widget update failed")
+        }
+        override suspend fun clear() {
+            throw RuntimeException("widget update failed")
+        }
+        override suspend fun reconcile() {
+            throw RuntimeException("widget update failed")
+        }
+        override suspend fun showNotificationsUnavailable(routine: CommuteRoutine) {
+            throw RuntimeException("widget update failed")
+        }
+    }
+
     /** Minimal in-memory [AppSettingsDataStore] fake — see the identical fake in
      * `RoutineCreateViewModelTest` for why each ViewModel test file keeps its own copy rather
      * than sharing one across packages. */
@@ -1138,6 +1157,90 @@ class RoutineDetailsViewModelTest {
         dispatcher.scheduler.advanceUntilIdle()
 
         assertEquals(1, widgetUpdater.reconcileCallCount)
+    }
+
+    // ---- Widget failures are best-effort: never make an already-successful action look failed,
+    // never crash viewModelScope (see se.blick.app.widget.runWidgetUpdateSafely's own doc) ----
+
+    @Test
+    fun `toggleEnabled still succeeds and is never reported failed when the widget updater throws`() = runTest(dispatcher) {
+        val routine = sampleRoutine(enabled = true)
+        val vm = viewModel(routine = routine, widgetUpdater = FailingRoutineWidgetUpdater())
+        dispatcher.scheduler.advanceUntilIdle()
+
+        vm.toggleEnabled()
+        dispatcher.scheduler.advanceUntilIdle()
+
+        // The real mutation (setEnabled/scheduleActivation) already succeeded before the widget
+        // updater ever ran -- a failure there must not overwrite this with enabledActionFailed.
+        assertEquals(false, vm.uiState.value.enabledActionFailed)
+        assertEquals(false, vm.uiState.value.isTogglingEnabled)
+        assertEquals(false, vm.uiState.value.routine?.enabled)
+    }
+
+    @Test
+    fun `pauseToday still succeeds and is never reported failed when the widget updater throws`() = runTest(dispatcher) {
+        val routine = sampleRoutine()
+        val vm = viewModel(routine = routine, widgetUpdater = FailingRoutineWidgetUpdater())
+        dispatcher.scheduler.advanceUntilIdle()
+
+        vm.pauseToday()
+        dispatcher.scheduler.advanceUntilIdle()
+
+        assertEquals(false, vm.uiState.value.pauseActionFailed)
+        assertEquals(false, vm.uiState.value.isTogglingPause)
+        assertEquals(true, vm.uiState.value.isPausedToday)
+    }
+
+    @Test
+    fun `resumeToday still succeeds and is never reported failed when the widget updater throws`() = runTest(dispatcher) {
+        val routine = sampleRoutine(pausedDate = LocalDate.now(clock))
+        val vm = viewModel(routine = routine, widgetUpdater = FailingRoutineWidgetUpdater())
+        dispatcher.scheduler.advanceUntilIdle()
+
+        vm.resumeToday()
+        dispatcher.scheduler.advanceUntilIdle()
+
+        assertEquals(false, vm.uiState.value.pauseActionFailed)
+        assertEquals(false, vm.uiState.value.isTogglingPause)
+        assertEquals(false, vm.uiState.value.isPausedToday)
+    }
+
+    @Test
+    fun `deleteRoutine still succeeds, still calls onDeleted, and is never reported failed when the widget updater throws`() = runTest(dispatcher) {
+        val routine = sampleRoutine()
+        var deleted = false
+        val vm = viewModel(routine = routine, widgetUpdater = FailingRoutineWidgetUpdater())
+        dispatcher.scheduler.advanceUntilIdle()
+
+        vm.deleteRoutine { deleted = true }
+        dispatcher.scheduler.advanceUntilIdle()
+
+        // The strongest proof: onDeleted() only ever runs on the genuine success path -- if the
+        // widget failure had leaked into the outer catch block, this would stay false and
+        // deleteFailed would be true instead, even though the routine really was deleted.
+        assertEquals(true, deleted)
+        assertEquals(false, vm.uiState.value.deleteFailed)
+        assertEquals(false, vm.uiState.value.isDeleting)
+    }
+
+    @Test
+    fun `reload completes and refreshes the routine without crashing when the widget updater throws`() = runTest(dispatcher) {
+        val routine = sampleRoutine(id = "r1")
+        val repository = FakeRoutineRepository(routine)
+        val vm = viewModel(routine = routine, routineId = "r1", routines = repository, widgetUpdater = FailingRoutineWidgetUpdater())
+        dispatcher.scheduler.advanceUntilIdle()
+
+        repository.save(routine.copy(name = "Renamed"))
+        // reload() launches inside viewModelScope with no try/catch of its own -- if the widget
+        // failure below were left unwrapped, it would propagate as an uncaught exception and
+        // fail this whole test (viewModelScope has no default exception handler). The test
+        // passing at all is therefore itself part of the regression proof; the assertion below
+        // additionally confirms the reload's own real work still completed.
+        vm.reload()
+        dispatcher.scheduler.advanceUntilIdle()
+
+        assertEquals("Renamed", vm.uiState.value.routine?.name)
     }
 
     // ---- Stale-snapshot identity regression (edit to a new site/line/direction/mode must

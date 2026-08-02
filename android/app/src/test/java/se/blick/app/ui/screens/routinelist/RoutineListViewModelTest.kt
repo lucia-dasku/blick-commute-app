@@ -123,6 +123,25 @@ class RoutineListViewModelTest {
         override suspend fun showNotificationsUnavailable(routine: CommuteRoutine) = Unit
     }
 
+    /** Throws from every method — proves deleteRoutine/pauseForToday wrap their
+     * [RoutineWidgetUpdater] call with `runWidgetUpdateSafely` rather than letting a widget/
+     * Glance/DataStore failure crash `viewModelScope` (which has no default exception handler
+     * on Android), even though the real repository mutation already succeeded. */
+    private class FailingRoutineWidgetUpdater : RoutineWidgetUpdater {
+        override suspend fun updateWithDepartures(routine: CommuteRoutine, departuresState: LiveDeparturesState, now: java.time.Instant) {
+            throw RuntimeException("widget update failed")
+        }
+        override suspend fun clear() {
+            throw RuntimeException("widget update failed")
+        }
+        override suspend fun reconcile() {
+            throw RuntimeException("widget update failed")
+        }
+        override suspend fun showNotificationsUnavailable(routine: CommuteRoutine) {
+            throw RuntimeException("widget update failed")
+        }
+    }
+
     @Test
     fun `starts in loading state before the repository emits`() = runTest(dispatcher) {
         val repository = FakeRoutineRepository(listOf(sampleRoutine()))
@@ -211,5 +230,40 @@ class RoutineListViewModelTest {
         dispatcher.scheduler.advanceUntilIdle()
 
         assertEquals(1, widgetUpdater.reconcileCallCount)
+    }
+
+    // ---- Widget failures are best-effort: never crash viewModelScope (see
+    // se.blick.app.widget.runWidgetUpdateSafely's own doc) ----
+
+    @Test
+    fun `deleteRoutine still deletes and cancels scheduling when the widget updater throws`() = runTest(dispatcher) {
+        val routine = sampleRoutine()
+        val repository = FakeRoutineRepository(listOf(routine))
+        val scheduler = FakeRoutineScheduler()
+        val viewModel = RoutineListViewModel(repository, scheduler, FailingRoutineWidgetUpdater())
+        dispatcher.scheduler.advanceUntilIdle()
+
+        // If the widget failure were left unwrapped, this whole coroutine would crash
+        // (viewModelScope has no default exception handler) and neither assertion below would
+        // ever be reached.
+        viewModel.deleteRoutine(routine.id)
+        dispatcher.scheduler.advanceUntilIdle()
+
+        assertEquals(listOf(routine.id), repository.deletedIds)
+        assertEquals(listOf(routine.id), scheduler.cancelledRoutineIds)
+        assertTrue(viewModel.uiState.value.routines.isEmpty())
+    }
+
+    @Test
+    fun `pauseForToday still records the pause when the widget updater throws`() = runTest(dispatcher) {
+        val routine = sampleRoutine()
+        val repository = FakeRoutineRepository(listOf(routine))
+        val viewModel = RoutineListViewModel(repository, FakeRoutineScheduler(), FailingRoutineWidgetUpdater())
+        dispatcher.scheduler.advanceUntilIdle()
+
+        viewModel.pauseForToday(routine.id)
+        dispatcher.scheduler.advanceUntilIdle()
+
+        assertEquals(routine.id, repository.pausedIds.single().first)
     }
 }

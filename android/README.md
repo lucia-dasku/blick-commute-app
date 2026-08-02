@@ -520,9 +520,15 @@ cases in `RoutineNotificationBuilderTest`) and 7 further instrumented ones
 then completed a set of widget fixes — see "Widget fixes: stale indicator, responsive
 compact layout, routine name, badge contrast, reliable reconcile scheduling" below —
 adding 11 further JVM `@Test` functions (`BlickRoutineWidgetTest`, new; plus
-`WidgetReconcileWorkerTest`) with no further instrumented ones, reaching the 443 JVM / 40
-instrumented total stated below — see `../docs/Blick_Project_Documentation.md`'s
-"Validation status" note for the full account of each.
+`WidgetReconcileWorkerTest`) with no further instrumented ones, reaching 443 JVM / 40
+instrumented. A further session then fixed a zero-delay rescheduling regression, made
+every widget operation genuinely best-effort, decoupled disruption fetch timing from
+departure notifications, and corrected disruption-relevance wording — see "Zero-delay fix,
+widget best-effort, decoupled disruption timing, and corrected relevance wording" below —
+adding 16 further JVM `@Test` functions with no further instrumented ones, reaching the
+459 JVM / 40 instrumented total stated below — see
+`../docs/Blick_Project_Documentation.md`'s "Validation status" note for the full account
+of each.
 
 On a machine with a real JDK 17 and Android SDK (or Android Studio, which provides
 both), build with:
@@ -542,9 +548,9 @@ clone builds without Android Studio or a pre-existing local Gradle install.
 ### Full verification pass
 
 A complete local run — `testDebugUnitTest`, `lintDebug`, `assembleDebug`, and
-`connectedDebugAndroidTest`, most recently on the physical Lenovo TB350FU (Android 14),
-previously on a Samsung Galaxy S23 Ultra (`SM-S918B`) — has since
-been completed, using Android Studio's own bundled JDK. All 443 JVM
+`connectedDebugAndroidTest`, most recently on both the physical Lenovo TB350FU (Android 14)
+and a Samsung Galaxy S23 Ultra (`SM-S918B`) connected simultaneously — has since
+been completed, using Android Studio's own bundled JDK. All 459 JVM
 `@Test` functions and all 40 instrumented `@Test` functions pass; `lintDebug` reports 0
 errors (43 warnings: two expected, already-guarded `InlinedApi` findings — the
 API-36 `ACTION_APP_NOTIFICATION_PROMOTION_SETTINGS` deep-link and the API-33
@@ -751,6 +757,76 @@ screenshot at those exact dimensions. Everything else in this entry — the comp
 decision logic, the badge color contrast ratios, and the reconcile worker actually running
 and calling through to `RoutineWidgetUpdater` — is covered by 11 new JVM `@Test` functions
 (`BlickRoutineWidgetTest`, `WidgetReconcileWorkerTest`) and confirmed passing.
+
+**Zero-delay fix, widget best-effort, decoupled disruption timing, and corrected relevance
+wording:** four fixes, unrelated to each other except that all four were real, concretely
+reproducible bugs rather than theoretical ones.
+
+`RoutineActiveWindowWorker.rescheduleSkippingToday` always overwrites the temporary
+scheduling copy's `pausedDate` with today's date now, never
+`latest.pausedDate ?: today` — the old `?:` was a genuine zero-delay busy-loop bug: if a
+routine already carried a STALE `pausedDate` from an earlier, unrelated "pause today" (simply
+never cleared, still set to some previous day), that old date was left in place instead of
+today's, so `NextOccurrenceCalculator` no longer excluded today's still-open window at all,
+`WorkManagerRoutineScheduler` enqueued the very same occurrence again with a zero initial
+delay, and the worker re-ran immediately into the exact same exit condition. Reproduced and
+fixed with two new regression tests, each constructing a routine with yesterday's date
+already sitting in `pausedDate`.
+
+Every `RoutineWidgetUpdater` call across the worker, `RoutineScheduleReconciler`,
+`StopRoutineNotificationAction`, and every routine-mutating ViewModel function
+(`RoutineListViewModel.deleteRoutine`/`pauseForToday`;
+`RoutineDetailsViewModel.toggleEnabled`/`pauseToday`/`resumeToday`/`deleteRoutine`/`reload`;
+`RoutineCreateViewModel.save`) now goes through a new shared
+`runWidgetUpdateSafely { ... }` (in `widget/RoutineWidgetUpdater.kt`) that swallows any
+ordinary exception — logged, not silently dropped — but always rethrows a genuine
+`CancellationException` unconverted. Before this, a widget/Glance/DataStore failure could:
+cut the active-window loop short and remove an already-successfully-posted notification
+early (the widget call inside the loop shared the same `catch (e: Exception)` as everything
+else in `doWork`); crash the whole app outright, since `viewModelScope.launch { }` and a
+`BroadcastReceiver`'s own detached coroutine scope have no default exception handler on
+Android (`RoutineListViewModel`'s two functions and `RoutineDetailsViewModel.reload` had no
+try/catch around their widget call at all); or — the subtlest case — silently overwrite an
+already-genuinely-successful create/edit/delete/enable/pause/resume action's own success
+state with a "failed" one, and skip its `onSaved()`/`onDeleted()` callback, purely because
+the widget call after the real mutation had already succeeded happened to throw. Verified
+with 16 new JVM `@Test` functions across `RoutineActiveWindowWorkerTest`,
+`RoutineDetailsViewModelTest`, `RoutineListViewModelTest`, `RoutineCreateViewModelTest`,
+`StopRoutineNotificationActionTest`, and `RoutineScheduleReconcilerTest`, each injecting a
+widget updater fake that throws from every method and asserting the real operation still
+completes, still reports success, and (for delete/save) still invokes its callback.
+
+The active-window loop's departures fetch and notification post no longer wait on
+disruptions at all — previously, despite a doc comment claiming otherwise ("adds no more
+than max(departures, disruptions), never their sum"), the loop actually awaited BOTH the
+disruptions `async` and the departures fetch before posting anything, so a slow SL
+Deviations request delayed the departures notification by exactly its own latency, sum or
+not. Departures are now fetched and posted alone, first; disruptions are fetched only
+afterward, bounded by a 5-second `DISRUPTIONS_FETCH_TIMEOUT_MS` via `withTimeoutOrNull`
+(`RoutineActiveWindowWorker.kt`), and a timed-out or failed fetch falls back to whichever
+disruption was last successfully confirmed (`lastKnownDisruption`, carried across loop
+ticks) rather than dropping to "none shown" for one tick — a confirmed `NoDisruptions`
+result, by contrast, does clear it, since that's a genuine positive confirmation, not an
+absence of information. If the disruption fetched this tick differs from what the
+departures notification was already posted with, a second, silent `showOrUpdate` call
+folds it in — "update the notification afterward if needed," not an unconditional second
+post every tick. Verified with a new test using a disruption repository that never resolves
+within 100× the timeout, proving departures still post normally and on schedule regardless.
+
+The Routine Details "Disruptions" heading was changed from the bare word "Disruptions" to
+"Disruptions related to this station and line" — matching, precisely, is by station + line
++ transport mode only (`deviationsFilter.ts`, `Disruption.kt`), never direction, since SL
+Deviations provides no direction or stop-sequence field to match against; the previous
+heading (and, more concretely, this project's own product-principles doc, which flatly
+claimed direction-based filtering existed) overstated what the matching actually
+guarantees. `docs/Blick_Project_Documentation.md`'s "Relevant" product principle was
+corrected to state the same real constraint rather than the previous, incorrect claim.
+
+**Not run this session, stated plainly:** an on-device screenshot confirming the new
+heading's exact rendered wording — the JVM/instrumented suites and the wording change
+itself were verified; nothing about this specific change required a live device beyond the
+already-passing `RoutineDetailsScreenTest`, which reads the string resource dynamically
+rather than asserting a hardcoded literal, so it exercises the new text automatically.
 
 **Widget re-audit and correction, since verified end to end on-device:** an earlier pass
 of this widget shipped with several real lifecycle/visual gaps — `StopRoutineNotificationAction`

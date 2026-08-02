@@ -1,10 +1,12 @@
 package se.blick.app.widget
 
 import android.content.Context
+import android.util.Log
 import androidx.glance.appwidget.GlanceAppWidgetManager
 import androidx.glance.appwidget.state.updateAppWidgetState
 import androidx.glance.appwidget.updateAll
 import dagger.hilt.android.qualifiers.ApplicationContext
+import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.flow.first
 import se.blick.app.data.repository.RoutineRepository
 import se.blick.app.domain.model.CommuteRoutine
@@ -61,6 +63,47 @@ interface RoutineWidgetUpdater {
      * silently going back to [RoutineWidgetUiState.NoActiveCommute] as if the window weren't
      * actually open. */
     suspend fun showNotificationsUnavailable(routine: CommuteRoutine)
+}
+
+private const val WIDGET_UPDATE_LOG_TAG = "RoutineWidgetUpdater"
+
+/**
+ * Runs [block] — expected to be exactly one [RoutineWidgetUpdater] call — swallowing any
+ * ordinary exception it throws (logged, not silently dropped) but always rethrowing a genuine
+ * [CancellationException] unconverted.
+ *
+ * The home-screen widget is a purely additive, best-effort surface (see this file's own class
+ * docs): a Glance/DataStore failure updating it must never
+ * - stop an already-successful notification post or end the active-window loop early
+ *   ([se.blick.app.scheduling.RoutineActiveWindowWorker]'s own `catch (e: Exception)` would
+ *   otherwise treat it as a "handled failure" and cut the whole window short even though the
+ *   notification itself posted fine),
+ * - prevent rescheduling ([se.blick.app.scheduling.RoutineScheduleReconciler]/the worker's own
+ *   reschedule calls already ran by the time most of these calls happen, but an uncaught
+ *   exception here would still fail the surrounding function/coroutine),
+ * - crash an unguarded coroutine — `viewModelScope.launch { }` and a `BroadcastReceiver`'s own
+ *   detached `CoroutineScope(...).launch { }` (see
+ *   [se.blick.app.notification.StopRoutineNotificationReceiver]) have no default exception
+ *   handler on Android, so an uncaught exception there crashes the whole app, not just this one
+ *   operation, or
+ * - cause a genuinely successful create/edit/delete/enable/disable/pause/resume/Stop action to
+ *   be reported back to the user as failed — several ViewModel functions call
+ *   [RoutineWidgetUpdater.reconcile] as the LAST step after the real repository/scheduler work
+ *   has already succeeded; without this wrapper, a widget failure there would land in the same
+ *   `catch` block that marks the whole action failed, even though the actual mutation the user
+ *   asked for already went through.
+ *
+ * Every call site that touches [RoutineWidgetUpdater] wraps that call with this function rather
+ * than letting it participate in the caller's own success/failure control flow.
+ */
+suspend fun runWidgetUpdateSafely(block: suspend () -> Unit) {
+    try {
+        block()
+    } catch (e: CancellationException) {
+        throw e
+    } catch (e: Exception) {
+        Log.w(WIDGET_UPDATE_LOG_TAG, "Widget update failed; ignoring (best-effort, see runWidgetUpdateSafely's own doc)", e)
+    }
 }
 
 @Singleton

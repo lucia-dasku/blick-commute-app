@@ -29,6 +29,7 @@ import se.blick.app.domain.model.TransportMode
 import se.blick.app.scheduling.RoutineScheduler
 import se.blick.app.ui.navigation.Routes
 import se.blick.app.widget.RoutineWidgetUpdater
+import se.blick.app.widget.runWidgetUpdateSafely
 import java.time.DayOfWeek
 import java.time.LocalTime
 import javax.inject.Inject
@@ -483,7 +484,12 @@ class RoutineCreateViewModel @Inject constructor(
                 // is safe to call unconditionally here even for a disabled routine (it cancels
                 // any existing scheduled work instead).
                 routineScheduler.scheduleActivation(toSave)
-                routineWidgetUpdater.reconcile()
+                // Best-effort, deliberately BEFORE the success state/onSaved() below -- without
+                // runWidgetUpdateSafely, a widget/Glance/DataStore failure here would fall into
+                // the `catch (e: Exception)` below, report saveFailed = true, and never call
+                // onSaved(), even though the routine was already genuinely saved (see
+                // runWidgetUpdateSafely's own doc).
+                runWidgetUpdateSafely { routineWidgetUpdater.reconcile() }
                 _uiState.update { it.copy(isSaving = false, saveFailed = false) }
                 onSaved()
             } catch (e: CancellationException) {

@@ -38,6 +38,7 @@ import se.blick.app.scheduling.DeviceZoneProvider
 import se.blick.app.scheduling.RoutineScheduler
 import se.blick.app.ui.navigation.Routes
 import se.blick.app.widget.RoutineWidgetUpdater
+import se.blick.app.widget.runWidgetUpdateSafely
 import java.time.Clock
 import java.time.LocalDate
 import java.time.ZonedDateTime
@@ -346,7 +347,12 @@ class RoutineDetailsViewModel @Inject constructor(
             // when this routine's active window should next run — always recompute, not only
             // when the departure-relevant identity changed.
             routineScheduler.scheduleActivation(fresh)
-            routineWidgetUpdater.reconcile()
+            // Best-effort -- this whole reload() coroutine has no try/catch of its own
+            // (nothing above it can meaningfully "fail" from the user's perspective), so an
+            // uncaught widget/Glance/DataStore failure here would otherwise crash the app via
+            // viewModelScope's lack of a default exception handler (see runWidgetUpdateSafely's
+            // own doc).
+            runWidgetUpdateSafely { routineWidgetUpdater.reconcile() }
         }
     }
 
@@ -374,7 +380,13 @@ class RoutineDetailsViewModel @Inject constructor(
                 _uiState.update {
                     it.copy(isTogglingEnabled = false, routine = it.routine?.copy(enabled = newEnabled))
                 }
-                routineWidgetUpdater.reconcile()
+                // Best-effort, and deliberately AFTER the success state above is already
+                // applied -- without runWidgetUpdateSafely, a widget/Glance/DataStore failure
+                // here would fall into the `catch (e: Exception)` below and overwrite that
+                // already-correct success state with enabledActionFailed = true, even though
+                // setEnabled/scheduleActivation genuinely already succeeded (see
+                // runWidgetUpdateSafely's own doc).
+                runWidgetUpdateSafely { routineWidgetUpdater.reconcile() }
             } catch (e: CancellationException) {
                 _uiState.update { it.copy(isTogglingEnabled = false) }
                 throw e
@@ -403,7 +415,9 @@ class RoutineDetailsViewModel @Inject constructor(
                 _uiState.update {
                     it.copy(isTogglingPause = false, isPausedToday = true, routine = it.routine?.copy(pausedDate = today))
                 }
-                routineWidgetUpdater.reconcile()
+                // Best-effort, deliberately after the success state above -- see toggleEnabled's
+                // identical comment and runWidgetUpdateSafely's own doc.
+                runWidgetUpdateSafely { routineWidgetUpdater.reconcile() }
             } catch (e: CancellationException) {
                 _uiState.update { it.copy(isTogglingPause = false) }
                 throw e
@@ -428,7 +442,9 @@ class RoutineDetailsViewModel @Inject constructor(
                 _uiState.update {
                     it.copy(isTogglingPause = false, isPausedToday = false, routine = it.routine?.copy(pausedDate = null))
                 }
-                routineWidgetUpdater.reconcile()
+                // Best-effort, deliberately after the success state above -- see toggleEnabled's
+                // identical comment and runWidgetUpdateSafely's own doc.
+                runWidgetUpdateSafely { routineWidgetUpdater.reconcile() }
             } catch (e: CancellationException) {
                 _uiState.update { it.copy(isTogglingPause = false) }
                 throw e
@@ -457,7 +473,12 @@ class RoutineDetailsViewModel @Inject constructor(
                 routineRepository.delete(routine.id)
                 routineScheduler.cancelActivation(routine.id)
                 routineNotifier.remove()
-                routineWidgetUpdater.reconcile()
+                // Best-effort, deliberately BEFORE the success state/onDeleted() below -- without
+                // runWidgetUpdateSafely, a widget/Glance/DataStore failure here would fall into
+                // the `catch (e: Exception)` below, report deleteFailed = true, and never call
+                // onDeleted(), even though the routine was already genuinely deleted (see
+                // runWidgetUpdateSafely's own doc and toggleEnabled's identical comment).
+                runWidgetUpdateSafely { routineWidgetUpdater.reconcile() }
                 _uiState.update { it.copy(isDeleting = false) }
                 onDeleted()
             } catch (e: CancellationException) {

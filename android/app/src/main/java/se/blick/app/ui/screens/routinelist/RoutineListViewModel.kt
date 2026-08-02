@@ -11,6 +11,7 @@ import se.blick.app.data.repository.RoutineRepository
 import se.blick.app.domain.model.CommuteRoutine
 import se.blick.app.scheduling.RoutineScheduler
 import se.blick.app.widget.RoutineWidgetUpdater
+import se.blick.app.widget.runWidgetUpdateSafely
 import java.time.LocalDate
 import javax.inject.Inject
 
@@ -41,14 +42,17 @@ class RoutineListViewModel @Inject constructor(
         viewModelScope.launch {
             routineRepository.delete(id)
             routineScheduler.cancelActivation(id)
-            routineWidgetUpdater.reconcile()
+            // Best-effort -- viewModelScope has no default exception handler, so an uncaught
+            // widget/Glance/DataStore failure here would crash the app even though the delete
+            // above already succeeded (see runWidgetUpdateSafely's own doc).
+            runWidgetUpdateSafely { routineWidgetUpdater.reconcile() }
         }
     }
 
     fun pauseForToday(id: String) {
         viewModelScope.launch {
             routineRepository.pauseForDate(id, LocalDate.now())
-            routineWidgetUpdater.reconcile()
+            runWidgetUpdateSafely { routineWidgetUpdater.reconcile() }
         }
     }
 }

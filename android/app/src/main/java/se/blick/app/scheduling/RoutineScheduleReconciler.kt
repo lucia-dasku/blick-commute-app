@@ -3,6 +3,7 @@ package se.blick.app.scheduling
 import kotlinx.coroutines.flow.first
 import se.blick.app.data.repository.RoutineRepository
 import se.blick.app.widget.RoutineWidgetUpdater
+import se.blick.app.widget.runWidgetUpdateSafely
 import javax.inject.Inject
 import javax.inject.Singleton
 
@@ -40,6 +41,10 @@ class RoutineScheduleReconciler @Inject constructor(
         routineRepository.observeAll().first().forEach { routine ->
             if (routine.enabled) routineScheduler.scheduleActivation(routine)
         }
-        routineWidgetUpdater.reconcile()
+        // Best-effort: a widget/Glance/DataStore failure here must never make the scheduling
+        // loop above look like it failed too, or crash whichever caller (process start,
+        // timezone-change receiver, BootCompletedReceiver) invoked this -- see
+        // runWidgetUpdateSafely's own doc.
+        runWidgetUpdateSafely { routineWidgetUpdater.reconcile() }
     }
 }

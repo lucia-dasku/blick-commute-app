@@ -71,6 +71,17 @@ class RoutineScheduleReconcilerTest {
         override suspend fun showNotificationsUnavailable(routine: CommuteRoutine) = Unit
     }
 
+    /** Throws from every method — proves `reconcileAll` wraps its [RoutineWidgetUpdater] call
+     * with `runWidgetUpdateSafely` rather than letting a widget/Glance/DataStore failure make
+     * the scheduling loop above look like it failed too, even though every routine was already
+     * genuinely scheduled by the time this runs. */
+    private class FailingWidgetUpdater : RoutineWidgetUpdater {
+        override suspend fun updateWithDepartures(routine: CommuteRoutine, departuresState: LiveDeparturesState, now: Instant) = Unit
+        override suspend fun clear() = Unit
+        override suspend fun reconcile(): Unit = throw RuntimeException("widget update failed")
+        override suspend fun showNotificationsUnavailable(routine: CommuteRoutine) = Unit
+    }
+
     @Test
     fun `reconcileAll schedules only enabled routines`() = runTest {
         val repository = FakeRoutineRepository(
@@ -119,5 +130,20 @@ class RoutineScheduleReconcilerTest {
         reconciler.reconcileAll()
 
         assertEquals(2, widgetUpdater.reconcileCallCount)
+    }
+
+    @Test
+    fun `reconcileAll still schedules every enabled routine when the widget updater throws`() = runTest {
+        val repository = FakeRoutineRepository(
+            listOf(routine("r1", enabled = true), routine("r2", enabled = false), routine("r3", enabled = true)),
+        )
+        val scheduler = RecordingScheduler()
+
+        // If the widget failure below were left unwrapped, reconcileAll() would throw and this
+        // assertion would never run -- even though scheduling every enabled routine above
+        // already genuinely completed.
+        RoutineScheduleReconciler(repository, scheduler, FailingWidgetUpdater()).reconcileAll()
+
+        assertEquals(listOf("r1", "r3"), scheduler.scheduled)
     }
 }

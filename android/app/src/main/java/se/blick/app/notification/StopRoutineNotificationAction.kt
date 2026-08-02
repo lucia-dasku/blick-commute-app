@@ -4,6 +4,7 @@ import se.blick.app.data.repository.RoutineRepository
 import se.blick.app.scheduling.DeviceZoneProvider
 import se.blick.app.scheduling.RoutineScheduler
 import se.blick.app.widget.RoutineWidgetUpdater
+import se.blick.app.widget.runWidgetUpdateSafely
 import java.time.Clock
 import java.time.ZonedDateTime
 import javax.inject.Inject
@@ -52,6 +53,11 @@ class StopRoutineNotificationAction @Inject constructor(
         // reconcile(), not clear(): correctly handles both "routine existed and just got
         // paused" and "routine was already deleted out from under this action" from scratch,
         // without an extra null-check branch here (see RoutineWidgetUpdater.reconcile's own doc).
-        routineWidgetUpdater.reconcile()
+        // Best-effort: a widget/Glance/DataStore failure here must never propagate out of stop()
+        // -- the pause/reschedule/notification-removal above have already genuinely succeeded by
+        // this point, and StopRoutineNotificationReceiver's own detached coroutine scope has no
+        // default exception handler, so an uncaught exception here would crash the app (see
+        // runWidgetUpdateSafely's own doc).
+        runWidgetUpdateSafely { routineWidgetUpdater.reconcile() }
     }
 }

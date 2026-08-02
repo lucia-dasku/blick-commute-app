@@ -10,6 +10,7 @@ import androidx.work.workDataOf
 import io.mockk.every
 import io.mockk.mockk
 import kotlinx.coroutines.CancellationException
+import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.test.runCurrent
 import kotlinx.coroutines.test.runTest
@@ -53,6 +54,7 @@ import java.io.IOException
 import java.time.Clock
 import java.time.DayOfWeek
 import java.time.Instant
+import java.time.LocalDate
 import java.time.LocalTime
 import java.time.ZoneId
 import java.time.ZoneOffset
@@ -195,6 +197,21 @@ class RoutineActiveWindowWorkerTest {
         }
     }
 
+    /** Never actually resolves within [delayMs] -- used to prove [DISRUPTIONS_FETCH_TIMEOUT_MS]
+     * genuinely bounds how long the worker waits on this, rather than departures merely
+     * happening to arrive first by chance. */
+    private class SlowDisruptionRepository(
+        private val delayMs: Long,
+        private val result: () -> List<Disruption> = { emptyList() },
+    ) : DisruptionRepository {
+        var callCount = 0
+        override suspend fun getDisruptions(siteId: Long, lineId: Long?, transportMode: TransportMode?): List<Disruption> {
+            callCount++
+            delay(delayMs)
+            return result()
+        }
+    }
+
     /** Records every posted model and every remove() call; can also be scripted to throw on a
      * specific call index, simulating an unexpected failure mid-loop (distinct from the normal
      * NotificationsDisabled/Failed return-value path, which never throws — see
@@ -239,6 +256,20 @@ class RoutineActiveWindowWorkerTest {
         override suspend fun showNotificationsUnavailable(routine: CommuteRoutine) {
             notificationsUnavailableCalls += routine
         }
+    }
+
+    /** Throws from every method — proves every `routineWidgetUpdater.*` call inside [doWork]
+     * wraps with `runWidgetUpdateSafely` rather than letting a widget/Glance/DataStore failure
+     * escalate into this function's own `catch (e: Exception)` (which would incorrectly treat
+     * it as a "handled failure" and cut the whole active-window loop short) or crash out of a
+     * `finally` block. */
+    private class FailingWidgetUpdater : RoutineWidgetUpdater {
+        override suspend fun updateWithDepartures(routine: CommuteRoutine, departuresState: LiveDeparturesState, now: Instant): Unit =
+            throw RuntimeException("widget update failed")
+        override suspend fun clear(): Unit = throw RuntimeException("widget update failed")
+        override suspend fun reconcile(): Unit = throw RuntimeException("widget update failed")
+        override suspend fun showNotificationsUnavailable(routine: CommuteRoutine): Unit =
+            throw RuntimeException("widget update failed")
     }
 
     private class RecordingScheduler : RoutineScheduler {
@@ -576,6 +607,72 @@ class RoutineActiveWindowWorkerTest {
         // being left on Loading forever, or silently reverting to "No active commute."
         assertEquals(listOf(routine.id), widgetUpdater.notificationsUnavailableCalls.map { it.id })
         assertNoZeroDelayReschedule(scheduler, clock)
+    }
+
+    // ---- Regression: a STALE pausedDate must never suppress today's own skip-today reschedule
+    // (Fix: rescheduleSkippingToday always overwrites pausedDate with today, never `?: today`) ----
+
+    @Test
+    fun `notifications unavailable at startup, with a stale pausedDate from yesterday -- today is still skipped, no zero-delay loop`() = runTest {
+        val clock = TickingClock(Instant.parse("2026-07-27T05:00:00Z"), zone)
+        // A routine that was paused for a PREVIOUS day and never touched since -- pausedDate
+        // simply still holds yesterday's date. Reproduces the exact bug: the old
+        // `latest.pausedDate ?: today` left this stale date in place instead of today's, so
+        // NextOccurrenceCalculator no longer excluded today's still-open window at all.
+        val routine = routine().copy(pausedDate = LocalDate.of(2026, 7, 26))
+        val repository = ScriptedRoutineRepository(clock) { routine }
+        val notifier = RecordingNotifier()
+        val widgetUpdater = RecordingWidgetUpdater()
+        val scheduler = RecordingScheduler()
+        val checker = FakeNotificationAvailabilityChecker(NotificationAvailability.AppDisabled)
+
+        val worker = buildWorker(
+            routine.id,
+            repository,
+            GetLiveDeparturesUseCase(FakeDepartureRepository { error("unused") }, clock),
+            notifier,
+            scheduler,
+            clock,
+            notificationAvailabilityChecker = checker,
+            widgetUpdater = widgetUpdater,
+        )
+        worker.doWork()
+
+        assertEquals(listOf(routine.id), widgetUpdater.notificationsUnavailableCalls.map { it.id })
+        // The core regression assertion: with the bug, the rescheduled routine's stale
+        // pausedDate (2026-07-26) would leave today (2026-07-27) unexcluded, and
+        // NextOccurrenceCalculator would report it as still ActiveNow -- exactly what
+        // assertNoZeroDelayReschedule exists to catch.
+        assertNoZeroDelayReschedule(scheduler, clock)
+        assertEquals(LocalDate.of(2026, 7, 27), scheduler.scheduledRoutines.single().pausedDate)
+    }
+
+    @Test
+    fun `a handled failure with a stale pausedDate from yesterday -- today is still skipped, no zero-delay loop`() = runTest {
+        val clock = TickingClock(Instant.parse("2026-07-27T05:00:00Z"), zone)
+        val routine = routine().copy(pausedDate = LocalDate.of(2026, 7, 26))
+        val repository = ScriptedRoutineRepository(clock) { routine }
+        val notifier = RecordingNotifier()
+        val scheduler = RecordingScheduler()
+        val widgetUpdater = RecordingWidgetUpdater()
+        val failingBuilder = mockk<RoutineNotificationBuilder>()
+        every { failingBuilder.build(any()) } throws RuntimeException("boom during foreground setup")
+
+        val worker = buildWorker(
+            routine.id,
+            repository,
+            GetLiveDeparturesUseCase(FakeDepartureRepository { error("unused") }, clock),
+            notifier,
+            scheduler,
+            clock,
+            notificationBuilder = failingBuilder,
+            widgetUpdater = widgetUpdater,
+        )
+        val result = worker.doWork()
+
+        assertTrue(result is ListenableWorker.Result.Success)
+        assertNoZeroDelayReschedule(scheduler, clock)
+        assertEquals(LocalDate.of(2026, 7, 27), scheduler.scheduledRoutines.single().pausedDate)
     }
 
     @Test
@@ -996,10 +1093,92 @@ class RoutineActiveWindowWorkerTest {
         assertEquals(1, notifier.removeCallCount)
     }
 
-    // ---- Disruptions fetched alongside departures (never stop, delay, or replace them) ----
+    // ---- Widget failures are best-effort: never cut the loop short, never crash a `finally`,
+    // never block rescheduling (see se.blick.app.widget.runWidgetUpdateSafely's own doc) ----
 
     @Test
-    fun `disruptions are fetched on every tick, alongside departures`() = runTest {
+    fun `the loop runs to a normal window-end completion, posting every tick, when the widget updater throws on every call`() = runTest {
+        val clock = TickingClock(Instant.parse("2026-07-27T05:00:00Z"), zone)
+        val routine = routine()
+        val repository = ScriptedRoutineRepository(clock) { routine }
+        val notifier = RecordingNotifier()
+        val scheduler = RecordingScheduler()
+        val departures = FakeDepartureRepository { DeparturesResult(clock.instant(), 9145, listOf(sampleDeparture()), emptyList()) }
+
+        val worker = buildWorker(
+            routine.id,
+            repository,
+            GetLiveDeparturesUseCase(departures, clock),
+            notifier,
+            scheduler,
+            clock,
+            widgetUpdater = FailingWidgetUpdater(),
+        )
+        val result = worker.doWork()
+
+        // If updateWithDepartures()'s failure inside the loop had leaked into doWork's own
+        // `catch (e: Exception)`, this would have been treated as a "handled failure" and cut
+        // the loop short after one tick instead of two, exactly like a real, unrelated crash
+        // would -- even though the notification itself posted successfully both times. If the
+        // finally block's own widget call had thrown instead of being wrapped, it would have
+        // masked whatever this function was already returning/propagating.
+        assertTrue(result is ListenableWorker.Result.Success)
+        assertEquals(2, notifier.shown.size)
+        assertEquals(1, notifier.removeCallCount)
+        assertNoZeroDelayReschedule(scheduler, clock)
+    }
+
+    @Test
+    fun `an early exit (routine disabled) still reschedules nothing and returns success when the widget updater throws`() = runTest {
+        val clock = TickingClock(Instant.parse("2026-07-27T05:00:00Z"), zone)
+        val routine = routine(enabled = false)
+        val repository = ScriptedRoutineRepository(clock) { routine }
+        val notifier = RecordingNotifier()
+
+        val worker = buildWorker(
+            routine.id,
+            repository,
+            GetLiveDeparturesUseCase(FakeDepartureRepository { error("unused") }, clock),
+            notifier,
+            RecordingScheduler(),
+            clock,
+            widgetUpdater = FailingWidgetUpdater(),
+        )
+        val result = worker.doWork()
+
+        assertTrue(result is ListenableWorker.Result.Success)
+        assertTrue(notifier.shown.isEmpty())
+    }
+
+    @Test
+    fun `notifications unavailable at startup still reschedules skipping today when the widget updater throws`() = runTest {
+        val clock = TickingClock(Instant.parse("2026-07-27T05:00:00Z"), zone)
+        val routine = routine()
+        val repository = ScriptedRoutineRepository(clock) { routine }
+        val notifier = RecordingNotifier()
+        val scheduler = RecordingScheduler()
+        val checker = FakeNotificationAvailabilityChecker(NotificationAvailability.AppDisabled)
+
+        val worker = buildWorker(
+            routine.id,
+            repository,
+            GetLiveDeparturesUseCase(FakeDepartureRepository { error("unused") }, clock),
+            notifier,
+            scheduler,
+            clock,
+            notificationAvailabilityChecker = checker,
+            widgetUpdater = FailingWidgetUpdater(),
+        )
+        val result = worker.doWork()
+
+        assertTrue(result is ListenableWorker.Result.Success)
+        assertNoZeroDelayReschedule(scheduler, clock)
+    }
+
+    // ---- Disruptions fetched AFTER departures, never stopping/delaying/replacing them ----
+
+    @Test
+    fun `disruptions are fetched every tick, and a newly-discovered one triggers exactly one extra silent update`() = runTest {
         val clock = TickingClock(Instant.parse("2026-07-27T05:00:00Z"), zone)
         val routine = routine()
         val repository = ScriptedRoutineRepository(clock) { routine }
@@ -1018,18 +1197,31 @@ class RoutineActiveWindowWorkerTest {
         )
         worker.doWork()
 
-        // Same tick count as departures/the notification (see the "fetches and posts on each
-        // tick" test above).
+        // Same tick count as departures (two ticks -- see the "fetches and posts on each tick"
+        // test above), fetched once per tick regardless of how many times the notification
+        // itself is posted that tick.
         assertEquals(2, disruptions.callCount)
-        assertEquals(2, notifier.shown.size)
+        // Three posts, not two: tick 1 posts departures alone first (nothing known about
+        // disruptions yet), THEN the same disruption that every tick returns is fetched and,
+        // since it's new information, triggers one extra silent "update the notification
+        // afterward" post carrying it. Tick 2 already knows about it from tick 1 (lastKnownDisruption
+        // persists across ticks), so its own single post already includes it and the fetch at
+        // the end of tick 2 finds nothing changed -- no second post that tick.
+        assertEquals(3, notifier.shown.size)
+        assertEquals(null, notifier.shown[0].disruptionHeadline)
+        assertEquals(sampleDisruption().message.header, notifier.shown[1].disruptionHeadline)
+        assertEquals(sampleDisruption().message.header, notifier.shown[2].disruptionHeadline)
     }
 
     @Test
-    fun `the notification carries the header and details of the repository's first (highest-priority) disruption`() = runTest {
+    fun `the notification eventually carries the header and details of the repository's first (highest-priority) disruption`() = runTest {
         // The repository (RemoteDisruptionRepository, via relevantDisruptions -- see
         // DisruptionTest/RemoteDisruptionRepositoryTest for that ordering's own coverage) is
         // what guarantees the list arrives already priority-ordered; the worker's own job is
         // simply to take its first entry, which this fake reproduces by returning `high` first.
+        // "Eventually" -- not "every post" -- because departures are always posted first, before
+        // anything about disruptions is known for that tick; see the previous test for exactly
+        // when the extra, disruption-carrying post happens.
         val clock = TickingClock(Instant.parse("2026-07-27T05:00:00Z"), zone)
         val routine = routine()
         val repository = ScriptedRoutineRepository(clock) { routine }
@@ -1051,8 +1243,9 @@ class RoutineActiveWindowWorkerTest {
         worker.doWork()
 
         assertTrue(notifier.shown.isNotEmpty())
-        assertTrue(notifier.shown.all { it.disruptionHeadline == high.message.header })
-        assertTrue(notifier.shown.all { it.disruptionDetails == high.message.details })
+        val last = notifier.shown.last()
+        assertEquals(high.message.header, last.disruptionHeadline)
+        assertEquals(high.message.details, last.disruptionDetails)
     }
 
     @Test
@@ -1111,5 +1304,43 @@ class RoutineActiveWindowWorkerTest {
         assertEquals(1, notifier.removeCallCount)
         assertEquals(1, scheduler.scheduledRoutines.size)
         assertTrue(failingDisruptions.callCount > 0)
+    }
+
+    @Test
+    fun `a disruptions fetch far slower than DISRUPTIONS_FETCH_TIMEOUT_MS cannot delay the departures notification`() = runTest {
+        val clock = TickingClock(Instant.parse("2026-07-27T05:00:00Z"), zone)
+        val routine = routine()
+        val repository = ScriptedRoutineRepository(clock) { routine }
+        val notifier = RecordingNotifier()
+        val scheduler = RecordingScheduler()
+        val departures = FakeDepartureRepository { DeparturesResult(clock.instant(), 9145, listOf(sampleDeparture()), emptyList()) }
+        // Never actually resolves in time -- 100x DISRUPTIONS_FETCH_TIMEOUT_MS, and far longer
+        // than ACTIVE_WINDOW_REFRESH_INTERVAL_MS itself, so this can only pass because
+        // withTimeoutOrNull genuinely bounds the wait, not because the fetch happened to finish
+        // fast enough on its own.
+        val slowDisruptions = SlowDisruptionRepository(delayMs = DISRUPTIONS_FETCH_TIMEOUT_MS * 100)
+
+        val worker = buildWorker(
+            routine.id,
+            repository,
+            GetLiveDeparturesUseCase(departures, clock),
+            notifier,
+            scheduler,
+            clock,
+            getDisruptions = GetDisruptionsUseCase(slowDisruptions),
+        )
+        val result = worker.doWork()
+
+        assertTrue(result is ListenableWorker.Result.Success)
+        // Departures still post on every tick, exactly as in the disruptions-free happy path --
+        // a slow disruptions fetch never adds an extra post (nothing ever resolves in time to
+        // become "new information" worth an update) and, crucially, never delays the departures
+        // post itself.
+        assertEquals(2, notifier.shown.size)
+        assertTrue(notifier.shown.all { it.content is RoutineNotificationContent.Live })
+        assertTrue(notifier.shown.all { it.disruptionHeadline == null })
+        assertEquals(1, notifier.removeCallCount)
+        assertEquals(1, scheduler.scheduledRoutines.size)
+        assertTrue(slowDisruptions.callCount > 0)
     }
 }

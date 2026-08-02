@@ -281,6 +281,25 @@ class RoutineCreateViewModelTest {
         override suspend fun showNotificationsUnavailable(routine: CommuteRoutine) = Unit
     }
 
+    /** Throws from every method — proves save() wraps its [RoutineWidgetUpdater] call with
+     * `runWidgetUpdateSafely` rather than letting a widget/Glance/DataStore failure fall into
+     * save()'s own `catch (e: Exception)`, report `saveFailed = true`, and skip `onSaved()`,
+     * even though the routine was already genuinely saved. */
+    private class FailingRoutineWidgetUpdater : RoutineWidgetUpdater {
+        override suspend fun updateWithDepartures(routine: CommuteRoutine, departuresState: LiveDeparturesState, now: Instant) {
+            throw RuntimeException("widget update failed")
+        }
+        override suspend fun clear() {
+            throw RuntimeException("widget update failed")
+        }
+        override suspend fun reconcile() {
+            throw RuntimeException("widget update failed")
+        }
+        override suspend fun showNotificationsUnavailable(routine: CommuteRoutine) {
+            throw RuntimeException("widget update failed")
+        }
+    }
+
     /** Minimal in-memory [AppSettingsDataStore] fake — see the identical fake in
      * `RoutineDetailsViewModelTest` for why each ViewModel test file keeps its own copy rather
      * than sharing one across packages. */
@@ -665,6 +684,32 @@ class RoutineCreateViewModelTest {
         dispatcher.scheduler.advanceUntilIdle()
 
         assertEquals(1, widgetUpdater.reconcileCallCount)
+    }
+
+    @Test
+    fun `save still succeeds and still calls onSaved when the widget updater throws`() = runTest(dispatcher) {
+        val routines = FakeRoutineRepository()
+        val vm = viewModel(routines = routines, widgetUpdater = FailingRoutineWidgetUpdater())
+
+        vm.selectSite(fruangen)
+        dispatcher.scheduler.advanceUntilIdle()
+        vm.selectTransportMode(TransportMode.METRO)
+        vm.selectDirection(metroOption)
+        vm.toggleDay(DayOfWeek.MONDAY)
+        vm.setStartTime(LocalTime.of(7, 0))
+        vm.setEndTime(LocalTime.of(9, 0))
+
+        var saved = false
+        vm.save { saved = true }
+        dispatcher.scheduler.advanceUntilIdle()
+
+        // The strongest proof: onSaved() only ever runs on the genuine success path -- if the
+        // widget failure had leaked into the outer catch block, this would stay false and
+        // saveFailed would be true instead, even though the routine really was saved.
+        assertTrue(saved)
+        assertEquals(1, routines.saved.size)
+        assertEquals(false, vm.uiState.value.saveFailed)
+        assertEquals(false, vm.uiState.value.isSaving)
     }
 
     @Test

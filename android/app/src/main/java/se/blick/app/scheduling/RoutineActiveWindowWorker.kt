@@ -10,13 +10,13 @@ import androidx.work.WorkerParameters
 import dagger.assisted.Assisted
 import dagger.assisted.AssistedInject
 import kotlinx.coroutines.CancellationException
-import kotlinx.coroutines.async
-import kotlinx.coroutines.coroutineScope
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.last
+import kotlinx.coroutines.withTimeoutOrNull
 import se.blick.app.data.repository.RoutineRepository
 import se.blick.app.data.repository.StaleSnapshotRepository
 import se.blick.app.domain.model.CommuteRoutine
+import se.blick.app.domain.model.Disruption
 import se.blick.app.domain.usecase.DisruptionsState
 import se.blick.app.domain.usecase.GetDisruptionsUseCase
 import se.blick.app.domain.usecase.GetLiveDeparturesUseCase
@@ -29,6 +29,7 @@ import se.blick.app.notification.RoutineNotificationIds
 import se.blick.app.notification.RoutineNotificationMapper
 import se.blick.app.notification.RoutineNotifier
 import se.blick.app.widget.RoutineWidgetUpdater
+import se.blick.app.widget.runWidgetUpdateSafely
 import java.time.Clock
 import java.time.ZonedDateTime
 
@@ -38,12 +39,21 @@ import java.time.ZonedDateTime
  * [WorkManagerRoutineScheduler]'s class doc. */
 internal const val ACTIVE_WINDOW_REFRESH_INTERVAL_MS = 30_000L
 
+/** How long each loop tick will wait for a disruptions fetch before giving up on it for THIS
+ * tick — see the main loop's own comment on why this exists: SL Deviations must never be able
+ * to delay, let alone indefinitely hang, the departures notification, which is always posted
+ * first and does not wait on this at all. Comfortably shorter than
+ * [ACTIVE_WINDOW_REFRESH_INTERVAL_MS] so a slow request can never itself become the bottleneck
+ * that eats into the next tick. */
+internal const val DISRUPTIONS_FETCH_TIMEOUT_MS = 5_000L
+
 /**
  * Runs one routine's active window end to end: checks notification availability, enters
  * foreground execution immediately with a valid notification, fetches and shows departures
- * (and, concurrently, disruptions — see the main loop's own comment on why that fetch can
- * never stop, delay, or replace a departures update) right away, then re-fetches and silently
- * updates the SAME notification (stable
+ * right away — never waiting on disruptions, which are fetched only AFTER departures have
+ * already posted, bounded by a short timeout, and folded in with a second, silent notification
+ * update only if they change what's already shown (see the main loop's own comment) — then
+ * re-fetches and silently updates the SAME notification (stable
  * [RoutineNotificationIds.NOTIFICATION_ID], `setOnlyAlertOnce`, no repeated sound/vibration/
  * heads-up — see [RoutineNotificationBuilder]) roughly every [ACTIVE_WINDOW_REFRESH_INTERVAL_MS]
  * until the routine's configured end time, then removes the notification and reschedules the
@@ -131,19 +141,20 @@ class RoutineActiveWindowWorker @AssistedInject constructor(
             // Malformed WorkRequest -- there is no routine identity to look up or reschedule
             // around, but some OTHER routine's widget state may currently be stale (e.g. this
             // is why the whole run exists), so reconcile from scratch rather than leaving
-            // whatever was last rendered untouched.
-            routineWidgetUpdater.reconcile()
+            // whatever was last rendered untouched. Best-effort -- see runWidgetUpdateSafely's
+            // own doc for why a widget failure here must never turn into a worker crash.
+            runWidgetUpdateSafely { routineWidgetUpdater.reconcile() }
             return Result.failure()
         }
         val routine = routineRepository.getById(routineId)
         if (routine == null) {
             // Deleted (or never existed) -- nothing to schedule, and the widget must not be
             // left showing a routine that no longer exists.
-            routineWidgetUpdater.reconcile()
+            runWidgetUpdateSafely { routineWidgetUpdater.reconcile() }
             return Result.success()
         }
         if (!routine.enabled) {
-            routineWidgetUpdater.reconcile()
+            runWidgetUpdateSafely { routineWidgetUpdater.reconcile() }
             return Result.success()
         }
 
@@ -155,7 +166,7 @@ class RoutineActiveWindowWorker @AssistedInject constructor(
             // of running (or partially running) a stale window. No foreground execution, no
             // notification, ever entered for this case.
             rescheduleNext(routineId)
-            routineWidgetUpdater.reconcile()
+            runWidgetUpdateSafely { routineWidgetUpdater.reconcile() }
             return Result.success()
         }
         val windowEnd = occurrence.windowEnd
@@ -171,7 +182,7 @@ class RoutineActiveWindowWorker @AssistedInject constructor(
             // Skips today's still-open occurrence rather than recomputing it -- see
             // rescheduleSkippingToday's own doc for why a plain rescheduleNext here would loop.
             rescheduleSkippingToday(routineId)
-            routineWidgetUpdater.showNotificationsUnavailable(routine)
+            runWidgetUpdateSafely { routineWidgetUpdater.showNotificationsUnavailable(routine) }
             return Result.success()
         }
 
@@ -179,6 +190,10 @@ class RoutineActiveWindowWorker @AssistedInject constructor(
         var notificationsBecameUnavailable = false
         var handledFailure = false
         var lastKnownRoutine = routine
+        // Persists across loop ticks -- see the main loop's own comment on why a timed-out or
+        // failed disruptions fetch falls back to this rather than dropping to "no disruption
+        // shown" for one tick.
+        var lastKnownDisruption: Disruption? = null
 
         try {
             setForeground(createForegroundInfo(routine))
@@ -197,26 +212,20 @@ class RoutineActiveWindowWorker @AssistedInject constructor(
 
                 val identity = current.departureIdentity()
                 val previous = staleSnapshotRepository.get(routineId, identity)
-                // Disruptions are fetched concurrently with departures (as a child of this
-                // coroutineScope), not sequentially after them -- so a slow disruptions fetch
-                // adds no more than max(departures, disruptions) to this tick, never their
-                // sum. GetDisruptionsUseCase itself never throws (besides a real
-                // CancellationException, which propagates and ends this run exactly like any
-                // other failure here would -- see doWork's own CancellationException handling),
-                // so a disruptions failure can never stop, delay, or replace the departures
-                // fetch/notification/widget update below.
-                val (departuresState, topDisruption) = coroutineScope {
-                    val disruptionsDeferred = async { getDisruptions(current).last() }
-                    val departures = getLiveDepartures(current, previous = previous).last()
-                    val disruption = (disruptionsDeferred.await() as? DisruptionsState.Loaded)?.disruptions?.firstOrNull()
-                    departures to disruption
-                }
+
+                // Departures are fetched and posted ALONE first -- disruptions are never
+                // awaited before this notification goes out. GetLiveDeparturesUseCase itself
+                // never throws (besides a real CancellationException, which propagates and ends
+                // this run exactly like any other failure here would -- see doWork's own
+                // CancellationException handling).
+                val departuresState = getLiveDepartures(current, previous = previous).last()
                 if (departuresState is LiveDeparturesState.Live) {
                     staleSnapshotRepository.save(routineId, identity, departuresState.snapshot)
                 }
 
                 val now = clock.instant()
-                val model = RoutineNotificationMapper.map(current, departuresState, now, topDisruption)
+                val disruptionAtPost = lastKnownDisruption
+                val model = RoutineNotificationMapper.map(current, departuresState, now, disruptionAtPost)
                 // The real NotificationPostResult is intentionally not surfaced anywhere from
                 // here (there is no UI attached to a background worker to report it to) --
                 // but it is also never used to claim success; showOrUpdate itself already
@@ -224,8 +233,41 @@ class RoutineActiveWindowWorker @AssistedInject constructor(
                 // channel are disabled, which this worker relies on rather than duplicating.
                 routineNotifier.showOrUpdate(model)
                 // Same tick, same already-fetched departuresState -- no separate fetch, no
-                // separate timer (see RoutineWidgetUpdater's own doc).
-                routineWidgetUpdater.updateWithDepartures(current, departuresState, now)
+                // separate timer (see RoutineWidgetUpdater's own doc). Best-effort: without
+                // runWidgetUpdateSafely, a widget/Glance/DataStore failure here would fall into
+                // this function's own outer `catch (e: Exception)` below and be treated as a
+                // "handled failure" -- cutting the whole active-window loop short even though
+                // the notification above already posted successfully this tick.
+                runWidgetUpdateSafely { routineWidgetUpdater.updateWithDepartures(current, departuresState, now) }
+
+                // Disruptions are fetched only AFTER departures have already posted, bounded by
+                // DISRUPTIONS_FETCH_TIMEOUT_MS so a slow SL Deviations request can never delay --
+                // or, worse, indefinitely hang -- the departures notification above.
+                // GetDisruptionsUseCase itself never throws (besides a real
+                // CancellationException -- see this loop's own CancellationException handling),
+                // so only the timeout is needed to bound how long a slow-but-not-actually-failing
+                // request can run.
+                //
+                // A timed-out or genuinely failed (Unavailable) fetch falls back to
+                // lastKnownDisruption (whichever disruption was last successfully confirmed,
+                // persisted across ticks) rather than dropping to "no disruption shown" purely
+                // because this one tick's request was slow -- a confirmed NoDisruptions result,
+                // on the other hand, DOES clear it, since that is a genuine, positive
+                // confirmation that nothing is currently affecting this routine, not merely an
+                // absence of information.
+                when (val disruptionResult = withTimeoutOrNull(DISRUPTIONS_FETCH_TIMEOUT_MS) { getDisruptions(current).last() }) {
+                    is DisruptionsState.Loaded -> lastKnownDisruption = disruptionResult.disruptions.firstOrNull()
+                    is DisruptionsState.NoDisruptions -> lastKnownDisruption = null
+                    is DisruptionsState.Unavailable, is DisruptionsState.Loading, null -> Unit
+                }
+                // Only re-posts the ALREADY-SHOWN notification with a refreshed disruption line
+                // when the fetch above actually changed what's known -- "update the notification
+                // afterward if needed," not an unconditional second post every tick. showOrUpdate
+                // is a silent, stable-id update either way (setOnlyAlertOnce -- see
+                // RoutineNotificationBuilder), so this never re-alerts the user.
+                if (lastKnownDisruption != disruptionAtPost) {
+                    routineNotifier.showOrUpdate(RoutineNotificationMapper.map(current, departuresState, now, lastKnownDisruption))
+                }
 
                 delay(ACTIVE_WINDOW_REFRESH_INTERVAL_MS)
             }
@@ -251,16 +293,21 @@ class RoutineActiveWindowWorker @AssistedInject constructor(
                 if (notificationsBecameUnavailable) {
                     // The window is still genuinely open -- represent that honestly instead of
                     // clearing to "No active commute." (see the pre-loop check's own comment).
-                    routineWidgetUpdater.showNotificationsUnavailable(lastKnownRoutine)
+                    // Best-effort: a widget failure inside a `finally` must never replace an
+                    // in-flight CancellationException or exception being propagated out of this
+                    // block -- runWidgetUpdateSafely still rethrows a real CancellationException
+                    // unconverted, but swallows anything else so it can never mask whatever this
+                    // `finally` was already unwinding.
+                    runWidgetUpdateSafely { routineWidgetUpdater.showNotificationsUnavailable(lastKnownRoutine) }
                 } else {
-                    routineWidgetUpdater.clear()
+                    runWidgetUpdateSafely { routineWidgetUpdater.clear() }
                 }
             } else {
                 // setForeground() itself threw before the loop -- and before this worker ever
                 // posted anything for the widget -- so there is nothing to "clear"; reconcile
                 // instead so the widget doesn't keep showing whatever it displayed before this
                 // run started (e.g. a stale Loading from an earlier attempt).
-                routineWidgetUpdater.reconcile()
+                runWidgetUpdateSafely { routineWidgetUpdater.reconcile() }
             }
         }
 
@@ -303,11 +350,21 @@ class RoutineActiveWindowWorker @AssistedInject constructor(
      * one call — nothing is written back via [RoutineRepository], so the routine's real
      * [CommuteRoutine.pausedDate] (and everything the widget/UI show for it) is completely
      * unaffected, and the very next normal [scheduleActivation][RoutineScheduler.scheduleActivation]
-     * call (the next natural reschedule, or any lifecycle mutation) recomputes fresh as usual. */
+     * call (the next natural reschedule, or any lifecycle mutation) recomputes fresh as usual.
+     *
+     * Always overwrites [CommuteRoutine.pausedDate] with [today] on this temporary copy — never
+     * `latest.pausedDate ?: today`, which was a real bug: if the routine already carried a
+     * STALE pausedDate from an earlier, unrelated "pause today" (e.g. still set to yesterday,
+     * simply never cleared), the `?:` left that old date in place instead of today's, so
+     * [NextOccurrenceCalculator] no longer excluded TODAY's still-open window at all — the very
+     * next [scheduleActivation][RoutineScheduler.scheduleActivation] call recomputed the SAME
+     * occurrence as [NextOccurrence.ActiveNow] again, [WorkManagerRoutineScheduler] enqueued it
+     * with a zero initial delay again, and the worker re-ran immediately into the exact same
+     * exit condition — a genuine zero-delay busy loop, not merely a theoretical one. */
     private suspend fun rescheduleSkippingToday(routineId: String) {
         val latest = routineRepository.getById(routineId) ?: return
         val today = zonedNow().toLocalDate()
-        routineScheduler.scheduleActivation(latest.copy(pausedDate = latest.pausedDate ?: today))
+        routineScheduler.scheduleActivation(latest.copy(pausedDate = today))
     }
 
     private fun createForegroundInfo(routine: CommuteRoutine): ForegroundInfo {
