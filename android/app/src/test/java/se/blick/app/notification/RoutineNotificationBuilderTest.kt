@@ -8,6 +8,7 @@ import io.mockk.every
 import io.mockk.mockk
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
+import org.junit.Assert.assertNull
 import org.junit.Assert.assertTrue
 import org.junit.Before
 import org.junit.Test
@@ -50,7 +51,9 @@ class RoutineNotificationBuilderTest {
         lineLabel: String? = "14",
         directionLabel: String? = "Fruängen",
         content: RoutineNotificationContent = RoutineNotificationContent.Live(listOf(sampleRow())),
-    ) = RoutineNotificationModel(routineId, stationName, lineLabel, directionLabel, content)
+        disruptionHeadline: String? = null,
+        disruptionDetails: String? = null,
+    ) = RoutineNotificationModel(routineId, stationName, lineLabel, directionLabel, content, disruptionHeadline, disruptionDetails)
 
     private fun sampleRow(
         lineDesignation: String = "14",
@@ -260,6 +263,15 @@ class RoutineNotificationBuilderTest {
     private fun bigTextLines(notification: Notification): List<String> =
         notification.extras.getCharSequence(Notification.EXTRA_BIG_TEXT).toString().split("\n")
 
+    /** Null when no [androidx.core.app.NotificationCompat.BigTextStyle] was applied at all —
+     * unlike [bigTextLines], safe to call for states that may or may not have one (e.g.
+     * Offline/Unavailable/Loading only gain one when a disruption is present). */
+    private fun bigTextOrNull(notification: Notification): String? =
+        notification.extras.getCharSequence(Notification.EXTRA_BIG_TEXT)?.toString()
+
+    private fun contentText(notification: Notification): String =
+        notification.extras.getCharSequence(Notification.EXTRA_TEXT).toString()
+
     @Test
     fun `Live content shows up to two expanded departure lines`() {
         val notification = builder.build(
@@ -304,6 +316,107 @@ class RoutineNotificationBuilderTest {
 
         val expectedTimeText = formatDepartureTime(lastCheckedAt, Locale.getDefault())
         assertTrue(bigTextLines(notification).any { it.contains(expectedTimeText) })
+    }
+
+    // ---- Disruption in the expanded view only ----
+    //
+    // See RoutineNotificationBuilder's own class doc: a disruption is only ever rendered in
+    // the expanded (BigTextStyle) body, appended AFTER whatever departure/last-checked lines
+    // that state already produces -- collapsed-view slots (contentText, subText,
+    // shortCriticalText) and the Stop action are never touched by it.
+
+    @Test
+    fun `no disruption adds no expanded-view line beyond Live's own departure rows`() {
+        val notification = builder.build(model(content = RoutineNotificationContent.Live(listOf(sampleRow()))))
+        assertEquals(1, bigTextLines(notification).size)
+    }
+
+    @Test
+    fun `a disruption's headline and details are appended after Live's departure rows`() {
+        val notification = builder.build(
+            model(
+                content = RoutineNotificationContent.Live(listOf(sampleRow())),
+                disruptionHeadline = "Delays on line 14",
+                disruptionDetails = "Expect longer travel times.",
+            ),
+        )
+        val lines = bigTextLines(notification)
+        assertEquals(3, lines.size) // 1 departure row + headline + details
+        assertEquals("Delays on line 14", lines[1])
+        assertEquals("Expect longer travel times.", lines[2])
+    }
+
+    @Test
+    fun `a disruption with no details appends only the headline`() {
+        val notification = builder.build(
+            model(content = RoutineNotificationContent.Live(listOf(sampleRow())), disruptionHeadline = "Delays on line 14"),
+        )
+        val lines = bigTextLines(notification)
+        assertEquals(2, lines.size)
+        assertEquals("Delays on line 14", lines[1])
+    }
+
+    @Test
+    fun `a disruption is appended after Stale's departure and last-checked lines`() {
+        val notification = builder.build(
+            model(
+                content = RoutineNotificationContent.Stale(listOf(sampleRow()), now),
+                disruptionHeadline = "Delays on line 14",
+            ),
+        )
+        assertEquals("Delays on line 14", bigTextLines(notification).last())
+    }
+
+    @Test
+    fun `a disruption is appended after NoUpcomingDepartures' last-checked line`() {
+        val notification = builder.build(
+            model(content = RoutineNotificationContent.NoUpcomingDepartures(now), disruptionHeadline = "Delays on line 14"),
+        )
+        assertEquals("Delays on line 14", bigTextLines(notification).last())
+    }
+
+    @Test
+    fun `Offline gains no expanded view at all without a disruption`() {
+        val notification = builder.build(model(content = RoutineNotificationContent.Offline))
+        assertNull(bigTextOrNull(notification))
+    }
+
+    @Test
+    fun `a disruption gives Offline an expanded view containing only the disruption`() {
+        val notification = builder.build(
+            model(content = RoutineNotificationContent.Offline, disruptionHeadline = "Delays on line 14", disruptionDetails = "Details"),
+        )
+        assertEquals(listOf("Delays on line 14", "Details"), bigTextLines(notification))
+    }
+
+    @Test
+    fun `a disruption gives Unavailable an expanded view containing only the disruption`() {
+        val notification = builder.build(
+            model(content = RoutineNotificationContent.Unavailable, disruptionHeadline = "Delays on line 14"),
+        )
+        assertEquals(listOf("Delays on line 14"), bigTextLines(notification))
+    }
+
+    @Test
+    fun `a disruption never changes the collapsed contentText`() {
+        val withoutDisruption = builder.build(model(content = RoutineNotificationContent.Live(listOf(sampleRow()))))
+        val withDisruption = builder.build(
+            model(content = RoutineNotificationContent.Live(listOf(sampleRow())), disruptionHeadline = "Delays on line 14"),
+        )
+        assertEquals(contentText(withoutDisruption), contentText(withDisruption))
+    }
+
+    @Test
+    fun `a disruption never changes the subText line-direction summary`() {
+        val withoutDisruption = builder.build(model())
+        val withDisruption = builder.build(model(disruptionHeadline = "Delays on line 14"))
+        assertEquals(subText(withoutDisruption), subText(withDisruption))
+    }
+
+    @Test
+    fun `a disruption never removes the Stop action`() {
+        val notification = builder.build(model(disruptionHeadline = "Delays on line 14"))
+        assertTrue(notification.actions.any { it.title == context.getString(R.string.notification_action_stop) })
     }
 
     // ---- Promoted-ongoing (Live Update) request ----

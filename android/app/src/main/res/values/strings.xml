@@ -35,6 +35,11 @@
     <string name="routine_details_departure_cancelled">Cancelled</string>
     <string name="routine_details_minutes_remaining">%1$d min</string>
 
+    <string name="routine_details_disruptions_heading">Disruptions</string>
+    <string name="routine_details_disruptions_none">No disruptions right now.</string>
+    <!-- Deliberately generic, same rationale as the departures section's own error strings. -->
+    <string name="routine_details_disruptions_unavailable">Couldn\'t load disruptions right now.</string>
+
     <string name="routine_details_actions_heading">Manage routine</string>
     <string name="routine_details_edit_action">Edit routine</string>
     <string name="routine_details_enable_action">Enable routine</string>

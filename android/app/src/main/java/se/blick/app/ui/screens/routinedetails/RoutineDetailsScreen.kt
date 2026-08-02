@@ -59,6 +59,8 @@ import androidx.lifecycle.repeatOnLifecycle
 import se.blick.app.BuildConfig
 import se.blick.app.R
 import se.blick.app.domain.model.CommuteRoutine
+import se.blick.app.domain.model.Disruption
+import se.blick.app.domain.usecase.DisruptionsState
 import se.blick.app.domain.usecase.LiveDeparturesState
 import se.blick.app.domain.usecase.PreparedDeparture
 import se.blick.app.domain.model.TransportMode
@@ -142,6 +144,7 @@ fun RoutineDetailsScreen(
                 isPausedToday = uiState.isPausedToday,
                 departuresState = uiState.departures,
                 isRefreshing = uiState.isRefreshingDepartures,
+                disruptionsState = uiState.disruptions,
                 onRefresh = viewModel::refresh,
                 onEdit = { onEdit(routine.id) },
                 isTogglingEnabled = uiState.isTogglingEnabled,
@@ -207,6 +210,7 @@ private fun RoutineDetailsContent(
     isPausedToday: Boolean,
     departuresState: LiveDeparturesState,
     isRefreshing: Boolean,
+    disruptionsState: DisruptionsState,
     onRefresh: () -> Unit,
     onEdit: () -> Unit,
     isTogglingEnabled: Boolean,
@@ -290,6 +294,14 @@ private fun RoutineDetailsContent(
         Spacer(Modifier.height(12.dp))
 
         DeparturesSection(departuresState, locale, onRefresh)
+
+        Spacer(Modifier.height(20.dp))
+        HorizontalDivider()
+        Spacer(Modifier.height(16.dp))
+
+        Text(stringResource(R.string.routine_details_disruptions_heading), style = MaterialTheme.typography.titleMedium)
+        Spacer(Modifier.height(12.dp))
+        DisruptionsSection(disruptionsState)
 
         // Debug-only manual notification trigger (Part 6 of the ongoing-notification
         // foundation milestone) — see RoutineDetailsViewModel.showDebugTestNotification's
@@ -672,6 +684,53 @@ private fun DeparturesSection(
         is LiveDeparturesState.NoUpcomingDepartures -> RetryableMessage(R.string.routine_details_no_departures, onRefresh)
         is LiveDeparturesState.Offline -> RetryableMessage(R.string.routine_details_offline, onRefresh)
         is LiveDeparturesState.Unavailable -> RetryableMessage(R.string.routine_details_unavailable, onRefresh)
+    }
+}
+
+/**
+ * Dedicated disruptions section for one routine's site/line/mode (see [DisruptionsState] and
+ * [se.blick.app.domain.usecase.GetDisruptionsUseCase]) — loading, no-disruptions, and
+ * unavailable are each their own clear, distinct message, matching [DeparturesSection]'s own
+ * per-state convention rather than a single ambiguous empty state covering all three. Entries
+ * are rendered in the order [se.blick.app.domain.model.relevantDisruptions] already sorted
+ * them in (highest priority first) — no re-sorting here.
+ */
+@Composable
+private fun DisruptionsSection(state: DisruptionsState) {
+    when (state) {
+        is DisruptionsState.Loading -> CenteredBox(Modifier.fillMaxWidth().padding(vertical = 16.dp)) {
+            CircularProgressIndicator()
+        }
+        is DisruptionsState.Loaded -> DisruptionsList(state.disruptions)
+        is DisruptionsState.NoDisruptions -> Text(
+            stringResource(R.string.routine_details_disruptions_none),
+            style = MaterialTheme.typography.bodyMedium,
+            color = MaterialTheme.colorScheme.secondary,
+        )
+        is DisruptionsState.Unavailable -> Text(
+            stringResource(R.string.routine_details_disruptions_unavailable),
+            style = MaterialTheme.typography.bodyMedium,
+            color = MaterialTheme.colorScheme.error,
+        )
+    }
+}
+
+@Composable
+private fun DisruptionsList(disruptions: List<Disruption>) {
+    Column {
+        disruptions.forEachIndexed { index, disruption ->
+            DisruptionRow(disruption)
+            if (index != disruptions.lastIndex) Spacer(Modifier.height(12.dp))
+        }
+    }
+}
+
+@Composable
+private fun DisruptionRow(disruption: Disruption) {
+    Column(Modifier.fillMaxWidth().padding(vertical = 4.dp)) {
+        Text(disruption.message.header, style = MaterialTheme.typography.bodyLarge)
+        Spacer(Modifier.height(2.dp))
+        Text(disruption.message.details, style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.secondary)
     }
 }
 

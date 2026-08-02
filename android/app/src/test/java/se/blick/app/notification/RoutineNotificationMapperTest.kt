@@ -6,6 +6,9 @@ import org.junit.Assert.assertNull
 import org.junit.Assert.assertTrue
 import org.junit.Test
 import se.blick.app.domain.model.CommuteRoutine
+import se.blick.app.domain.model.Disruption
+import se.blick.app.domain.model.DisruptionMessage
+import se.blick.app.domain.model.DisruptionPriority
 import se.blick.app.domain.model.TransportMode
 import se.blick.app.domain.usecase.LiveDeparturesSnapshot
 import se.blick.app.domain.usecase.LiveDeparturesState
@@ -71,6 +74,20 @@ class RoutineNotificationMapperTest {
 
     private fun snapshot(vararg departures: PreparedDeparture, fetchedAt: Instant = now) =
         LiveDeparturesSnapshot(departures.toList(), fetchedAt)
+
+    private fun disruption(header: String = "Delays on line 14", details: String = "Expect longer travel times.") = Disruption(
+        disruptionId = "d1",
+        version = 1,
+        createdAt = now,
+        modifiedAt = null,
+        validFrom = null,
+        validUntil = null,
+        priority = DisruptionPriority(1, 1, 1),
+        message = DisruptionMessage(header, details, null, null, "en"),
+        affectedStopAreas = emptyList(),
+        affectedLines = emptyList(),
+        affectedModes = emptyList(),
+    )
 
     // ---- Routine identity fields ----
 
@@ -346,5 +363,30 @@ class RoutineNotificationMapperTest {
         content as RoutineNotificationContent.Stale
         assertTrue(content.departures.isEmpty())
         assertEquals(fetchedAt, content.lastCheckedAt)
+    }
+
+    // ---- topDisruption ----
+
+    @Test
+    fun `no topDisruption produces null disruptionHeadline and disruptionDetails`() {
+        val model = RoutineNotificationMapper.map(routine(), LiveDeparturesState.Loading, now)
+        assertNull(model.disruptionHeadline)
+        assertNull(model.disruptionDetails)
+    }
+
+    @Test
+    fun `topDisruption's header and details are carried into the model unchanged`() {
+        val d = disruption(header = "Delays on line 14", details = "Expect longer travel times.")
+        val model = RoutineNotificationMapper.map(routine(), LiveDeparturesState.Loading, now, topDisruption = d)
+        assertEquals("Delays on line 14", model.disruptionHeadline)
+        assertEquals("Expect longer travel times.", model.disruptionDetails)
+    }
+
+    @Test
+    fun `topDisruption is independent of the departures content state`() {
+        val d = disruption()
+        val model = RoutineNotificationMapper.map(routine(), LiveDeparturesState.Offline, now, topDisruption = d)
+        assertEquals(RoutineNotificationContent.Offline, model.content)
+        assertEquals(d.message.header, model.disruptionHeadline)
     }
 }

@@ -96,7 +96,7 @@ review), route validation/error-envelope behavior, and the actual Vercel entry p
 (`api/index.ts`, imported directly rather than re-testing a copy of it).
 
 All of the above passed clean in the authoring sandbox (0 type errors, 0 lint
-errors/warnings, 243/243 tests passing, `npm audit`: 0 vulnerabilities). A live smoke
+errors/warnings, 265/265 tests passing, `npm audit`: 0 vulnerabilities). A live smoke
 test of the running server against the real SL endpoints could not be completed from
 that sandbox — its outbound network proxy blocks `transport.integration.sl.se` /
 `deviations.integration.sl.se` / `vercel.com` / `api.vercel.com` by allowlist. The

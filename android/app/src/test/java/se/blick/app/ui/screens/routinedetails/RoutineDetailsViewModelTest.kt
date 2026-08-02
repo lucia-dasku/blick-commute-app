@@ -24,17 +24,23 @@ import org.junit.Test
 import se.blick.app.data.local.datastore.AppSettings
 import se.blick.app.data.local.datastore.AppSettingsDataStore
 import se.blick.app.data.repository.DepartureRepository
+import se.blick.app.data.repository.DisruptionRepository
 import se.blick.app.data.repository.RoutineRepository
 import se.blick.app.data.repository.StaleSnapshotRepository
 import se.blick.app.domain.model.CommuteRoutine
 import se.blick.app.domain.model.Departure
 import se.blick.app.domain.model.DeparturesResult
+import se.blick.app.domain.model.Disruption
+import se.blick.app.domain.model.DisruptionMessage
+import se.blick.app.domain.model.DisruptionPriority
 import se.blick.app.domain.model.Journey
 import se.blick.app.domain.model.LineRef
 import se.blick.app.domain.model.StopAreaRef
 import se.blick.app.domain.model.StopPointRef
 import se.blick.app.domain.model.TransportMode
 import se.blick.app.domain.usecase.DepartureIdentity
+import se.blick.app.domain.usecase.DisruptionsState
+import se.blick.app.domain.usecase.GetDisruptionsUseCase
 import se.blick.app.domain.usecase.GetLiveDeparturesUseCase
 import se.blick.app.domain.usecase.LiveDeparturesSnapshot
 import se.blick.app.domain.usecase.LiveDeparturesState
@@ -266,6 +272,50 @@ class RoutineDetailsViewModelTest {
         }
     }
 
+    // ---- DisruptionRepository fakes ----
+
+    private fun sampleDisruption(id: String = "d1") = Disruption(
+        disruptionId = id,
+        version = 1,
+        createdAt = now,
+        modifiedAt = null,
+        validFrom = null,
+        validUntil = null,
+        priority = DisruptionPriority(1, 1, 1),
+        message = DisruptionMessage("Header $id", "Details $id", null, null, "en"),
+        affectedStopAreas = emptyList(),
+        affectedLines = emptyList(),
+        affectedModes = emptyList(),
+    )
+
+    private class FakeDisruptionRepository(private val result: List<Disruption> = emptyList()) : DisruptionRepository {
+        var callCount = 0
+        override suspend fun getDisruptions(siteId: Long, lineId: Long?, transportMode: TransportMode?): List<Disruption> {
+            callCount++
+            return result
+        }
+    }
+
+    private class FailingDisruptionRepository(private val error: Throwable) : DisruptionRepository {
+        override suspend fun getDisruptions(siteId: Long, lineId: Long?, transportMode: TransportMode?): List<Disruption> = throw error
+    }
+
+    /** Each call suspends on its own [CompletableDeferred] -- same pattern as
+     * [ControllableDepartureRepository], for proving disruptions loading is genuinely
+     * independent of (never blocked by, never blocking) departures loading. */
+    private class ControllableDisruptionRepository : DisruptionRepository {
+        private val pending = mutableListOf<CompletableDeferred<List<Disruption>>>()
+        val callCount: Int get() = pending.size
+        override suspend fun getDisruptions(siteId: Long, lineId: Long?, transportMode: TransportMode?): List<Disruption> {
+            val deferred = CompletableDeferred<List<Disruption>>()
+            pending += deferred
+            return deferred.await()
+        }
+        fun complete(callIndex: Int, result: List<Disruption>) {
+            pending[callIndex].complete(result)
+        }
+    }
+
     /** Records every [RoutineNotifier] call so the debug-trigger tests can assert on them
      * without needing a real Android `NotificationManager` — the concrete Android
      * implementation is covered separately by `RoutineNotificationBuilderTest`. Returns
@@ -383,6 +433,7 @@ class RoutineDetailsViewModelTest {
         routine: CommuteRoutine? = sampleRoutine(),
         routineId: String = routine?.id ?: "missing",
         departures: DepartureRepository = FakeDepartureRepository(resultOf(upcomingDeparture())),
+        disruptions: DisruptionRepository = FakeDisruptionRepository(),
         routines: RoutineRepository = FakeRoutineRepository(routine),
         staleSnapshots: StaleSnapshotRepository = FakeStaleSnapshotRepository(),
         notifier: RoutineNotifier = FakeRoutineNotifier(),
@@ -396,6 +447,7 @@ class RoutineDetailsViewModelTest {
         savedStateHandle = SavedStateHandle(mapOf(Routes.RoutineDetails.ARG_ROUTINE_ID to routineId)),
         routineRepository = routines,
         getLiveDepartures = GetLiveDeparturesUseCase(departures, clock),
+        getDisruptions = GetDisruptionsUseCase(disruptions),
         staleSnapshotRepository = staleSnapshots,
         routineNotifier = notifier,
         routineScheduler = scheduler,
@@ -417,6 +469,7 @@ class RoutineDetailsViewModelTest {
             savedStateHandle = SavedStateHandle(mapOf(Routes.RoutineDetails.ARG_ROUTINE_ID to "r42")),
             routineRepository = repository,
             getLiveDepartures = GetLiveDeparturesUseCase(FakeDepartureRepository(resultOf(upcomingDeparture())), clock),
+            getDisruptions = GetDisruptionsUseCase(FakeDisruptionRepository()),
             staleSnapshotRepository = FakeStaleSnapshotRepository(),
             routineNotifier = FakeRoutineNotifier(),
             routineScheduler = FakeRoutineScheduler(),
@@ -756,6 +809,7 @@ class RoutineDetailsViewModelTest {
             savedStateHandle = SavedStateHandle(mapOf(Routes.RoutineDetails.ARG_ROUTINE_ID to routine.id)),
             routineRepository = repository,
             getLiveDepartures = GetLiveDeparturesUseCase(FakeDepartureRepository(resultOf(upcomingDeparture())), lateNightClock),
+            getDisruptions = GetDisruptionsUseCase(FakeDisruptionRepository()),
             staleSnapshotRepository = FakeStaleSnapshotRepository(),
             routineNotifier = FakeRoutineNotifier(),
             routineScheduler = FakeRoutineScheduler(),
@@ -1511,5 +1565,163 @@ class RoutineDetailsViewModelTest {
 
         assertEquals(listOf(routine.id), scheduler.cancelledRoutineIds)
         assertEquals(1, notifier.removeCallCount)
+    }
+
+    // ---- Disruptions section (independent of departures) ----
+
+    @Test
+    fun `the disruptions fetch begins automatically once the routine has loaded`() = runTest(dispatcher) {
+        val disruptions = FakeDisruptionRepository(listOf(sampleDisruption()))
+        viewModel(disruptions = disruptions)
+        dispatcher.scheduler.advanceUntilIdle()
+
+        assertEquals(1, disruptions.callCount)
+    }
+
+    @Test
+    fun `Loading is shown until the disruptions fetch resolves, then Loaded`() = runTest(dispatcher) {
+        val disruptions = ControllableDisruptionRepository()
+        val vm = viewModel(disruptions = disruptions)
+
+        dispatcher.scheduler.advanceUntilIdle() // reach the fetch's suspension point
+        assertEquals(DisruptionsState.Loading, vm.uiState.value.disruptions)
+
+        disruptions.complete(0, listOf(sampleDisruption()))
+        dispatcher.scheduler.advanceUntilIdle()
+
+        assertTrue(vm.uiState.value.disruptions is DisruptionsState.Loaded)
+    }
+
+    @Test
+    fun `a Loaded state exposes the repository's own disruptions list`() = runTest(dispatcher) {
+        val a = sampleDisruption("a")
+        val b = sampleDisruption("b")
+        val vm = viewModel(disruptions = FakeDisruptionRepository(listOf(a, b)))
+        dispatcher.scheduler.advanceUntilIdle()
+
+        val loaded = vm.uiState.value.disruptions as DisruptionsState.Loaded
+        assertEquals(listOf("a", "b"), loaded.disruptions.map { it.disruptionId })
+    }
+
+    @Test
+    fun `an empty result produces NoDisruptions`() = runTest(dispatcher) {
+        val vm = viewModel(disruptions = FakeDisruptionRepository(emptyList()))
+        dispatcher.scheduler.advanceUntilIdle()
+
+        assertEquals(DisruptionsState.NoDisruptions, vm.uiState.value.disruptions)
+    }
+
+    @Test
+    fun `a disruptions fetch failure produces Unavailable`() = runTest(dispatcher) {
+        val vm = viewModel(disruptions = FailingDisruptionRepository(RuntimeException("boom")))
+        dispatcher.scheduler.advanceUntilIdle()
+
+        assertEquals(DisruptionsState.Unavailable, vm.uiState.value.disruptions)
+    }
+
+    @Test
+    fun `a disruptions failure never touches the departures state`() = runTest(dispatcher) {
+        val vm = viewModel(
+            departures = FakeDepartureRepository(resultOf(upcomingDeparture())),
+            disruptions = FailingDisruptionRepository(RuntimeException("boom")),
+        )
+        dispatcher.scheduler.advanceUntilIdle()
+
+        assertTrue(vm.uiState.value.departures is LiveDeparturesState.Live)
+        assertEquals(DisruptionsState.Unavailable, vm.uiState.value.disruptions)
+    }
+
+    @Test
+    fun `a departures failure never touches the disruptions state`() = runTest(dispatcher) {
+        val vm = viewModel(
+            departures = FailingDepartureRepository(RuntimeException("boom")),
+            disruptions = FakeDisruptionRepository(listOf(sampleDisruption())),
+        )
+        dispatcher.scheduler.advanceUntilIdle()
+
+        assertEquals(LiveDeparturesState.Unavailable, vm.uiState.value.departures)
+        assertTrue(vm.uiState.value.disruptions is DisruptionsState.Loaded)
+    }
+
+    @Test
+    fun `refresh also triggers a new disruptions fetch`() = runTest(dispatcher) {
+        val disruptions = FakeDisruptionRepository(listOf(sampleDisruption()))
+        val vm = viewModel(disruptions = disruptions)
+        dispatcher.scheduler.advanceUntilIdle()
+        assertEquals(1, disruptions.callCount)
+
+        vm.refresh()
+        dispatcher.scheduler.advanceUntilIdle()
+
+        assertEquals(2, disruptions.callCount)
+    }
+
+    @Test
+    fun `an automatic refresh tick never blanks disruptions back to Loading`() = runTest(dispatcher) {
+        val disruptions = ControllableDisruptionRepository()
+        val vm = viewModel(disruptions = disruptions)
+        dispatcher.scheduler.advanceUntilIdle()
+        disruptions.complete(0, listOf(sampleDisruption()))
+        dispatcher.scheduler.advanceUntilIdle()
+        assertTrue(vm.uiState.value.disruptions is DisruptionsState.Loaded)
+
+        val job = launch { vm.runAutoRefresh() }
+        dispatcher.scheduler.advanceTimeBy(RoutineDetailsViewModel.AUTO_REFRESH_INTERVAL_MS + 1)
+        dispatcher.scheduler.runCurrent()
+
+        assertNotEquals(DisruptionsState.Loading, vm.uiState.value.disruptions)
+        disruptions.complete(1, listOf(sampleDisruption()))
+        dispatcher.scheduler.runCurrent()
+        job.cancel()
+    }
+
+    @Test
+    fun `reload re-fetches disruptions once the routine's identity changes`() = runTest(dispatcher) {
+        val routine = sampleRoutine(id = "r1")
+        val repository = FakeRoutineRepository(routine)
+        val disruptions = FakeDisruptionRepository(listOf(sampleDisruption()))
+        val vm = viewModel(routine = routine, routineId = "r1", disruptions = disruptions, routines = repository)
+        dispatcher.scheduler.advanceUntilIdle()
+        assertEquals(1, disruptions.callCount)
+
+        repository.save(routine.copy(siteId = 9192, siteName = "Slussen"))
+        vm.reload()
+        dispatcher.scheduler.advanceUntilIdle()
+
+        assertEquals(2, disruptions.callCount)
+    }
+
+    @Test
+    fun `an older in-flight disruptions fetch cannot overwrite a newer one`() = runTest(dispatcher) {
+        val disruptions = ControllableDisruptionRepository()
+        val vm = viewModel(disruptions = disruptions)
+        dispatcher.scheduler.advanceUntilIdle()
+        disruptions.complete(0, listOf(sampleDisruption("initial")))
+        dispatcher.scheduler.advanceUntilIdle()
+
+        vm.refresh() // call index 1 (older refresh), left pending
+        dispatcher.scheduler.advanceUntilIdle()
+        vm.refresh() // call index 2 (newer refresh) -- must supersede index 1
+        dispatcher.scheduler.advanceUntilIdle()
+
+        disruptions.complete(2, listOf(sampleDisruption("newer")))
+        dispatcher.scheduler.advanceUntilIdle()
+        assertEquals(listOf("newer"), (vm.uiState.value.disruptions as DisruptionsState.Loaded).disruptions.map { it.disruptionId })
+
+        // The older, superseded refresh finally resolves late -- must be ignored.
+        disruptions.complete(1, listOf(sampleDisruption("stale-older")))
+        dispatcher.scheduler.advanceUntilIdle()
+        assertEquals(listOf("newer"), (vm.uiState.value.disruptions as DisruptionsState.Loaded).disruptions.map { it.disruptionId })
+    }
+
+    @Test
+    fun `showDebugTestNotification carries the highest-priority already-loaded disruption`() = runTest(dispatcher) {
+        val notifier = FakeRoutineNotifier()
+        val vm = viewModel(disruptions = FakeDisruptionRepository(listOf(sampleDisruption("d1"))), notifier = notifier)
+        dispatcher.scheduler.advanceUntilIdle()
+
+        vm.showDebugTestNotification()
+
+        assertEquals("Header d1", notifier.shown.single().disruptionHeadline)
     }
 }

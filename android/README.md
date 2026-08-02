@@ -501,7 +501,10 @@ countdown/secondary-block/status-row layout, and the width-driven responsive siz
 described above, adding 23 further JVM `@Test` functions (17 in
 `LineBadgeColorMappingTest`, plus mapper/preferences/reconciler coverage for the new
 `lineDesignation`/`transportMode` model fields) with no further instrumented ones,
-reaching the 364 JVM / 24 instrumented total stated below — see
+reaching 364 JVM / 24 instrumented. A further session then integrated disruptions into
+the Android client for the first time — see "Disruptions integration, verified end to
+end on-device" below — adding 61 further JVM `@Test` functions with no further
+instrumented ones, reaching the 425 JVM / 24 instrumented total stated below — see
 `../docs/Blick_Project_Documentation.md`'s "Validation status" note for the full account
 of each.
 
@@ -524,7 +527,7 @@ clone builds without Android Studio or a pre-existing local Gradle install.
 
 A complete local run — `testDebugUnitTest`, `lintDebug`, `assembleDebug`, and
 `connectedDebugAndroidTest` on the physical Lenovo TB350FU (Android 14) referenced
-above — has since been completed, using Android Studio's own bundled JDK. All 364 JVM
+above — has since been completed, using Android Studio's own bundled JDK. All 425 JVM
 `@Test` functions and all 24 instrumented `@Test` functions pass; `lintDebug` reports 0
 errors (43 warnings: two expected, already-guarded `InlinedApi` findings — the
 API-36 `ACTION_APP_NOTIFICATION_PROMOTION_SETTINGS` deep-link and the API-33
@@ -536,6 +539,39 @@ debug APK builds
 and installs; and the ongoing-notification
 loop, the routine details live-preview, and full routine management were all exercised
 manually on that same device.
+
+**Disruptions integration, verified end to end on-device (with one real-data caveat):**
+the previously-built-but-unwired `DisruptionRepository`/`RemoteDisruptionRepository`
+(see "Not yet implemented" in `../docs/Blick_Project_Documentation.md`'s prior revision)
+is now called from a new shared `DisruptionCache` (60-second TTL, in-flight
+de-duplication so `RoutineActiveWindowWorker` and the Routine Details screen's own
+30-second auto-refresh never trigger more than one upstream-bound fetch per filter per
+minute between them), a new `GetDisruptionsUseCase`/`DisruptionsState`, a new "Disruptions"
+section on the Routine Details screen, and the ongoing notification's expanded view (the
+highest-priority disruption's header/details, appended after the existing departure/
+last-checked lines, never touching the collapsed countdown, departure text, Stop action,
+or Live Update request). Verified against the real deployed backend
+(`https://blick-backend.vercel.app/`) on the same physical device: created a live routine
+(T-Centralen, line 18 Metro → Hökarängen), confirmed the Disruptions section correctly
+read real SL data ("No disruptions right now" — genuinely true for that line at
+verification time) and the notification's expanded view correctly added nothing when no
+disruption existed; then disabled Wi-Fi and mobile data (`adb shell svc wifi disable` /
+`svc data disable`) and let the cache's 60-second TTL elapse before refreshing again, to
+force a real fetch failure rather than merely serving a still-fresh cached value — the
+Disruptions section correctly flipped to "Couldn't load disruptions right now" while the
+departures section *independently* fell back to its own Stale state at the same time,
+confirming failure isolation between the two live, not only via fakes in the automated
+suite; the notification, refreshed at that point, again correctly showed no disruption
+line. Connectivity was then restored, both sections recovered on the next fetch, and the
+test routine and its notification were removed to leave the device clean. **One state was
+not observed with real data, stated plainly rather than glossed over:** no live SL
+Deviations disruption was active on the tested line during verification, so the
+"a disruption is actually present" rendering path — the Disruptions section's own list
+(header, details, priority order), and the notification's appended lines — was exercised
+only through the automated suite's explicit fixtures (`DisruptionTest`,
+`GetDisruptionsUseCaseTest`, `RoutineDetailsViewModelTest`,
+`RoutineNotificationMapperTest`, `RoutineNotificationBuilderTest`), not by direct visual
+confirmation of a real disruption rendering on-screen.
 
 **Widget re-audit and correction, since verified end to end on-device:** an earlier pass
 of this widget shipped with several real lifecycle/visual gaps — `StopRoutineNotificationAction`

@@ -237,12 +237,16 @@ dedup/updates, `created`/`modified` timestamps, `publish.from/upto` (needed to c
 hide expired disruptions), full `header`/`details`/`weblink`/`language`, and a three-part
 priority breakdown. The MVP design calls both: the embedded fields are intended to be
 surfaced as-is for a free, no-extra-request signal, with a full disruptions section of
-the UI still backed by `/api/v1/disruptions`. **Neither is implemented in the Android
-client today** — `siteDeviations`/`tripDeviations` are normalized and present in the
-`/api/v1/departures` response, and `/api/v1/disruptions` is fully implemented and
-tested on the backend, but nothing in the Android app currently reads either one; see
+the UI backed by `/api/v1/disruptions`.
+
+**The dedicated `/api/v1/disruptions` endpoint is now integrated into the Android
+client** — a Routine Details section (loading/no-disruptions/unavailable/list, ordered by
+priority) and the highest-priority disruption's header/details in the ongoing
+notification's expanded view, both backed by a shared, TTL-capped client-side cache (see
 `docs/Blick_Project_Documentation.md`'s "Current implementation status" for the
-authoritative account.
+authoritative account). **The lighter-weight embedded `siteDeviations`/`tripDeviations`
+fields are still not read by the Android app** — they remain normalized and present in
+the `/api/v1/departures` response only, with no current consumer.
 
 #### 3.5 Request validation vs. response compatibility
 

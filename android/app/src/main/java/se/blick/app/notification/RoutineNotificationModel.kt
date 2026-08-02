@@ -25,6 +25,17 @@ data class RoutineNotificationModel(
      * pinned one — same fallback rule as [lineLabel]. */
     val directionLabel: String?,
     val content: RoutineNotificationContent,
+    /** The highest-priority currently-relevant disruption's header, or null if none was
+     * fetched/available — see [RoutineNotificationMapper.map]'s `topDisruption` parameter.
+     * Trailing, defaulted fields (not inserted earlier in the constructor) so existing
+     * positional call sites keep compiling unchanged. [RoutineNotificationBuilder] renders
+     * this only in the notification's expanded view, appended after the existing
+     * departure/last-checked lines — never in place of, or ahead of, the collapsed
+     * countdown/departure/Stop action/Live Update content (see that class's own doc). */
+    val disruptionHeadline: String? = null,
+    /** The same disruption's longer body text, shown directly under [disruptionHeadline] in
+     * the expanded view only. Never populated without [disruptionHeadline] also being set. */
+    val disruptionDetails: String? = null,
 )
 
 /**

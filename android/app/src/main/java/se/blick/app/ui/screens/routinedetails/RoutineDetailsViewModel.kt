@@ -22,6 +22,8 @@ import se.blick.app.data.local.datastore.AppSettingsDataStore
 import se.blick.app.data.repository.RoutineRepository
 import se.blick.app.data.repository.StaleSnapshotRepository
 import se.blick.app.domain.model.CommuteRoutine
+import se.blick.app.domain.usecase.DisruptionsState
+import se.blick.app.domain.usecase.GetDisruptionsUseCase
 import se.blick.app.domain.usecase.GetLiveDeparturesUseCase
 import se.blick.app.domain.usecase.LiveDeparturesSnapshot
 import se.blick.app.domain.usecase.LiveDeparturesState
@@ -64,6 +66,12 @@ data class RoutineDetailsUiState(
      */
     val departures: LiveDeparturesState = LiveDeparturesState.Loading,
     val isRefreshingDepartures: Boolean = false,
+    /** The dedicated disruptions section's own state — loaded independently of, and never
+     * affected by the failure of, [departures] (see [RoutineDetailsViewModel.loadDisruptions]'s
+     * own doc). Like [departures], an automatic/manual refresh tick does not reset this back to
+     * [DisruptionsState.Loading]; only the very first load (or one following an edit that
+     * changed the routine's site/line/direction/mode) does. */
+    val disruptions: DisruptionsState = DisruptionsState.Loading,
     /** Guards overlapping enable/disable taps; a failure leaves [RoutineDetailsUiState.routine]
      * at whatever the write actually left in storage — never a value the UI merely hoped for. */
     val isTogglingEnabled: Boolean = false,
@@ -106,6 +114,7 @@ class RoutineDetailsViewModel @Inject constructor(
     savedStateHandle: SavedStateHandle,
     private val routineRepository: RoutineRepository,
     private val getLiveDepartures: GetLiveDeparturesUseCase,
+    private val getDisruptions: GetDisruptionsUseCase,
     private val staleSnapshotRepository: StaleSnapshotRepository,
     private val routineNotifier: RoutineNotifier,
     private val routineScheduler: RoutineScheduler,
@@ -130,6 +139,14 @@ class RoutineDetailsViewModel @Inject constructor(
      * [se.blick.app.ui.screens.routinecreate.RoutineCreateViewModel]'s direction-race fix. */
     private var departuresJob: Job? = null
     private var departuresRequestId = 0
+
+    /** Guards against an overlapping/superseded disruptions fetch overwriting a newer one —
+     * same job + request-generation-token pattern as [departuresJob]/[departuresRequestId],
+     * but kept entirely separate: cancelling or superseding one must never affect the other,
+     * since a disruptions failure must never delay or replace a departures update (or vice
+     * versa) — see [loadDisruptions]'s own doc. */
+    private var disruptionsJob: Job? = null
+    private var disruptionsRequestId = 0
 
     /** True once the very first departures fetch (from [init], shown as
      * [LiveDeparturesState.Loading]) has actually been triggered — [runAutoRefresh] uses this
@@ -169,6 +186,7 @@ class RoutineDetailsViewModel @Inject constructor(
                     )
                 }
                 loadDepartures(routine, RefreshTrigger.INITIAL)
+                loadDisruptions(routine, isInitial = true)
             }
         }
         viewModelScope.launch {
@@ -243,12 +261,18 @@ class RoutineDetailsViewModel @Inject constructor(
             val job = launch {
                 uiState.map { it.routine }.filterNotNull().first()
                 if (hasStartedAutoRefreshOnce) {
-                    _uiState.value.routine?.let { loadDepartures(it, RefreshTrigger.AUTOMATIC) }
+                    _uiState.value.routine?.let {
+                        loadDepartures(it, RefreshTrigger.AUTOMATIC)
+                        loadDisruptions(it, isInitial = false)
+                    }
                 }
                 hasStartedAutoRefreshOnce = true
                 while (isActive) {
                     delay(AUTO_REFRESH_INTERVAL_MS)
-                    _uiState.value.routine?.let { loadDepartures(it, RefreshTrigger.AUTOMATIC) }
+                    _uiState.value.routine?.let {
+                        loadDepartures(it, RefreshTrigger.AUTOMATIC)
+                        loadDisruptions(it, isInitial = false)
+                    }
                 }
             }
             autoRefreshJob = job
@@ -278,6 +302,7 @@ class RoutineDetailsViewModel @Inject constructor(
     fun refresh() {
         val routine = _uiState.value.routine ?: return
         loadDepartures(routine, RefreshTrigger.MANUAL)
+        loadDisruptions(routine, isInitial = false)
     }
 
     /**
@@ -315,6 +340,7 @@ class RoutineDetailsViewModel @Inject constructor(
                 // relying on that check alone, and prevents it from lingering for no purpose.
                 staleSnapshotRepository.clear(routineId)
                 loadDepartures(fresh, RefreshTrigger.INITIAL)
+                loadDisruptions(fresh, isInitial = true)
             }
             // The edit may also have changed enabled/schedule/pause fields, which affects
             // when this routine's active window should next run — always recompute, not only
@@ -465,7 +491,8 @@ class RoutineDetailsViewModel @Inject constructor(
     fun showDebugTestNotification(): NotificationPostResult? {
         val state = _uiState.value
         val routine = state.routine ?: return null
-        val model = RoutineNotificationMapper.map(routine, state.departures, clock.instant())
+        val topDisruption = (state.disruptions as? DisruptionsState.Loaded)?.disruptions?.firstOrNull()
+        val model = RoutineNotificationMapper.map(routine, state.departures, clock.instant(), topDisruption)
         return routineNotifier.showOrUpdate(model)
     }
 
@@ -529,6 +556,32 @@ class RoutineDetailsViewModel @Inject constructor(
                     staleSnapshotRepository.save(routineId, identity, state.snapshot)
                 }
                 _uiState.update { it.copy(departures = state, isRefreshingDepartures = false) }
+            }
+        }
+    }
+
+    /**
+     * Loads the dedicated disruptions section's state via [getDisruptions] — entirely
+     * independent of [loadDepartures]: its own job/request-id pair (see [disruptionsJob]'s own
+     * doc), and a failure here (surfaced as [DisruptionsState.Unavailable] by
+     * [GetDisruptionsUseCase] itself) never touches [RoutineDetailsUiState.departures] or
+     * cancels an in-flight departures fetch, and vice versa.
+     *
+     * [isInitial] mirrors [RefreshTrigger.INITIAL] vs. [RefreshTrigger.AUTOMATIC]/
+     * [RefreshTrigger.MANUAL] for departures: only the very first load for a given routine
+     * identity (or one following an edit that changed site/line/direction/mode, see [reload])
+     * blanks the section to [DisruptionsState.Loading]; every later automatic tick or manual
+     * refresh keeps whatever is already on screen until the new terminal state arrives, so the
+     * section never flashes back to a loading spinner every ~30 seconds.
+     */
+    private fun loadDisruptions(routine: CommuteRoutine, isInitial: Boolean) {
+        disruptionsJob?.cancel()
+        val requestId = ++disruptionsRequestId
+        disruptionsJob = viewModelScope.launch {
+            getDisruptions(routine).collect { state ->
+                if (requestId != disruptionsRequestId) return@collect
+                if (state is DisruptionsState.Loading && !isInitial) return@collect
+                _uiState.update { it.copy(disruptions = state) }
             }
         }
     }

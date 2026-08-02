@@ -18,7 +18,7 @@ what is actually built today; where the two disagree, this section wins.
 
 **Validation status of this update, stated plainly up front:** a complete local run —
 `testDebugUnitTest`, `lintDebug`, `assembleDebug`, and `connectedDebugAndroidTest` on a
-physical Lenovo TB350FU (Android 14) — has now passed in full: all 364 JVM `@Test`
+physical Lenovo TB350FU (Android 14) — has now passed in full: all 425 JVM `@Test`
 functions and all 24 instrumented `@Test` functions, `lintDebug` with 0 errors (43
 warnings: two expected, already-guarded `InlinedApi` findings — the API-36
 `ACTION_APP_NOTIFICATION_PROMOTION_SETTINGS` deep-link and the API-33
@@ -32,7 +32,13 @@ manually confirmed on that same device, including its "Design 1" visual redesign
 colored line-number badge, a large countdown, and a live/scheduled/cancelled status
 row** — see `android/README.md`'s Full verification pass section for the full account,
 including the one compact-layout sub-case this device's launcher grid couldn't directly
-exercise.
+exercise. **Disruptions are now integrated into the Android client** (a Routine Details
+section plus the notification's expanded view) and were verified on the same device
+against the real deployed backend for the no-disruption and fetch-failure cases,
+including live confirmation that a disruptions failure never affects departures — but not
+for a disruption actually being present, since none was active on the tested line at
+verification time; see "Disruptions integration, verified end to end on-device" in
+`android/README.md` for the full account of what was and wasn't observed directly.
 
 Getting there took three work sessions of source beyond the earlier 193-JVM-test
 baseline. First: the FAB restoration, the Routine Details 30-second auto-refresh, the
@@ -135,8 +141,25 @@ departure beside it, and a live/scheduled/cancelled status row, with font sizes 
 through width-driven responsive tiers rather than one fixed size (the reference mock was
 captured on a tablet-sized placement, whose grid cells are physically much larger than an
 ordinary phone's). This added 23 further JVM `@Test` functions with no further
-instrumented ones, bringing the fully verified total to 364 JVM / 24 instrumented, stated
-above.
+instrumented ones, reaching 364 JVM / 24 instrumented. A further session then wired the
+previously-built-but-unused `DisruptionRepository` into the Android client for the first
+time: a shared `DisruptionCache` (60-second TTL, in-flight de-duplication so the
+active-window worker and the Routine Details screen's own auto-refresh never trigger more
+than one upstream-bound fetch per filter per minute between them), a `GetDisruptionsUseCase`/
+`DisruptionsState` mirroring the departures engine's own Loading/empty-is-not-a-failure/
+failure split, a new "Disruptions" section on the Routine Details screen (loading,
+no-disruptions, unavailable, and a priority-ordered list), and the ongoing notification's
+expanded view showing the single highest-priority disruption's header and details,
+appended after the existing departure/last-checked lines without ever touching the
+collapsed countdown, departure text, Stop action, or Live Update request — see
+"Disruptions" under §8 and §9 below for the full design. Also fixed a backend filtering
+bug found in the same phase of work: a line-only disruption (one with no station scope at
+all) was being unconditionally excluded regardless of the requested line, because an empty
+`scope.stop_areas` array made the siteId check always fail; it is now included when both
+the requested line and transport mode match the deviation's own scope, while a deviation
+scoped to an unrelated station continues to be excluded exactly as before. This added 61
+further JVM `@Test` functions with no further instrumented ones, bringing the fully
+verified total to 425 JVM / 24 instrumented, stated above.
 
 **Implemented today (Android client + backend):**
 
@@ -170,7 +193,17 @@ above.
   scoped to the exact departure identity (site, line, direction, transport mode) that
   produced it, and is discarded rather than reused across an identity change.
 - The backend's full contract, request validation, upstream normalization, and caching
-  logic (192 passing automated tests as of this update).
+  logic (265 passing automated tests as of this update).
+- Disruptions: the Routine Details screen shows a dedicated section (loading,
+  no-disruptions, unavailable, and a priority-ordered list of header/details) for the
+  routine's own site/line/transport-mode, and the ongoing notification's expanded view
+  shows the single highest-priority disruption's header and details, appended after the
+  existing departure/last-checked lines — never replacing or hiding the collapsed
+  countdown, departure text, Stop action, or Live Update request. Both are backed by the
+  same shared, TTL-capped `DisruptionCache` so the background worker and the details
+  screen's own auto-refresh never trigger more than one upstream-bound disruptions fetch
+  per filter per minute between them; a disruptions failure is fully isolated and never
+  stops, delays, or replaces a departures update. See "Disruptions" under §8 and §9 below.
 - The ongoing-notification foundation (a pure mapper from a routine + the
   live-departures engine's state + the current time to a notification presentation
   model, recomputing each departure's countdown rather than trusting a cached value; a
@@ -287,14 +320,11 @@ above.
 
 **Not yet implemented** (described in the sections below purely as the plan):
 
-- Disruptions are not currently displayed anywhere in the Android client. The backend
-  fully implements and tests disruption retrieval and normalization (see "Disruptions"
-  under §8 and §9 below), and the Android side has a matching `Disruption` domain model,
-  DTO, and `DisruptionRepository`/`RemoteDisruptionRepository` — but nothing in the
-  notification, the routine details screen, or any ViewModel calls that repository yet,
-  so no disruption message ever reaches the user today.
 - Exact-time activation — see "Active-window scheduling" below for why this is
   deliberately best-effort, not exact.
+- The home-screen widget does not show disruptions — by design, not an oversight (see
+  "Home-screen widget" below): it reuses the notification/departures pipeline only, and
+  disruptions were deliberately kept out of scope for it in this phase.
 
 ---
 
@@ -436,10 +466,13 @@ Line and direction options are initially discovered from live departures at the 
 
 ### Daily operation
 
-*Steps 1, 2, 3, 4, 5, and 7 below are implemented in source and verified on a real
-device — see "Current implementation status" above and the "Active-window scheduling
-and the 30-second notification loop" architecture note below. Step 6 is not: no
-disruption information is included anywhere today — see "Not yet implemented" above.*
+*All 7 steps below are implemented in source and verified on a real device — see
+"Current implementation status" above and the "Active-window scheduling and the
+30-second notification loop" architecture note below. Step 6's disruption fetch was
+verified live for the no-disruption and fetch-failure cases; a disruption actually being
+present was verified only through the automated test suite, not by direct observation of
+a real one rendering on-screen — see "Current implementation status" above for the exact
+account.*
 
 1. The routine becomes active around the configured start time (best-effort, not exact
    — see the scheduling section below).
@@ -448,8 +481,9 @@ disruption information is included anywhere today — see "Not yet implemented" 
 4. One ongoing notification appears.
 5. The notification is silently refreshed about every 30 seconds during the active
    period, without a repeated sound, vibration, or extra card.
-6. Relevant disruption information is included when available. *(Not yet implemented
-   — see above.)*
+6. Relevant disruption information is included when available, as the highest-priority
+   currently-relevant disruption's header and details, appended after the departure
+   lines in the notification's expanded view.
 7. The notification is removed at the configured end time, and the next eligible
    occurrence is scheduled.
 
@@ -1597,4 +1631,4 @@ Technical success includes:
 
 ## 21. Short project description
 
-**Blick is an Android-first scheduled departure display for regular SL commuters. Users choose a site, transport mode, line, direction, weekdays, and time window. During that period, upcoming departures appear automatically in one calm, updating Android notification (relevant disruptions are specified but not yet surfaced there — see "Current implementation status" above). The platform-neutral backend is designed to support a planned native iPhone client and possible future household displays without expanding the initial MVP.**
+**Blick is an Android-first scheduled departure display for regular SL commuters. Users choose a site, transport mode, line, direction, weekdays, and time window. During that period, upcoming departures — and relevant disruptions, in both the Routine Details screen and the notification — appear automatically in one calm, updating Android notification (see "Current implementation status" above). The platform-neutral backend is designed to support a planned native iPhone client and possible future household displays without expanding the initial MVP.**

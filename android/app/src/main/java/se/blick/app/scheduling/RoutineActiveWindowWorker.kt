@@ -10,11 +10,15 @@ import androidx.work.WorkerParameters
 import dagger.assisted.Assisted
 import dagger.assisted.AssistedInject
 import kotlinx.coroutines.CancellationException
+import kotlinx.coroutines.async
+import kotlinx.coroutines.coroutineScope
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.last
 import se.blick.app.data.repository.RoutineRepository
 import se.blick.app.data.repository.StaleSnapshotRepository
 import se.blick.app.domain.model.CommuteRoutine
+import se.blick.app.domain.usecase.DisruptionsState
+import se.blick.app.domain.usecase.GetDisruptionsUseCase
 import se.blick.app.domain.usecase.GetLiveDeparturesUseCase
 import se.blick.app.domain.usecase.LiveDeparturesState
 import se.blick.app.domain.usecase.departureIdentity
@@ -37,7 +41,9 @@ internal const val ACTIVE_WINDOW_REFRESH_INTERVAL_MS = 30_000L
 /**
  * Runs one routine's active window end to end: checks notification availability, enters
  * foreground execution immediately with a valid notification, fetches and shows departures
- * right away, then re-fetches and silently updates the SAME notification (stable
+ * (and, concurrently, disruptions — see the main loop's own comment on why that fetch can
+ * never stop, delay, or replace a departures update) right away, then re-fetches and silently
+ * updates the SAME notification (stable
  * [RoutineNotificationIds.NOTIFICATION_ID], `setOnlyAlertOnce`, no repeated sound/vibration/
  * heads-up — see [RoutineNotificationBuilder]) roughly every [ACTIVE_WINDOW_REFRESH_INTERVAL_MS]
  * until the routine's configured end time, then removes the notification and reschedules the
@@ -106,6 +112,7 @@ class RoutineActiveWindowWorker @AssistedInject constructor(
     @Assisted params: WorkerParameters,
     private val routineRepository: RoutineRepository,
     private val getLiveDepartures: GetLiveDeparturesUseCase,
+    private val getDisruptions: GetDisruptionsUseCase,
     private val staleSnapshotRepository: StaleSnapshotRepository,
     private val routineNotifier: RoutineNotifier,
     private val routineNotificationBuilder: RoutineNotificationBuilder,
@@ -190,13 +197,26 @@ class RoutineActiveWindowWorker @AssistedInject constructor(
 
                 val identity = current.departureIdentity()
                 val previous = staleSnapshotRepository.get(routineId, identity)
-                val departuresState = getLiveDepartures(current, previous = previous).last()
+                // Disruptions are fetched concurrently with departures (as a child of this
+                // coroutineScope), not sequentially after them -- so a slow disruptions fetch
+                // adds no more than max(departures, disruptions) to this tick, never their
+                // sum. GetDisruptionsUseCase itself never throws (besides a real
+                // CancellationException, which propagates and ends this run exactly like any
+                // other failure here would -- see doWork's own CancellationException handling),
+                // so a disruptions failure can never stop, delay, or replace the departures
+                // fetch/notification/widget update below.
+                val (departuresState, topDisruption) = coroutineScope {
+                    val disruptionsDeferred = async { getDisruptions(current).last() }
+                    val departures = getLiveDepartures(current, previous = previous).last()
+                    val disruption = (disruptionsDeferred.await() as? DisruptionsState.Loaded)?.disruptions?.firstOrNull()
+                    departures to disruption
+                }
                 if (departuresState is LiveDeparturesState.Live) {
                     staleSnapshotRepository.save(routineId, identity, departuresState.snapshot)
                 }
 
                 val now = clock.instant()
-                val model = RoutineNotificationMapper.map(current, departuresState, now)
+                val model = RoutineNotificationMapper.map(current, departuresState, now, topDisruption)
                 // The real NotificationPostResult is intentionally not surfaced anywhere from
                 // here (there is no UI attached to a background worker to report it to) --
                 // but it is also never used to claim success; showOrUpdate itself already

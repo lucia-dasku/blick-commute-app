@@ -22,17 +22,22 @@ import org.robolectric.RobolectricTestRunner
 import org.robolectric.RuntimeEnvironment
 import org.robolectric.annotation.Config
 import se.blick.app.data.repository.DepartureRepository
+import se.blick.app.data.repository.DisruptionRepository
 import se.blick.app.data.repository.RoutineRepository
 import se.blick.app.data.repository.StaleSnapshotRepository
 import se.blick.app.domain.model.CommuteRoutine
 import se.blick.app.domain.model.DeparturesResult
 import se.blick.app.domain.model.Departure
+import se.blick.app.domain.model.Disruption
+import se.blick.app.domain.model.DisruptionMessage
+import se.blick.app.domain.model.DisruptionPriority
 import se.blick.app.domain.model.Journey
 import se.blick.app.domain.model.LineRef
 import se.blick.app.domain.model.StopAreaRef
 import se.blick.app.domain.model.StopPointRef
 import se.blick.app.domain.model.TransportMode
 import se.blick.app.domain.usecase.DepartureIdentity
+import se.blick.app.domain.usecase.GetDisruptionsUseCase
 import se.blick.app.domain.usecase.GetLiveDeparturesUseCase
 import se.blick.app.domain.usecase.LiveDeparturesSnapshot
 import se.blick.app.notification.NotificationAvailability
@@ -154,6 +159,39 @@ class RoutineActiveWindowWorkerTest {
         override suspend fun getDepartures(siteId: Long, forecastMinutes: Int?): DeparturesResult {
             callCount++
             return result()
+        }
+    }
+
+    private fun sampleDisruption(id: String = "d1", importance: Int = 1) = Disruption(
+        disruptionId = id,
+        version = 1,
+        createdAt = Instant.parse("2026-07-27T05:00:00Z"),
+        modifiedAt = null,
+        validFrom = null,
+        validUntil = null,
+        priority = DisruptionPriority(importance, 1, 1),
+        message = DisruptionMessage("Header $id", "Details $id", null, null, "en"),
+        affectedStopAreas = emptyList(),
+        affectedLines = emptyList(),
+        affectedModes = emptyList(),
+    )
+
+    /** Defaults to an empty result -- most tests below don't care about disruptions at all. */
+    private class FakeDisruptionRepository(
+        private val result: () -> List<Disruption> = { emptyList() },
+    ) : DisruptionRepository {
+        var callCount = 0
+        override suspend fun getDisruptions(siteId: Long, lineId: Long?, transportMode: TransportMode?): List<Disruption> {
+            callCount++
+            return result()
+        }
+    }
+
+    private class FailingDisruptionRepository(private val error: Throwable) : DisruptionRepository {
+        var callCount = 0
+        override suspend fun getDisruptions(siteId: Long, lineId: Long?, transportMode: TransportMode?): List<Disruption> {
+            callCount++
+            throw error
         }
     }
 
@@ -285,6 +323,7 @@ class RoutineActiveWindowWorkerTest {
         deviceZoneProvider: DeviceZoneProvider = zoneProvider,
         staleSnapshotRepository: StaleSnapshotRepository = FakeStaleSnapshotRepository(),
         widgetUpdater: RoutineWidgetUpdater = RecordingWidgetUpdater(),
+        getDisruptions: GetDisruptionsUseCase = GetDisruptionsUseCase(FakeDisruptionRepository()),
     ): RoutineActiveWindowWorker =
         TestListenableWorkerBuilder<RoutineActiveWindowWorker>(context)
             .setInputData(workDataOf(RoutineActiveWindowWorker.KEY_ROUTINE_ID to routineId))
@@ -298,6 +337,7 @@ class RoutineActiveWindowWorkerTest {
                     workerParameters,
                     routineRepository,
                     getLiveDepartures,
+                    getDisruptions,
                     staleSnapshotRepository,
                     notifier,
                     notificationBuilder,
@@ -321,6 +361,7 @@ class RoutineActiveWindowWorkerTest {
                         workerParameters,
                         ScriptedRoutineRepository(TickingClock(Instant.now(), zone)) { null },
                         GetLiveDeparturesUseCase(FakeDepartureRepository { error("unused") }, Clock.systemUTC()),
+                        GetDisruptionsUseCase(FakeDisruptionRepository()),
                         FakeStaleSnapshotRepository(),
                         RecordingNotifier(),
                         notificationBuilder,
@@ -953,5 +994,122 @@ class RoutineActiveWindowWorkerTest {
         assertTrue(scheduler.scheduledRoutines.isEmpty())
         // Cleanup still happens even on a real cancellation.
         assertEquals(1, notifier.removeCallCount)
+    }
+
+    // ---- Disruptions fetched alongside departures (never stop, delay, or replace them) ----
+
+    @Test
+    fun `disruptions are fetched on every tick, alongside departures`() = runTest {
+        val clock = TickingClock(Instant.parse("2026-07-27T05:00:00Z"), zone)
+        val routine = routine()
+        val repository = ScriptedRoutineRepository(clock) { routine }
+        val notifier = RecordingNotifier()
+        val departures = FakeDepartureRepository { DeparturesResult(clock.instant(), 9145, listOf(sampleDeparture()), emptyList()) }
+        val disruptions = FakeDisruptionRepository { listOf(sampleDisruption()) }
+
+        val worker = buildWorker(
+            routine.id,
+            repository,
+            GetLiveDeparturesUseCase(departures, clock),
+            notifier,
+            RecordingScheduler(),
+            clock,
+            getDisruptions = GetDisruptionsUseCase(disruptions),
+        )
+        worker.doWork()
+
+        // Same tick count as departures/the notification (see the "fetches and posts on each
+        // tick" test above).
+        assertEquals(2, disruptions.callCount)
+        assertEquals(2, notifier.shown.size)
+    }
+
+    @Test
+    fun `the notification carries the header and details of the repository's first (highest-priority) disruption`() = runTest {
+        // The repository (RemoteDisruptionRepository, via relevantDisruptions -- see
+        // DisruptionTest/RemoteDisruptionRepositoryTest for that ordering's own coverage) is
+        // what guarantees the list arrives already priority-ordered; the worker's own job is
+        // simply to take its first entry, which this fake reproduces by returning `high` first.
+        val clock = TickingClock(Instant.parse("2026-07-27T05:00:00Z"), zone)
+        val routine = routine()
+        val repository = ScriptedRoutineRepository(clock) { routine }
+        val notifier = RecordingNotifier()
+        val departures = FakeDepartureRepository { DeparturesResult(clock.instant(), 9145, listOf(sampleDeparture()), emptyList()) }
+        val low = sampleDisruption(id = "low", importance = 1)
+        val high = sampleDisruption(id = "high", importance = 5)
+        val disruptions = FakeDisruptionRepository { listOf(high, low) }
+
+        val worker = buildWorker(
+            routine.id,
+            repository,
+            GetLiveDeparturesUseCase(departures, clock),
+            notifier,
+            RecordingScheduler(),
+            clock,
+            getDisruptions = GetDisruptionsUseCase(disruptions),
+        )
+        worker.doWork()
+
+        assertTrue(notifier.shown.isNotEmpty())
+        assertTrue(notifier.shown.all { it.disruptionHeadline == high.message.header })
+        assertTrue(notifier.shown.all { it.disruptionDetails == high.message.details })
+    }
+
+    @Test
+    fun `no disruptions produces a null disruptionHeadline, not a failure`() = runTest {
+        val clock = TickingClock(Instant.parse("2026-07-27T05:00:00Z"), zone)
+        val routine = routine()
+        val repository = ScriptedRoutineRepository(clock) { routine }
+        val notifier = RecordingNotifier()
+        val departures = FakeDepartureRepository { DeparturesResult(clock.instant(), 9145, listOf(sampleDeparture()), emptyList()) }
+
+        val worker = buildWorker(
+            routine.id,
+            repository,
+            GetLiveDeparturesUseCase(departures, clock),
+            notifier,
+            RecordingScheduler(),
+            clock,
+            getDisruptions = GetDisruptionsUseCase(FakeDisruptionRepository { emptyList() }),
+        )
+        worker.doWork()
+
+        assertTrue(notifier.shown.isNotEmpty())
+        assertTrue(notifier.shown.all { it.disruptionHeadline == null })
+    }
+
+    @Test
+    fun `a disruptions fetch failure does not stop the loop, remove the notification, or affect departures`() = runTest {
+        val clock = TickingClock(Instant.parse("2026-07-27T05:00:00Z"), zone)
+        val routine = routine()
+        val repository = ScriptedRoutineRepository(clock) { routine }
+        val notifier = RecordingNotifier()
+        val scheduler = RecordingScheduler()
+        val departures = FakeDepartureRepository { DeparturesResult(clock.instant(), 9145, listOf(sampleDeparture()), emptyList()) }
+        val failingDisruptions = FailingDisruptionRepository(RuntimeException("disruptions upstream down"))
+
+        val worker = buildWorker(
+            routine.id,
+            repository,
+            GetLiveDeparturesUseCase(departures, clock),
+            notifier,
+            scheduler,
+            clock,
+            getDisruptions = GetDisruptionsUseCase(failingDisruptions),
+        )
+        val result = worker.doWork()
+
+        assertTrue(result is ListenableWorker.Result.Success)
+        // Same behaviour as the disruptions-free happy path: two ticks posted, one removal at
+        // window end, one reschedule -- a disruptions failure is fully isolated (see
+        // GetDisruptionsUseCase's own doc: it never throws besides a real cancellation, so
+        // this failure surfaces only as DisruptionsState.Unavailable / a null disruptionHeadline
+        // below, never as a broken loop).
+        assertEquals(2, notifier.shown.size)
+        assertTrue(notifier.shown.all { it.content is RoutineNotificationContent.Live })
+        assertTrue(notifier.shown.all { it.disruptionHeadline == null })
+        assertEquals(1, notifier.removeCallCount)
+        assertEquals(1, scheduler.scheduledRoutines.size)
+        assertTrue(failingDisruptions.callCount > 0)
     }
 }

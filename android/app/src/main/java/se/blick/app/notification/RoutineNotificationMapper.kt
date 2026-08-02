@@ -1,6 +1,7 @@
 package se.blick.app.notification
 
 import se.blick.app.domain.model.CommuteRoutine
+import se.blick.app.domain.model.Disruption
 import se.blick.app.domain.usecase.LiveDeparturesSnapshot
 import se.blick.app.domain.usecase.LiveDeparturesState
 import se.blick.app.domain.usecase.PreparedDeparture
@@ -28,13 +29,29 @@ object RoutineNotificationMapper {
 
     private const val MAX_DEPARTURES = 2
 
-    fun map(routine: CommuteRoutine, departuresState: LiveDeparturesState, now: Instant): RoutineNotificationModel =
+    /**
+     * [topDisruption] is the single highest-priority currently-relevant disruption for this
+     * routine, if any was fetched successfully (see [se.blick.app.domain.usecase.GetDisruptionsUseCase]
+     * and [se.blick.app.domain.model.relevantDisruptions] — already priority-ordered before
+     * this mapper ever sees it, so "top" is simply the first element the caller passes in).
+     * Defaults to null so every existing call site (the worker's own `Loading` placeholder
+     * post, the debug notification trigger) keeps compiling without having fetched
+     * disruptions itself.
+     */
+    fun map(
+        routine: CommuteRoutine,
+        departuresState: LiveDeparturesState,
+        now: Instant,
+        topDisruption: Disruption? = null,
+    ): RoutineNotificationModel =
         RoutineNotificationModel(
             routineId = routine.id,
             stationName = routine.siteName,
             lineLabel = routine.lineDesignation,
             directionLabel = routine.destinationLabel,
             content = departuresState.toContent(now),
+            disruptionHeadline = topDisruption?.message?.header,
+            disruptionDetails = topDisruption?.message?.details,
         )
 
     private fun LiveDeparturesState.toContent(now: Instant): RoutineNotificationContent = when (this) {
