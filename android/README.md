@@ -629,6 +629,28 @@ Adds 9 new instrumented `@Test` functions (`RoutineCreateScreenTest`, plus new c
 `RoutineListScreenTest`) covering narrow-phone and tablet widths for the centering and
 weekday-row fixes; no JVM-level behaviour changed, so the JVM suite stays at 425.
 
+**Cross-device re-run surfaced (and fixed) a real test-only bug, not a production one:**
+once a physical Samsung Galaxy S23 Ultra (`SM-S918B`, One UI) was connected, running
+`connectedDebugAndroidTest` on it exposed that both "wide/tablet" cases had used
+`Modifier.requiredWidth(900.dp)` — deterministic on the Lenovo tablet used above, but on
+this phone (whose own portrait content width, `1080px / 450dpi × 160 ≈ 384dp`, is itself
+*narrower* than 900dp and, as it turned out, than `WeekdaySelector`'s own
+`WEEKDAY_SINGLE_ROW_MIN_WIDTH` threshold too) forcing an un-renderable 900dp width pushed
+content beyond the device's actual viewport. The visibility assertion was changed to
+check layout (existence + non-zero
+measured size) instead of physical on-screen visibility, which is what a forced,
+device-independent width should be judged against; the row-position assertions were
+already layout-only and needed no change. Re-run on the S23 Ultra: all 33 instrumented
+tests pass. The empty-message centering fix was also confirmed directly on this phone in
+its native portrait orientation (not a forced resolution) — the message visibly wrapped
+to two lines with the second centered under the first — and the weekday selector was
+confirmed the same way: at this phone's own native ~384dp width, all seven days rendered
+in two balanced rows (Monday–Thursday, Friday–Sunday), exactly the two-row branch the
+original bug report was about, on the exact class of device (a current flagship phone in
+portrait) most likely to hit it. The launcher icon's extra padding was also confirmed on
+this device's own app-drawer icon, rendered under One UI's own squircle mask — a second,
+independent real-world mask shape beyond the Lenovo tablet's.
+
 **Widget re-audit and correction, since verified end to end on-device:** an earlier pass
 of this widget shipped with several real lifecycle/visual gaps — `StopRoutineNotificationAction`
 never touched the widget, several `RoutineActiveWindowWorker` exit paths (missing/deleted/

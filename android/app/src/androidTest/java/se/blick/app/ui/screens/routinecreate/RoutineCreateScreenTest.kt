@@ -27,11 +27,26 @@ import org.junit.runner.RunWith
  * own direct-test convention) rather than the full [RoutineCreateScreen], which needs a
  * saved-stop/line/direction flow and a real ViewModel to reach the weekday step at all.
  *
- * [androidx.compose.foundation.layout.requiredWidth] (not `.width`, which would just be
- * coerced down to the real test device's own screen size) deterministically forces a
- * specific width regardless of which physical device or emulator profile actually runs
- * these tests — the standard technique for exercising both a narrow-phone and a tablet-width
- * layout from the same instrumented test target.
+ * Every case uses [androidx.compose.foundation.layout.requiredWidth] to force the exact
+ * width under test regardless of the real test device's own screen size — deliberately, so
+ * "narrow" and "wide" here test [WeekdaySelector]'s own responsive *logic* at fixed measured
+ * constraints, not whatever width a given physical device happens to have. This matters
+ * because a real device is not guaranteed to be either: a Galaxy S23 Ultra's own portrait
+ * content width (~384dp at its native density) is itself *narrower* than
+ * [WEEKDAY_SINGLE_ROW_MIN_WIDTH] — a perfectly ordinary flagship phone, but not a stand-in
+ * for "wide" — so a "wide" case that merely coerced down to whatever the device provides
+ * (via plain [androidx.compose.foundation.layout.width]) would silently stop testing the
+ * single-row branch at all on that hardware.
+ *
+ * The one thing [requiredWidth] does trade away is [assertIsDisplayed] for the "wide" cases:
+ * a forced 900dp width can genuinely exceed a real phone's own visible viewport, and
+ * `assertIsDisplayed` (which checks actual on-screen visibility, not just layout) can then
+ * fail for reasons that have nothing to do with [WeekdaySelector] itself. The "wide" visibility
+ * case below asserts existence and a non-zero measured size instead — a faithful check of
+ * "this chip was actually laid out with real content," independent of whether the specific
+ * test device's physical screen happens to be that wide; the separate row-position tests
+ * still directly confirm real, correct placement via [boundsInRoot][androidx.compose.ui.geometry.Rect],
+ * which is a layout property unaffected by physical viewport clipping either way.
  */
 @RunWith(AndroidJUnit4::class)
 class RoutineCreateScreenTest {
@@ -62,11 +77,14 @@ class RoutineCreateScreenTest {
     }
 
     @Test
-    fun atTabletWidth_allSevenDaysAreVisible() {
+    fun atTabletWidth_allSevenDaysAreLaidOutWithRealSize() {
         setContentAtWidth(900.dp)
 
+        // See this class's own doc for why this checks layout (existence + non-zero size)
+        // rather than assertIsDisplayed's physical-viewport visibility at this forced width.
         labels.forEach { label ->
-            composeRule.onNodeWithText(label).assertIsDisplayed()
+            val bounds = composeRule.onNodeWithText(label).fetchSemanticsNode().boundsInRoot
+            assertTrue("expected '$label' to have a real measured size, got $bounds", bounds.width > 0f && bounds.height > 0f)
         }
     }
 

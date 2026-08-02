@@ -84,11 +84,16 @@ class RoutineListScreenTest {
         assertEquals(true, addRoutineClicked)
     }
 
-    /** Forces a specific width regardless of the real test device's actual screen size —
-     * [requiredWidth] (not [androidx.compose.foundation.layout.width], which would just be
-     * coerced down to whatever the real device already provides) is the standard technique
-     * for deterministically exercising a narrow-phone vs. tablet-width layout in an
-     * instrumented test. */
+    /** Forces exactly [width] regardless of the real test device's actual screen size, via
+     * [requiredWidth] rather than plain [androidx.compose.foundation.layout.width] — deliberately,
+     * so "narrow" and "wide" test this centering logic at fixed measured constraints, not
+     * whatever width a given physical device happens to have (a real phone's own portrait
+     * content width is not guaranteed to be narrower than a "wide" test value, or wider than a
+     * "narrow" one — see `RoutineCreateScreenTest`'s identical reasoning, prompted by a real
+     * Galaxy S23 Ultra run). This is safe here specifically because the assertion below only
+     * ever compares [boundsInRoot][androidx.compose.ui.geometry.Rect] centers — a pure layout
+     * property, unaffected by whether the forced width exceeds the device's actual physical
+     * viewport — never physical on-screen visibility. */
     private fun horizontalCenterOfEmptyMessage(width: Dp): Pair<Float, Float> {
         composeRule.setContent {
             Box(Modifier.requiredWidth(width).fillMaxHeight().testTag("container")) {
