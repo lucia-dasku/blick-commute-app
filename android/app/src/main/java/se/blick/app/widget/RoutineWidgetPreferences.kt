@@ -34,7 +34,7 @@ private object WidgetKeys {
     val FOLLOWING_IS_CANCELLED = booleanPreferencesKey("followingIsCancelled")
 }
 
-private enum class ContentType { NO_ACTIVE_COMMUTE, LOADING, LIVE, STALE, NO_UPCOMING, OFFLINE, UNAVAILABLE }
+private enum class ContentType { NO_ACTIVE_COMMUTE, LOADING, LIVE, STALE, NO_UPCOMING, OFFLINE, UNAVAILABLE, NOTIFICATIONS_UNAVAILABLE }
 
 /** Clears every key this codec owns before writing new ones — a widget state transition (e.g.
  * [RoutineWidgetContent.Live] to [RoutineWidgetContent.Offline]) must never leave a stale
@@ -67,6 +67,8 @@ internal fun RoutineWidgetUiState.writeInto(prefs: MutablePreferences) {
                 }
                 RoutineWidgetContent.Offline -> prefs[WidgetKeys.CONTENT_TYPE] = ContentType.OFFLINE.name
                 RoutineWidgetContent.Unavailable -> prefs[WidgetKeys.CONTENT_TYPE] = ContentType.UNAVAILABLE.name
+                RoutineWidgetContent.NotificationsUnavailable ->
+                    prefs[WidgetKeys.CONTENT_TYPE] = ContentType.NOTIFICATIONS_UNAVAILABLE.name
             }
         }
     }
@@ -111,6 +113,7 @@ internal fun Preferences.toWidgetUiState(): RoutineWidgetUiState {
         ContentType.NO_UPCOMING -> RoutineWidgetContent.NoUpcomingDepartures(lastCheckedAt = lastCheckedAt ?: Instant.EPOCH)
         ContentType.OFFLINE -> RoutineWidgetContent.Offline
         ContentType.UNAVAILABLE -> RoutineWidgetContent.Unavailable
+        ContentType.NOTIFICATIONS_UNAVAILABLE -> RoutineWidgetContent.NotificationsUnavailable
         ContentType.NO_ACTIVE_COMMUTE -> return RoutineWidgetUiState.NoActiveCommute
     }
     return RoutineWidgetUiState.ActiveRoutine(

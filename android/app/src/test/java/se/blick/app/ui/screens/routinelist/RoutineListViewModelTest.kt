@@ -119,6 +119,8 @@ class RoutineListViewModelTest {
         override suspend fun reconcile() {
             reconcileCallCount++
         }
+
+        override suspend fun showNotificationsUnavailable(routine: CommuteRoutine) = Unit
     }
 
     @Test

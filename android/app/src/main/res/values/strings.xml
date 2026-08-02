@@ -154,8 +154,13 @@
     <string name="debug_notification_failed">Couldn\'t post the test notification. Try again.</string>
 
     <!-- Home-screen widget (widget/BlickRoutineWidget.kt) — shown outside any active routine
-         window. All other widget state text reuses the notification_*/routine_details_departure_*
+         window. Most other widget state text reuses the notification_*/routine_details_departure_*
          strings above verbatim, the same copy for the same states. -->
     <string name="widget_no_active_commute">No active commute.</string>
     <string name="widget_description">Shows your commute\'s next departures while its active window is open.</string>
+    <!-- Shown instead of notification_loading when the active window is open but notifications
+         are unavailable (see RoutineWidgetContent.NotificationsUnavailable's own doc) — the
+         widget's only data source cannot run, so it says so rather than staying on "Updating
+         departures…" indefinitely. -->
+    <string name="widget_notifications_unavailable">Turn on notifications to see live departures here.</string>
 </resources>

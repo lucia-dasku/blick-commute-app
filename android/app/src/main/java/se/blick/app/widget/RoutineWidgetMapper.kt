@@ -29,6 +29,19 @@ object RoutineWidgetMapper {
             content = departuresState.toWidgetContent(now),
         )
 
+    /** No [LiveDeparturesState] counterpart exists for this case — see
+     * [RoutineWidgetContent.NotificationsUnavailable]'s own doc. Still routed through the same
+     * routine-identity mapping as [map] so the routine name/station/direction stay visible
+     * alongside the honest explanation, rather than falling back to a blank screen. */
+    fun notificationsUnavailable(routine: CommuteRoutine): RoutineWidgetModel =
+        RoutineWidgetModel(
+            routineId = routine.id,
+            routineName = routine.name,
+            stationName = routine.siteName,
+            directionLabel = routine.destinationLabel,
+            content = RoutineWidgetContent.NotificationsUnavailable,
+        )
+
     private fun LiveDeparturesState.toWidgetContent(now: Instant): RoutineWidgetContent = when (this) {
         is LiveDeparturesState.Loading -> RoutineWidgetContent.Loading
         is LiveDeparturesState.Live -> {

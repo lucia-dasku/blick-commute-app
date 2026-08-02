@@ -277,6 +277,8 @@ class RoutineCreateViewModelTest {
         override suspend fun reconcile() {
             reconcileCallCount++
         }
+
+        override suspend fun showNotificationsUnavailable(routine: CommuteRoutine) = Unit
     }
 
     /** Minimal in-memory [AppSettingsDataStore] fake — see the identical fake in

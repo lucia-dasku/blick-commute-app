@@ -90,21 +90,29 @@ The last successful departure snapshot used for the `Stale` fallback is durably
 persisted (Room-backed, scoped to the routine's exact site/line/direction/mode) rather
 than held only in memory, so it survives the app's process being killed and recreated,
 and is shared between the foreground preview and the background notification loop.
-A home-screen widget (Jetpack Glance) now mirrors the routine details/notification
+A home-screen widget (Jetpack Glance) mirrors the routine details/notification
 information — routine, station and direction, next and following departure with a
 minute-only countdown recomputed at render time (never cached), and the same loading/
-stale/offline/unavailable/no-upcoming-departures states — updated only from
-`RoutineActiveWindowWorker`'s existing ~30-second loop and every routine-lifecycle
-mutation site (create/edit, enable/disable, pause/resume, delete, reboot
-reconciliation); Android's own widget-update scheduler is explicitly disabled
-(`updatePeriodMillis="0"`). Outside any active window it reads exactly "No active
-commute." Tapping it opens the routine details screen via the same navigation contract
-the notification's tap already uses.
-333 JVM `@Test` functions and 24 instrumented `@Test` functions exist in source as of
+stale/offline/unavailable/no-upcoming-departures states, plus a widget-only
+`NotificationsUnavailable` state so an active-but-blocked window is represented honestly
+rather than left on a placeholder forever — updated from
+`RoutineActiveWindowWorker`'s existing ~30-second loop, every one of that worker's exit
+paths that cannot continue an active commute, every routine-lifecycle mutation site
+(create/edit, enable/disable, pause/resume, delete, the notification's own Stop action,
+reboot reconciliation), and a freshly-placed widget instance's own first render; Android's
+own widget-update scheduler is explicitly disabled (`updatePeriodMillis="0"`). Live widget
+updates depend on notification availability by design — its only data source is the same
+worker loop the notification depends on. Outside any active window it reads exactly "No
+active commute." It responds to resizing (`SizeMode.Exact`) without clipping, and uses a
+theme-aware, readable background. Tapping it opens the routine details screen via the
+same navigation contract the notification's tap already uses.
+341 JVM `@Test` functions and 24 instrumented `@Test` functions exist in source as of
 this update, all passing in a fresh local `./gradlew testDebugUnitTest lintDebug
 assembleDebug connectedDebugAndroidTest` run (0 lint errors, 43 warnings, debug APK
-built, all instrumented tests run on a physical device) — see `android/README.md`'s
-Build section for the exact toolchain and test breakdown. A simple About screen (info
+built, all instrumented tests run on a physical device), and the widget's placement,
+resizing, live updates, and Stop-action behavior were manually verified on that same
+device — see `android/README.md`'s Build section for the exact toolchain and test
+breakdown. A simple About screen (info
 icon in the routine list's top app bar) now carries the Trafiklab.se attribution, and the
 routine details screen offers a deep-link (Android 16+ only) to Android's own per-app Live Update
 settings when promotion isn't currently eligible — see `android/README.md`'s Status

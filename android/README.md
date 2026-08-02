@@ -165,18 +165,38 @@ departure flagged the same way. `RoutineWidgetMapper` is the widget's exact coun
 to `RoutineNotificationMapper`, applying the identical expired-departure filter (a
 departure whose effective time has passed by render time is dropped, exactly like the
 notification) to the identical `LiveDeparturesState` input. `RoutineWidgetUpdater`
-(`updateWithDepartures`/`clear`/`reconcile`) is called from `RoutineActiveWindowWorker`'s
-existing ~30-second loop — right after the same tick's `RoutineNotifier.showOrUpdate`
-call, using the exact same already-fetched `CommuteRoutine`/`LiveDeparturesState` — and
-from its `finally` block (widget cleared exactly when the notification is removed); no
+(`updateWithDepartures`/`clear`/`reconcile`/`showNotificationsUnavailable`) is called
+from `RoutineActiveWindowWorker`'s existing ~30-second loop — right after the same
+tick's `RoutineNotifier.showOrUpdate` call, using the exact same already-fetched
+`CommuteRoutine`/`LiveDeparturesState` — and from every one of that worker's exit paths
+that cannot continue an active commute (missing/deleted/disabled routine, an elapsed or
+late-started window, notifications unavailable at startup or discovered mid-loop, and a
+handled failure before or during foreground execution), each mapped to whichever of
+`clear`/`reconcile`/`showNotificationsUnavailable` correctly represents that specific
+exit — see `RoutineActiveWindowWorker.doWork`'s own doc for the full enumeration; no
 second worker, timer, foreground service, or departure engine exists. Every other
-routine-lifecycle mutation (create/edit save, enable/disable, pause/resume, delete) and
+routine-lifecycle mutation (create/edit save, enable/disable, pause/resume, delete, the
+notification's own Stop action via `StopRoutineNotificationAction`) and
 `RoutineScheduleReconciler.reconcileAll()` (covering process start, device-timezone
 change, and reboot via `BootCompletedReceiver`) call `RoutineWidgetUpdater.reconcile()`,
 which reuses `NextOccurrenceCalculator` (the same active-window calculation the worker
-and scheduler already use) to decide the correct resulting state from scratch. Outside
-any active window the widget reads exactly **"No active commute."**
-(`R.string.widget_no_active_commute`). Tapping the widget opens the routine details
+and scheduler already use) to decide the correct resulting state from scratch — including
+checking `NotificationAvailabilityChecker` itself, so `reconcile()` reports
+`NotificationsUnavailable` rather than a misleading `Loading` placeholder for an active
+window whose notifications are blocked. `BlickRoutineWidgetReceiver` also calls
+`reconcile()` from its own `onUpdate` (in addition to, never instead of, Glance's own
+per-instance render from persisted state — see that class's own doc), specifically so a
+newly-placed widget instance derives its correct current state immediately instead of
+defaulting to "No active commute." until the next lifecycle event. Outside any active
+window the widget reads exactly **"No active commute."**
+(`R.string.widget_no_active_commute`). **Live widget updates depend on notification
+availability**, by design: the worker's loop — the widget's only data source, exactly
+like the notification — only runs while `NotificationAvailabilityChecker` reports
+`Available`, so if notifications are unavailable (permission missing, app disabled, or
+the Blick channel disabled) during an otherwise-active window, the widget shows
+`NotificationsUnavailable` instead of live departures; this is an accepted design
+tradeoff to avoid a second, notification-independent departure-fetching engine, not a
+platform limitation. Tapping the widget opens the routine details
 screen via `routineDetailsTapIntent`, reusing `MainActivity`'s existing
 `RoutineNotificationIds.EXTRA_ROUTINE_ID` navigation contract unchanged — the same one
 the notification's own tap already uses. All installed widget instances update together
@@ -186,12 +206,23 @@ provider (`res/xml/blick_routine_widget_info.xml`) sets `android:updatePeriodMil
 deliberately — Android's own widget-update scheduler is never used — and declares both
 the legacy (`minWidth`/`minHeight`/`minResizeWidth`/`minResizeHeight`) and Android 12+
 (`targetCellWidth`/`targetCellHeight`/`maxResizeWidth`/`maxResizeHeight`) sizing
-attributes for ordinary resizing on every supported launcher; `GlanceAppWidget`'s default
-`SizeMode.Exact` recomposes with the live exact size on every resize, so no fixed
-responsive-size set is declared. There is no widget configuration screen — with the
-existing first-beta one-routine limit, every instance simply mirrors whichever one
-routine is currently enabled. The existing notification and Android 16 Live Update
-behaviour is completely unchanged; disruptions remain out of scope for this milestone.
+attributes for ordinary resizing on every supported launcher; `BlickRoutineWidget`
+explicitly overrides `sizeMode` to `SizeMode.Exact` (`GlanceAppWidget`'s own default is
+`SizeMode.Single`, which does NOT recompose on resize — an earlier draft of this widget
+incorrectly assumed `Exact` was the default and shipped without the override, meaning it
+never actually responded to resizing; see this doc's own git history), so the layout
+reads the live exact size from `LocalSize` on every resize and adapts — below a height
+threshold the "following" departure row and stale/no-upcoming explanatory text are
+dropped rather than clipped — with a `GlanceTheme` + the bundled
+`androidx.glance.appwidget.components.Scaffold` providing a theme-aware, readable
+background (`GlanceTheme.colors.widgetBackground`, proper `appWidgetBackground()`
+marking, Android-12+ system corner radius) and explicit `GlanceTheme.colors.onBackground`/
+`onSurfaceVariant` text colors, since `Text`'s own default color is a fixed black that
+would be unreadable against a dark theme background. There is no widget configuration
+screen — with the existing first-beta one-routine limit, every instance simply mirrors
+whichever one routine is currently enabled. The existing notification and Android 16
+Live Update behaviour is completely unchanged; disruptions remain out of scope for this
+milestone.
 
 ## Pinned versions and why
 
@@ -276,9 +307,12 @@ bump them there as needed.
 - **The home-screen widget has no configuration screen and shows one shared state across
   every placed instance** — with the existing first-beta one-routine limit, there is only
   ever one routine to show, so every instance simply mirrors it (or "No active commute.");
-  this would need revisiting if the one-routine limit is ever lifted. Its actual on-screen
-  rendering has also not been visually confirmed on a real launcher — see the Full
-  verification pass section's own note on why.
+  this would need revisiting if the one-routine limit is ever lifted.
+- **Live widget updates depend on notification availability** (see the Status section
+  above) — this is an accepted design tradeoff, not a bug, but worth restating here: if
+  notifications are unavailable during an active window, the widget shows
+  `NotificationsUnavailable` rather than live departures, since its only data source is
+  the same worker loop the notification depends on.
 
 ## Pointing at a deployed backend
 
@@ -431,8 +465,12 @@ the Status section above for the full design), adding 53 further JVM `@Test` fun
 active/inactive reconciliation transitions, Preferences round-trip persistence, tap-intent
 contents, and every routine-lifecycle call site's widget-update/reconcile wiring) with no
 further instrumented tests (all widget tests are plain JVM, matching this project's
-stated preference — see `libs.versions.toml`'s `robolectric` entry), reaching the 333
-JVM / 24 instrumented total stated below — see
+stated preference — see `libs.versions.toml`'s `robolectric` entry), reaching 333
+JVM / 24 instrumented. A final re-audit session then fixed the widget lifecycle/visual
+gaps described in "Widget re-audit and correction" below (Stop-action wiring, every
+worker exit path, the `NotificationsUnavailable` state, responsive sizing, and the
+readable theme background) and added 8 further JVM `@Test` functions with no further
+instrumented ones, reaching the 341 JVM / 24 instrumented total stated below — see
 `../docs/Blick_Project_Documentation.md`'s "Validation status" note for the full account
 of each.
 
@@ -455,7 +493,7 @@ clone builds without Android Studio or a pre-existing local Gradle install.
 
 A complete local run — `testDebugUnitTest`, `lintDebug`, `assembleDebug`, and
 `connectedDebugAndroidTest` on the physical Lenovo TB350FU (Android 14) referenced
-above — has since been completed, using Android Studio's own bundled JDK. All 333 JVM
+above — has since been completed, using Android Studio's own bundled JDK. All 341 JVM
 `@Test` functions and all 24 instrumented `@Test` functions pass; `lintDebug` reports 0
 errors (43 warnings: two expected, already-guarded `InlinedApi` findings — the
 API-36 `ACTION_APP_NOTIFICATION_PROMOTION_SETTINGS` deep-link and the API-33
@@ -468,20 +506,36 @@ and installs; and the ongoing-notification
 loop, the routine details live-preview, and full routine management were all exercised
 manually on that same device.
 
-**Widget verification limitation, stated plainly:** installing the debug APK on that
-same device confirmed the widget provider registers correctly with the system launcher
-(it appears in the launcher's own widget picker as "Blick", correct 2×1 declared size,
-correct app icon, and the exact `widget_description` string rendered by the OS from the
-provider XML) — but placing the widget onto a home screen to visually confirm its actual
-rendered content (the "No active commute." idle state, and a live departures state) was
-not achieved: this device's OEM launcher (Lenovo's `TabUILauncher`) did not respond to
-scripted drag-and-drop widget placement (`adb shell input draganddrop`) the way the
-stock Pixel Launcher does, and manually placing a widget requires touch interaction this
-verification pass could not perform. The widget's actual UI code was therefore verified
-by compilation, lint, and its full JVM test suite (mapping, countdown, filtering,
-persistence round-trip, and tap-intent contents) — not by eyes-on confirmation of pixels
-on a real launcher. This should be confirmed manually (place the widget, watch it through
-a real active window) before relying on its visual output.
+**Widget re-audit and correction, since verified end to end on-device:** an earlier pass
+of this widget shipped with several real lifecycle/visual gaps — `StopRoutineNotificationAction`
+never touched the widget, several `RoutineActiveWindowWorker` exit paths (missing/deleted/
+disabled routine, an elapsed window, notifications unavailable at startup, and a failure
+before foreground entry) left it stale, notifications-unavailable-while-active left it on
+`Loading` forever instead of saying so honestly, `GlanceAppWidget`'s actual default
+`SizeMode.Single` (not `Exact`, as an earlier draft incorrectly assumed) meant it never
+responded to resizing at all, and its default un-themed text color would have been
+unreadable against a themed background. All of these were fixed (see the Status section
+above for the design of each) and covered by 8 further JVM `@Test` functions (341 JVM /
+24 instrumented total). Because this device's OEM launcher (Lenovo's `TabUILauncher`) does
+not respond to scripted `adb shell input draganddrop`/resize-handle gestures, placement
+and resizing were performed by hand on the physical device rather than scripted, with
+`adb`-driven screenshots and `dumpsys appwidget` confirming each step: the widget placed
+successfully via the launcher's own widget picker; a freshly-placed instance immediately
+rendered live departure data (the `BlickRoutineWidgetReceiver.onUpdate` → `reconcile()`
+fix, rather than defaulting to "No active commute." until the next lifecycle event); its
+countdown visibly ticked down in step with the existing ~30-second worker loop across
+repeated screenshots; it was resized (confirmed both by the launcher's visible resize
+handles and directly by the person performing the resize) without any clipping, readable
+throughout against its themed `Scaffold` background; and tapping the notification's Stop
+action both removed the notification and reconciled the widget to "No active commute."
+immediately. The one sub-case not reachable on this specific device is deliberately
+noted rather than glossed over: this launcher's minimum resize grid step never went below
+roughly 145dp in testing, comfortably above the 110dp height threshold below which the
+widget drops its "following" departure row — so that specific compact-layout branch was
+exercised by reasoning about the measured widget height against the threshold, not by
+direct visual observation of the row disappearing; it remains covered in principle by the
+same `SizeMode.Exact`/`LocalSize` mechanism confirmed working for every other resize
+observed.
 
 Actually compiling and running the 65 JVM / 3 instrumented tests that had only existed
 as source (see above) surfaced three genuine issues, all now fixed:

@@ -43,6 +43,19 @@ sealed interface RoutineWidgetContent {
     data class NoUpcomingDepartures(val lastCheckedAt: Instant) : RoutineWidgetContent
     data object Offline : RoutineWidgetContent
     data object Unavailable : RoutineWidgetContent
+
+    /**
+     * No [se.blick.app.domain.usecase.LiveDeparturesState] counterpart — this is a widget-only
+     * case, distinct from [Unavailable] (a departure *fetch* failure). It means the routine's
+     * active window is genuinely open right now, but [se.blick.app.scheduling.RoutineActiveWindowWorker]
+     * never even started (or stopped) its departure-fetching loop because notifications are
+     * unavailable (permission missing, app disabled, or the Blick channel disabled) — see that
+     * worker's own doc. Live widget updates currently depend on notification availability,
+     * because the worker's loop (the widget's only data source — see [RoutineWidgetUpdater]) is
+     * itself gated on it; this state exists specifically so the widget says so honestly instead
+     * of being left showing [Loading] forever.
+     */
+    data object NotificationsUnavailable : RoutineWidgetContent
 }
 
 data class WidgetDepartureRow(

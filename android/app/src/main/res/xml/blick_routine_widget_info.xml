@@ -5,9 +5,10 @@
     RoutineWidgetUpdater, driven only by RoutineActiveWindowWorker's existing ~30-second loop and
     the routine-lifecycle call sites listed on RoutineWidgetUpdater.reconcile — see that
     interface's own doc. android:resizeMode="horizontal|vertical" plus the min/target/max
-    dimensions below support ordinary resizing on every launcher; GlanceAppWidget's default
-    SizeMode.Exact (see BlickRoutineWidget) recomposes with the live exact size on every resize,
-    so no fixed responsive-size set is declared.
+    dimensions below support ordinary resizing on every launcher; BlickRoutineWidget explicitly
+    overrides sizeMode to SizeMode.Exact (NOT GlanceAppWidget's own default, which is
+    SizeMode.Single and would not recompose on resize) so the layout recomposes with the live
+    exact size on every resize, with no fixed responsive-size set declared here.
 -->
 <appwidget-provider xmlns:android="http://schemas.android.com/apk/res/android"
     android:minWidth="180dp"

@@ -92,4 +92,30 @@ class RoutineWidgetReconcilerTest {
         assertTrue(state is RoutineWidgetUiState.ActiveRoutine)
         assertEquals("enabled", (state as RoutineWidgetUiState.ActiveRoutine).model.routineId)
     }
+
+    // ---- notificationsAvailable -- a freshly-reconciled widget must not default to Loading
+    // forever when the worker's loop (its only data source) cannot run ----
+
+    @Test
+    fun `an active window with notifications available defaults to Loading, same as before`() {
+        val state = decideReconciledWidgetState(listOf(routine()), activeNow, notificationsAvailable = true)
+        assertTrue(state is RoutineWidgetUiState.ActiveRoutine)
+        assertEquals(RoutineWidgetContent.Loading, (state as RoutineWidgetUiState.ActiveRoutine).model.content)
+    }
+
+    @Test
+    fun `an active window with notifications unavailable reports NotificationsUnavailable, not Loading or NoActiveCommute`() {
+        val r = routine()
+        val state = decideReconciledWidgetState(listOf(r), activeNow, notificationsAvailable = false)
+        assertTrue(state is RoutineWidgetUiState.ActiveRoutine)
+        state as RoutineWidgetUiState.ActiveRoutine
+        assertEquals(r.id, state.model.routineId)
+        assertEquals(RoutineWidgetContent.NotificationsUnavailable, state.model.content)
+    }
+
+    @Test
+    fun `notifications unavailable outside any active window is still NoActiveCommute`() {
+        val state = decideReconciledWidgetState(listOf(routine()), outsideWindow, notificationsAvailable = false)
+        assertEquals(RoutineWidgetUiState.NoActiveCommute, state)
+    }
 }

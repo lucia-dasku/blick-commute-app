@@ -3,6 +3,7 @@ package se.blick.app.notification
 import se.blick.app.data.repository.RoutineRepository
 import se.blick.app.scheduling.DeviceZoneProvider
 import se.blick.app.scheduling.RoutineScheduler
+import se.blick.app.widget.RoutineWidgetUpdater
 import java.time.Clock
 import java.time.ZonedDateTime
 import javax.inject.Inject
@@ -21,9 +22,10 @@ import javax.inject.Singleton
  * — writing [se.blick.app.domain.model.CommuteRoutine.pausedDate] to today's date — rather than
  * inventing a separate mechanism. [RoutineActiveWindowWorker][se.blick.app.scheduling.RoutineActiveWindowWorker]
  * already re-reads the routine on every ~30-second loop tick and breaks out once
- * `pausedDate == today`, so this alone stops that loop (and, via its own `finally`, removes the
- * notification) within one tick. [RoutineNotifier.remove] is still called directly here too, so
- * the notification disappears immediately on tap rather than up to 30 seconds later.
+ * `pausedDate == today`, so this alone stops that loop (and, via its own `finally`, clears the
+ * notification and the widget) within one tick. [RoutineNotifier.remove] and
+ * [RoutineWidgetUpdater.reconcile] are still called directly here too, so the notification and
+ * the widget both update immediately on tap rather than up to 30 seconds later.
  *
  * "Today" is deliberately resolved from [clock] combined with [deviceZoneProvider]'s CURRENT
  * zone (mirroring the worker's own `zonedNow()`), never a zone-less `LocalDate.now(clock)` —
@@ -35,6 +37,7 @@ class StopRoutineNotificationAction @Inject constructor(
     private val routineRepository: RoutineRepository,
     private val routineScheduler: RoutineScheduler,
     private val routineNotifier: RoutineNotifier,
+    private val routineWidgetUpdater: RoutineWidgetUpdater,
     private val clock: Clock,
     private val deviceZoneProvider: DeviceZoneProvider,
 ) {
@@ -46,5 +49,9 @@ class StopRoutineNotificationAction @Inject constructor(
             routineScheduler.scheduleActivation(routine.copy(pausedDate = today))
         }
         routineNotifier.remove()
+        // reconcile(), not clear(): correctly handles both "routine existed and just got
+        // paused" and "routine was already deleted out from under this action" from scratch,
+        // without an extra null-check branch here (see RoutineWidgetUpdater.reconcile's own doc).
+        routineWidgetUpdater.reconcile()
     }
 }

@@ -51,6 +51,7 @@ import java.time.Instant
 import java.time.LocalTime
 import java.time.ZoneId
 import java.time.ZoneOffset
+import java.time.ZonedDateTime
 import java.util.UUID
 
 /**
@@ -178,12 +179,14 @@ class RoutineActiveWindowWorkerTest {
         }
     }
 
-    /** Records every widget-update/clear call — for proving each loop tick updates the widget
-     * with the exact same [CommuteRoutine]/[LiveDeparturesState] already fetched for the
-     * notification (no separate fetch), and that the `finally` block clears the widget exactly
-     * when [RoutineNotifier.remove] also runs. */
+    /** Records every widget-update/clear/reconcile/showNotificationsUnavailable call — for
+     * proving each loop tick updates the widget with the exact same
+     * [CommuteRoutine]/[LiveDeparturesState] already fetched for the notification (no separate
+     * fetch), and that every exit path that cannot continue an active commute touches the widget
+     * exactly once, with the right method. */
     private class RecordingWidgetUpdater : RoutineWidgetUpdater {
         val updateCalls = mutableListOf<Pair<CommuteRoutine, LiveDeparturesState>>()
+        val notificationsUnavailableCalls = mutableListOf<CommuteRoutine>()
         var clearCallCount = 0
         var reconcileCallCount = 0
         override suspend fun updateWithDepartures(routine: CommuteRoutine, departuresState: LiveDeparturesState, now: Instant) {
@@ -195,6 +198,9 @@ class RoutineActiveWindowWorkerTest {
         override suspend fun reconcile() {
             reconcileCallCount++
         }
+        override suspend fun showNotificationsUnavailable(routine: CommuteRoutine) {
+            notificationsUnavailableCalls += routine
+        }
     }
 
     private class RecordingScheduler : RoutineScheduler {
@@ -203,6 +209,25 @@ class RoutineActiveWindowWorkerTest {
             scheduledRoutines += routine
         }
         override fun cancelActivation(routineId: String) = Unit
+    }
+
+    /** Proves the worker never asks [RoutineScheduler] to reschedule an occurrence that is
+     * STILL [NextOccurrence.ActiveNow] right now -- exactly reproducing
+     * [WorkManagerRoutineScheduler]'s own `excludedDate = routine.pausedDate` calculation against
+     * the single [CommuteRoutine] that was actually scheduled, using the real occurrence
+     * calculator rather than asserting on [RoutineActiveWindowWorker]'s private implementation
+     * detail. If this failed, [WorkManagerRoutineScheduler] would enqueue that occurrence with a
+     * ZERO initial delay, and the worker would immediately re-run and hit the same condition
+     * again -- a tight zero-delay rescheduling loop. */
+    private fun assertNoZeroDelayReschedule(scheduler: RecordingScheduler, clock: TickingClock) {
+        assertEquals(1, scheduler.scheduledRoutines.size)
+        val scheduled = scheduler.scheduledRoutines.single()
+        val now = ZonedDateTime.ofInstant(clock.instant, zone)
+        val occurrence = NextOccurrenceCalculator.nextOccurrence(scheduled, now, excludedDate = scheduled.pausedDate)
+        assertTrue(
+            "expected the rescheduled occurrence to skip today's still-open window, but got $occurrence",
+            occurrence !is NextOccurrence.ActiveNow,
+        )
     }
 
     /** Settable fake — see [NotificationAvailabilityChecker]'s own doc for why this is the one
@@ -286,7 +311,8 @@ class RoutineActiveWindowWorkerTest {
             .build()
 
     @Test
-    fun `returns failure when the routine id is missing from input data`() = runTest {
+    fun `returns failure and reconciles the widget when the routine id is missing from input data`() = runTest {
+        val widgetUpdater = RecordingWidgetUpdater()
         val worker = TestListenableWorkerBuilder<RoutineActiveWindowWorker>(context)
             .setWorkerFactory(object : WorkerFactory() {
                 override fun createWorker(appContext: Context, workerClassName: String, workerParameters: WorkerParameters) =
@@ -298,7 +324,7 @@ class RoutineActiveWindowWorkerTest {
                         FakeStaleSnapshotRepository(),
                         RecordingNotifier(),
                         notificationBuilder,
-                        RecordingWidgetUpdater(),
+                        widgetUpdater,
                         RecordingScheduler(),
                         FakeNotificationAvailabilityChecker(),
                         Clock.systemUTC(),
@@ -309,13 +335,15 @@ class RoutineActiveWindowWorkerTest {
 
         val result = worker.doWork()
         assertTrue(result is ListenableWorker.Result.Failure)
+        assertEquals(1, widgetUpdater.reconcileCallCount)
     }
 
     @Test
-    fun `does nothing and succeeds when the routine no longer exists`() = runTest {
+    fun `does nothing, succeeds, and reconciles the widget when the routine no longer exists`() = runTest {
         val clock = TickingClock(Instant.parse("2026-07-27T05:00:00Z"), zone)
         val repository = ScriptedRoutineRepository(clock) { null }
         val notifier = RecordingNotifier()
+        val widgetUpdater = RecordingWidgetUpdater()
 
         val worker = buildWorker(
             "r1",
@@ -324,15 +352,48 @@ class RoutineActiveWindowWorkerTest {
             notifier,
             RecordingScheduler(),
             clock,
+            widgetUpdater = widgetUpdater,
         )
         val result = worker.doWork()
 
         assertTrue(result is ListenableWorker.Result.Success)
         assertTrue(notifier.shown.isEmpty())
+        // Deleted (or never existed) -- the widget must not keep showing a routine that no
+        // longer exists, so reconcile() (not clear()) recomputes the correct state from scratch.
+        assertEquals(1, widgetUpdater.reconcileCallCount)
     }
 
     @Test
-    fun `a routine outside its window (late start) is skipped and rescheduled without posting`() = runTest {
+    fun `a disabled routine is skipped, rescheduled, and reconciles the widget`() = runTest {
+        val clock = TickingClock(Instant.parse("2026-07-27T05:00:00Z"), zone)
+        val disabledRoutine = routine(enabled = false)
+        val repository = ScriptedRoutineRepository(clock) { disabledRoutine }
+        val notifier = RecordingNotifier()
+        val scheduler = RecordingScheduler()
+        val widgetUpdater = RecordingWidgetUpdater()
+
+        val worker = buildWorker(
+            disabledRoutine.id,
+            repository,
+            GetLiveDeparturesUseCase(FakeDepartureRepository { error("unused") }, clock),
+            notifier,
+            scheduler,
+            clock,
+            widgetUpdater = widgetUpdater,
+        )
+        val result = worker.doWork()
+
+        assertTrue(result is ListenableWorker.Result.Success)
+        assertTrue(notifier.shown.isEmpty())
+        // A disabled routine is never rescheduled by this run (RoutineScheduler's own callers
+        // handle re-enabling); the widget must still be reconciled so it doesn't keep showing a
+        // now-disabled routine as active.
+        assertTrue(scheduler.scheduledRoutines.isEmpty())
+        assertEquals(1, widgetUpdater.reconcileCallCount)
+    }
+
+    @Test
+    fun `a routine outside its window (late start) is skipped, rescheduled without posting, and reconciles the widget`() = runTest {
         // Window is 07:00-07:02, but the ticking clock starts at 08:00 -- WorkManager ran this
         // far later than intended (or it was somehow enqueued too early); either way this
         // occurrence is stale.
@@ -341,6 +402,7 @@ class RoutineActiveWindowWorkerTest {
         val repository = ScriptedRoutineRepository(clock) { routine }
         val notifier = RecordingNotifier()
         val scheduler = RecordingScheduler()
+        val widgetUpdater = RecordingWidgetUpdater()
 
         val worker = buildWorker(
             routine.id,
@@ -349,12 +411,14 @@ class RoutineActiveWindowWorkerTest {
             notifier,
             scheduler,
             clock,
+            widgetUpdater = widgetUpdater,
         )
         val result = worker.doWork()
 
         assertTrue(result is ListenableWorker.Result.Success)
         assertTrue(notifier.shown.isEmpty())
         assertEquals(1, scheduler.scheduledRoutines.size)
+        assertEquals(1, widgetUpdater.reconcileCallCount)
     }
 
     @Test
@@ -442,12 +506,13 @@ class RoutineActiveWindowWorkerTest {
     }
 
     @Test
-    fun `notifications unavailable -- the widget is never updated and never cleared`() = runTest {
+    fun `notifications unavailable at startup -- the widget is never updated, never cleared, but shown honestly, and today is skipped when rescheduling`() = runTest {
         val clock = TickingClock(Instant.parse("2026-07-27T05:00:00Z"), zone)
         val routine = routine()
         val repository = ScriptedRoutineRepository(clock) { routine }
         val notifier = RecordingNotifier()
         val widgetUpdater = RecordingWidgetUpdater()
+        val scheduler = RecordingScheduler()
         val checker = FakeNotificationAvailabilityChecker(NotificationAvailability.AppDisabled)
 
         val worker = buildWorker(
@@ -455,7 +520,7 @@ class RoutineActiveWindowWorkerTest {
             repository,
             GetLiveDeparturesUseCase(FakeDepartureRepository { error("unused") }, clock),
             notifier,
-            RecordingScheduler(),
+            scheduler,
             clock,
             notificationAvailabilityChecker = checker,
             widgetUpdater = widgetUpdater,
@@ -466,6 +531,10 @@ class RoutineActiveWindowWorkerTest {
         // enteredForeground never became true (see notifier.removeCallCount's own assertion
         // elsewhere), so the widget-clear in the same `finally` never ran either.
         assertEquals(0, widgetUpdater.clearCallCount)
+        // The window IS genuinely active here -- the widget must say so honestly instead of
+        // being left on Loading forever, or silently reverting to "No active commute."
+        assertEquals(listOf(routine.id), widgetUpdater.notificationsUnavailableCalls.map { it.id })
+        assertNoZeroDelayReschedule(scheduler, clock)
     }
 
     @Test
@@ -519,12 +588,13 @@ class RoutineActiveWindowWorkerTest {
     }
 
     @Test
-    fun `notifications becoming unavailable mid-run stops the loop early and reschedules`() = runTest {
+    fun `notifications becoming unavailable mid-run stops the loop early, reschedules, and shows the widget honestly instead of clearing it`() = runTest {
         val clock = TickingClock(Instant.parse("2026-07-27T05:00:00Z"), zone)
         val enabledRoutine = routine()
         val repository = ScriptedRoutineRepository(clock) { enabledRoutine }
         val notifier = RecordingNotifier()
         val scheduler = RecordingScheduler()
+        val widgetUpdater = RecordingWidgetUpdater()
         val departures = FakeDepartureRepository { DeparturesResult(clock.instant(), 9145, listOf(sampleDeparture()), emptyList()) }
         // Call index 0 is the pre-loop check in doWork(), call index 1 is the first tick's
         // re-check (still available) -- then AppDisabled from the second tick's re-check
@@ -541,12 +611,19 @@ class RoutineActiveWindowWorkerTest {
             scheduler,
             clock,
             notificationAvailabilityChecker = checker,
+            widgetUpdater = widgetUpdater,
         )
         worker.doWork()
 
         assertEquals(1, notifier.shown.size) // only the one tick before notifications became unavailable
         assertEquals(1, notifier.removeCallCount)
         assertEquals(1, scheduler.scheduledRoutines.size)
+        // The window is still genuinely open -- the `finally` must show the honest
+        // "notifications unavailable" state here, NOT clear() (which would falsely claim there's
+        // no active commute at all).
+        assertEquals(0, widgetUpdater.clearCallCount)
+        assertEquals(listOf(enabledRoutine.id), widgetUpdater.notificationsUnavailableCalls.map { it.id })
+        assertNoZeroDelayReschedule(scheduler, clock)
     }
 
     @Test
@@ -659,12 +736,13 @@ class RoutineActiveWindowWorkerTest {
     // ---- Notification availability checked before foreground execution (Fix 2) ----
 
     @Test
-    fun `runtime permission missing -- never enters the loop, never removes, still reschedules`() = runTest {
+    fun `runtime permission missing -- never enters the loop, never removes, still reschedules, shows the widget honestly`() = runTest {
         val clock = TickingClock(Instant.parse("2026-07-27T05:00:00Z"), zone)
         val routine = routine()
         val repository = ScriptedRoutineRepository(clock) { routine }
         val notifier = RecordingNotifier()
         val scheduler = RecordingScheduler()
+        val widgetUpdater = RecordingWidgetUpdater()
         val checker = FakeNotificationAvailabilityChecker(NotificationAvailability.PermissionMissing)
 
         val worker = buildWorker(
@@ -675,6 +753,7 @@ class RoutineActiveWindowWorkerTest {
             scheduler,
             clock,
             notificationAvailabilityChecker = checker,
+            widgetUpdater = widgetUpdater,
         )
         val result = worker.doWork()
 
@@ -684,6 +763,7 @@ class RoutineActiveWindowWorkerTest {
         // so remove() (only called in the `finally` guarded by that flag) never ran either.
         assertEquals(0, notifier.removeCallCount)
         assertEquals(1, scheduler.scheduledRoutines.size)
+        assertEquals(listOf(routine.id), widgetUpdater.notificationsUnavailableCalls.map { it.id })
     }
 
     @Test
@@ -773,12 +853,13 @@ class RoutineActiveWindowWorkerTest {
     // ---- Handled terminal failures still clean up and reschedule (Fix 2) ----
 
     @Test
-    fun `a failure building the foreground notification is handled -- no loop, no crash, still reschedules`() = runTest {
+    fun `a failure building the foreground notification is handled -- no loop, no crash, still reschedules, reconciles the widget`() = runTest {
         val clock = TickingClock(Instant.parse("2026-07-27T05:00:00Z"), zone)
         val routine = routine()
         val repository = ScriptedRoutineRepository(clock) { routine }
         val notifier = RecordingNotifier()
         val scheduler = RecordingScheduler()
+        val widgetUpdater = RecordingWidgetUpdater()
         val failingBuilder = mockk<RoutineNotificationBuilder>()
         every { failingBuilder.build(any()) } throws RuntimeException("boom during foreground setup")
 
@@ -790,6 +871,7 @@ class RoutineActiveWindowWorkerTest {
             scheduler,
             clock,
             notificationBuilder = failingBuilder,
+            widgetUpdater = widgetUpdater,
         )
         val result = worker.doWork()
 
@@ -799,10 +881,16 @@ class RoutineActiveWindowWorkerTest {
         // stayed false, so remove() (finally-guarded by that flag) never ran.
         assertEquals(0, notifier.removeCallCount)
         assertEquals(1, scheduler.scheduledRoutines.size)
+        // enteredForeground being false takes the finally's `else` branch: this run never
+        // posted anything for the widget to clear, so it reconciles instead, so the widget
+        // doesn't keep showing stale content from before this run started.
+        assertEquals(1, widgetUpdater.reconcileCallCount)
+        assertEquals(0, widgetUpdater.clearCallCount)
+        assertNoZeroDelayReschedule(scheduler, clock)
     }
 
     @Test
-    fun `an unexpected failure updating the notification mid-loop is handled -- cleans up and reschedules`() = runTest {
+    fun `an unexpected failure updating the notification mid-loop is handled -- cleans up, reschedules, and skips today (no zero-delay loop)`() = runTest {
         val clock = TickingClock(Instant.parse("2026-07-27T05:00:00Z"), zone)
         val routine = routine()
         val repository = ScriptedRoutineRepository(clock) { routine }
@@ -828,6 +916,7 @@ class RoutineActiveWindowWorkerTest {
         // still removes the notification despite the mid-loop failure.
         assertEquals(1, notifier.removeCallCount)
         assertEquals(1, scheduler.scheduledRoutines.size)
+        assertNoZeroDelayReschedule(scheduler, clock)
     }
 
     // ---- Real cancellation never resurrects obsolete work (Fix 2) ----

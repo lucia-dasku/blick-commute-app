@@ -5,11 +5,11 @@
 **Document status:** Android-first MVP specification — see "Current implementation
 status" immediately below for what already exists in this repository versus what the
 rest of this document specifies as still planned.  
-**Updated:** 1 August 2026
+**Updated:** 2 August 2026
 
 ---
 
-## Current implementation status (as of 1 August 2026)
+## Current implementation status (as of 2 August 2026)
 
 This document specifies the full intended product. Most of the sections below describe
 that end-state design in the present tense, as a specification does — they are **not**
@@ -18,7 +18,7 @@ what is actually built today; where the two disagree, this section wins.
 
 **Validation status of this update, stated plainly up front:** a complete local run —
 `testDebugUnitTest`, `lintDebug`, `assembleDebug`, and `connectedDebugAndroidTest` on a
-physical Lenovo TB350FU (Android 14) — has now passed in full: all 333 JVM `@Test`
+physical Lenovo TB350FU (Android 14) — has now passed in full: all 341 JVM `@Test`
 functions and all 24 instrumented `@Test` functions, `lintDebug` with 0 errors (43
 warnings: two expected, already-guarded `InlinedApi` findings — the API-36
 `ACTION_APP_NOTIFICATION_PROMOTION_SETTINGS` deep-link and the API-33
@@ -27,10 +27,10 @@ on the widget provider XML's Android-12+-only sizing attributes, kept alongside 
 legacy fallbacks deliberately), and a working debug APK,
 with the ongoing-notification loop, routine details live-preview, and full routine
 management additionally exercised manually on that same device. **The home-screen
-widget's own on-screen rendering has not yet been visually confirmed** — see
-`android/README.md`'s Full verification pass section for exactly why and what was
-confirmed instead (provider registration, description, icon, and declared size, plus its
-full JVM test suite).
+widget's placement, resizing, live updates, and Stop-action behavior have since been
+manually confirmed on that same device** — see `android/README.md`'s Full verification
+pass section, "Widget re-audit and correction," for the full account, including the one
+compact-layout sub-case this device's launcher grid couldn't directly exercise.
 
 Getting there took three work sessions of source beyond the earlier 193-JVM-test
 baseline. First: the FAB restoration, the Routine Details 30-second auto-refresh, the
@@ -110,8 +110,22 @@ counterpart to `RoutineNotificationMapper`, reusing the same `LiveDeparturesStat
 routine-lifecycle mutation site — no second worker, timer, foreground service, or
 departure engine), and `BlickRoutineWidget` (Jetpack Glance, `updatePeriodMillis="0"` so
 Android's own widget-update scheduler is never used). This added 53 further JVM `@Test`
-functions with no further instrumented ones, bringing the fully verified total to 333
-JVM / 24 instrumented, stated above.
+functions with no further instrumented ones, reaching 333 JVM / 24 instrumented. A final
+re-audit session then fixed several real lifecycle/visual gaps in that first widget
+implementation: `StopRoutineNotificationAction` never reconciled the widget; several
+worker exit paths (missing/deleted/disabled routine, an elapsed window, notifications
+unavailable at startup, a handled failure) left it stale instead of clearing or
+reconciling it; a window that was active but had notifications blocked left the widget on
+`Loading` forever instead of saying so; a routine's own rescheduling after such a case
+could ask `WorkManagerRoutineScheduler` to immediately re-enqueue the SAME still-open
+occurrence with a zero delay, risking a tight retry loop; a freshly-placed widget instance
+defaulted to "No active commute." until the next lifecycle event instead of deriving its
+real current state immediately; `GlanceAppWidget`'s actual default `SizeMode.Single` (not
+`Exact`, as first assumed) meant it never responded to resizing; and its default
+un-themed text color would have been unreadable against a themed background. All fixed —
+see "Home-screen widget" below for the design of each — and covered by 8 further JVM
+`@Test` functions, bringing the fully verified total to 341 JVM / 24 instrumented, stated
+above.
 
 **Implemented today (Android client + backend):**
 
@@ -246,13 +260,19 @@ JVM / 24 instrumented, stated above.
   reuses every existing piece rather than building a second departure engine:
   `RoutineWidgetMapper` mirrors `RoutineNotificationMapper` exactly (same
   `LiveDeparturesState` input, same `countdownMinutes` recomputation, same
-  expired-departure filtering), and `RoutineWidgetUpdater` is driven only by
-  `RoutineActiveWindowWorker`'s existing ~30-second loop plus every routine-lifecycle
-  mutation site — no second worker, timer, foreground service, or refresh mechanism.
-  Android's own widget-update scheduler is explicitly disabled
-  (`updatePeriodMillis="0"`). Its actual on-screen rendering has not yet been visually
-  confirmed on a real launcher — see `android/README.md`'s Full verification pass
-  section for why, and for the complete design account.
+  expired-departure filtering), and `RoutineWidgetUpdater` is driven by
+  `RoutineActiveWindowWorker`'s existing ~30-second loop, every one of that worker's exit
+  paths that cannot continue an active commute, every routine-lifecycle mutation site
+  (including the notification's own Stop action), and a freshly-placed widget instance's
+  own first render — no second worker, timer, foreground service, or refresh mechanism.
+  Live widget updates depend on notification availability by design: when a window is
+  active but notifications are blocked, the widget shows a dedicated
+  `NotificationsUnavailable` state rather than a misleading placeholder. Android's own
+  widget-update scheduler is explicitly disabled (`updatePeriodMillis="0"`); the widget
+  responds to resizing (`SizeMode.Exact`) without clipping, against a theme-aware
+  readable background. Its placement, resizing, live updates, and Stop-action behavior
+  have been manually confirmed on a real launcher — see `android/README.md`'s Full
+  verification pass section for the complete account.
 
 **Not yet implemented** (described in the sections below purely as the plan):
 
@@ -542,21 +562,33 @@ that every device grants it.
 ### Home-screen widget
 
 Implemented (`widget/BlickRoutineWidget`, Jetpack Glance — see "Current implementation
-status" above and `android/README.md`'s Status section for the full account; its actual
-on-screen rendering has not yet been visually confirmed, only its provider registration,
-compilation, and full JVM test suite — see `android/README.md`'s Full verification pass
-section). Shows the saved routine's name, station, and direction; the next and following
+status" above and `android/README.md`'s Status section for the full account; its
+placement, resizing, live updates, and Stop-action behavior have been manually confirmed
+on a real launcher — see `android/README.md`'s Full verification pass section). Shows the
+saved routine's name, station, and direction; the next and following
 departure as a minute-only countdown recomputed at render time (never a fixed or cached
 value, reusing the exact same `countdownMinutes` function and expired-departure filter
 the notification uses); and the same loading/live/stale/offline/unavailable/
-no-upcoming-departures states, with a cancelled departure flagged the same way. Outside
+no-upcoming-departures states, with a cancelled departure flagged the same way, plus a
+widget-only `NotificationsUnavailable` state (no notification counterpart) shown when a
+window is active but notifications are blocked — live widget updates depend on
+notification availability by design, since the worker's loop is the widget's only data
+source, exactly like the notification. Outside
 any active window it reads exactly "No active commute." Tapping it opens the routine
 details screen, reusing `MainActivity`'s existing notification-tap navigation contract
-unchanged. Updated only from `RoutineActiveWindowWorker`'s existing ~30-second active-
-window loop and from every routine-lifecycle mutation (create/edit, enable/disable,
-pause/resume, delete, and reboot/timezone/process-start reconciliation) — no second
+unchanged. Updated from `RoutineActiveWindowWorker`'s existing ~30-second active-
+window loop, every one of that worker's exit paths that cannot continue an active commute
+(missing/deleted/disabled routine, an elapsed window, notifications unavailable at
+startup or discovered mid-loop, a handled failure before or during foreground execution),
+every routine-lifecycle mutation (create/edit, enable/disable, pause/resume, delete, the
+notification's own Stop action, and reboot/timezone/process-start reconciliation), and a
+freshly-placed widget instance's own first render — no second
 worker, timer, foreground service, or departure-fetching engine, and Android's own
-widget-update scheduler is explicitly disabled (`updatePeriodMillis="0"`). All installed
+widget-update scheduler is explicitly disabled (`updatePeriodMillis="0"`). Explicitly
+overrides `SizeMode.Exact` (`GlanceAppWidget`'s own default, `SizeMode.Single`, would not
+respond to resizing) so the layout adapts to the widget's live size without clipping,
+dropping the following-departure row below a height threshold, against a theme-aware
+readable background. All installed
 widget instances update together; there is no per-instance configuration screen, since
 the existing first-beta one-routine limit means every instance has only one possible
 routine to show.
@@ -690,8 +722,12 @@ silent-failure fallback case (`launchLiveUpdateSettings`), added 2 further JVM `
 functions with no further instrumented ones, reaching 280 JVM / 24 instrumented. The
 home-screen widget implementation (`RoutineWidgetMapper`, `RoutineWidgetUpdater`,
 `BlickRoutineWidget`) added 53 further JVM `@Test` functions with no further instrumented
-ones —
-**333 JVM `@Test` functions and 24 instrumented `@Test` functions now exist in source,
+ones, reaching 333 JVM / 24 instrumented. A final re-audit session fixing that widget's
+lifecycle/visual gaps (Stop-action wiring, every worker exit path, the
+`NotificationsUnavailable` state, the zero-delay reschedule fix, the freshly-placed-widget
+reconcile fix, responsive sizing, and the readable theme background) added 8 further JVM
+`@Test` functions with no further instrumented ones —
+**341 JVM `@Test` functions and 24 instrumented `@Test` functions now exist in source,
 and all of them pass.** See `android/README.md`'s Build section for the exact toolchain
 versions, the up-to-date per-file test breakdown, and the real issues that first full
 run found and fixed (including a genuine production bug, not just test-suite

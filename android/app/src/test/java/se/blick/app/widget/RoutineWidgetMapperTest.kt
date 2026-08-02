@@ -268,4 +268,24 @@ class RoutineWidgetMapperTest {
         assertNull(content.following)
         assertEquals(fetchedAt, content.lastCheckedAt)
     }
+
+    // ---- notificationsUnavailable() -- no LiveDeparturesState counterpart (widget-only case) ----
+
+    @Test
+    fun `notificationsUnavailable carries the routine's identity fields with NotificationsUnavailable content`() {
+        val model = RoutineWidgetMapper.notificationsUnavailable(
+            routine(id = "r42", name = "Evening commute", siteName = "Slussen", destinationLabel = "T-Centralen"),
+        )
+        assertEquals("r42", model.routineId)
+        assertEquals("Evening commute", model.routineName)
+        assertEquals("Slussen", model.stationName)
+        assertEquals("T-Centralen", model.directionLabel)
+        assertEquals(RoutineWidgetContent.NotificationsUnavailable, model.content)
+    }
+
+    @Test
+    fun `notificationsUnavailable falls back direction to null, not an empty string, exactly like map`() {
+        val model = RoutineWidgetMapper.notificationsUnavailable(routine(destinationLabel = null))
+        assertNull(model.directionLabel)
+    }
 }

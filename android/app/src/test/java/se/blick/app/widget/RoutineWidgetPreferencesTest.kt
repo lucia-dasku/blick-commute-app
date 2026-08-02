@@ -103,4 +103,24 @@ class RoutineWidgetPreferencesTest {
         assertEquals(RoutineWidgetContent.Offline, (roundTrip(RoutineWidgetUiState.ActiveRoutine(offline)) as RoutineWidgetUiState.ActiveRoutine).model.content)
         assertEquals(RoutineWidgetContent.Unavailable, (roundTrip(RoutineWidgetUiState.ActiveRoutine(unavailable)) as RoutineWidgetUiState.ActiveRoutine).model.content)
     }
+
+    @Test
+    fun `NotificationsUnavailable round-trips with routine identity fields intact`() {
+        val model = RoutineWidgetModel("r1", "Morning commute", "Fruängen", "T-Centralen", RoutineWidgetContent.NotificationsUnavailable)
+        val restored = roundTrip(RoutineWidgetUiState.ActiveRoutine(model)) as RoutineWidgetUiState.ActiveRoutine
+        assertEquals(model, restored.model)
+    }
+
+    @Test
+    fun `a transition from NotificationsUnavailable to Live clears no leftover departure rows`() {
+        val prefs = mutablePreferencesOf()
+        val base = RoutineWidgetModel("r1", "Morning commute", "Fruängen", "T-Centralen", RoutineWidgetContent.NotificationsUnavailable)
+        RoutineWidgetUiState.ActiveRoutine(base).writeInto(prefs)
+
+        val next = WidgetDepartureRow("14", "T-Centralen", 3L, isRealTime = true, isCancelled = false)
+        RoutineWidgetUiState.ActiveRoutine(base.copy(content = RoutineWidgetContent.Live(next, null))).writeInto(prefs)
+
+        val restored = prefs.toPreferences().toWidgetUiState() as RoutineWidgetUiState.ActiveRoutine
+        assertEquals(RoutineWidgetContent.Live(next, null), restored.model.content)
+    }
 }

@@ -119,9 +119,26 @@ class RoutineActiveWindowWorker @AssistedInject constructor(
     private fun zonedNow(): ZonedDateTime = ZonedDateTime.ofInstant(clock.instant(), deviceZoneProvider.currentZone())
 
     override suspend fun doWork(): Result {
-        val routineId = inputData.getString(KEY_ROUTINE_ID) ?: return Result.failure()
-        val routine = routineRepository.getById(routineId) ?: return Result.success()
-        if (!routine.enabled) return Result.success()
+        val routineId = inputData.getString(KEY_ROUTINE_ID)
+        if (routineId == null) {
+            // Malformed WorkRequest -- there is no routine identity to look up or reschedule
+            // around, but some OTHER routine's widget state may currently be stale (e.g. this
+            // is why the whole run exists), so reconcile from scratch rather than leaving
+            // whatever was last rendered untouched.
+            routineWidgetUpdater.reconcile()
+            return Result.failure()
+        }
+        val routine = routineRepository.getById(routineId)
+        if (routine == null) {
+            // Deleted (or never existed) -- nothing to schedule, and the widget must not be
+            // left showing a routine that no longer exists.
+            routineWidgetUpdater.reconcile()
+            return Result.success()
+        }
+        if (!routine.enabled) {
+            routineWidgetUpdater.reconcile()
+            return Result.success()
+        }
 
         val occurrence = NextOccurrenceCalculator.nextOccurrence(routine, zonedNow(), excludedDate = routine.pausedDate)
         if (occurrence !is NextOccurrence.ActiveNow) {
@@ -131,6 +148,7 @@ class RoutineActiveWindowWorker @AssistedInject constructor(
             // of running (or partially running) a stale window. No foreground execution, no
             // notification, ever entered for this case.
             rescheduleNext(routineId)
+            routineWidgetUpdater.reconcile()
             return Result.success()
         }
         val windowEnd = occurrence.windowEnd
@@ -138,13 +156,22 @@ class RoutineActiveWindowWorker @AssistedInject constructor(
         // Checked BEFORE any foreground execution or notification/channel construction begins
         // (see class doc) -- if unavailable, this occurrence is skipped exactly like a late
         // start above: reschedule the next eligible one and exit, without ever calling
-        // setForeground, building a notification, or touching the channel.
+        // setForeground, building a notification, or touching the channel. The window IS
+        // genuinely active here (unlike the reconcile() cases above), so the widget must say so
+        // honestly rather than either staying on Loading forever or claiming "No active
+        // commute." -- see RoutineWidgetUpdater.showNotificationsUnavailable's own doc.
         if (notificationAvailabilityChecker.check() != NotificationAvailability.Available) {
-            rescheduleNext(routineId)
+            // Skips today's still-open occurrence rather than recomputing it -- see
+            // rescheduleSkippingToday's own doc for why a plain rescheduleNext here would loop.
+            rescheduleSkippingToday(routineId)
+            routineWidgetUpdater.showNotificationsUnavailable(routine)
             return Result.success()
         }
 
         var enteredForeground = false
+        var notificationsBecameUnavailable = false
+        var handledFailure = false
+        var lastKnownRoutine = routine
 
         try {
             setForeground(createForegroundInfo(routine))
@@ -152,10 +179,14 @@ class RoutineActiveWindowWorker @AssistedInject constructor(
 
             while (true) {
                 val current = routineRepository.getById(routineId) ?: break
+                lastKnownRoutine = current
                 if (!current.enabled) break
                 if (current.pausedDate == zonedNow().toLocalDate()) break
                 if (!zonedNow().isBefore(windowEnd)) break
-                if (notificationAvailabilityChecker.check() != NotificationAvailability.Available) break
+                if (notificationAvailabilityChecker.check() != NotificationAvailability.Available) {
+                    notificationsBecameUnavailable = true
+                    break
+                }
 
                 val identity = current.departureIdentity()
                 val previous = staleSnapshotRepository.get(routineId, identity)
@@ -191,14 +222,37 @@ class RoutineActiveWindowWorker @AssistedInject constructor(
             // device/OEM, or an unhandled error mid-loop) -- treated as a normal end of this
             // run rather than an unhandled crash with no next occurrence ever scheduled. Falls
             // through to the reschedule call below, same as a normal window-end completion.
+            // handledFailure = true because the window may still genuinely be open (this
+            // failure is unrelated to window timing) -- see rescheduleSkippingToday's own doc.
+            handledFailure = true
         } finally {
             if (enteredForeground) {
                 routineNotifier.remove()
-                routineWidgetUpdater.clear()
+                if (notificationsBecameUnavailable) {
+                    // The window is still genuinely open -- represent that honestly instead of
+                    // clearing to "No active commute." (see the pre-loop check's own comment).
+                    routineWidgetUpdater.showNotificationsUnavailable(lastKnownRoutine)
+                } else {
+                    routineWidgetUpdater.clear()
+                }
+            } else {
+                // setForeground() itself threw before the loop -- and before this worker ever
+                // posted anything for the widget -- so there is nothing to "clear"; reconcile
+                // instead so the widget doesn't keep showing whatever it displayed before this
+                // run started (e.g. a stale Loading from an earlier attempt).
+                routineWidgetUpdater.reconcile()
             }
         }
 
-        rescheduleNext(routineId)
+        // notificationsBecameUnavailable/handledFailure: the loop broke or the run failed for a
+        // reason unrelated to the window itself actually ending, so the window may still be
+        // genuinely open -- see rescheduleSkippingToday's own doc for why a plain rescheduleNext
+        // here would loop.
+        if (notificationsBecameUnavailable || handledFailure) {
+            rescheduleSkippingToday(routineId)
+        } else {
+            rescheduleNext(routineId)
+        }
         return Result.success()
     }
 
@@ -210,6 +264,30 @@ class RoutineActiveWindowWorker @AssistedInject constructor(
      * by this worker enqueuing obsolete work again. */
     private suspend fun rescheduleNext(routineId: String) {
         routineRepository.getById(routineId)?.let { latest -> routineScheduler.scheduleActivation(latest) }
+    }
+
+    /** Like [rescheduleNext], except today's occurrence is treated as ineligible for THIS one
+     * scheduling calculation — used when the reason this run is ending is notifications being
+     * unavailable (at startup or discovered mid-loop) or a handled failure (e.g. [setForeground]
+     * itself throwing), none of which mean the window itself has ended. Without this, plain
+     * [rescheduleNext] would ask [RoutineScheduler] to recompute the SAME still-open occurrence,
+     * which [WorkManagerRoutineScheduler] schedules with a ZERO initial delay for
+     * [NextOccurrence.ActiveNow] — causing this worker to re-run almost immediately, hit the
+     * exact same condition again, and spin in a tight zero-delay loop until either the window
+     * naturally ends or the condition resolves.
+     *
+     * Deliberately does NOT call [RoutineRepository.pauseForDate] — that would persist a real,
+     * user-visible pause the user never asked for. Instead, today is threaded through the exact
+     * same [CommuteRoutine.pausedDate] field [WorkManagerRoutineScheduler] already reads for
+     * "paused for today", but only on this in-memory copy passed to [RoutineScheduler] for this
+     * one call — nothing is written back via [RoutineRepository], so the routine's real
+     * [CommuteRoutine.pausedDate] (and everything the widget/UI show for it) is completely
+     * unaffected, and the very next normal [scheduleActivation][RoutineScheduler.scheduleActivation]
+     * call (the next natural reschedule, or any lifecycle mutation) recomputes fresh as usual. */
+    private suspend fun rescheduleSkippingToday(routineId: String) {
+        val latest = routineRepository.getById(routineId) ?: return
+        val today = zonedNow().toLocalDate()
+        routineScheduler.scheduleActivation(latest.copy(pausedDate = latest.pausedDate ?: today))
     }
 
     private fun createForegroundInfo(routine: CommuteRoutine): ForegroundInfo {
