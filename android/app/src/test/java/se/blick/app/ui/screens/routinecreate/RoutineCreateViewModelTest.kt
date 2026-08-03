@@ -256,6 +256,7 @@ class RoutineCreateViewModelTest {
         override fun cancelActivation(routineId: String) {
             cancelledRoutineIds += routineId
         }
+        override suspend fun isActivationRunning(routineId: String): Boolean = false
     }
 
     /** Records every call — for proving save() reconciles the widget. See the identical fake

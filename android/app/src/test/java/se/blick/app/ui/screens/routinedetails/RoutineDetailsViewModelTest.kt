@@ -348,6 +348,7 @@ class RoutineDetailsViewModelTest {
         override fun cancelActivation(routineId: String) {
             cancelledRoutineIds += routineId
         }
+        override suspend fun isActivationRunning(routineId: String): Boolean = false
     }
 
     /** Records every call — for proving toggleEnabled/pauseToday/resumeToday/deleteRoutine/

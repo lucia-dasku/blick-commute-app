@@ -63,6 +63,7 @@ class StopRoutineNotificationActionTest {
             scheduled += routine
         }
         override fun cancelActivation(routineId: String) = Unit
+        override suspend fun isActivationRunning(routineId: String): Boolean = false
     }
 
     private class RecordingNotifier : RoutineNotifier {

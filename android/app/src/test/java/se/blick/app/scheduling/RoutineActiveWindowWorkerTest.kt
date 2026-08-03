@@ -311,6 +311,7 @@ class RoutineActiveWindowWorkerTest {
             scheduledRoutines += routine
         }
         override fun cancelActivation(routineId: String) = Unit
+        override suspend fun isActivationRunning(routineId: String): Boolean = false
     }
 
     /** Proves the worker never asks [RoutineScheduler] to reschedule an occurrence that is

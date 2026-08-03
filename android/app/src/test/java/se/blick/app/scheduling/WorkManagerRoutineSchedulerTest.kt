@@ -5,7 +5,9 @@ import androidx.work.WorkInfo
 import androidx.work.WorkManager
 import androidx.work.testing.SynchronousExecutor
 import androidx.work.testing.WorkManagerTestInitHelper
+import kotlinx.coroutines.test.runTest
 import org.junit.Assert.assertEquals
+import org.junit.Assert.assertFalse
 import org.junit.Assert.assertNotEquals
 import org.junit.Assert.assertTrue
 import org.junit.Before
@@ -203,6 +205,24 @@ class WorkManagerRoutineSchedulerTest {
     fun `cancelActivation for a routine with no scheduled work is a harmless no-op`() {
         scheduler.cancelActivation("never-scheduled")
         assertTrue(workInfosFor("never-scheduled").isEmpty())
+    }
+
+    // ---- isActivationRunning ----
+
+    @Test
+    fun `isActivationRunning is false for a routine with no scheduled work at all`() = runTest {
+        assertFalse(scheduler.isActivationRunning("never-scheduled"))
+    }
+
+    @Test
+    fun `isActivationRunning is false for work that is merely ENQUEUED, not yet RUNNING`() = runTest {
+        // "now" (03:00 UTC / 05:00 Stockholm) is before routine()'s 07:00-09:00 window (see
+        // class doc), so this enqueues with a real, non-zero delay -- SynchronousExecutor never
+        // runs it, leaving it ENQUEUED, never RUNNING.
+        scheduler.scheduleActivation(routine())
+        assertEquals(WorkInfo.State.ENQUEUED, workInfosFor("r1").single().state)
+
+        assertFalse(scheduler.isActivationRunning("r1"))
     }
 
     @Test

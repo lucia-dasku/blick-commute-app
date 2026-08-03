@@ -28,4 +28,16 @@ interface RoutineScheduler {
      * itself; [se.blick.app.notification.RoutineNotifier.remove] plus the worker's own
      * mid-run enabled/existence re-check (see [RoutineActiveWindowWorker]) handle that. */
     fun cancelActivation(routineId: String)
+
+    /** Reports whether this routine's active-window worker is genuinely `RUNNING` right now —
+     * used by [ForegroundNotificationRecovery] to decide whether it is safe to call
+     * [scheduleActivation] at all: that call's `ExistingWorkPolicy.REPLACE` (see
+     * [WorkManagerRoutineScheduler]'s own doc) would otherwise cancel and replace an
+     * already-running worker merely because something else wanted to make sure a routine's
+     * active window is covered. Callers must treat a `false` result as "safe to schedule", not
+     * as a hard guarantee — there is an inherent, unavoidable race between this query and any
+     * subsequent [scheduleActivation] call, since WorkManager exposes no atomic
+     * "replace-unless-running" primitive (see [ForegroundNotificationRecovery]'s own doc on why
+     * this is an accepted, narrow risk rather than one this method can eliminate outright). */
+    suspend fun isActivationRunning(routineId: String): Boolean
 }

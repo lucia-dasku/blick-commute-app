@@ -17,18 +17,21 @@ a claim that all of it already exists. This section is the authoritative summary
 what is actually built today; where the two disagree, this section wins.
 
 **Validation status of this update, stated plainly up front:** a complete local run —
-`testDebugUnitTest`, `lintDebug`, `assembleDebug`, and `connectedDebugAndroidTest`, most
-recently on the physical Lenovo TB350FU (Android 14) — has now passed in full: all 460
-JVM `@Test` functions and all 41 instrumented `@Test` functions, with the debug APK
-installing and launching without crashing,
+`testDebugUnitTest`, `lintDebug`, and `assembleDebug` — has now passed in full: all 470
+JVM `@Test` functions, with the debug APK building,
 `lintDebug` with 0 errors (44
 warnings: two expected, already-guarded `InlinedApi` findings — the API-36
 `ACTION_APP_NOTIFICATION_PROMOTION_SETTINGS` deep-link and the API-33
 `POST_NOTIFICATIONS` permission constant — plus four expected `UnusedAttribute` findings
 on the widget provider XML's Android-12+-only sizing attributes, kept alongside their
 legacy fallbacks deliberately, and one expected `GradleDependency` finding for the
-newly-added `androidx.lifecycle:lifecycle-process` dependency). The backend's own
-`npm test` also passed in full at 268/268. **The home-screen
+newly-added `androidx.lifecycle:lifecycle-process` dependency). `connectedDebugAndroidTest`
+(41 instrumented `@Test` functions) was not re-run this session, since no physical device
+or emulator was connected at the time — stated plainly rather than silently implied; the
+new foreground-recovery regression tests are themselves JVM-side Robolectric tests against
+a real, in-memory WorkManager instance, so they are already included in the 470 figure
+above regardless. The backend's own `npm test` also passed in full at 268/268. **The
+home-screen
 widget's placement, resizing, live updates, and Stop-action behavior have since been
 manually confirmed on that same device, including its "Design 1" visual redesign — a
 colored line-number badge, a large countdown, and a live/scheduled/cancelled status
@@ -897,9 +900,24 @@ but never once thrown; and several unused derived TypeScript type aliases whose 
 Zod schemas remained genuinely in use. Two further candidates, `DisruptionsResponseSchema`
 and `StopSearchResponseSchema`, turned out to be well-formed but unwired contract-test
 scaffolding and were wired into `contract.test.ts` instead of deleted. This removed 7
-now-obsolete JVM `@Test` functions and added 2 new backend contract tests —
-**460 JVM `@Test` functions and 41 instrumented `@Test` functions now exist in source,
-and all of them pass** (268 backend tests, up from 266). See `android/README.md`'s Build section for the exact toolchain
+now-obsolete JVM `@Test` functions and added 2 new backend contract tests, reaching
+460 JVM / 41 instrumented (268 backend tests, up from 266). A further session fixed a
+foreground-scheduling regression: `BlickApplication`'s `ON_START` observer called
+`RoutineScheduleReconciler.reconcileAll()` on every single app foreground, and that call's
+`ExistingWorkPolicy.REPLACE` could cancel and replace an already-`RUNNING`
+`RoutineActiveWindowWorker` merely because the user opened the app — notification/widget
+flicker, duplicate departures/disruptions requests, a lost in-memory disruption fallback,
+and a race where the cancelled worker's own `finally` could clear content a "replacement"
+worker had already posted. Replaced with a new `ForegroundNotificationRecovery`: a new
+`NotificationAvailabilityStateStore` (DataStore-backed, surviving process recreation)
+detects a genuine unavailable-to-available transition; only then does recovery act, and
+even then only for routines whose active window is open right now AND have no worker
+already `RUNNING` for it (a new `RoutineScheduler.isActivationRunning` query) — a routine
+outside its window, or with a worker already running, is left completely untouched. Added
+10 further JVM `@Test` functions (6 real-`WorkManager` regression tests plus direct
+coverage of the new store and scheduler query) —
+**470 JVM `@Test` functions and 41 instrumented `@Test` functions now exist in source,
+and all of them pass** (268 backend tests, unchanged by this fix). See `android/README.md`'s Build section for the exact toolchain
 versions, the up-to-date per-file test breakdown, and the real issues that first full
 run found and fixed (including a genuine production bug, not just test-suite
 corrections), and see "Validation status of this update" at the top of this document

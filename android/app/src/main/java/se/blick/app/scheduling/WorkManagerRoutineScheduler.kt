@@ -3,9 +3,12 @@ package se.blick.app.scheduling
 import android.content.Context
 import androidx.work.ExistingWorkPolicy
 import androidx.work.OneTimeWorkRequestBuilder
+import androidx.work.WorkInfo
 import androidx.work.WorkManager
 import androidx.work.workDataOf
 import dagger.hilt.android.qualifiers.ApplicationContext
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.withContext
 import se.blick.app.domain.model.CommuteRoutine
 import java.time.Clock
 import java.time.Duration
@@ -83,6 +86,16 @@ class WorkManagerRoutineScheduler @Inject constructor(
 
     override fun cancelActivation(routineId: String) {
         WorkManager.getInstance(context).cancelUniqueWork(uniqueWorkName(routineId))
+    }
+
+    /** [WorkManager.getWorkInfosForUniqueWork] returns a blocking [com.google.common.util.concurrent.ListenableFuture]
+     * — its own `.get()` is dispatched onto [Dispatchers.IO] rather than blocking whichever
+     * dispatcher this suspend function happens to be called from. */
+    override suspend fun isActivationRunning(routineId: String): Boolean = withContext(Dispatchers.IO) {
+        WorkManager.getInstance(context)
+            .getWorkInfosForUniqueWork(uniqueWorkName(routineId))
+            .get()
+            .any { it.state == WorkInfo.State.RUNNING }
     }
 
     companion object {

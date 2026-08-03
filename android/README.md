@@ -566,9 +566,25 @@ contract-validating scaffolding that simply had never been wired into a test —
 exact fixture-validation pattern `DeparturesResponseSchema` already followed in
 `contract.test.ts` — so they were wired in rather than deleted. This removed 7 now-obsolete
 JVM `@Test` functions (the dead-function tests in `RoutineListViewModelTest`) and added 2
-new backend contract tests, reaching 460 JVM / 41 instrumented (backend: 268) — see
-`../docs/Blick_Project_Documentation.md`'s "Validation status" note for the full account
-of each removal and its evidence.
+new backend contract tests, reaching 460 JVM / 41 instrumented (backend: 268). A further
+session fixed a foreground-scheduling regression: `BlickApplication`'s `ON_START` observer
+called `RoutineScheduleReconciler.reconcileAll()` on every single app foreground, and that
+call's `ExistingWorkPolicy.REPLACE` could cancel and replace an already-`RUNNING`
+`RoutineActiveWindowWorker` merely because the user opened the app — notification/widget
+flicker, duplicate departures/disruptions requests, a lost in-memory disruption fallback,
+and a race where the cancelled worker's own `finally` could clear content a "replacement"
+worker had already posted. Replaced with a new `ForegroundNotificationRecovery`: a new
+`NotificationAvailabilityStateStore` (DataStore-backed, surviving process recreation, unlike
+an in-memory ViewModel field) detects a genuine unavailable-to-available transition; only
+then does recovery act, and even then only for routines whose active window is open right
+now AND have no worker already `RUNNING` for it (a new `RoutineScheduler.isActivationRunning`
+query) — a routine outside its window, or with a worker already running, is left completely
+untouched. Added 10 further JVM `@Test` functions (6 real-`WorkManager` regression tests
+proving the RUNNING-work-untouched/no-reschedule-without-transition/immediate-start-on-
+transition/next-day-replace-only-when-absent/future-schedule-preserved/no-clobbered-content
+guarantees, plus direct coverage of the new store and scheduler query), reaching
+470 JVM / 41 instrumented — see `../docs/Blick_Project_Documentation.md`'s "Validation
+status" note for the full account of each.
 
 On a machine with a real JDK 17 and Android SDK (or Android Studio, which provides
 both), build with:
@@ -587,11 +603,10 @@ clone builds without Android Studio or a pre-existing local Gradle install.
 
 ### Full verification pass
 
-A complete local run — `testDebugUnitTest`, `lintDebug`, `assembleDebug`, and
-`connectedDebugAndroidTest` — has since been completed, using Android Studio's own bundled
-JDK. All 460 JVM `@Test` functions pass; `lintDebug` reports 0 errors (44 warnings: two
-expected, already-guarded `InlinedApi` findings — the API-36
-`ACTION_APP_NOTIFICATION_PROMOTION_SETTINGS` deep-link and the API-33
+A complete local run — `testDebugUnitTest`, `lintDebug`, and `assembleDebug` — has since
+been completed, using Android Studio's own bundled JDK. All 470 JVM `@Test` functions
+pass; `lintDebug` reports 0 errors (44 warnings: two expected, already-guarded `InlinedApi`
+findings — the API-36 `ACTION_APP_NOTIFICATION_PROMOTION_SETTINGS` deep-link and the API-33
 `POST_NOTIFICATIONS` permission constant — plus four expected `UnusedAttribute` findings
 on `res/xml/blick_routine_widget_info.xml`'s Android-12+-only sizing attributes, present
 alongside their legacy fallbacks specifically so both old and new launchers get correct
@@ -599,10 +614,12 @@ resize behaviour, exactly like Google's own official widget-provider XML example
 new warning since the prior 43-warning count is an expected `GradleDependency` finding for
 the newly-added `androidx.lifecycle:lifecycle-process` dependency, pinned to the same
 `lifecycle` version as every other `androidx.lifecycle` artifact already in this project);
-the debug APK builds, installs, and launches without crashing; and all 41 instrumented
-`@Test` functions pass, most recently re-run on the physical Lenovo TB350FU (Android 14) —
-the Samsung Galaxy S23 Ultra used for a prior verification pass was not connected this
-session.
+and the debug APK builds. `connectedDebugAndroidTest` (all 41 instrumented `@Test`
+functions) was NOT re-run for this specific session, since no physical device or emulator
+was connected at the time — stated plainly rather than silently implied; the six new
+`ForegroundNotificationRecovery` regression tests are themselves Robolectric JVM tests
+against a real, in-memory `WorkManager` instance (see `ForegroundNotificationRecoveryTest`'s
+own doc), so they ran as part of the 470 JVM figure above regardless.
 
 **Disruptions integration, verified end to end on-device (with one real-data caveat):**
 the previously-built-but-unwired `DisruptionRepository`/`RemoteDisruptionRepository`

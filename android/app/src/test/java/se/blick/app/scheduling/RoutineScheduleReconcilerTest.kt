@@ -56,6 +56,7 @@ class RoutineScheduleReconcilerTest {
             scheduled += routine.id
         }
         override fun cancelActivation(routineId: String) = Unit
+        override suspend fun isActivationRunning(routineId: String): Boolean = false
     }
 
     /** Records every call — for proving `reconcileAll` also reconciles the widget on every run
