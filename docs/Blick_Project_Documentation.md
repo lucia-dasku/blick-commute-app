@@ -17,21 +17,22 @@ a claim that all of it already exists. This section is the authoritative summary
 what is actually built today; where the two disagree, this section wins.
 
 **Validation status of this update, stated plainly up front:** a complete local run —
-`testDebugUnitTest`, `lintDebug`, and `assembleDebug` — has now passed in full: all 470
-JVM `@Test` functions, with the debug APK building,
+`testDebugUnitTest`, `lintDebug`, `assembleDebug`, and `connectedDebugAndroidTest`, on the
+physical Lenovo TB350FU (Android 14) and a Samsung Galaxy S23 Ultra (`SM-S918B`, Android
+16) connected simultaneously — has now passed in full: all 470 JVM `@Test` functions and
+all 41 instrumented `@Test` functions on both devices, with the debug APK installing and
+launching without crashing on both,
 `lintDebug` with 0 errors (44
 warnings: two expected, already-guarded `InlinedApi` findings — the API-36
 `ACTION_APP_NOTIFICATION_PROMOTION_SETTINGS` deep-link and the API-33
 `POST_NOTIFICATIONS` permission constant — plus four expected `UnusedAttribute` findings
 on the widget provider XML's Android-12+-only sizing attributes, kept alongside their
 legacy fallbacks deliberately, and one expected `GradleDependency` finding for the
-newly-added `androidx.lifecycle:lifecycle-process` dependency). `connectedDebugAndroidTest`
-(41 instrumented `@Test` functions) was not re-run this session, since no physical device
-or emulator was connected at the time — stated plainly rather than silently implied; the
-new foreground-recovery regression tests are themselves JVM-side Robolectric tests against
-a real, in-memory WorkManager instance, so they are already included in the 470 figure
-above regardless. The backend's own `npm test` also passed in full at 268/268. **The
-home-screen
+newly-added `androidx.lifecycle:lifecycle-process` dependency). The new
+foreground-recovery regression tests are themselves JVM-side Robolectric tests against a
+real, in-memory WorkManager instance, so they are already included in the 470 figure above
+regardless of device availability. The backend's own `npm test` also passed in full at
+268/268. **The home-screen
 widget's placement, resizing, live updates, and Stop-action behavior have since been
 manually confirmed on that same device, including its "Design 1" visual redesign — a
 colored line-number badge, a large countdown, and a live/scheduled/cancelled status
