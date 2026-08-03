@@ -8,8 +8,10 @@ import dagger.hilt.InstallIn
 import dagger.hilt.android.qualifiers.ApplicationContext
 import dagger.hilt.components.SingletonComponent
 import se.blick.app.data.local.room.MIGRATION_1_2
+import se.blick.app.data.local.room.MIGRATION_2_3
 import se.blick.app.data.local.room.RoutineDao
 import se.blick.app.data.local.room.BlickDatabase
+import se.blick.app.data.local.room.RoutineWorkOwnershipDao
 import se.blick.app.data.local.room.StaleSnapshotDao
 import javax.inject.Singleton
 
@@ -21,7 +23,7 @@ object DatabaseModule {
     @Singleton
     fun provideDatabase(@ApplicationContext context: Context): BlickDatabase =
         Room.databaseBuilder(context, BlickDatabase::class.java, "blick.db")
-            .addMigrations(MIGRATION_1_2)
+            .addMigrations(MIGRATION_1_2, MIGRATION_2_3)
             .build()
 
     @Provides
@@ -29,4 +31,8 @@ object DatabaseModule {
 
     @Provides
     fun provideStaleSnapshotDao(database: BlickDatabase): StaleSnapshotDao = database.staleSnapshotDao()
+
+    @Provides
+    fun provideRoutineWorkOwnershipDao(database: BlickDatabase): RoutineWorkOwnershipDao =
+        database.routineWorkOwnershipDao()
 }

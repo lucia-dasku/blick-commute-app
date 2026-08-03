@@ -26,6 +26,7 @@ import org.robolectric.annotation.Config
 import se.blick.app.data.repository.DepartureRepository
 import se.blick.app.data.repository.DisruptionRepository
 import se.blick.app.data.repository.RoutineRepository
+import se.blick.app.data.repository.RoutineWorkOwnershipRepository
 import se.blick.app.data.repository.StaleSnapshotRepository
 import se.blick.app.domain.model.CommuteRoutine
 import se.blick.app.domain.model.DeparturesResult
@@ -376,6 +377,30 @@ class RoutineActiveWindowWorkerTest {
         }
     }
 
+    /** Records every [reportUnavailable] call — for proving the worker durably reports an
+     * observed unavailable state before it stops, rather than relying on some other, later
+     * observer to notice the same thing. */
+    private class FakeNotificationRecoveryReporter : NotificationRecoveryReporter {
+        var reportUnavailableCallCount = 0
+        override suspend fun reportUnavailable() {
+            reportUnavailableCallCount++
+        }
+    }
+
+    /** Defaults to reporting the calling run as STILL the content owner, matching every
+     * existing test in this file (none of which simulate a replacement mid-run) — see the
+     * dedicated ownership tests below for the ones that configure [isOwnerResult] to `false`
+     * to prove a superseded run's `finally`-block cleanup is correctly suppressed instead. */
+    private class FakeRoutineWorkOwnershipRepository(
+        private val isOwnerResult: Boolean = true,
+    ) : RoutineWorkOwnershipRepository {
+        val claimedIds = mutableListOf<Pair<String, String>>()
+        override suspend fun claim(routineId: String, workId: String) {
+            claimedIds += routineId to workId
+        }
+        override suspend fun isOwner(routineId: String, workId: String): Boolean = isOwnerResult
+    }
+
     private fun buildWorker(
         routineId: String,
         routineRepository: RoutineRepository,
@@ -389,6 +414,8 @@ class RoutineActiveWindowWorkerTest {
         staleSnapshotRepository: StaleSnapshotRepository = FakeStaleSnapshotRepository(),
         widgetUpdater: RoutineWidgetUpdater = RecordingWidgetUpdater(),
         getDisruptions: GetDisruptionsUseCase = GetDisruptionsUseCase(FakeDisruptionRepository()),
+        notificationRecoveryReporter: NotificationRecoveryReporter = FakeNotificationRecoveryReporter(),
+        routineWorkOwnershipRepository: RoutineWorkOwnershipRepository = FakeRoutineWorkOwnershipRepository(),
     ): RoutineActiveWindowWorker =
         TestListenableWorkerBuilder<RoutineActiveWindowWorker>(context)
             .setInputData(workDataOf(RoutineActiveWindowWorker.KEY_ROUTINE_ID to routineId))
@@ -409,6 +436,8 @@ class RoutineActiveWindowWorkerTest {
                     widgetUpdater,
                     scheduler,
                     notificationAvailabilityChecker,
+                    notificationRecoveryReporter,
+                    routineWorkOwnershipRepository,
                     clock,
                     deviceZoneProvider,
                 )
@@ -433,6 +462,8 @@ class RoutineActiveWindowWorkerTest {
                         widgetUpdater,
                         RecordingScheduler(),
                         FakeNotificationAvailabilityChecker(),
+                        FakeNotificationRecoveryReporter(),
+                        FakeRoutineWorkOwnershipRepository(),
                         Clock.systemUTC(),
                         zoneProvider,
                     )
@@ -620,6 +651,7 @@ class RoutineActiveWindowWorkerTest {
         val widgetUpdater = RecordingWidgetUpdater()
         val scheduler = RecordingScheduler()
         val checker = FakeNotificationAvailabilityChecker(NotificationAvailability.AppDisabled)
+        val recoveryReporter = FakeNotificationRecoveryReporter()
 
         val worker = buildWorker(
             routine.id,
@@ -630,6 +662,7 @@ class RoutineActiveWindowWorkerTest {
             clock,
             notificationAvailabilityChecker = checker,
             widgetUpdater = widgetUpdater,
+            notificationRecoveryReporter = recoveryReporter,
         )
         worker.doWork()
 
@@ -641,6 +674,10 @@ class RoutineActiveWindowWorkerTest {
         // being left on Loading forever, or silently reverting to "No active commute."
         assertEquals(listOf(routine.id), widgetUpdater.notificationsUnavailableCalls.map { it.id })
         assertNoZeroDelayReschedule(scheduler, clock)
+        // Durably records that a recovery attempt is owed BEFORE this run stops -- see
+        // NotificationRecoveryCoordinator's own doc for why this must happen here rather than
+        // being inferred later from a compared availability snapshot.
+        assertEquals(1, recoveryReporter.reportUnavailableCallCount)
     }
 
     // ---- Regression: a STALE pausedDate must never suppress today's own skip-today reschedule
@@ -774,6 +811,7 @@ class RoutineActiveWindowWorkerTest {
         val checker = ScriptedNotificationAvailabilityChecker { callIndex ->
             if (callIndex < 2) NotificationAvailability.Available else NotificationAvailability.AppDisabled
         }
+        val recoveryReporter = FakeNotificationRecoveryReporter()
 
         val worker = buildWorker(
             enabledRoutine.id,
@@ -784,6 +822,7 @@ class RoutineActiveWindowWorkerTest {
             clock,
             notificationAvailabilityChecker = checker,
             widgetUpdater = widgetUpdater,
+            notificationRecoveryReporter = recoveryReporter,
         )
         worker.doWork()
 
@@ -796,6 +835,9 @@ class RoutineActiveWindowWorkerTest {
         assertEquals(0, widgetUpdater.clearCallCount)
         assertEquals(listOf(enabledRoutine.id), widgetUpdater.notificationsUnavailableCalls.map { it.id })
         assertNoZeroDelayReschedule(scheduler, clock)
+        // Discovered mid-loop, not just at startup -- must still be durably recorded before this
+        // run stops, exactly like the pre-loop check.
+        assertEquals(1, recoveryReporter.reportUnavailableCallCount)
     }
 
     @Test
@@ -1450,5 +1492,103 @@ class RoutineActiveWindowWorkerTest {
         // time (3s fetch + 27s delay, twice) lands exactly on 2 * ACTIVE_WINDOW_REFRESH_INTERVAL_MS.
         assertEquals(2, notifier.shown.size)
         assertEquals(2 * ACTIVE_WINDOW_REFRESH_INTERVAL_MS, currentTime)
+    }
+
+    // ---- Content ownership (Fix: generation/ownership tracking gates `finally` cleanup, so a
+    // cancelled/replaced run can never clobber a newer run's own content) ----
+
+    @Test
+    fun `this run claims content ownership under its own WorkManager id once foreground execution begins`() = runTest {
+        val clock = TickingClock(Instant.parse("2026-07-27T05:00:00Z"), zone)
+        val routine = routine()
+        val repository = ScriptedRoutineRepository(clock) { routine }
+        val notifier = RecordingNotifier()
+        val ownershipRepository = FakeRoutineWorkOwnershipRepository()
+        val departures = FakeDepartureRepository { DeparturesResult(clock.instant(), 9145, listOf(sampleDeparture())) }
+
+        val worker = buildWorker(
+            routine.id,
+            repository,
+            GetLiveDeparturesUseCase(departures, clock),
+            notifier,
+            RecordingScheduler(),
+            clock,
+            routineWorkOwnershipRepository = ownershipRepository,
+        )
+        worker.doWork()
+
+        assertEquals(listOf(routine.id to worker.id.toString()), ownershipRepository.claimedIds)
+    }
+
+    @Test
+    fun `the current owner still cleans up normally at window end`() = runTest {
+        val clock = TickingClock(Instant.parse("2026-07-27T05:00:00Z"), zone)
+        val routine = routine()
+        val repository = ScriptedRoutineRepository(clock) { routine }
+        val notifier = RecordingNotifier()
+        val widgetUpdater = RecordingWidgetUpdater()
+        val scheduler = RecordingScheduler()
+        // isOwnerResult = true (the default) -- this run is still the recorded owner of
+        // whatever it posted, so its own `finally` must clean up exactly as before; this is
+        // deliberately NOT "skip cleanup on every cancellation/completion" -- only a genuine
+        // loss of ownership suppresses it (see the two tests below).
+        val ownershipRepository = FakeRoutineWorkOwnershipRepository(isOwnerResult = true)
+        val departures = FakeDepartureRepository { DeparturesResult(clock.instant(), 9145, listOf(sampleDeparture())) }
+
+        val worker = buildWorker(
+            routine.id,
+            repository,
+            GetLiveDeparturesUseCase(departures, clock),
+            notifier,
+            scheduler,
+            clock,
+            widgetUpdater = widgetUpdater,
+            routineWorkOwnershipRepository = ownershipRepository,
+        )
+        worker.doWork()
+
+        assertEquals(1, notifier.removeCallCount)
+        assertEquals(1, widgetUpdater.clearCallCount)
+        assertEquals(1, scheduler.scheduledRoutines.size)
+    }
+
+    @Test
+    fun `a replaced worker cannot clear a replacement's content once it has lost ownership`() = runTest {
+        val clock = TickingClock(Instant.parse("2026-07-27T05:00:00Z"), zone)
+        val routine = routine()
+        val repository = ScriptedRoutineRepository(clock) { routine }
+        val notifier = RecordingNotifier()
+        val widgetUpdater = RecordingWidgetUpdater()
+        val scheduler = RecordingScheduler()
+        // Simulates a REPLACEMENT run having already claimed ownership for this routine by the
+        // time THIS run's own `finally` block checks -- e.g. this run was cancelled and
+        // immediately superseded by a new run for the same routine id (editing an active
+        // routine cancels the old worker and immediately starts a new one).
+        val ownershipRepository = FakeRoutineWorkOwnershipRepository(isOwnerResult = false)
+        val departures = FakeDepartureRepository { DeparturesResult(clock.instant(), 9145, listOf(sampleDeparture())) }
+
+        val worker = buildWorker(
+            routine.id,
+            repository,
+            GetLiveDeparturesUseCase(departures, clock),
+            notifier,
+            scheduler,
+            clock,
+            widgetUpdater = widgetUpdater,
+            routineWorkOwnershipRepository = ownershipRepository,
+        )
+        val result = worker.doWork()
+
+        // The loop still ran and posted content normally -- ownership only gates CLEANUP, never
+        // the run itself -- but since this run no longer owns what it posted, its own `finally`
+        // must never remove the notification or clear the widget: a replacement run may already
+        // be actively showing its own content for this same routine.
+        assertTrue(result is ListenableWorker.Result.Success)
+        assertTrue(notifier.shown.isNotEmpty())
+        assertEquals(0, notifier.removeCallCount)
+        assertEquals(0, widgetUpdater.clearCallCount)
+        // Rescheduling is unaffected by ownership -- this run still reschedules the next
+        // eligible occurrence regardless of whether it owned the content it posted.
+        assertEquals(1, scheduler.scheduledRoutines.size)
     }
 }

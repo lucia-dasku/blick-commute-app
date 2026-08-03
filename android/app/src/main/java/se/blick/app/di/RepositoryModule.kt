@@ -14,8 +14,10 @@ import se.blick.app.data.repository.RemoteDepartureRepository
 import se.blick.app.data.repository.RemoteDisruptionRepository
 import se.blick.app.data.repository.RemoteStopRepository
 import se.blick.app.data.repository.RoomRoutineRepository
+import se.blick.app.data.repository.RoomRoutineWorkOwnershipRepository
 import se.blick.app.data.repository.RoomStaleSnapshotRepository
 import se.blick.app.data.repository.RoutineRepository
+import se.blick.app.data.repository.RoutineWorkOwnershipRepository
 import se.blick.app.data.repository.StaleSnapshotRepository
 import se.blick.app.data.repository.StopRepository
 import javax.inject.Singleton
@@ -51,4 +53,10 @@ abstract class RepositoryModule {
     @Binds
     @Singleton
     abstract fun bindStaleSnapshotRepository(impl: RoomStaleSnapshotRepository): StaleSnapshotRepository
+
+    @Binds
+    @Singleton
+    abstract fun bindRoutineWorkOwnershipRepository(
+        impl: RoomRoutineWorkOwnershipRepository,
+    ): RoutineWorkOwnershipRepository
 }

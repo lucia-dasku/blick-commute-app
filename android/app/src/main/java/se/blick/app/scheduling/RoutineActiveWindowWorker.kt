@@ -3,6 +3,7 @@ package se.blick.app.scheduling
 import android.content.Context
 import android.content.pm.ServiceInfo
 import android.os.Build
+import android.util.Log
 import androidx.hilt.work.HiltWorker
 import androidx.work.CoroutineWorker
 import androidx.work.ForegroundInfo
@@ -10,10 +11,13 @@ import androidx.work.WorkerParameters
 import dagger.assisted.Assisted
 import dagger.assisted.AssistedInject
 import kotlinx.coroutines.CancellationException
+import kotlinx.coroutines.NonCancellable
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.last
+import kotlinx.coroutines.withContext
 import kotlinx.coroutines.withTimeoutOrNull
 import se.blick.app.data.repository.RoutineRepository
+import se.blick.app.data.repository.RoutineWorkOwnershipRepository
 import se.blick.app.data.repository.StaleSnapshotRepository
 import se.blick.app.domain.model.CommuteRoutine
 import se.blick.app.domain.model.Disruption
@@ -33,6 +37,8 @@ import se.blick.app.widget.runWidgetUpdateSafely
 import java.time.Clock
 import java.time.Duration
 import java.time.ZonedDateTime
+
+private const val LOG_TAG = "RoutineActiveWindowWorker"
 
 /** The interval between departure re-fetches while a routine's active window is running (the
  * "30-second active-window loop" from the product doc). Not a [androidx.work.PeriodicWorkRequest]
@@ -109,8 +115,22 @@ internal const val DISRUPTIONS_FETCH_TIMEOUT_MS = 5_000L
  * cancelling outright. Any other unexpected exception (a failure entering foreground execution,
  * or anything else unhandled mid-loop) is caught, treated as a normal end of this run, and still
  * proceeds to clean up the notification and reschedule the next eligible occurrence — the same
- * as a normal window-end completion. [routineNotifier.remove] always runs in a `finally` once
- * foreground execution actually started, whichever of these paths is taken.
+ * as a normal window-end completion. [routineNotifier.remove] runs in a `finally` once
+ * foreground execution actually started, whichever of these paths is taken — but ONLY if this
+ * run is still the recorded content owner at that point (see [claimContentOwnership] and
+ * [se.blick.app.data.repository.RoutineWorkOwnershipRepository]'s own doc): a cancelled run
+ * that has since been superseded by a replacement (e.g. editing this active routine, which
+ * cancels this worker and immediately starts a new one for the same routine id) must never let
+ * its own cleanup clear content the replacement has already posted. This is deliberately NOT
+ * "skip cleanup on every cancellation" — a cancelled run that is STILL the recorded owner
+ * (nothing has actually replaced it) cleans up exactly as before; only genuine ownership loss
+ * suppresses it, so content is never left stale merely because a run happened to be cancelled.
+ *
+ * Also durably records a pending notification-recovery attempt (see
+ * [NotificationRecoveryCoordinator]'s own doc) the moment this worker itself discovers
+ * notifications are unavailable — both before entering foreground execution at all, and mid-loop
+ * if the condition changes partway through — rather than relying on some other, later observer
+ * to notice the same thing.
  *
  * Declares the `dataSync` foreground service type (see `AndroidManifest.xml`'s
  * `SystemForegroundService` override and the `FOREGROUND_SERVICE_DATA_SYNC` permission) — the
@@ -133,6 +153,8 @@ class RoutineActiveWindowWorker @AssistedInject constructor(
     private val routineWidgetUpdater: RoutineWidgetUpdater,
     private val routineScheduler: RoutineScheduler,
     private val notificationAvailabilityChecker: NotificationAvailabilityChecker,
+    private val notificationRecoveryReporter: NotificationRecoveryReporter,
+    private val routineWorkOwnershipRepository: RoutineWorkOwnershipRepository,
     private val clock: Clock,
     private val deviceZoneProvider: DeviceZoneProvider,
 ) : CoroutineWorker(context, params) {
@@ -183,6 +205,11 @@ class RoutineActiveWindowWorker @AssistedInject constructor(
         // honestly rather than either staying on Loading forever or claiming "No active
         // commute." -- see RoutineWidgetUpdater.showNotificationsUnavailable's own doc.
         if (notificationAvailabilityChecker.check() != NotificationAvailability.Available) {
+            // Durably records that a recovery attempt is owed BEFORE this run stops -- see
+            // NotificationRecoveryCoordinator's own doc on why this is one of the required
+            // real detection paths, and why it must happen here rather than being inferred
+            // later from a compared availability snapshot.
+            notificationRecoveryReporter.reportUnavailable()
             // Skips today's still-open occurrence rather than recomputing it -- see
             // rescheduleSkippingToday's own doc for why a plain rescheduleNext here would loop.
             rescheduleSkippingToday(routineId)
@@ -204,6 +231,7 @@ class RoutineActiveWindowWorker @AssistedInject constructor(
         try {
             setForeground(createForegroundInfo(routine))
             enteredForeground = true
+            claimContentOwnership(routineId)
 
             while (true) {
                 val current = routineRepository.getById(routineId) ?: break
@@ -213,6 +241,9 @@ class RoutineActiveWindowWorker @AssistedInject constructor(
                 if (!zonedNow().isBefore(windowEnd)) break
                 if (notificationAvailabilityChecker.check() != NotificationAvailability.Available) {
                     notificationsBecameUnavailable = true
+                    // See the pre-loop check's identical call for why this must happen here,
+                    // before the loop actually breaks, not be inferred later.
+                    notificationRecoveryReporter.reportUnavailable()
                     break
                 }
 
@@ -313,18 +344,39 @@ class RoutineActiveWindowWorker @AssistedInject constructor(
             handledFailure = true
         } finally {
             if (enteredForeground) {
-                routineNotifier.remove()
-                if (notificationsBecameUnavailable) {
-                    // The window is still genuinely open -- represent that honestly instead of
-                    // clearing to "No active commute." (see the pre-loop check's own comment).
-                    // Best-effort: a widget failure inside a `finally` must never replace an
-                    // in-flight CancellationException or exception being propagated out of this
-                    // block -- runWidgetUpdateSafely still rethrows a real CancellationException
-                    // unconverted, but swallows anything else so it can never mask whatever this
-                    // `finally` was already unwinding.
-                    runWidgetUpdateSafely { routineWidgetUpdater.showNotificationsUnavailable(lastKnownRoutine) }
-                } else {
-                    runWidgetUpdateSafely { routineWidgetUpdater.clear() }
+                // Ownership may have been superseded by a replacement run (e.g. editing this
+                // active routine cancelled this worker and immediately started a new one) --
+                // only clean up if THIS run is still the recorded owner of the content it
+                // posted, so a cancelled/replaced run can never clobber a newer run's own
+                // notification/widget content. The check itself must run even while this
+                // coroutine is being cancelled (that's precisely the case it exists to guard),
+                // so it's wrapped in NonCancellable; on any unexpected failure to even determine
+                // ownership, this fails CLOSED (skips cleanup) rather than risking a clear
+                // against unknown ownership -- see this worker's own class doc.
+                val stillOwnsContent = withContext(NonCancellable) {
+                    try {
+                        routineWorkOwnershipRepository.isOwner(routineId, id.toString())
+                    } catch (e: CancellationException) {
+                        throw e
+                    } catch (e: Exception) {
+                        Log.w(LOG_TAG, "Failed to determine content ownership for routine $routineId; skipping cleanup to be safe", e)
+                        false
+                    }
+                }
+                if (stillOwnsContent) {
+                    routineNotifier.remove()
+                    if (notificationsBecameUnavailable) {
+                        // The window is still genuinely open -- represent that honestly instead of
+                        // clearing to "No active commute." (see the pre-loop check's own comment).
+                        // Best-effort: a widget failure inside a `finally` must never replace an
+                        // in-flight CancellationException or exception being propagated out of this
+                        // block -- runWidgetUpdateSafely still rethrows a real CancellationException
+                        // unconverted, but swallows anything else so it can never mask whatever this
+                        // `finally` was already unwinding.
+                        runWidgetUpdateSafely { routineWidgetUpdater.showNotificationsUnavailable(lastKnownRoutine) }
+                    } else {
+                        runWidgetUpdateSafely { routineWidgetUpdater.clear() }
+                    }
                 }
             } else {
                 // setForeground() itself threw before the loop -- and before this worker ever
@@ -389,6 +441,23 @@ class RoutineActiveWindowWorker @AssistedInject constructor(
         val latest = routineRepository.getById(routineId) ?: return
         val today = zonedNow().toLocalDate()
         routineScheduler.scheduleActivation(latest.copy(pausedDate = today))
+    }
+
+    /** Claims this run as the current content owner for [routineId] — see
+     * `data/local/room/RoutineWorkOwnershipEntity.kt`'s own doc for exactly what this protects
+     * against. Called once, as early as possible after entering foreground execution (right
+     * after posting the very first, "Loading" notification). Best-effort: if this write fails,
+     * the run still proceeds normally rather than aborting over ownership bookkeeping alone —
+     * see this worker's own class doc on why "always clean up" is not the fallback either way,
+     * regardless of whether claiming itself succeeded. */
+    private suspend fun claimContentOwnership(routineId: String) {
+        try {
+            routineWorkOwnershipRepository.claim(routineId, id.toString())
+        } catch (e: CancellationException) {
+            throw e
+        } catch (e: Exception) {
+            Log.w(LOG_TAG, "Failed to claim content ownership for routine $routineId", e)
+        }
     }
 
     private fun createForegroundInfo(routine: CommuteRoutine): ForegroundInfo {

@@ -586,6 +586,34 @@ guarantees, plus direct coverage of the new store and scheduler query), reaching
 470 JVM / 41 instrumented — see `../docs/Blick_Project_Documentation.md`'s "Validation
 status" note for the full account of each.
 
+A further session replaced `ForegroundNotificationRecovery` and its boolean
+`NotificationAvailabilityStateStore` with one `@Singleton` `NotificationRecoveryCoordinator`
+as the sole, `Mutex`-serialized authority for both cold-start reconciliation and
+notification-availability recovery — `BlickApplication.onCreate()` no longer launches
+`RoutineScheduleReconciler.reconcileAll()` independently alongside the foreground trigger, so
+the two can never race into scheduling the same routine twice. The old boolean
+"last-known-available" comparison (which could never durably remember an unavailable state
+across process recreation if the app happened to restart before the next check) was replaced
+with a durable `RecoveryPendingStateStore.recoveryPending` flag: every real detector of
+"notifications are unavailable right now" (`RoutineActiveWindowWorker` before it stops,
+`RoutineDetailsViewModel`'s own checks, and the coordinator's own startup/foreground checks)
+marks it, and only a fully successful recovery attempt clears it — a Room/DataStore/WorkManager
+failure partway through leaves it set so the next foreground/startup retries. Per-routine
+content ownership (a new Room-backed `RoutineWorkOwnershipEntity`, keyed by each run's own
+WorkManager id) now gates `RoutineActiveWindowWorker`'s `finally`-block cleanup: a run that has
+been superseded by a replacement (e.g. editing an active routine) can no longer clear
+notification/widget content the replacement already posted, while the current owner still
+cleans up exactly as before. `RoutineDetailsViewModel` no longer schedules recovery itself —
+it only reports an observed unavailable state through a new, narrow
+`NotificationRecoveryReporter` interface. Removed 8 JVM `@Test` functions with the deleted
+`ForegroundNotificationRecoveryTest`/`PreferencesNotificationAvailabilityStateStoreTest` files
+and added 19 new ones (a new `NotificationRecoveryCoordinatorTest` covering serialized
+concurrent foreground/startup calls, retry-after-failure, RUNNING-work-untouched, and
+cancellation propagation; new persistence tests proving both the pending flag and content
+ownership survive simulated process recreation; and new `RoutineActiveWindowWorkerTest`/
+`RoutineDetailsViewModelTest` coverage for ownership-gated cleanup and report-only behavior),
+reaching 481 JVM / 41 instrumented.
+
 On a machine with a real JDK 17 and Android SDK (or Android Studio, which provides
 both), build with:
 
@@ -622,6 +650,27 @@ new `ForegroundNotificationRecovery` regression tests are themselves Robolectric
 against a real, in-memory `WorkManager` instance (see `ForegroundNotificationRecoveryTest`'s
 own doc), so they ran as part of the 470 JVM figure above regardless of device
 availability.
+
+**Notification-recovery coordination and worker-cleanup ownership fix, verified.** A
+further session replaced `ForegroundNotificationRecovery`/`NotificationAvailabilityStateStore`
+with the `NotificationRecoveryCoordinator`/`RecoveryPendingStateStore`/content-ownership
+design described earlier in this document, and re-ran the full local suite —
+`testDebugUnitTest`, `lintDebug`, `assembleDebug`, `assembleRelease` (a new addition to this
+verification pass; the release build config has no signing config configured, so this
+produces an unsigned APK, which is expected), and `connectedDebugAndroidTest`. Only the
+physical Lenovo TB350FU (Android 14) was connected during this session — the Samsung Galaxy
+S23 Ultra used for the run above was not available, so the instrumented suite ran on that
+one device only. All 481 JVM `@Test` functions and all 41 instrumented `@Test` functions
+pass; `lintDebug` still reports 0 errors and the same 44 warnings (none of the files touched
+by this fix introduced any new finding); `assembleDebug` and `assembleRelease` both
+succeeded. The new coordinator/ownership regression tests are themselves JVM-side Robolectric
+tests (several against a real, in-memory `WorkManager` instance, and two against a real,
+file-backed Room database/DataStore proving durable state survives simulated process
+recreation), so they ran as part of the 481 JVM figure above regardless of device
+availability. One known, narrow race remains and is documented rather than papered over:
+`RoutineScheduler.isActivationRunning` and any subsequent `scheduleActivation` call are not
+atomic, since WorkManager exposes no atomic "replace-unless-running" primitive — see
+`NotificationRecoveryCoordinator`'s own class doc for the full reasoning.
 
 **Disruptions integration, verified end to end on-device (with one real-data caveat):**
 the previously-built-but-unwired `DisruptionRepository`/`RemoteDisruptionRepository`

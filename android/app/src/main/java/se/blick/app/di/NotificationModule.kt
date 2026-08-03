@@ -8,9 +8,9 @@ import se.blick.app.notification.AndroidNotificationAvailabilityChecker
 import se.blick.app.notification.AndroidPromotedNotificationChecker
 import se.blick.app.notification.AndroidRoutineNotifier
 import se.blick.app.notification.NotificationAvailabilityChecker
-import se.blick.app.notification.NotificationAvailabilityStateStore
-import se.blick.app.notification.PreferencesNotificationAvailabilityStateStore
+import se.blick.app.notification.PreferencesRecoveryPendingStateStore
 import se.blick.app.notification.PromotedNotificationChecker
+import se.blick.app.notification.RecoveryPendingStateStore
 import se.blick.app.notification.RoutineNotifier
 import javax.inject.Singleton
 
@@ -19,9 +19,9 @@ import javax.inject.Singleton
  * binds the shared [NotificationAvailabilityChecker] (see that interface's own doc) so
  * [AndroidRoutineNotifier], `RoutineActiveWindowWorker`, and the routine details screen all
  * read the exact same live availability state, the separate [PromotedNotificationChecker] (see
- * that interface's own doc on why it's a distinct concern), and [NotificationAvailabilityStateStore]
- * (see that interface's own doc) so `ForegroundNotificationRecovery` has one persisted place to
- * detect an unavailable-to-available transition across process recreation. */
+ * that interface's own doc on why it's a distinct concern), and [RecoveryPendingStateStore] (see
+ * that interface's own doc) so `NotificationRecoveryCoordinator` has one persisted, durable
+ * place to track an owed notification-recovery attempt across process recreation. */
 @Module
 @InstallIn(SingletonComponent::class)
 abstract class NotificationModule {
@@ -44,7 +44,7 @@ abstract class NotificationModule {
 
     @Binds
     @Singleton
-    abstract fun bindNotificationAvailabilityStateStore(
-        impl: PreferencesNotificationAvailabilityStateStore,
-    ): NotificationAvailabilityStateStore
+    abstract fun bindRecoveryPendingStateStore(
+        impl: PreferencesRecoveryPendingStateStore,
+    ): RecoveryPendingStateStore
 }

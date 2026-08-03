@@ -5,7 +5,7 @@
 **Document status:** Android-first MVP specification — see "Current implementation
 status" immediately below for what already exists in this repository versus what the
 rest of this document specifies as still planned.  
-**Updated:** 2 August 2026
+**Updated:** 3 August 2026
 
 ---
 
@@ -17,22 +17,31 @@ a claim that all of it already exists. This section is the authoritative summary
 what is actually built today; where the two disagree, this section wins.
 
 **Validation status of this update, stated plainly up front:** a complete local run —
-`testDebugUnitTest`, `lintDebug`, `assembleDebug`, and `connectedDebugAndroidTest`, on the
-physical Lenovo TB350FU (Android 14) and a Samsung Galaxy S23 Ultra (`SM-S918B`, Android
-16) connected simultaneously — has now passed in full: all 470 JVM `@Test` functions and
-all 41 instrumented `@Test` functions on both devices, with the debug APK installing and
-launching without crashing on both,
-`lintDebug` with 0 errors (44
-warnings: two expected, already-guarded `InlinedApi` findings — the API-36
-`ACTION_APP_NOTIFICATION_PROMOTION_SETTINGS` deep-link and the API-33
+`testDebugUnitTest`, `lintDebug`, `assembleDebug`, `assembleRelease`, and
+`connectedDebugAndroidTest` — has now passed in full: all 481 JVM `@Test` functions, and all
+41 instrumented `@Test` functions on the physical Lenovo TB350FU (Android 14) (only that
+device was connected during this session; the Samsung Galaxy S23 Ultra used for earlier
+instrumented runs was not available this time, so it was not re-run — see
+`android/README.md`'s own note on this). `lintDebug` completed with 0 errors (44 warnings,
+unchanged in composition from the previous run: two expected, already-guarded `InlinedApi`
+findings — the API-36 `ACTION_APP_NOTIFICATION_PROMOTION_SETTINGS` deep-link and the API-33
 `POST_NOTIFICATIONS` permission constant — plus four expected `UnusedAttribute` findings
 on the widget provider XML's Android-12+-only sizing attributes, kept alongside their
 legacy fallbacks deliberately, and one expected `GradleDependency` finding for the
-newly-added `androidx.lifecycle:lifecycle-process` dependency). The new
-foreground-recovery regression tests are themselves JVM-side Robolectric tests against a
-real, in-memory WorkManager instance, so they are already included in the 470 figure above
-regardless of device availability. The backend's own `npm test` also passed in full at
-268/268. **The home-screen
+`androidx.lifecycle:lifecycle-process` dependency), and both `assembleDebug` and
+`assembleRelease` (unsigned; no release signing config is configured in this project yet)
+completed successfully. The new notification-recovery-coordination and
+worker-cleanup-ownership regression tests are themselves JVM-side Robolectric tests (several
+against a real, in-memory WorkManager instance, and two against a real, file-backed Room
+database/DataStore to prove state survives simulated process recreation), so they are
+already included in the 481 figure above regardless of device availability. One known,
+narrow, unavoidable race remains and is documented rather than hidden: `RoutineScheduler.isActivationRunning`
+and any subsequent `scheduleActivation` call are not atomic — a worker can transition from
+not-yet-started to genuinely `RUNNING` in the brief window between the two, since WorkManager
+exposes no atomic "replace-unless-running" primitive (see `NotificationRecoveryCoordinator`'s
+own doc for the full reasoning on why this residual window is accepted). The backend's own
+`npm test` also passed in full at 268/268 (unaffected by this Android-only change). **The
+home-screen
 widget's placement, resizing, live updates, and Stop-action behavior have since been
 manually confirmed on that same device, including its "Design 1" visual redesign — a
 colored line-number badge, a large countdown, and a live/scheduled/cancelled status
@@ -923,6 +932,40 @@ versions, the up-to-date per-file test breakdown, and the real issues that first
 run found and fixed (including a genuine production bug, not just test-suite
 corrections), and see "Validation status of this update" at the top of this document
 for the summary.
+
+A further session replaced that `ForegroundNotificationRecovery`/`NotificationAvailabilityStateStore`
+pairing entirely: `BlickApplication.onCreate()` was still launching cold-start
+reconciliation independently alongside the foreground trigger, with no shared coordination
+between the two, and the boolean "last-known-available" comparison could not durably
+remember an unavailable state across process recreation. One new `@Singleton`
+`NotificationRecoveryCoordinator`, serialized by its own `Mutex`, is now the sole authority
+for both: `onAppStart()` and `onForeground()` funnel through the same lock, so the two
+triggers (which genuinely do overlap on cold start) can never race into scheduling the same
+routine twice. A durable `RecoveryPendingStateStore.recoveryPending` flag replaced the
+boolean transition comparison — every real detector of "notifications are unavailable right
+now" (`RoutineActiveWindowWorker` before it stops, `RoutineDetailsViewModel`'s own checks,
+and the coordinator's own checks) marks it, and only a fully successful recovery attempt
+clears it, so a Room/DataStore/WorkManager failure partway through leaves it set for the next
+retry rather than silently losing the recovery. `RoutineDetailsViewModel` no longer schedules
+anything itself — it only reports what it observed through a new, narrow
+`NotificationRecoveryReporter` interface, closing off the two-independent-schedulers race
+that motivated this whole change. Separately, a new Room-backed `RoutineWorkOwnershipEntity`
+(keyed by each active-window run's own WorkManager id) now gates
+`RoutineActiveWindowWorker`'s own cleanup: a run that has been superseded by a replacement
+(e.g. editing an active routine, which cancels the old worker and immediately starts a new
+one) can no longer clear notification/widget content the replacement has already posted,
+while a run that is still the recorded owner cleans up exactly as before — deliberately not
+"skip cleanup on every cancellation," which could otherwise leave stale content behind.
+Removed 8 now-obsolete JVM `@Test` functions with the two deleted files and added 19 new
+ones (serialized concurrent-callback, retry-after-failure, RUNNING-work-untouched, and
+cancellation-propagation coverage for the coordinator; ownership-gated-cleanup coverage for
+the worker; report-only coverage for the ViewModel; and dedicated persistence tests proving
+both the pending flag and content ownership survive simulated process recreation) —
+**481 JVM `@Test` functions and 41 instrumented `@Test` functions now exist in source, and
+all of them pass** (268 backend tests, unchanged by this fix). See "Validation status of
+this update" at the top of this document for the full run, including the one residual,
+documented, unavoidable `isActivationRunning`/`scheduleActivation` race this fix does not
+(and cannot) eliminate outright.
 
 ### Backend
 

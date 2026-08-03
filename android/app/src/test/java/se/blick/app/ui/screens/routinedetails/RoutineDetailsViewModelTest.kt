@@ -51,6 +51,7 @@ import se.blick.app.notification.PromotedNotificationChecker
 import se.blick.app.notification.RoutineNotificationModel
 import se.blick.app.notification.RoutineNotifier
 import se.blick.app.scheduling.DeviceZoneProvider
+import se.blick.app.scheduling.NotificationRecoveryReporter
 import se.blick.app.scheduling.RoutineScheduler
 import se.blick.app.ui.navigation.Routes
 import se.blick.app.widget.RoutineWidgetUpdater
@@ -429,6 +430,17 @@ class RoutineDetailsViewModelTest {
         override fun isPromotable(): Boolean = promotable
     }
 
+    /** Records every [reportUnavailable] call — for proving this ViewModel only ever REPORTS
+     * an observed unavailable state rather than scheduling/reconciling anything itself; the
+     * real recovery/scheduling decision now lives solely in
+     * `se.blick.app.scheduling.NotificationRecoveryCoordinator` (see that class's own doc). */
+    private class FakeNotificationRecoveryReporter : NotificationRecoveryReporter {
+        var reportUnavailableCallCount = 0
+        override suspend fun reportUnavailable() {
+            reportUnavailableCallCount++
+        }
+    }
+
     /** In-memory [StaleSnapshotRepository] fake, backed by a plain mutable map rather than
      * Room — a SHARED instance passed to two separately-constructed ViewModels is exactly how
      * these tests simulate "the process was killed and recreated": a fresh ViewModel instance
@@ -461,6 +473,7 @@ class RoutineDetailsViewModelTest {
         appSettingsDataStore: AppSettingsDataStore = FakeAppSettingsDataStore(),
         notificationAvailabilityChecker: NotificationAvailabilityChecker = FakeNotificationAvailabilityChecker(),
         promotedNotificationChecker: PromotedNotificationChecker = FakePromotedNotificationChecker(),
+        notificationRecoveryReporter: NotificationRecoveryReporter = FakeNotificationRecoveryReporter(),
         deviceZoneProvider: DeviceZoneProvider = this.deviceZoneProvider,
     ) = RoutineDetailsViewModel(
         savedStateHandle = SavedStateHandle(mapOf(Routes.RoutineDetails.ARG_ROUTINE_ID to routineId)),
@@ -474,6 +487,7 @@ class RoutineDetailsViewModelTest {
         appSettingsDataStore = appSettingsDataStore,
         notificationAvailabilityChecker = notificationAvailabilityChecker,
         promotedNotificationChecker = promotedNotificationChecker,
+        notificationRecoveryReporter = notificationRecoveryReporter,
         clock = clock,
         deviceZoneProvider = deviceZoneProvider,
     )
@@ -496,6 +510,7 @@ class RoutineDetailsViewModelTest {
             appSettingsDataStore = FakeAppSettingsDataStore(),
             notificationAvailabilityChecker = FakeNotificationAvailabilityChecker(),
             promotedNotificationChecker = FakePromotedNotificationChecker(),
+            notificationRecoveryReporter = FakeNotificationRecoveryReporter(),
             clock = clock,
             deviceZoneProvider = deviceZoneProvider,
         )
@@ -836,6 +851,7 @@ class RoutineDetailsViewModelTest {
             appSettingsDataStore = FakeAppSettingsDataStore(),
             notificationAvailabilityChecker = FakeNotificationAvailabilityChecker(),
             promotedNotificationChecker = FakePromotedNotificationChecker(),
+            notificationRecoveryReporter = FakeNotificationRecoveryReporter(),
             clock = lateNightClock,
             deviceZoneProvider = stockholmZone,
         )
@@ -1593,83 +1609,97 @@ class RoutineDetailsViewModelTest {
         assertEquals(NotificationAvailability.Available, vm.uiState.value.notificationAvailability)
     }
 
-    // ---- Notification re-enabling resumes today's routine (Fix: reschedule + reconcile on the
-    // unavailable-to-available transition) ----
+    // ---- Notification-recovery reporting only (RoutineDetailsViewModel is no longer an
+    // independent scheduling authority) ----
     //
-    // Without this, an enabled routine whose active window RoutineActiveWindowWorker already
-    // cut short (via its own rescheduleSkippingToday, once it noticed notifications were
-    // unavailable) stayed silent until the routine's next eligible occurrence -- tomorrow at the
-    // earliest -- even if the user re-enabled notifications while today's window was still open.
+    // se.blick.app.scheduling.NotificationRecoveryCoordinator is now the SOLE authority for
+    // deciding when to reschedule/reconcile after notifications become available again (see
+    // that class's own doc). This screen's only remaining responsibility is durably REPORTING
+    // an observed unavailable state via NotificationRecoveryReporter -- it must never call
+    // RoutineScheduler.scheduleActivation or reconcile the widget itself, since two independent
+    // code paths racing to schedule the same routine's activation is exactly the bug the
+    // coordinator was introduced to fix.
 
     @Test
-    fun `refreshNotificationAvailability reschedules and reconciles the widget on the unavailable-to-available transition`() =
+    fun `refreshNotificationAvailability reports unavailable and never schedules or reconciles the widget itself`() =
         runTest(dispatcher) {
             val routine = sampleRoutine(enabled = true)
-            val checker = FakeNotificationAvailabilityChecker(current = NotificationAvailability.AppDisabled)
+            val checker = FakeNotificationAvailabilityChecker(current = NotificationAvailability.Available)
             val scheduler = FakeRoutineScheduler()
             val widgetUpdater = FakeRoutineWidgetUpdater()
-            val vm = viewModel(routine = routine, notificationAvailabilityChecker = checker, scheduler = scheduler, widgetUpdater = widgetUpdater)
+            val reporter = FakeNotificationRecoveryReporter()
+            val vm = viewModel(
+                routine = routine,
+                notificationAvailabilityChecker = checker,
+                scheduler = scheduler,
+                widgetUpdater = widgetUpdater,
+                notificationRecoveryReporter = reporter,
+            )
             dispatcher.scheduler.advanceUntilIdle()
-            // The very first check (in init) landing on Unavailable must not itself trigger a
-            // reschedule -- there is no PRIOR "available" state to be transitioning away from.
-            assertTrue(scheduler.scheduledRoutines.isEmpty())
+            // The very first check (in init) is Available -- nothing to report.
+            assertEquals(0, reporter.reportUnavailableCallCount)
 
-            checker.current = NotificationAvailability.Available
+            checker.current = NotificationAvailability.AppDisabled
             vm.refreshNotificationAvailability()
             dispatcher.scheduler.advanceUntilIdle()
 
-            assertEquals(NotificationAvailability.Available, vm.uiState.value.notificationAvailability)
-            assertEquals(listOf(routine.id), scheduler.scheduledRoutines.map { it.id })
-            assertEquals(1, widgetUpdater.reconcileCallCount)
+            assertEquals(NotificationAvailability.AppDisabled, vm.uiState.value.notificationAvailability)
+            assertEquals(1, reporter.reportUnavailableCallCount)
+            // Scheduling/reconciling a recovered routine is the coordinator's job now, never
+            // this ViewModel's -- see this section's own doc.
+            assertTrue(scheduler.scheduledRoutines.isEmpty())
+            assertEquals(0, widgetUpdater.reconcileCallCount)
         }
 
     @Test
-    fun `refreshNotificationAvailability does not reschedule when availability was already available`() = runTest(dispatcher) {
+    fun `refreshNotificationAvailability does not report when availability is already available`() = runTest(dispatcher) {
         val routine = sampleRoutine(enabled = true)
         val checker = FakeNotificationAvailabilityChecker(current = NotificationAvailability.Available)
-        val scheduler = FakeRoutineScheduler()
-        val widgetUpdater = FakeRoutineWidgetUpdater()
-        val vm = viewModel(routine = routine, notificationAvailabilityChecker = checker, scheduler = scheduler, widgetUpdater = widgetUpdater)
+        val reporter = FakeNotificationRecoveryReporter()
+        val vm = viewModel(routine = routine, notificationAvailabilityChecker = checker, notificationRecoveryReporter = reporter)
         dispatcher.scheduler.advanceUntilIdle()
 
-        // Still available -- not a transition, so no reschedule.
         vm.refreshNotificationAvailability()
         dispatcher.scheduler.advanceUntilIdle()
 
-        assertTrue(scheduler.scheduledRoutines.isEmpty())
-        assertEquals(0, widgetUpdater.reconcileCallCount)
+        assertEquals(0, reporter.reportUnavailableCallCount)
     }
 
     @Test
-    fun `refreshNotificationAvailability does not reschedule a disabled routine on the unavailable-to-available transition`() =
+    fun `refreshNotificationAvailability reports unavailable even for a disabled routine`() =
         runTest(dispatcher) {
+            // The report is purely "notifications are unavailable right now" -- whether that's
+            // worth acting on for THIS routine is the coordinator's decision (it only ever
+            // touches enabled routines), not something this screen needs to pre-filter.
             val routine = sampleRoutine(enabled = false)
             val checker = FakeNotificationAvailabilityChecker(current = NotificationAvailability.AppDisabled)
-            val scheduler = FakeRoutineScheduler()
-            val vm = viewModel(routine = routine, notificationAvailabilityChecker = checker, scheduler = scheduler)
+            val reporter = FakeNotificationRecoveryReporter()
+            val vm = viewModel(routine = routine, notificationAvailabilityChecker = checker, notificationRecoveryReporter = reporter)
             dispatcher.scheduler.advanceUntilIdle()
 
-            checker.current = NotificationAvailability.Available
-            vm.refreshNotificationAvailability()
-            dispatcher.scheduler.advanceUntilIdle()
-
-            assertTrue(scheduler.scheduledRoutines.isEmpty())
+            assertEquals(1, reporter.reportUnavailableCallCount)
         }
 
     @Test
-    fun `markNotificationRationaleSeen also reschedules on the unavailable-to-available transition`() = runTest(dispatcher) {
+    fun `markNotificationRationaleSeen also reports unavailable, never schedules`() = runTest(dispatcher) {
         val routine = sampleRoutine(enabled = true)
-        val checker = FakeNotificationAvailabilityChecker(current = NotificationAvailability.PermissionMissing)
+        val checker = FakeNotificationAvailabilityChecker(current = NotificationAvailability.Available)
         val scheduler = FakeRoutineScheduler()
-        val vm = viewModel(routine = routine, notificationAvailabilityChecker = checker, scheduler = scheduler)
+        val reporter = FakeNotificationRecoveryReporter()
+        val vm = viewModel(
+            routine = routine,
+            notificationAvailabilityChecker = checker,
+            scheduler = scheduler,
+            notificationRecoveryReporter = reporter,
+        )
         dispatcher.scheduler.advanceUntilIdle()
 
-        // The permission-grant result flow always calls markNotificationRationaleSeen().
-        checker.current = NotificationAvailability.Available
+        checker.current = NotificationAvailability.PermissionMissing
         vm.markNotificationRationaleSeen()
         dispatcher.scheduler.advanceUntilIdle()
 
-        assertEquals(listOf(routine.id), scheduler.scheduledRoutines.map { it.id })
+        assertEquals(1, reporter.reportUnavailableCallCount)
+        assertTrue(scheduler.scheduledRoutines.isEmpty())
     }
 
     // ---- Scheduler integration (save/enable/disable/pause/resume/delete) ----
