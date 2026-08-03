@@ -7,6 +7,9 @@ import android.content.Intent
 import android.content.IntentFilter
 import androidx.core.content.ContextCompat
 import androidx.hilt.work.HiltWorkerFactory
+import androidx.lifecycle.DefaultLifecycleObserver
+import androidx.lifecycle.LifecycleOwner
+import androidx.lifecycle.ProcessLifecycleOwner
 import androidx.work.Configuration
 import dagger.hilt.android.HiltAndroidApp
 import kotlinx.coroutines.CoroutineScope
@@ -26,16 +29,24 @@ import javax.inject.Inject
  * ever runs, crashing with "WorkManager is already initialized" the first time on-demand
  * initialization is attempted here instead.
  *
- * Runs [RoutineScheduleReconciler.reconcileAll] (see that class's own doc) twice over: once on
- * process start (covering reboot, an app update, and ordinary process recreation — WorkManager
- * itself already persists enqueued work across all of these; this is a defensive backstop, not
- * the primary scheduling mechanism, since saving/editing/enabling/disabling/pausing/resuming a
- * routine already calls the scheduler directly at the point of change), and again every time
+ * Runs [RoutineScheduleReconciler.reconcileAll] (see that class's own doc) on three separate
+ * triggers, all cheap and idempotent to repeat: once on process start (covering reboot — see
+ * [se.blick.app.scheduling.BootCompletedReceiver] for the dedicated `BOOT_COMPLETED` receiver
+ * that also calls it — plus an app update and ordinary process recreation; WorkManager itself
+ * already persists enqueued work across all of these, so this is a defensive backstop, not the
+ * primary scheduling mechanism, since saving/editing/enabling/disabling/pausing/resuming a
+ * routine already calls the scheduler directly at the point of change); every time
  * [Intent.ACTION_TIMEZONE_CHANGED] is broadcast while this process stays alive — a live device
  * timezone change that an already-enqueued `WorkRequest`'s fixed `initialDelay` cannot pick up
- * on its own (see [RoutineScheduleReconciler]'s doc). No `BOOT_COMPLETED` receiver is used —
- * starting a `dataSync` foreground service directly from one is restricted on modern Android;
- * WorkManager's own persistence plus this process-start reconciliation covers reboot instead.
+ * on its own (see [RoutineScheduleReconciler]'s doc); and every time the app returns to the
+ * foreground ([ProcessLifecycleOwner]'s `ON_START`). The foreground trigger closes a real gap:
+ * without it, notifications disabled and then re-enabled entirely while Blick stays backgrounded
+ * (no Routine Details screen open to observe the unavailable-to-available transition itself —
+ * see [se.blick.app.ui.screens.routinedetails.RoutineDetailsViewModel.refreshNotificationAvailability])
+ * would never re-trigger [se.blick.app.scheduling.RoutineScheduler.scheduleActivation] for the
+ * rest of that day. `ON_START` fires once at process start too (before this class's own explicit
+ * call below even runs), so the two triggers overlap on cold start — harmless, since
+ * [RoutineScheduleReconciler.reconcileAll] is documented as safe to call as often as needed.
  */
 @HiltAndroidApp
 class BlickApplication : Application(), Configuration.Provider {
@@ -53,6 +64,17 @@ class BlickApplication : Application(), Configuration.Provider {
         super.onCreate()
         applicationScope.launch { routineScheduleReconciler.reconcileAll() }
         registerTimeZoneChangeReceiver()
+        registerForegroundReconciler()
+    }
+
+    private fun registerForegroundReconciler() {
+        ProcessLifecycleOwner.get().lifecycle.addObserver(
+            object : DefaultLifecycleObserver {
+                override fun onStart(owner: LifecycleOwner) {
+                    applicationScope.launch { routineScheduleReconciler.reconcileAll() }
+                }
+            },
+        )
     }
 
     private fun registerTimeZoneChangeReceiver() {

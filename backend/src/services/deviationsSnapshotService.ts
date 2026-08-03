@@ -163,7 +163,17 @@ export function createDeviationsSnapshotService(
         throw err;
       }
     } finally {
-      await lock.release(REFRESH_LOCK_KEY, refreshToken);
+      // Best-effort: a throwing release() must never override whatever the try block above is
+      // already returning or throwing -- by JS semantics, an exception from a `finally` block
+      // replaces a pending return/throw from its own `try`, so an UNGUARDED release() call here
+      // could turn an already-successful, already-cached snapshot into a 500 for this request,
+      // even though the data was fetched fine and is now available to every other request. The
+      // lock's own TTL (REFRESH_LOCK_TTL_MS) still guarantees eventual release if this fails.
+      try {
+        await lock.release(REFRESH_LOCK_KEY, refreshToken);
+      } catch (err) {
+        console.warn("Failed to release SL Deviations refresh lock (will expire via its own TTL):", err);
+      }
     }
   }
 

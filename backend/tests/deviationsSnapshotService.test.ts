@@ -2,6 +2,7 @@ import { describe, expect, it, vi } from "vitest";
 import { createDeviationsSnapshotService } from "../src/services/deviationsSnapshotService.js";
 import { InMemoryCache } from "../src/lib/cache.js";
 import { InMemoryLock } from "../src/lib/distributedLock.js";
+import type { DistributedLock } from "../src/lib/distributedLock.js";
 import { AppError, isAppError } from "../src/lib/errors.js";
 import type { SlDeviationsClient } from "../src/services/slDeviationsClient.js";
 import type { RawDeviation } from "../src/services/upstreamTypes.js";
@@ -279,6 +280,38 @@ describe("createDeviationsSnapshotService — refresh-lock expiry and recovery",
       expect(callCount()).toBe(1);
       expect(snapshot.deviations).toEqual([fakeDeviation(1)]);
       expect(stuckCallCount).toBe(1); // the stuck instance's own single attempt, still pending
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+});
+
+describe("createDeviationsSnapshotService — lock release is best-effort", () => {
+  it("a throwing lock.release() does not turn an already-successful, already-cached fetch into a failure", async () => {
+    vi.useFakeTimers();
+    try {
+      vi.setSystemTime(new Date("2026-07-27T05:00:00Z"));
+      const { client, callCount } = scriptedClient([async () => [fakeDeviation(1)]]);
+      // acquire() delegates to a real InMemoryLock (so the rest of the service's own logic
+      // behaves normally); release() always throws, simulating a dropped Redis connection or
+      // failed release script AFTER the upstream fetch already succeeded and was cached.
+      const innerLock = new InMemoryLock();
+      const throwingReleaseLock: DistributedLock = {
+        acquire: (key, ttlMs) => innerLock.acquire(key, ttlMs),
+        release: async () => {
+          throw new Error("Redis connection dropped during release");
+        },
+      };
+      const cache = new InMemoryCache();
+      const service = createDeviationsSnapshotService(client, cache, throwingReleaseLock);
+
+      const snapshot = await service.getSnapshot();
+
+      expect(callCount()).toBe(1);
+      expect(snapshot.deviations).toHaveLength(1);
+      // The successful fetch was still cached despite the release failure -- a later request
+      // does not need to fetch again just because this one's cleanup failed.
+      expect(await cache.get("sl-deviations:snapshot:v1")).toEqual(snapshot);
     } finally {
       vi.useRealTimers();
     }

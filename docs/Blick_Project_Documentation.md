@@ -18,19 +18,18 @@ what is actually built today; where the two disagree, this section wins.
 
 **Validation status of this update, stated plainly up front:** a complete local run —
 `testDebugUnitTest`, `lintDebug`, `assembleDebug`, and `connectedDebugAndroidTest`, most
-recently on a physical Lenovo TB350FU and a Samsung Galaxy S23 Ultra connected
-simultaneously (Android 14) — has now passed in full: all 465 JVM `@Test`
-functions (the 40 instrumented `@Test` functions are unchanged since that combined-device
-run and were not re-run for the most recent, JVM-only audit-follow-up session, since no
-device was connected at the time — stated plainly rather than silently implied),
-`lintDebug` with 0 errors (43
+recently on the physical Lenovo TB350FU alone (Android 14; the Samsung Galaxy S23 Ultra
+used for prior combined-device runs was not connected this session) — has now passed in
+full: all 467 JVM `@Test` functions and all 41 instrumented `@Test` functions,
+`lintDebug` with 0 errors (44
 warnings: two expected, already-guarded `InlinedApi` findings — the API-36
 `ACTION_APP_NOTIFICATION_PROMOTION_SETTINGS` deep-link and the API-33
 `POST_NOTIFICATIONS` permission constant — plus four expected `UnusedAttribute` findings
 on the widget provider XML's Android-12+-only sizing attributes, kept alongside their
-legacy fallbacks deliberately), and a working debug APK,
-with the ongoing-notification loop, routine details live-preview, and full routine
-management additionally exercised manually on that same device. **The home-screen
+legacy fallbacks deliberately, and one expected `GradleDependency` finding for the
+newly-added `androidx.lifecycle:lifecycle-process` dependency), and a working debug APK
+that launches without crashing. The backend's own `npm test` also passed in full at
+266/266. **The home-screen
 widget's placement, resizing, live updates, and Stop-action behavior have since been
 manually confirmed on that same device, including its "Design 1" visual redesign — a
 colored line-number badge, a large countdown, and a live/scheduled/cancelled status
@@ -876,8 +875,16 @@ during a broader project audit, fixing two remaining real bugs — notification
 re-enabling not resuming today's already-active routine, and `WidgetReconcileWorker`'s
 one remaining unprotected widget call now returning `Result.retry()` on ordinary
 failure instead of silently giving up — added 6 further JVM `@Test` functions with no
-further instrumented ones —
-**465 JVM `@Test` functions and 40 instrumented `@Test` functions now exist in source,
+further instrumented ones, reaching 465 JVM / 40 instrumented. A further session, found
+during a broader project audit, fixing five more real bugs — editing a routine silently
+deleting its offline stale-departure fallback via `RoutineDao.upsert()`'s cascade-delete
+conflict resolution, notifications re-enabled entirely while backgrounded not resuming
+today's routine, an already-expired fallback disruption surviving a timed-out refetch,
+tick spacing drifting beyond its intended 30-second cadence on a slow disruptions fetch,
+and the backend's SL Deviations refresh-lock release able to turn an already-successful
+fetch into a failure — added 2 further JVM `@Test` functions and 1 further instrumented
+one (plus 1 further backend test, unrelated to these counts) —
+**467 JVM `@Test` functions and 41 instrumented `@Test` functions now exist in source,
 and all of them pass.** See `android/README.md`'s Build section for the exact toolchain
 versions, the up-to-date per-file test breakdown, and the real issues that first full
 run found and fixed (including a genuine production bug, not just test-suite
@@ -1155,7 +1162,7 @@ delete
 deleteById
 ```
 
-`upsert` is `@Insert(onConflict = OnConflictStrategy.REPLACE)` — an insert that replaces an existing row sharing the same primary key, rather than a separate merge/patch operation.
+`upsert` is `@Upsert` — inserts a new row, or updates an existing row sharing the same primary key IN PLACE. Previously `@Insert(onConflict = OnConflictStrategy.REPLACE)`, which resolves a primary-key conflict via a real SQL DELETE of the existing row followed by a fresh INSERT — harmless on its own, but that DELETE fired `stale_snapshots`' `ON DELETE CASCADE` on every routine edit, silently wiping the offline stale-departure fallback each time (a genuine bug, fixed during a broader project audit).
 
 Preferences DataStore holds only small application settings such as first-launch state, theme choice, and whether an explanation has been dismissed.
 

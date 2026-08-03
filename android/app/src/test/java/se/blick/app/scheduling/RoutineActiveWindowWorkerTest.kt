@@ -12,6 +12,7 @@ import io.mockk.mockk
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.test.currentTime
 import kotlinx.coroutines.test.runCurrent
 import kotlinx.coroutines.test.runTest
 import org.junit.Assert.assertEquals
@@ -208,6 +209,38 @@ class RoutineActiveWindowWorkerTest {
         override suspend fun getDisruptions(siteId: Long, lineId: Long?, transportMode: TransportMode?): List<Disruption> {
             callCount++
             delay(delayMs)
+            return result()
+        }
+    }
+
+    /** Returns whatever [resultForCall] produces for the current call index, EXCEPT a `null`
+     * result means "never resolves in time" (simulated via a delay far longer than
+     * [DISRUPTIONS_FETCH_TIMEOUT_MS], like [SlowDisruptionRepository]) -- lets a test script a
+     * successful fetch on one tick and a timed-out one on the next. */
+    private class ScriptedDisruptionRepository(
+        private val resultForCall: (callIndex: Int) -> List<Disruption>?,
+    ) : DisruptionRepository {
+        var callCount = 0
+        override suspend fun getDisruptions(siteId: Long, lineId: Long?, transportMode: TransportMode?): List<Disruption> {
+            val result = resultForCall(callCount)
+            callCount++
+            if (result == null) delay(DISRUPTIONS_FETCH_TIMEOUT_MS * 100)
+            return result ?: emptyList()
+        }
+    }
+
+    /** Advances the shared [clock] by [advanceMs] (simulating real wall-clock time spent
+     * awaiting this fetch, exactly like [ScriptedRoutineRepository]'s own per-call advance)
+     * before returning [result] -- used to prove elapsed disruption-fetch time is subtracted
+     * from the tick's subsequent delay rather than added on top of it. */
+    private class SlowClockAdvancingDisruptionRepository(
+        private val clock: TickingClock,
+        private val delayMs: Long,
+        private val result: () -> List<Disruption> = { emptyList() },
+    ) : DisruptionRepository {
+        override suspend fun getDisruptions(siteId: Long, lineId: Long?, transportMode: TransportMode?): List<Disruption> {
+            delay(delayMs)
+            clock.instant = clock.instant.plusMillis(delayMs)
             return result()
         }
     }
@@ -1342,5 +1375,79 @@ class RoutineActiveWindowWorkerTest {
         assertEquals(1, notifier.removeCallCount)
         assertEquals(1, scheduler.scheduledRoutines.size)
         assertTrue(slowDisruptions.callCount > 0)
+    }
+
+    // ---- Regression: an expired fallback disruption must not survive a later timed-out fetch
+    // (Fix: lastKnownDisruption's own validUntil is re-checked against `now` every tick) ----
+
+    @Test
+    fun `an expired fallback disruption is cleared, not shown, after a later fetch times out`() = runTest {
+        val clock = TickingClock(Instant.parse("2026-07-27T05:00:00Z"), zone) // 07:00 local
+        val routine = routine() // 07:00-07:02 window -- exactly two ticks (see class doc example)
+        val repository = ScriptedRoutineRepository(clock) { routine }
+        val notifier = RecordingNotifier()
+        val departures = FakeDepartureRepository { DeparturesResult(clock.instant(), 9145, listOf(sampleDeparture()), emptyList()) }
+        // Tick 1's own `now` lands at 05:01:00Z (see class doc's worked example); this disruption
+        // is still valid then, but expires at 05:01:15Z -- BEFORE tick 2's own `now` (05:01:30Z).
+        val expiringDisruption = sampleDisruption().copy(validUntil = Instant.parse("2026-07-27T05:01:15Z"))
+        val disruptions = ScriptedDisruptionRepository { callIndex ->
+            if (callIndex == 0) listOf(expiringDisruption) else null // tick 2's fetch times out
+        }
+
+        val worker = buildWorker(
+            routine.id,
+            repository,
+            GetLiveDeparturesUseCase(departures, clock),
+            notifier,
+            RecordingScheduler(),
+            clock,
+            getDisruptions = GetDisruptionsUseCase(disruptions),
+        )
+        worker.doWork()
+
+        // Tick 1: posts departures alone first (nothing known yet), then the newly-loaded
+        // disruption arrives and triggers one extra silent post carrying it -- same pattern as
+        // the "newly-discovered" test above. Tick 2: its OWN fetch times out, but the fallback it
+        // would otherwise have reused already expired by tick 2's `now` -- so this tick's post
+        // must show no disruption at all, not the stale one, even though nothing "new" ever
+        // explicitly replaced it.
+        assertEquals(3, notifier.shown.size)
+        assertEquals(null, notifier.shown[0].disruptionHeadline)
+        assertEquals(expiringDisruption.message.header, notifier.shown[1].disruptionHeadline)
+        assertEquals(null, notifier.shown[2].disruptionHeadline)
+    }
+
+    // ---- Regression: elapsed disruption-fetch time is subtracted from the tick's own delay,
+    // not added on top of it (Fix: tick spacing no longer drifts to ~35s on a slow fetch) ----
+
+    @Test
+    fun `time spent on a slow-but-successful disruptions fetch is subtracted from the tick's delay, not added on top`() = runTest {
+        val clock = TickingClock(Instant.parse("2026-07-27T05:00:00Z"), zone) // 07:00 local
+        val routine = routine() // 07:00-07:02 window -- exactly two ticks (see class doc example)
+        val repository = ScriptedRoutineRepository(clock) { routine }
+        val notifier = RecordingNotifier()
+        val departures = FakeDepartureRepository { DeparturesResult(clock.instant(), 9145, listOf(sampleDeparture()), emptyList()) }
+        // Well under DISRUPTIONS_FETCH_TIMEOUT_MS (5s), so this always resolves rather than
+        // timing out -- but still genuinely slow enough to matter if its elapsed time were
+        // simply added on top of ACTIVE_WINDOW_REFRESH_INTERVAL_MS instead of subtracted from it.
+        val disruptions = SlowClockAdvancingDisruptionRepository(clock, delayMs = 3_000L)
+
+        val worker = buildWorker(
+            routine.id,
+            repository,
+            GetLiveDeparturesUseCase(departures, clock),
+            notifier,
+            RecordingScheduler(),
+            clock,
+            getDisruptions = GetDisruptionsUseCase(disruptions),
+        )
+        worker.doWork()
+
+        // Without the fix, each tick's delay would still be the full ACTIVE_WINDOW_REFRESH_INTERVAL_MS
+        // on top of the 3s already spent fetching, drifting total tick spacing to 2 * 33s = 66s.
+        // With the fix, each tick's delay is shortened to 27s, so the two ticks' combined virtual
+        // time (3s fetch + 27s delay, twice) lands exactly on 2 * ACTIVE_WINDOW_REFRESH_INTERVAL_MS.
+        assertEquals(2, notifier.shown.size)
+        assertEquals(2 * ACTIVE_WINDOW_REFRESH_INTERVAL_MS, currentTime)
     }
 }

@@ -31,6 +31,7 @@ import se.blick.app.notification.RoutineNotifier
 import se.blick.app.widget.RoutineWidgetUpdater
 import se.blick.app.widget.runWidgetUpdateSafely
 import java.time.Clock
+import java.time.Duration
 import java.time.ZonedDateTime
 
 /** The interval between departure re-fetches while a routine's active window is running (the
@@ -44,7 +45,10 @@ internal const val ACTIVE_WINDOW_REFRESH_INTERVAL_MS = 30_000L
  * to delay, let alone indefinitely hang, the departures notification, which is always posted
  * first and does not wait on this at all. Comfortably shorter than
  * [ACTIVE_WINDOW_REFRESH_INTERVAL_MS] so a slow request can never itself become the bottleneck
- * that eats into the next tick. */
+ * that eats into the next tick — and however much of it a slow-but-successful fetch actually
+ * uses is subtracted from that same tick's own delay (see the main loop's own comment), so tick
+ * spacing stays close to [ACTIVE_WINDOW_REFRESH_INTERVAL_MS] rather than drifting up to this
+ * much beyond it on every slow tick. */
 internal const val DISRUPTIONS_FETCH_TIMEOUT_MS = 5_000L
 
 /**
@@ -192,7 +196,9 @@ class RoutineActiveWindowWorker @AssistedInject constructor(
         var lastKnownRoutine = routine
         // Persists across loop ticks -- see the main loop's own comment on why a timed-out or
         // failed disruptions fetch falls back to this rather than dropping to "no disruption
-        // shown" for one tick.
+        // shown" for one tick. Re-checked against its own validUntil every tick (see the main
+        // loop's own comment) so an already-expired fallback can never be shown indefinitely
+        // just because every subsequent fetch happens to time out or fail.
         var lastKnownDisruption: Disruption? = null
 
         try {
@@ -224,6 +230,16 @@ class RoutineActiveWindowWorker @AssistedInject constructor(
                 }
 
                 val now = clock.instant()
+                // A fallback carried over from an earlier tick may have expired by now (its own
+                // validUntil has passed) even though nothing has explicitly replaced it yet --
+                // only a fresh Loaded/NoDisruptions result normally updates lastKnownDisruption
+                // (see below), so without this check an expired disruption could keep being
+                // shown indefinitely across ticks where every subsequent fetch times out or
+                // fails. A confirmed-fresh result is never expired at the moment it's received,
+                // so this can only ever clear a fallback, never a value from THIS tick's own fetch.
+                if (lastKnownDisruption?.validUntil?.isBefore(now) == true) {
+                    lastKnownDisruption = null
+                }
                 val disruptionAtPost = lastKnownDisruption
                 val model = RoutineNotificationMapper.map(current, departuresState, now, disruptionAtPost)
                 // The real NotificationPostResult is intentionally not surfaced anywhere from
@@ -255,6 +271,7 @@ class RoutineActiveWindowWorker @AssistedInject constructor(
                 // on the other hand, DOES clear it, since that is a genuine, positive
                 // confirmation that nothing is currently affecting this routine, not merely an
                 // absence of information.
+                val disruptionFetchStart = clock.instant()
                 when (val disruptionResult = withTimeoutOrNull(DISRUPTIONS_FETCH_TIMEOUT_MS) { getDisruptions(current).last() }) {
                     is DisruptionsState.Loaded -> lastKnownDisruption = disruptionResult.disruptions.firstOrNull()
                     is DisruptionsState.NoDisruptions -> lastKnownDisruption = null
@@ -269,7 +286,14 @@ class RoutineActiveWindowWorker @AssistedInject constructor(
                     routineNotifier.showOrUpdate(RoutineNotificationMapper.map(current, departuresState, now, lastKnownDisruption))
                 }
 
-                delay(ACTIVE_WINDOW_REFRESH_INTERVAL_MS)
+                // Subtracts however long the disruptions fetch just above actually took (bounded
+                // by DISRUPTIONS_FETCH_TIMEOUT_MS, but a slow-yet-successful fetch can still
+                // consume most of that) from this tick's own delay, rather than adding it on top
+                // -- without this, a slow-but-not-timed-out fetch drifted total tick spacing up
+                // to DISRUPTIONS_FETCH_TIMEOUT_MS beyond ACTIVE_WINDOW_REFRESH_INTERVAL_MS (up to
+                // ~35s instead of 30s) on every tick where the fetch was slow.
+                val disruptionFetchElapsedMs = Duration.between(disruptionFetchStart, clock.instant()).toMillis().coerceAtLeast(0L)
+                delay((ACTIVE_WINDOW_REFRESH_INTERVAL_MS - disruptionFetchElapsedMs).coerceAtLeast(0L))
             }
         } catch (e: CancellationException) {
             // A real coroutine cancellation (this worker's own work was replaced or cancelled

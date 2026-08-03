@@ -2,10 +2,9 @@ package se.blick.app.data.local.room
 
 import androidx.room.Dao
 import androidx.room.Delete
-import androidx.room.Insert
-import androidx.room.OnConflictStrategy
 import androidx.room.Query
 import androidx.room.Update
+import androidx.room.Upsert
 import kotlinx.coroutines.flow.Flow
 
 @Dao
@@ -16,7 +15,12 @@ interface RoutineDao {
     @Query("SELECT * FROM routines WHERE id = :id")
     suspend fun getById(id: String): RoutineEntity?
 
-    @Insert(onConflict = OnConflictStrategy.REPLACE)
+    // @Upsert (insert, or update in place on a primary-key conflict) rather than
+    // @Insert(onConflict = OnConflictStrategy.REPLACE) -- REPLACE resolves a conflict by
+    // issuing a real SQL DELETE of the existing row before re-inserting, and that DELETE fires
+    // ON DELETE CASCADE actions on child tables (see StaleSnapshotEntity's foreign key), so
+    // every edit of an existing routine was silently wiping its stale-departure fallback.
+    @Upsert
     suspend fun upsert(routine: RoutineEntity)
 
     @Update

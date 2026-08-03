@@ -530,10 +530,23 @@ adding 16 further JVM `@Test` functions with no further instrumented ones, reach
 broader project audit — notification re-enabling not resuming today's already-active
 routine, and `WidgetReconcileWorker`'s one remaining unprotected widget call — see "Audit
 follow-up: notification re-enable resumes today, WidgetReconcileWorker retries" below —
-adding 6 further JVM `@Test` functions with no further instrumented ones, reaching the
-465 JVM / 40 instrumented total stated below — see
-`../docs/Blick_Project_Documentation.md`'s "Validation status" note for the full account
-of each.
+adding 6 further JVM `@Test` functions with no further instrumented ones, reaching
+465 JVM / 40 instrumented. A further session then fixed five more real bugs found during
+a broader project audit — editing a routine silently deleted its offline stale-departure
+fallback (`RoutineDao.upsert()`'s `OnConflictStrategy.REPLACE` triggered the
+`stale_snapshots` table's `ON DELETE CASCADE` on every edit, not just a real delete),
+notifications disabled then re-enabled entirely while the app stayed backgrounded could
+still miss the rest of the day (closed with a `ProcessLifecycleOwner`-driven reconcile on
+every foreground return, not only when the Routine Details screen happened to observe the
+transition itself), an already-expired fallback disruption could keep being shown across
+ticks where every subsequent fetch timed out, tick spacing could drift up to
+`DISRUPTIONS_FETCH_TIMEOUT_MS` beyond the intended 30-second cadence on a slow-but-
+successful disruptions fetch, and the backend's SL Deviations refresh-lock release could
+turn an already-successful, already-cached fetch into a 500 if the release call itself
+failed — adding 2 further JVM `@Test` functions and 1 further instrumented one, reaching
+the 467 JVM / 41 instrumented total stated below (plus 1 new backend test, reaching 266 —
+see `../backend/README.md`) — see `../docs/Blick_Project_Documentation.md`'s "Validation
+status" note for the full account of each.
 
 On a machine with a real JDK 17 and Android SDK (or Android Studio, which provides
 both), build with:
@@ -553,20 +566,22 @@ clone builds without Android Studio or a pre-existing local Gradle install.
 ### Full verification pass
 
 A complete local run — `testDebugUnitTest`, `lintDebug`, `assembleDebug`, and
-`connectedDebugAndroidTest`, most recently on both the physical Lenovo TB350FU (Android 14)
-and a Samsung Galaxy S23 Ultra (`SM-S918B`) connected simultaneously — has since
-been completed, using Android Studio's own bundled JDK. All 465 JVM
-`@Test` functions pass; `lintDebug` reports 0
-errors (43 warnings: two expected, already-guarded `InlinedApi` findings — the
-API-36 `ACTION_APP_NOTIFICATION_PROMOTION_SETTINGS` deep-link and the API-33
+`connectedDebugAndroidTest` — has since been completed, using Android Studio's own bundled
+JDK. All 467 JVM `@Test` functions pass; `lintDebug` reports 0 errors (44 warnings: two
+expected, already-guarded `InlinedApi` findings — the API-36
+`ACTION_APP_NOTIFICATION_PROMOTION_SETTINGS` deep-link and the API-33
 `POST_NOTIFICATIONS` permission constant — plus four expected `UnusedAttribute` findings
 on `res/xml/blick_routine_widget_info.xml`'s Android-12+-only sizing attributes, present
 alongside their legacy fallbacks specifically so both old and new launchers get correct
-resize behaviour, exactly like Google's own official widget-provider XML example); the
-debug APK builds
-and installs; and the ongoing-notification
-loop, the routine details live-preview, and full routine management were all exercised
-manually on that same device.
+resize behaviour, exactly like Google's own official widget-provider XML example; the one
+new warning since the prior 43-warning count is an expected `GradleDependency` finding for
+the newly-added `androidx.lifecycle:lifecycle-process` dependency, pinned to the same
+`lifecycle` version as every other `androidx.lifecycle` artifact already in this project);
+the debug APK builds, installs, and launches without crashing; and all 41 instrumented
+`@Test` functions pass on the physical Lenovo TB350FU (Android 14) — the Samsung Galaxy
+S23 Ultra used for prior combined-device runs was not connected this session, so this
+round's instrumented run is on the one device alone, stated plainly rather than silently
+implied.
 
 **Disruptions integration, verified end to end on-device (with one real-data caveat):**
 the previously-built-but-unwired `DisruptionRepository`/`RemoteDisruptionRepository`

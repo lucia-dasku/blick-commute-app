@@ -136,6 +136,24 @@ class StaleSnapshotDaoTest {
     }
 
     @Test
+    fun editingTheOwningRoutineDoesNotDeleteItsStaleSnapshot() = runBlocking {
+        // Regression test: RoutineDao.upsert() used to be @Insert(onConflict = REPLACE), which
+        // resolves a primary-key conflict via a real SQL DELETE + re-INSERT of the routines row
+        // -- and that DELETE fired the ON DELETE CASCADE on stale_snapshots, so simply editing a
+        // routine (same id, upsert called again) silently wiped its stale-departure fallback.
+        // Now @Upsert updates the existing row in place instead, so the child row must survive.
+        routineDao.upsert(sampleRoutineEntity())
+        dao.upsert(toStaleSnapshotEntity("r1", identity, sampleSnapshot()))
+
+        routineDao.upsert(sampleRoutineEntity().copy(name = "Renamed commute"))
+
+        val stored = dao.getByRoutineId("r1")
+        assertEquals(identity, stored?.identity())
+        assertEquals(listOf("d1"), stored?.toSnapshot()?.departures?.map { it.departureId })
+        assertEquals("Renamed commute", routineDao.getById("r1")?.name)
+    }
+
+    @Test
     fun repositoryGetReturnsNullWhenNothingWasEverSaved() = runBlocking {
         routineDao.upsert(sampleRoutineEntity())
 

@@ -39,11 +39,11 @@ value, or an unprotected fallback (see `src/config/env.ts`).
 npm run typecheck   # tsc --noEmit
 npm run lint        # eslint (flat config, eslint.config.js)
 npm run build       # tsc, emits to dist/
-npm test            # vitest — 265 tests
+npm test            # vitest — 266 tests
 npm audit           # dependency vulnerability scan
 ```
 
-Test coverage (265 tests across 21 files): DST resolver (including calendar validation
+Test coverage (266 tests across 21 files): DST resolver (including calendar validation
 — rejecting impossible dates and the spring DST gap, and ISO round-trip consistency),
 cancellation derivation, search ranking, cache/dedup, `fetchedAt` semantics (fresh,
 cached, and deduplicated-concurrent requests — including concurrent requests with
@@ -67,8 +67,9 @@ the SL Deviations shared-snapshot service (`deviationsSnapshotService.ts` — co
 requests from separate simulated instances sharing one cache/lock producing exactly one
 upstream call, the 60-second fair-use limit including a failed attempt's own cooldown,
 stale fallback with the original `fetchedAt` preserved, the controlled error when no
-snapshot has ever succeeded, and refresh-lock expiry/recovery after a simulated stuck
-holder), the local deviations filter (`deviationsFilter.ts` — `siteId` resolved via the
+snapshot has ever succeeded, refresh-lock expiry/recovery after a simulated stuck holder,
+and a throwing `lock.release()` never turning an already-successful, already-cached fetch
+into a failure), the local deviations filter (`deviationsFilter.ts` — `siteId` resolved via the
 site directory's own child stop-area IDs, `lineId`/`transportMode`, the validity-period/
 `future` window, and — since this is the one dimension with genuinely different
 semantics depending on the deviation's own shape — line-only deviations with no
@@ -96,7 +97,7 @@ review), route validation/error-envelope behavior, and the actual Vercel entry p
 (`api/index.ts`, imported directly rather than re-testing a copy of it).
 
 All of the above passed clean in the authoring sandbox (0 type errors, 0 lint
-errors/warnings, 265/265 tests passing, `npm audit`: 0 vulnerabilities). A live smoke
+errors/warnings, 266/266 tests passing, `npm audit`: 0 vulnerabilities). A live smoke
 test of the running server against the real SL endpoints could not be completed from
 that sandbox — its outbound network proxy blocks `transport.integration.sl.se` /
 `deviations.integration.sl.se` / `vercel.com` / `api.vercel.com` by allowlist. The
