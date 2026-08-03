@@ -577,11 +577,12 @@ resize behaviour, exactly like Google's own official widget-provider XML example
 new warning since the prior 43-warning count is an expected `GradleDependency` finding for
 the newly-added `androidx.lifecycle:lifecycle-process` dependency, pinned to the same
 `lifecycle` version as every other `androidx.lifecycle` artifact already in this project);
-the debug APK builds, installs, and launches without crashing; and all 41 instrumented
-`@Test` functions pass on the physical Lenovo TB350FU (Android 14) — the Samsung Galaxy
-S23 Ultra used for prior combined-device runs was not connected this session, so this
-round's instrumented run is on the one device alone, stated plainly rather than silently
-implied.
+the debug APK builds, installs, and launches without crashing (confirmed on both); and all
+41 instrumented `@Test` functions pass — first on the physical Lenovo TB350FU (Android 14)
+alone, then re-run on a Samsung Galaxy S23 Ultra (`SM-S918B`, Android 16) alone once that
+device was connected in a later session (the two were not connected simultaneously for
+this particular verification pass, so this is two separate single-device confirmations,
+not one combined run).
 
 **Disruptions integration, verified end to end on-device (with one real-data caveat):**
 the previously-built-but-unwired `DisruptionRepository`/`RemoteDisruptionRepository`

@@ -17,19 +17,21 @@ a claim that all of it already exists. This section is the authoritative summary
 what is actually built today; where the two disagree, this section wins.
 
 **Validation status of this update, stated plainly up front:** a complete local run —
-`testDebugUnitTest`, `lintDebug`, `assembleDebug`, and `connectedDebugAndroidTest`, most
-recently on the physical Lenovo TB350FU alone (Android 14; the Samsung Galaxy S23 Ultra
-used for prior combined-device runs was not connected this session) — has now passed in
-full: all 467 JVM `@Test` functions and all 41 instrumented `@Test` functions,
+`testDebugUnitTest`, `lintDebug`, `assembleDebug`, and `connectedDebugAndroidTest` — has
+now passed in full: all 467 JVM `@Test` functions, and all 41 instrumented `@Test`
+functions confirmed twice over on two separate single-device runs (the physical Lenovo
+TB350FU, Android 14, then a Samsung Galaxy S23 Ultra `SM-S918B`, Android 16, once that
+device was connected in a later session — not simultaneously, so two independent
+confirmations rather than one combined run), with the debug APK also installing and
+launching without crashing on both,
 `lintDebug` with 0 errors (44
 warnings: two expected, already-guarded `InlinedApi` findings — the API-36
 `ACTION_APP_NOTIFICATION_PROMOTION_SETTINGS` deep-link and the API-33
 `POST_NOTIFICATIONS` permission constant — plus four expected `UnusedAttribute` findings
 on the widget provider XML's Android-12+-only sizing attributes, kept alongside their
 legacy fallbacks deliberately, and one expected `GradleDependency` finding for the
-newly-added `androidx.lifecycle:lifecycle-process` dependency), and a working debug APK
-that launches without crashing. The backend's own `npm test` also passed in full at
-266/266. **The home-screen
+newly-added `androidx.lifecycle:lifecycle-process` dependency). The backend's own
+`npm test` also passed in full at 266/266. **The home-screen
 widget's placement, resizing, live updates, and Stop-action behavior have since been
 manually confirmed on that same device, including its "Design 1" visual redesign — a
 colored line-number badge, a large countdown, and a live/scheduled/cancelled status
