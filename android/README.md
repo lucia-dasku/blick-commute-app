@@ -688,6 +688,10 @@ survives that attempt's own clear — confirmed to fail against the pre-fix code
 verified against the fix. The rest of the notification-recovery/ownership code was audited
 for further bugs and dead code; none were found. Reaching 482 JVM / 41 instrumented.
 
+The 41 instrumented tests were then also re-run on the Samsung Galaxy S23 Ultra
+(`SM-S918B`, Android 16), once it was reconnected — all 41 pass there too (0 skipped, 0
+failed), confirming this fix's instrumented coverage on both physical devices.
+
 **Disruptions integration, verified end to end on-device (with one real-data caveat):**
 the previously-built-but-unwired `DisruptionRepository`/`RemoteDisruptionRepository`
 (see "Not yet implemented" in `../docs/Blick_Project_Documentation.md`'s prior revision)

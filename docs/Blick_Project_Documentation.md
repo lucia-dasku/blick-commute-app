@@ -19,10 +19,11 @@ what is actually built today; where the two disagree, this section wins.
 **Validation status of this update, stated plainly up front:** a complete local run —
 `testDebugUnitTest`, `lintDebug`, `assembleDebug`, `assembleRelease`, and
 `connectedDebugAndroidTest` — has now passed in full: all 482 JVM `@Test` functions, and all
-41 instrumented `@Test` functions on the physical Lenovo TB350FU (Android 14) (only that
-device was connected during this session; the Samsung Galaxy S23 Ultra used for earlier
-instrumented runs was not available this time, so it was not re-run — see
-`android/README.md`'s own note on this). `lintDebug` completed with 0 errors (44 warnings,
+41 instrumented `@Test` functions on both the physical Lenovo TB350FU (Android 14) and a
+Samsung Galaxy S23 Ultra (`SM-S918B`, Android 16) (the two devices were connected at
+different points during this session rather than simultaneously; each independently ran and
+passed the full 41-test instrumented suite — see `android/README.md`'s own note on this).
+`lintDebug` completed with 0 errors (44 warnings,
 unchanged in composition from the previous run: two expected, already-guarded `InlinedApi`
 findings — the API-36 `ACTION_APP_NOTIFICATION_PROMOTION_SETTINGS` deep-link and the API-33
 `POST_NOTIFICATIONS` permission constant — plus four expected `UnusedAttribute` findings
