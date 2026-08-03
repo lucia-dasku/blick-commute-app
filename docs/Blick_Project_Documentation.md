@@ -18,7 +18,7 @@ what is actually built today; where the two disagree, this section wins.
 
 **Validation status of this update, stated plainly up front:** a complete local run —
 `testDebugUnitTest`, `lintDebug`, `assembleDebug`, `assembleRelease`, and
-`connectedDebugAndroidTest` — has now passed in full: all 481 JVM `@Test` functions, and all
+`connectedDebugAndroidTest` — has now passed in full: all 482 JVM `@Test` functions, and all
 41 instrumented `@Test` functions on the physical Lenovo TB350FU (Android 14) (only that
 device was connected during this session; the Samsung Galaxy S23 Ultra used for earlier
 instrumented runs was not available this time, so it was not re-run — see
@@ -34,7 +34,15 @@ completed successfully. The new notification-recovery-coordination and
 worker-cleanup-ownership regression tests are themselves JVM-side Robolectric tests (several
 against a real, in-memory WorkManager instance, and two against a real, file-backed Room
 database/DataStore to prove state survives simulated process recreation), so they are
-already included in the 481 figure above regardless of device availability. One known,
+already included in the 482 figure above regardless of device availability. A follow-up
+bug-hunting pass over the same coordinator (no architecture changes) found and fixed one
+genuine, reachable race: `reportUnavailable()`, called from entirely separate coroutines
+(`RoutineActiveWindowWorker`, `RoutineDetailsViewModel`) that never otherwise touch
+`NotificationRecoveryCoordinator`, wrote to `RecoveryPendingStateStore` without acquiring the
+coordinator's own `Mutex` — a worker's fresh "recovery is owed" report arriving mid-attempt
+could be silently overwritten by that attempt's own unconditional clear at the end. Fixed by
+routing that write through the same `Mutex`; one new regression test (confirmed to fail
+against the pre-fix code, then to pass against the fix) proves it stays fixed. One known,
 narrow, unavoidable race remains and is documented rather than hidden: `RoutineScheduler.isActivationRunning`
 and any subsequent `scheduleActivation` call are not atomic — a worker can transition from
 not-yet-started to genuinely `RUNNING` in the brief window between the two, since WorkManager
@@ -966,6 +974,22 @@ all of them pass** (268 backend tests, unchanged by this fix). See "Validation s
 this update" at the top of this document for the full run, including the one residual,
 documented, unavoidable `isActivationRunning`/`scheduleActivation` race this fix does not
 (and cannot) eliminate outright.
+
+A follow-up bug-hunting session then audited this same coordinator for further bugs and
+dead code, deliberately without touching its architecture, and found one real, reachable
+race: `reportUnavailable()` — called from `RoutineActiveWindowWorker` and
+`RoutineDetailsViewModel`, both entirely separate coroutines that never otherwise interact
+with `NotificationRecoveryCoordinator` — wrote to `RecoveryPendingStateStore` without
+acquiring the coordinator's own `Mutex`. A worker reporting a genuinely fresh unavailable
+state while `attemptPendingRecoveryIfNeeded` happened to be mid-attempt for some other
+routine could have that report silently overwritten by the in-progress attempt's own
+unconditional clear once it finished — losing the durable "recovery is owed" signal for a
+routine that still needed it. Fixed by having `reportUnavailable()` acquire the same
+`Mutex` (its one internal, already-locked caller now calls a private, non-locking
+equivalent instead, to avoid self-deadlocking on Kotlin's non-reentrant `Mutex`), and added
+one regression test that was confirmed to fail against the pre-fix code before being
+verified against the fix — reaching 482 JVM / 41 instrumented. No dead code was found in
+the audited files.
 
 ### Backend
 

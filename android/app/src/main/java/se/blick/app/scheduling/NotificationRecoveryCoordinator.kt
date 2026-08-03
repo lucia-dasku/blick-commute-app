@@ -41,15 +41,21 @@ interface NotificationRecoveryReporter {
  * start — `ON_START` fires once at process start too) can never interleave and schedule the same
  * routine twice: whichever call is second simply observes whatever the first one already left in
  * place (an already-`RUNNING` worker, or an already-cleared [RecoveryPendingStateStore]) and acts
- * accordingly, rather than racing it.
+ * accordingly, rather than racing it. [reportUnavailable] — called from entirely separate
+ * coroutines ([RoutineActiveWindowWorker]'s own `doWork`, `RoutineDetailsViewModel`'s
+ * `viewModelScope`) that never otherwise interact with this class — also serializes through the
+ * same [mutex], so a freshly-reported "recovery is owed" signal can never land in the middle of,
+ * and be silently discarded by, an in-progress [attemptPendingRecoveryIfNeeded]'s own
+ * unconditional clear (see [reportUnavailable]'s own doc for the exact race this closes).
  *
  * **Durable pending-recovery, not a compared transition.** [RecoveryPendingStateStore] (see its
  * own doc) is a plain sticky "a recovery attempt is owed" flag, not a last-known-availability
  * snapshot compared against the current one. Every real detector of "notifications are NOT
  * available right now" — [RoutineActiveWindowWorker] before it stops for that reason,
  * `RoutineDetailsViewModel`'s own availability checks, and this class's own
- * [recordCurrentAvailabilityIfUnavailable] — calls [reportUnavailable], which durably marks it.
- * Availability later being observed as available again does NOT itself clear it — only
+ * [recordCurrentAvailabilityIfUnavailable] — durably marks it (via [reportUnavailable] or its
+ * internal, already-locked equivalent [markRecoveryPendingSafely]). Availability later being
+ * observed as available again does NOT itself clear it — only
  * [attemptPendingRecoveryIfNeeded] actually succeeding (every routine that needed it got
  * (re)scheduled, and the widget was reconciled) does. If Room, DataStore, or WorkManager throws
  * partway through that attempt, the flag is left set so the next foreground or startup check
@@ -120,20 +126,36 @@ class NotificationRecoveryCoordinator @Inject constructor(
      * do; only [onForeground]/[onAppStart] ever schedule anything. Best-effort: a
      * Room/DataStore failure here must never crash whichever caller detected the unavailable
      * state (a worker mid-`doWork`, or a ViewModel with no default exception handler on its
-     * `viewModelScope`), but a genuine [CancellationException] is always rethrown unconverted. */
+     * `viewModelScope`), but a genuine [CancellationException] is always rethrown unconverted.
+     *
+     * Acquires [mutex] itself — unlike [onAppStart]/[onForeground], this is called from
+     * completely separate coroutines ([RoutineActiveWindowWorker]'s own `doWork`,
+     * `RoutineDetailsViewModel`'s `viewModelScope`) that never otherwise touch this class, so
+     * without this lock a worker's mark here could land in the middle of
+     * [attemptPendingRecoveryIfNeeded]'s own read-act-clear sequence and be silently wiped out
+     * by that sequence's own unconditional [RecoveryPendingStateStore.clearRecoveryPending] —
+     * losing a genuinely fresh "recovery is owed" signal reported after the in-progress attempt
+     * had already decided everything was handled. [recordCurrentAvailabilityIfUnavailable] is
+     * the one internal caller that already holds this lock (from inside [onAppStart]/
+     * [onForeground]), so it calls [markRecoveryPendingSafely] directly instead of this method,
+     * to avoid self-deadlocking on a non-reentrant [Mutex]. */
     override suspend fun reportUnavailable() {
+        mutex.withLock { markRecoveryPendingSafely() }
+    }
+
+    private suspend fun recordCurrentAvailabilityIfUnavailable() {
+        if (notificationAvailabilityChecker.check() != NotificationAvailability.Available) {
+            markRecoveryPendingSafely()
+        }
+    }
+
+    private suspend fun markRecoveryPendingSafely() {
         try {
             recoveryPendingStore.markRecoveryPending()
         } catch (e: CancellationException) {
             throw e
         } catch (e: Exception) {
             Log.w(LOG_TAG, "Failed to durably record a pending notification recovery; a future check will retry", e)
-        }
-    }
-
-    private suspend fun recordCurrentAvailabilityIfUnavailable() {
-        if (notificationAvailabilityChecker.check() != NotificationAvailability.Available) {
-            reportUnavailable()
         }
     }
 

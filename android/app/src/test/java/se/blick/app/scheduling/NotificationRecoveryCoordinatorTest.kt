@@ -244,6 +244,42 @@ class NotificationRecoveryCoordinatorTest {
         assertEquals(1, repository.observeAllCallCount)
     }
 
+    // ---- Regression: a report arriving mid-attempt must never be lost to that attempt's own
+    // trailing clear (reportUnavailable is called from entirely separate coroutines -- workers,
+    // ViewModels -- that don't otherwise touch this coordinator, so without reportUnavailable
+    // itself acquiring the Mutex, a fresh mark could land between attemptPendingRecoveryIfNeeded's
+    // own read and its unconditional clearRecoveryPending, and be silently wiped out) ----
+
+    @Test
+    fun `a report arriving while a recovery attempt is in progress is never lost to that attempt's own clear`() =
+        runTest {
+            val routineA = routine(id = "a")
+            val repository = ControllableRoutineRepository(listOf(routineA))
+            val scheduler = RecordingRoutineScheduler()
+            val pendingStore = InMemoryRecoveryPendingStateStore(initiallyPending = true)
+            val coordinator = buildCoordinator(repository, scheduler, pendingStore, available = true)
+
+            val gate = repository.pauseNextObserveAll()
+            val foregroundJob = launch { coordinator.onForeground() }
+            runCurrent() // onForeground acquires the Mutex, reaches observeAll(), suspends on the gate
+
+            // A worker for some OTHER routine discovers unavailability concurrently, mid-attempt
+            // -- must not be silently discarded by this attempt's own trailing clear.
+            val reportJob = launch { coordinator.reportUnavailable() }
+            runCurrent() // reportJob must block on the Mutex itself, never racing the in-flight attempt
+
+            gate.complete(Unit)
+            foregroundJob.join()
+            reportJob.join()
+
+            assertEquals(
+                "the concurrently-reported pending state must survive, not be clobbered by the " +
+                    "in-flight attempt's own clear",
+                true,
+                pendingStore.recoveryPending.first(),
+            )
+        }
+
     // ---- 5. Re-enabling notifications after a background disable->enable recovers the
     // missing worker ----
 

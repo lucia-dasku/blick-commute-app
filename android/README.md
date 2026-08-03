@@ -672,6 +672,22 @@ availability. One known, narrow race remains and is documented rather than paper
 atomic, since WorkManager exposes no atomic "replace-unless-running" primitive — see
 `NotificationRecoveryCoordinator`'s own class doc for the full reasoning.
 
+A follow-up bug-hunting pass (no architecture changes, per explicit instruction) over the
+same coordinator found one genuine, reachable race: `reportUnavailable()` — called from
+`RoutineActiveWindowWorker`/`RoutineDetailsViewModel`, entirely separate coroutines that
+never otherwise touch `NotificationRecoveryCoordinator` — wrote to `RecoveryPendingStateStore`
+without acquiring the coordinator's own `Mutex`. A worker discovering unavailability while
+`attemptPendingRecoveryIfNeeded` was already mid-attempt (for a different routine) could have
+its `markRecoveryPending()` write silently overwritten by that in-progress attempt's own
+unconditional `clearRecoveryPending()` at the end — losing a genuinely fresh "recovery is
+owed" signal. Fixed by having `reportUnavailable()` acquire the same `Mutex` (the one
+already-locked internal caller, `recordCurrentAvailabilityIfUnavailable`, now calls a
+private, non-locking equivalent directly, to avoid self-deadlocking on Kotlin's
+non-reentrant `Mutex`). Added one regression test proving a report arriving mid-attempt now
+survives that attempt's own clear — confirmed to fail against the pre-fix code before being
+verified against the fix. The rest of the notification-recovery/ownership code was audited
+for further bugs and dead code; none were found. Reaching 482 JVM / 41 instrumented.
+
 **Disruptions integration, verified end to end on-device (with one real-data caveat):**
 the previously-built-but-unwired `DisruptionRepository`/`RemoteDisruptionRepository`
 (see "Not yet implemented" in `../docs/Blick_Project_Documentation.md`'s prior revision)
