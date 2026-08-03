@@ -39,11 +39,11 @@ value, or an unprotected fallback (see `src/config/env.ts`).
 npm run typecheck   # tsc --noEmit
 npm run lint        # eslint (flat config, eslint.config.js)
 npm run build       # tsc, emits to dist/
-npm test            # vitest — 266 tests
+npm test            # vitest — 268 tests
 npm audit           # dependency vulnerability scan
 ```
 
-Test coverage (266 tests across 21 files): DST resolver (including calendar validation
+Test coverage (268 tests across 21 files): DST resolver (including calendar validation
 — rejecting impossible dates and the spring DST gap, and ISO round-trip consistency),
 cancellation derivation, search ranking, cache/dedup, `fetchedAt` semantics (fresh,
 cached, and deduplicated-concurrent requests — including concurrent requests with
@@ -96,8 +96,16 @@ contract/serialization (against real fixture data captured live during architect
 review), route validation/error-envelope behavior, and the actual Vercel entry point
 (`api/index.ts`, imported directly rather than re-testing a copy of it).
 
+Also covers the `/api/v1/disruptions` and `/api/v1/stops/search` response envelopes
+themselves (`DisruptionsResponseSchema`/`StopSearchResponseSchema` in `contract.test.ts`,
+mirroring the same fixture-round-trip pattern `DeparturesResponseSchema` already followed)
+— these two schemas previously existed but were never wired into a test, found and fixed
+during a dead-code audit that also removed the unused, never-thrown `RATE_LIMITED` error
+code and a handful of unused derived TypeScript type aliases whose underlying Zod schemas
+remained genuinely in use.
+
 All of the above passed clean in the authoring sandbox (0 type errors, 0 lint
-errors/warnings, 266/266 tests passing, `npm audit`: 0 vulnerabilities). A live smoke
+errors/warnings, 268/268 tests passing, `npm audit`: 0 vulnerabilities). A live smoke
 test of the running server against the real SL endpoints could not be completed from
 that sandbox — its outbound network proxy blocks `transport.integration.sl.se` /
 `deviations.integration.sl.se` / `vercel.com` / `api.vercel.com` by allowlist. The

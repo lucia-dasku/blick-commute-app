@@ -544,9 +544,31 @@ ticks where every subsequent fetch timed out, tick spacing could drift up to
 successful disruptions fetch, and the backend's SL Deviations refresh-lock release could
 turn an already-successful, already-cached fetch into a 500 if the release call itself
 failed — adding 2 further JVM `@Test` functions and 1 further instrumented one, reaching
-the 467 JVM / 41 instrumented total stated below (plus 1 new backend test, reaching 266 —
-see `../backend/README.md`) — see `../docs/Blick_Project_Documentation.md`'s "Validation
-status" note for the full account of each.
+467 JVM / 41 instrumented. A further session then audited the whole project for dead code
+and safely removed what proved genuinely unused, verified by tracing real call sites
+rather than trusting IDE "unused" hints: the older, now-superseded embedded per-departure
+"site deviation" domain model (`SiteDeviation`, `SiteDeviationLineRef`,
+`SiteDeviationStopPointRef`, and their DTOs/mapping — `SiteDeviationStopAreaRef` was kept,
+since the standalone SL Deviations `Disruption` model reuses its exact shape) and the
+`DeparturesResult`/`DeparturesResponseDto` `siteDeviations` field they fed (the backend
+still returns this field — a documented, contract-visible part of `/api/v1/departures` —
+but nothing on the Android side ever read it; `ignoreUnknownKeys = true` means dropping it
+client-side changes nothing observable); `RoutineListViewModel.deleteRoutine()`/
+`pauseForToday()`, which had no caller anywhere in the app (no swipe/button/menu affordance
+on `RoutineListScreen`, no other ViewModel, nothing but their own now-removed unit tests);
+the backend's `RATE_LIMITED` error code, reserved in the `ErrorCode` union but never once
+thrown by any route or service; and a handful of unused derived TypeScript type aliases
+(`Journey`, `LineRef`, `StopAreaRef`, `StopPointRef`, `RequestTransportMode`, `RawJourney`,
+`RawLineRef`, `RawStopAreaRef`, `RawStopPointRef` — their underlying Zod schemas remained
+in active use, only the `z.infer` alias itself had zero consumers). Two more candidates,
+`DisruptionsResponseSchema` and `StopSearchResponseSchema`, turned out to be well-formed
+contract-validating scaffolding that simply had never been wired into a test — matching the
+exact fixture-validation pattern `DeparturesResponseSchema` already followed in
+`contract.test.ts` — so they were wired in rather than deleted. This removed 7 now-obsolete
+JVM `@Test` functions (the dead-function tests in `RoutineListViewModelTest`) and added 2
+new backend contract tests, reaching 460 JVM / 41 instrumented (backend: 268) — see
+`../docs/Blick_Project_Documentation.md`'s "Validation status" note for the full account
+of each removal and its evidence.
 
 On a machine with a real JDK 17 and Android SDK (or Android Studio, which provides
 both), build with:
@@ -567,7 +589,7 @@ clone builds without Android Studio or a pre-existing local Gradle install.
 
 A complete local run — `testDebugUnitTest`, `lintDebug`, `assembleDebug`, and
 `connectedDebugAndroidTest` — has since been completed, using Android Studio's own bundled
-JDK. All 467 JVM `@Test` functions pass; `lintDebug` reports 0 errors (44 warnings: two
+JDK. All 460 JVM `@Test` functions pass; `lintDebug` reports 0 errors (44 warnings: two
 expected, already-guarded `InlinedApi` findings — the API-36
 `ACTION_APP_NOTIFICATION_PROMOTION_SETTINGS` deep-link and the API-33
 `POST_NOTIFICATIONS` permission constant — plus four expected `UnusedAttribute` findings
@@ -577,12 +599,10 @@ resize behaviour, exactly like Google's own official widget-provider XML example
 new warning since the prior 43-warning count is an expected `GradleDependency` finding for
 the newly-added `androidx.lifecycle:lifecycle-process` dependency, pinned to the same
 `lifecycle` version as every other `androidx.lifecycle` artifact already in this project);
-the debug APK builds, installs, and launches without crashing (confirmed on both); and all
-41 instrumented `@Test` functions pass — first on the physical Lenovo TB350FU (Android 14)
-alone, then re-run on a Samsung Galaxy S23 Ultra (`SM-S918B`, Android 16) alone once that
-device was connected in a later session (the two were not connected simultaneously for
-this particular verification pass, so this is two separate single-device confirmations,
-not one combined run).
+the debug APK builds, installs, and launches without crashing; and all 41 instrumented
+`@Test` functions pass, most recently re-run on the physical Lenovo TB350FU (Android 14) —
+the Samsung Galaxy S23 Ultra used for a prior verification pass was not connected this
+session.
 
 **Disruptions integration, verified end to end on-device (with one real-data caveat):**
 the previously-built-but-unwired `DisruptionRepository`/`RemoteDisruptionRepository`
@@ -796,7 +816,8 @@ already sitting in `pausedDate`.
 
 Every `RoutineWidgetUpdater` call across the worker, `RoutineScheduleReconciler`,
 `StopRoutineNotificationAction`, and every routine-mutating ViewModel function
-(`RoutineListViewModel.deleteRoutine`/`pauseForToday`;
+(`RoutineListViewModel.deleteRoutine`/`pauseForToday` at the time — later found to have no
+real caller and removed during a dead-code audit, see below;
 `RoutineDetailsViewModel.toggleEnabled`/`pauseToday`/`resumeToday`/`deleteRoutine`/`reload`;
 `RoutineCreateViewModel.save`) now goes through a new shared
 `runWidgetUpdateSafely { ... }` (in `widget/RoutineWidgetUpdater.kt`) that swallows any

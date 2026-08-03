@@ -13,7 +13,6 @@ export const JourneySchema = z.object({
   state: z.string(),
   predictionState: z.string().nullable(),
 });
-export type Journey = z.infer<typeof JourneySchema>;
 
 export const TripDeviationSchema = z.object({
   importanceLevel: z.number(),
@@ -27,21 +26,18 @@ export const StopAreaRefSchema = z.object({
   name: z.string(),
   type: z.string().nullable(),
 });
-export type StopAreaRef = z.infer<typeof StopAreaRefSchema>;
 
 export const StopPointRefSchema = z.object({
   id: z.number().int(),
   name: z.string(),
   designation: z.string().nullable(),
 });
-export type StopPointRef = z.infer<typeof StopPointRefSchema>;
 
 export const LineRefSchema = z.object({
   id: z.number().int(),
   designation: z.string(),
   transportMode: TransportModeSchema,
 });
-export type LineRef = z.infer<typeof LineRefSchema>;
 
 export const DepartureSchema = z.object({
   departureId: z.string(),

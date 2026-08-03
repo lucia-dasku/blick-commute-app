@@ -62,7 +62,6 @@ export const RawJourneySchema = z
     prediction_state: z.string().nullable().optional(),
   })
   .passthrough();
-export type RawJourney = z.infer<typeof RawJourneySchema>;
 
 export const RawTripDeviationSchema = z
   .object({
@@ -80,7 +79,6 @@ export const RawStopAreaRefSchema = z
     type: z.string().nullable().optional(),
   })
   .passthrough();
-export type RawStopAreaRef = z.infer<typeof RawStopAreaRefSchema>;
 
 export const RawStopPointRefSchema = z
   .object({
@@ -89,7 +87,6 @@ export const RawStopPointRefSchema = z
     designation: z.string().nullable().optional(),
   })
   .passthrough();
-export type RawStopPointRef = z.infer<typeof RawStopPointRefSchema>;
 
 export const RawLineRefSchema = z
   .object({
@@ -98,7 +95,6 @@ export const RawLineRefSchema = z
     transport_mode: z.string(),
   })
   .passthrough();
-export type RawLineRef = z.infer<typeof RawLineRefSchema>;
 
 export const RawDepartureSchema = z
   .object({

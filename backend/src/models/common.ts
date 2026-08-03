@@ -17,7 +17,6 @@ export const KNOWN_TRANSPORT_MODES = ["BUS", "METRO", "TRAIN", "TRAM", "SHIP", "
 
 /** Strict — used only to validate an incoming request's `transportMode` filter value. */
 export const RequestTransportModeSchema = z.enum(KNOWN_TRANSPORT_MODES);
-export type RequestTransportMode = z.infer<typeof RequestTransportModeSchema>;
 
 /**
  * Permissive — used for normalized response/DTO `transportMode` fields. A plain
@@ -34,7 +33,6 @@ export const ErrorCodeSchema = z.enum([
   "UPSTREAM_TIMEOUT",
   "UPSTREAM_RATE_LIMITED",
   "NOT_FOUND",
-  "RATE_LIMITED",
   "INTERNAL_ERROR",
 ]);
 export type ErrorCode = z.infer<typeof ErrorCodeSchema>;

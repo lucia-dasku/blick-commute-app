@@ -52,30 +52,22 @@ data class DepartureDto(
     val tripDeviations: List<TripDeviationDto> = emptyList(),
 )
 
+/** Shared with [DisruptionDto.affectedStopAreas] — see [se.blick.app.domain.model.SiteDeviationStopAreaRef]'s
+ * own doc for why this DTO survives even though the rest of the old embedded per-departure
+ * "site deviation" DTOs were removed as dead code. */
 @Serializable
 data class SiteDeviationStopAreaRefDto(val id: Long, val name: String, val type: String? = null)
 
-@Serializable
-data class SiteDeviationStopPointRefDto(val id: Long, val name: String)
-
-@Serializable
-data class SiteDeviationLineRefDto(val id: Long, val designation: String, val transportMode: String? = null)
-
-@Serializable
-data class SiteDeviationDto(
-    val id: Long,
-    val importanceLevel: Int,
-    val message: String,
-    val affectedStopAreas: List<SiteDeviationStopAreaRefDto> = emptyList(),
-    val affectedStopPoints: List<SiteDeviationStopPointRefDto> = emptyList(),
-    val affectedLines: List<SiteDeviationLineRefDto> = emptyList(),
-)
-
+/**
+ * The backend still includes a `siteDeviations` field in this response (a documented,
+ * contract-visible field — see docs/api-contract.md) that Android has never consumed; it is
+ * deliberately not modeled here. `Json` is configured with `ignoreUnknownKeys = true` (see
+ * `di/NetworkModule.kt`), so the extra field is silently ignored during deserialization.
+ */
 @Serializable
 data class DeparturesResponseDto(
     val fetchedAt: String,
     val timeZone: String,
     val siteId: Long,
     val departures: List<DepartureDto>,
-    val siteDeviations: List<SiteDeviationDto> = emptyList(),
 )

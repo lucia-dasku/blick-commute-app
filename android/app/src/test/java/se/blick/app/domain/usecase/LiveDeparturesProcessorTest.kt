@@ -81,7 +81,6 @@ class LiveDeparturesProcessorTest {
         fetchedAt = now,
         siteId = 9145,
         departures = departures.toList(),
-        siteDeviations = emptyList(),
     )
 
     // ---- Transport mode ----

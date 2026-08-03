@@ -62,10 +62,12 @@ Every error response:
 { "schemaVersion": 1, "error": { "code": "VALIDATION_ERROR", "message": "..." } }
 ```
 
-`code` is one of: `VALIDATION_ERROR` (400), `NOT_FOUND` (404), `RATE_LIMITED` (429),
+`code` is one of: `VALIDATION_ERROR` (400), `NOT_FOUND` (404),
 `UPSTREAM_RATE_LIMITED` (503), `UPSTREAM_TIMEOUT` (504), `UPSTREAM_ERROR` (502),
-`INTERNAL_ERROR` (500). See §8, "Upstream networking, runtime validation, and error
-handling", for exactly what each error response does and does not contain.
+`INTERNAL_ERROR` (500). (A separate, self-imposed `RATE_LIMITED` code was previously
+reserved in this list but never actually produced by any code path — removed as dead code
+during an audit.) See §8, "Upstream networking, runtime validation, and error handling",
+for exactly what each error response does and does not contain.
 
 ## 3. Endpoints
 

@@ -1,7 +1,7 @@
 import { describe, expect, it } from "vitest";
 import { DeparturesResponseSchema } from "../src/models/departure.js";
-import { DisruptionSchema } from "../src/models/disruption.js";
-import { SiteSchema } from "../src/models/site.js";
+import { DisruptionSchema, DisruptionsResponseSchema } from "../src/models/disruption.js";
+import { SiteSchema, StopSearchResponseSchema } from "../src/models/site.js";
 import { normalizeDeparturesResponse } from "../src/normalize/normalizeDeparture.js";
 import { normalizeDisruption } from "../src/normalize/normalizeDisruption.js";
 import { normalizeSite } from "../src/normalize/normalizeSite.js";
@@ -68,6 +68,20 @@ describe("contract: disruptions", () => {
     const overlap = [...deviationLineIds].filter((id) => departureLineIds.has(id) || id === 17 || id === 18 || id === 19);
     expect(overlap.length).toBeGreaterThan(0);
   });
+
+  it("normalizes the real fixture into the actual /api/v1/disruptions response shape", () => {
+    // Mirrors what routes/disruptions.ts actually returns as its envelope's `data` (see
+    // successEnvelope({ fetchedAt, disruptions }) there) -- this schema itself was
+    // previously declared but never wired into any test or runtime validation.
+    const fetchedAt = new Date("2026-07-27T05:00:00Z").toISOString();
+    const disruptions = (deviationsFixture as unknown as RawDeviation[]).map(normalizeDisruption);
+
+    const parsed = DisruptionsResponseSchema.parse({ fetchedAt, disruptions });
+    expect(parsed.disruptions.length).toBe(disruptions.length);
+
+    const roundTripped = JSON.parse(JSON.stringify(parsed));
+    expect(DisruptionsResponseSchema.parse(roundTripped)).toEqual(parsed);
+  });
 });
 
 describe("contract: sites", () => {
@@ -78,5 +92,19 @@ describe("contract: sites", () => {
       const roundTripped = JSON.parse(JSON.stringify(parsed));
       expect(SiteSchema.parse(roundTripped)).toEqual(parsed);
     }
+  });
+
+  it("normalizes the real fixture into the actual /api/v1/stops/search response shape", () => {
+    // Mirrors what routes/stops.ts actually returns as its envelope's `data` (see
+    // successEnvelope({ query, sites }) there) -- this schema itself was previously
+    // declared but never wired into any test or runtime validation.
+    const query = "Slussen";
+    const sites = (sitesFixture as unknown as RawSlSite[]).map(normalizeSite);
+
+    const parsed = StopSearchResponseSchema.parse({ query, sites });
+    expect(parsed.sites.length).toBe(sites.length);
+
+    const roundTripped = JSON.parse(JSON.stringify(parsed));
+    expect(StopSearchResponseSchema.parse(roundTripped)).toEqual(parsed);
   });
 });

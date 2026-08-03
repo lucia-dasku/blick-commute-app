@@ -17,13 +17,10 @@ a claim that all of it already exists. This section is the authoritative summary
 what is actually built today; where the two disagree, this section wins.
 
 **Validation status of this update, stated plainly up front:** a complete local run —
-`testDebugUnitTest`, `lintDebug`, `assembleDebug`, and `connectedDebugAndroidTest` — has
-now passed in full: all 467 JVM `@Test` functions, and all 41 instrumented `@Test`
-functions confirmed twice over on two separate single-device runs (the physical Lenovo
-TB350FU, Android 14, then a Samsung Galaxy S23 Ultra `SM-S918B`, Android 16, once that
-device was connected in a later session — not simultaneously, so two independent
-confirmations rather than one combined run), with the debug APK also installing and
-launching without crashing on both,
+`testDebugUnitTest`, `lintDebug`, `assembleDebug`, and `connectedDebugAndroidTest`, most
+recently on the physical Lenovo TB350FU (Android 14) — has now passed in full: all 460
+JVM `@Test` functions and all 41 instrumented `@Test` functions, with the debug APK
+installing and launching without crashing,
 `lintDebug` with 0 errors (44
 warnings: two expected, already-guarded `InlinedApi` findings — the API-36
 `ACTION_APP_NOTIFICATION_PROMOTION_SETTINGS` deep-link and the API-33
@@ -31,7 +28,7 @@ warnings: two expected, already-guarded `InlinedApi` findings — the API-36
 on the widget provider XML's Android-12+-only sizing attributes, kept alongside their
 legacy fallbacks deliberately, and one expected `GradleDependency` finding for the
 newly-added `androidx.lifecycle:lifecycle-process` dependency). The backend's own
-`npm test` also passed in full at 266/266. **The home-screen
+`npm test` also passed in full at 268/268. **The home-screen
 widget's placement, resizing, live updates, and Stop-action behavior have since been
 manually confirmed on that same device, including its "Design 1" visual redesign — a
 colored line-number badge, a large countdown, and a live/scheduled/cancelled status
@@ -885,9 +882,24 @@ today's routine, an already-expired fallback disruption surviving a timed-out re
 tick spacing drifting beyond its intended 30-second cadence on a slow disruptions fetch,
 and the backend's SL Deviations refresh-lock release able to turn an already-successful
 fetch into a failure — added 2 further JVM `@Test` functions and 1 further instrumented
-one (plus 1 further backend test, unrelated to these counts) —
-**467 JVM `@Test` functions and 41 instrumented `@Test` functions now exist in source,
-and all of them pass.** See `android/README.md`'s Build section for the exact toolchain
+one (plus 1 further backend test, unrelated to these counts), reaching 467 JVM / 41
+instrumented. A further session audited the whole project for dead code — verified via
+real call-site tracing, not IDE "unused" hints — and safely removed what proved genuinely
+unused: the older, superseded embedded per-departure "site deviation" domain model
+(`SiteDeviation`/`SiteDeviationLineRef`/`SiteDeviationStopPointRef` and their DTOs;
+`SiteDeviationStopAreaRef` was kept, since the standalone SL Deviations `Disruption` model
+reuses its exact shape) and the `DeparturesResult`/`DeparturesResponseDto` `siteDeviations`
+field they fed (the backend still returns this documented, contract-visible field —
+nothing on the Android side ever read it, and `ignoreUnknownKeys = true` means dropping it
+client-side is unobservable); `RoutineListViewModel.deleteRoutine()`/`pauseForToday()`,
+which had no caller anywhere in the app; the backend's `RATE_LIMITED` error code, reserved
+but never once thrown; and several unused derived TypeScript type aliases whose underlying
+Zod schemas remained genuinely in use. Two further candidates, `DisruptionsResponseSchema`
+and `StopSearchResponseSchema`, turned out to be well-formed but unwired contract-test
+scaffolding and were wired into `contract.test.ts` instead of deleted. This removed 7
+now-obsolete JVM `@Test` functions and added 2 new backend contract tests —
+**460 JVM `@Test` functions and 41 instrumented `@Test` functions now exist in source,
+and all of them pass** (268 backend tests, up from 266). See `android/README.md`'s Build section for the exact toolchain
 versions, the up-to-date per-file test breakdown, and the real issues that first full
 run found and fixed (including a genuine production bug, not just test-suite
 corrections), and see "Validation status of this update" at the top of this document
@@ -965,9 +977,11 @@ UPSTREAM_ERROR
 UPSTREAM_TIMEOUT
 UPSTREAM_RATE_LIMITED
 NOT_FOUND
-RATE_LIMITED
 INTERNAL_ERROR
 ```
+
+(A separate, self-imposed `RATE_LIMITED` code was previously reserved here but never
+actually produced by any code path — removed as dead code during an audit.)
 
 Errors must not expose stack traces, environment values, or unnecessary upstream details.
 
@@ -1685,10 +1699,12 @@ with no failures — see "Validation status of this update" at the top of this d
   and a fetch failure after an earlier success in the same window produces a `Stale`
   notification content, not `Offline`/`Unavailable`.
 - Scheduler integration: enabling, disabling, pausing for today, resuming, and deleting
-  a routine from `RoutineDetailsViewModel`, saving a new routine from
-  `RoutineCreateViewModel`, and deleting a routine from `RoutineListViewModel` all call
-  through to a fake `RoutineScheduler`'s `scheduleActivation`/`cancelActivation` as
-  expected.
+  a routine from `RoutineDetailsViewModel`, and saving a new routine from
+  `RoutineCreateViewModel`, all call through to a fake `RoutineScheduler`'s
+  `scheduleActivation`/`cancelActivation` as expected. (`RoutineListViewModel` previously
+  had its own `deleteRoutine`/`pauseForToday` wrappers around the same repository/scheduler
+  calls, but they had no real caller anywhere in the app and were removed as dead code
+  during an audit — see the changelog below.)
 
 ### Release checks
 

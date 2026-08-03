@@ -132,7 +132,6 @@ class RoutineDetailsViewModelTest {
         fetchedAt = now,
         siteId = 9145,
         departures = departures.toList(),
-        siteDeviations = emptyList(),
     )
 
     // ---- RoutineRepository fakes ----

@@ -66,7 +66,6 @@ class GetLiveDeparturesUseCaseTest {
         fetchedAt = now,
         siteId = 9145,
         departures = departures.toList(),
-        siteDeviations = emptyList(),
     )
 
     private class FakeDepartureRepository(private val result: DeparturesResult) : DepartureRepository {

@@ -535,7 +535,7 @@ class RoutineActiveWindowWorkerTest {
         val repository = ScriptedRoutineRepository(clock) { routine }
         val notifier = RecordingNotifier()
         val scheduler = RecordingScheduler()
-        val departures = FakeDepartureRepository { DeparturesResult(clock.instant(), 9145, listOf(sampleDeparture()), emptyList()) }
+        val departures = FakeDepartureRepository { DeparturesResult(clock.instant(), 9145, listOf(sampleDeparture())) }
 
         val worker = buildWorker(
             routine.id,
@@ -566,7 +566,7 @@ class RoutineActiveWindowWorkerTest {
         val repository = ScriptedRoutineRepository(clock) { routine }
         val notifier = RecordingNotifier()
         val widgetUpdater = RecordingWidgetUpdater()
-        val departures = FakeDepartureRepository { DeparturesResult(clock.instant(), 9145, listOf(sampleDeparture()), emptyList()) }
+        val departures = FakeDepartureRepository { DeparturesResult(clock.instant(), 9145, listOf(sampleDeparture())) }
 
         val worker = buildWorker(
             routine.id,
@@ -593,7 +593,7 @@ class RoutineActiveWindowWorkerTest {
         val repository = ScriptedRoutineRepository(clock) { routine }
         val notifier = RecordingNotifier()
         val widgetUpdater = RecordingWidgetUpdater()
-        val departures = FakeDepartureRepository { DeparturesResult(clock.instant(), 9145, listOf(sampleDeparture()), emptyList()) }
+        val departures = FakeDepartureRepository { DeparturesResult(clock.instant(), 9145, listOf(sampleDeparture())) }
 
         val worker = buildWorker(
             routine.id,
@@ -714,7 +714,7 @@ class RoutineActiveWindowWorkerTest {
         val routine = routine(id = "r-42")
         val repository = ScriptedRoutineRepository(clock) { routine }
         val notifier = RecordingNotifier()
-        val departures = FakeDepartureRepository { DeparturesResult(clock.instant(), 9145, listOf(sampleDeparture()), emptyList()) }
+        val departures = FakeDepartureRepository { DeparturesResult(clock.instant(), 9145, listOf(sampleDeparture())) }
 
         val worker = buildWorker(
             routine.id,
@@ -741,7 +741,7 @@ class RoutineActiveWindowWorkerTest {
         }
         val notifier = RecordingNotifier()
         val scheduler = RecordingScheduler()
-        val departures = FakeDepartureRepository { DeparturesResult(clock.instant(), 9145, listOf(sampleDeparture()), emptyList()) }
+        val departures = FakeDepartureRepository { DeparturesResult(clock.instant(), 9145, listOf(sampleDeparture())) }
 
         val worker = buildWorker(
             enabledRoutine.id,
@@ -766,7 +766,7 @@ class RoutineActiveWindowWorkerTest {
         val notifier = RecordingNotifier()
         val scheduler = RecordingScheduler()
         val widgetUpdater = RecordingWidgetUpdater()
-        val departures = FakeDepartureRepository { DeparturesResult(clock.instant(), 9145, listOf(sampleDeparture()), emptyList()) }
+        val departures = FakeDepartureRepository { DeparturesResult(clock.instant(), 9145, listOf(sampleDeparture())) }
         // Call index 0 is the pre-loop check in doWork(), call index 1 is the first tick's
         // re-check (still available) -- then AppDisabled from the second tick's re-check
         // onward, simulating the user turning notifications off partway through the window.
@@ -804,7 +804,7 @@ class RoutineActiveWindowWorkerTest {
         val repository = ScriptedRoutineRepository(clock) { callIndex -> if (callIndex < 2) existingRoutine else null }
         val notifier = RecordingNotifier()
         val scheduler = RecordingScheduler()
-        val departures = FakeDepartureRepository { DeparturesResult(clock.instant(), 9145, listOf(sampleDeparture()), emptyList()) }
+        val departures = FakeDepartureRepository { DeparturesResult(clock.instant(), 9145, listOf(sampleDeparture())) }
 
         val worker = buildWorker(
             existingRoutine.id,
@@ -830,7 +830,7 @@ class RoutineActiveWindowWorkerTest {
         val departures = object : DepartureRepository {
             override suspend fun getDepartures(siteId: Long, forecastMinutes: Int?): DeparturesResult {
                 callCount++
-                if (callCount == 1) return DeparturesResult(clock.instant(), 9145, listOf(sampleDeparture()), emptyList())
+                if (callCount == 1) return DeparturesResult(clock.instant(), 9145, listOf(sampleDeparture()))
                 throw IOException("network down")
             }
         }
@@ -864,7 +864,7 @@ class RoutineActiveWindowWorkerTest {
         val firstRepository = ScriptedRoutineRepository(firstClock) { routine }
         val firstNotifier = RecordingNotifier()
         val firstDepartures = FakeDepartureRepository {
-            DeparturesResult(firstClock.instant(), 9145, listOf(sampleDeparture()), emptyList())
+            DeparturesResult(firstClock.instant(), 9145, listOf(sampleDeparture()))
         }
         val firstWorker = buildWorker(
             routine.id,
@@ -1003,7 +1003,7 @@ class RoutineActiveWindowWorkerTest {
         val repository = ScriptedRoutineRepository(clock) { routine }
         val notifier = RecordingNotifier()
         val scheduler = RecordingScheduler()
-        val departures = FakeDepartureRepository { DeparturesResult(clock.instant(), 9145, listOf(sampleDeparture()), emptyList()) }
+        val departures = FakeDepartureRepository { DeparturesResult(clock.instant(), 9145, listOf(sampleDeparture())) }
 
         val worker = buildWorker(
             routine.id,
@@ -1069,7 +1069,7 @@ class RoutineActiveWindowWorkerTest {
         // real mid-loop failure rather than one on the very first attempt).
         val notifier = RecordingNotifier(throwOnShowCall = 2)
         val scheduler = RecordingScheduler()
-        val departures = FakeDepartureRepository { DeparturesResult(clock.instant(), 9145, listOf(sampleDeparture()), emptyList()) }
+        val departures = FakeDepartureRepository { DeparturesResult(clock.instant(), 9145, listOf(sampleDeparture())) }
 
         val worker = buildWorker(
             routine.id,
@@ -1101,7 +1101,7 @@ class RoutineActiveWindowWorkerTest {
         val repository = ScriptedRoutineRepository(clock, advanceSecondsPerCall = 0) { routine }
         val notifier = RecordingNotifier()
         val scheduler = RecordingScheduler()
-        val departures = FakeDepartureRepository { DeparturesResult(clock.instant(), 9145, listOf(sampleDeparture()), emptyList()) }
+        val departures = FakeDepartureRepository { DeparturesResult(clock.instant(), 9145, listOf(sampleDeparture())) }
 
         val worker = buildWorker(
             routine.id,
@@ -1136,7 +1136,7 @@ class RoutineActiveWindowWorkerTest {
         val repository = ScriptedRoutineRepository(clock) { routine }
         val notifier = RecordingNotifier()
         val scheduler = RecordingScheduler()
-        val departures = FakeDepartureRepository { DeparturesResult(clock.instant(), 9145, listOf(sampleDeparture()), emptyList()) }
+        val departures = FakeDepartureRepository { DeparturesResult(clock.instant(), 9145, listOf(sampleDeparture())) }
 
         val worker = buildWorker(
             routine.id,
@@ -1216,7 +1216,7 @@ class RoutineActiveWindowWorkerTest {
         val routine = routine()
         val repository = ScriptedRoutineRepository(clock) { routine }
         val notifier = RecordingNotifier()
-        val departures = FakeDepartureRepository { DeparturesResult(clock.instant(), 9145, listOf(sampleDeparture()), emptyList()) }
+        val departures = FakeDepartureRepository { DeparturesResult(clock.instant(), 9145, listOf(sampleDeparture())) }
         val disruptions = FakeDisruptionRepository { listOf(sampleDisruption()) }
 
         val worker = buildWorker(
@@ -1259,7 +1259,7 @@ class RoutineActiveWindowWorkerTest {
         val routine = routine()
         val repository = ScriptedRoutineRepository(clock) { routine }
         val notifier = RecordingNotifier()
-        val departures = FakeDepartureRepository { DeparturesResult(clock.instant(), 9145, listOf(sampleDeparture()), emptyList()) }
+        val departures = FakeDepartureRepository { DeparturesResult(clock.instant(), 9145, listOf(sampleDeparture())) }
         val low = sampleDisruption(id = "low", importance = 1)
         val high = sampleDisruption(id = "high", importance = 5)
         val disruptions = FakeDisruptionRepository { listOf(high, low) }
@@ -1287,7 +1287,7 @@ class RoutineActiveWindowWorkerTest {
         val routine = routine()
         val repository = ScriptedRoutineRepository(clock) { routine }
         val notifier = RecordingNotifier()
-        val departures = FakeDepartureRepository { DeparturesResult(clock.instant(), 9145, listOf(sampleDeparture()), emptyList()) }
+        val departures = FakeDepartureRepository { DeparturesResult(clock.instant(), 9145, listOf(sampleDeparture())) }
 
         val worker = buildWorker(
             routine.id,
@@ -1311,7 +1311,7 @@ class RoutineActiveWindowWorkerTest {
         val repository = ScriptedRoutineRepository(clock) { routine }
         val notifier = RecordingNotifier()
         val scheduler = RecordingScheduler()
-        val departures = FakeDepartureRepository { DeparturesResult(clock.instant(), 9145, listOf(sampleDeparture()), emptyList()) }
+        val departures = FakeDepartureRepository { DeparturesResult(clock.instant(), 9145, listOf(sampleDeparture())) }
         val failingDisruptions = FailingDisruptionRepository(RuntimeException("disruptions upstream down"))
 
         val worker = buildWorker(
@@ -1346,7 +1346,7 @@ class RoutineActiveWindowWorkerTest {
         val repository = ScriptedRoutineRepository(clock) { routine }
         val notifier = RecordingNotifier()
         val scheduler = RecordingScheduler()
-        val departures = FakeDepartureRepository { DeparturesResult(clock.instant(), 9145, listOf(sampleDeparture()), emptyList()) }
+        val departures = FakeDepartureRepository { DeparturesResult(clock.instant(), 9145, listOf(sampleDeparture())) }
         // Never actually resolves in time -- 100x DISRUPTIONS_FETCH_TIMEOUT_MS, and far longer
         // than ACTIVE_WINDOW_REFRESH_INTERVAL_MS itself, so this can only pass because
         // withTimeoutOrNull genuinely bounds the wait, not because the fetch happened to finish
@@ -1386,7 +1386,7 @@ class RoutineActiveWindowWorkerTest {
         val routine = routine() // 07:00-07:02 window -- exactly two ticks (see class doc example)
         val repository = ScriptedRoutineRepository(clock) { routine }
         val notifier = RecordingNotifier()
-        val departures = FakeDepartureRepository { DeparturesResult(clock.instant(), 9145, listOf(sampleDeparture()), emptyList()) }
+        val departures = FakeDepartureRepository { DeparturesResult(clock.instant(), 9145, listOf(sampleDeparture())) }
         // Tick 1's own `now` lands at 05:01:00Z (see class doc's worked example); this disruption
         // is still valid then, but expires at 05:01:15Z -- BEFORE tick 2's own `now` (05:01:30Z).
         val expiringDisruption = sampleDisruption().copy(validUntil = Instant.parse("2026-07-27T05:01:15Z"))
@@ -1426,7 +1426,7 @@ class RoutineActiveWindowWorkerTest {
         val routine = routine() // 07:00-07:02 window -- exactly two ticks (see class doc example)
         val repository = ScriptedRoutineRepository(clock) { routine }
         val notifier = RecordingNotifier()
-        val departures = FakeDepartureRepository { DeparturesResult(clock.instant(), 9145, listOf(sampleDeparture()), emptyList()) }
+        val departures = FakeDepartureRepository { DeparturesResult(clock.instant(), 9145, listOf(sampleDeparture())) }
         // Well under DISRUPTIONS_FETCH_TIMEOUT_MS (5s), so this always resolves rather than
         // timing out -- but still genuinely slow enough to matter if its elapsed time were
         // simply added on top of ACTIVE_WINDOW_REFRESH_INTERVAL_MS instead of subtracted from it.

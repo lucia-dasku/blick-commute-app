@@ -9,10 +9,6 @@ import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.launch
 import se.blick.app.data.repository.RoutineRepository
 import se.blick.app.domain.model.CommuteRoutine
-import se.blick.app.scheduling.RoutineScheduler
-import se.blick.app.widget.RoutineWidgetUpdater
-import se.blick.app.widget.runWidgetUpdateSafely
-import java.time.LocalDate
 import javax.inject.Inject
 
 data class RoutineListUiState(
@@ -23,8 +19,6 @@ data class RoutineListUiState(
 @HiltViewModel
 class RoutineListViewModel @Inject constructor(
     private val routineRepository: RoutineRepository,
-    private val routineScheduler: RoutineScheduler,
-    private val routineWidgetUpdater: RoutineWidgetUpdater,
 ) : ViewModel() {
 
     private val _uiState = MutableStateFlow(RoutineListUiState())
@@ -35,24 +29,6 @@ class RoutineListViewModel @Inject constructor(
             routineRepository.observeAll().collect { routines ->
                 _uiState.value = RoutineListUiState(routines = routines, isLoading = false)
             }
-        }
-    }
-
-    fun deleteRoutine(id: String) {
-        viewModelScope.launch {
-            routineRepository.delete(id)
-            routineScheduler.cancelActivation(id)
-            // Best-effort -- viewModelScope has no default exception handler, so an uncaught
-            // widget/Glance/DataStore failure here would crash the app even though the delete
-            // above already succeeded (see runWidgetUpdateSafely's own doc).
-            runWidgetUpdateSafely { routineWidgetUpdater.reconcile() }
-        }
-    }
-
-    fun pauseForToday(id: String) {
-        viewModelScope.launch {
-            routineRepository.pauseForDate(id, LocalDate.now())
-            runWidgetUpdateSafely { routineWidgetUpdater.reconcile() }
         }
     }
 }

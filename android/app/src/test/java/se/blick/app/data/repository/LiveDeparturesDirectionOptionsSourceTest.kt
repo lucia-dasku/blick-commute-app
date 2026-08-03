@@ -55,7 +55,7 @@ class LiveDeparturesDirectionOptionsSourceTest {
 
     @Test
     fun `requests the maximum SL Transport forecast window, not the live-display default`() = runTest {
-        val repository = RecordingDepartureRepository(DeparturesResult(Instant.EPOCH, 9145, emptyList(), emptyList()))
+        val repository = RecordingDepartureRepository(DeparturesResult(Instant.EPOCH, 9145, emptyList()))
 
         LiveDeparturesDirectionOptionsSource(repository).getDirectionOptions(9145)
 
@@ -65,7 +65,7 @@ class LiveDeparturesDirectionOptionsSourceTest {
 
     @Test
     fun `maps departures to direction options`() = runTest {
-        val result = DeparturesResult(Instant.EPOCH, 9145, listOf(departure()), emptyList())
+        val result = DeparturesResult(Instant.EPOCH, 9145, listOf(departure()))
         val repository = RecordingDepartureRepository(result)
 
         val options = LiveDeparturesDirectionOptionsSource(repository).getDirectionOptions(9145)
@@ -82,7 +82,6 @@ class LiveDeparturesDirectionOptionsSourceTest {
             Instant.EPOCH,
             9145,
             listOf(departure(), departure(), departure()),
-            emptyList(),
         )
         val repository = RecordingDepartureRepository(result)
 
@@ -97,7 +96,6 @@ class LiveDeparturesDirectionOptionsSourceTest {
             Instant.EPOCH,
             9145,
             listOf(departure(lineId = 14, directionCode = 1), departure(lineId = 14, directionCode = 2), departure(lineId = 17, directionCode = 1)),
-            emptyList(),
         )
         val repository = RecordingDepartureRepository(result)
 

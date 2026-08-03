@@ -4,7 +4,6 @@ import se.blick.app.data.remote.dto.DepartureDto
 import se.blick.app.data.remote.dto.DeparturesResponseDto
 import se.blick.app.data.remote.dto.DisruptionDto
 import se.blick.app.data.remote.dto.DisruptionsResponseDto
-import se.blick.app.data.remote.dto.SiteDeviationDto
 import se.blick.app.data.remote.dto.SiteDto
 import se.blick.app.domain.model.Departure
 import se.blick.app.domain.model.DeparturesResult
@@ -15,10 +14,7 @@ import se.blick.app.domain.model.DisruptionPriority
 import se.blick.app.domain.model.Journey
 import se.blick.app.domain.model.LineRef
 import se.blick.app.domain.model.Site
-import se.blick.app.domain.model.SiteDeviation
-import se.blick.app.domain.model.SiteDeviationLineRef
 import se.blick.app.domain.model.SiteDeviationStopAreaRef
-import se.blick.app.domain.model.SiteDeviationStopPointRef
 import se.blick.app.domain.model.StopAreaRef
 import se.blick.app.domain.model.StopPointRef
 import se.blick.app.domain.model.TripDeviation
@@ -62,22 +58,10 @@ fun DepartureDto.toDomain(): Departure = Departure(
     tripDeviations = tripDeviations.map { TripDeviation(it.importanceLevel, it.consequence, it.message) },
 )
 
-fun SiteDeviationDto.toDomain(): SiteDeviation = SiteDeviation(
-    id = id,
-    importanceLevel = importanceLevel,
-    message = message,
-    affectedStopAreas = affectedStopAreas.map { SiteDeviationStopAreaRef(it.id, it.name, it.type) },
-    affectedStopPoints = affectedStopPoints.map { SiteDeviationStopPointRef(it.id, it.name) },
-    affectedLines = affectedLines.map {
-        SiteDeviationLineRef(it.id, it.designation, it.transportMode?.toTransportMode())
-    },
-)
-
 fun DeparturesResponseDto.toDomain(): DeparturesResult = DeparturesResult(
     fetchedAt = fetchedAt.toInstant(),
     siteId = siteId,
     departures = departures.map { it.toDomain() },
-    siteDeviations = siteDeviations.map { it.toDomain() },
 )
 
 fun DisruptionDto.toDomain(): Disruption = Disruption(

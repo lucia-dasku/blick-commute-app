@@ -47,5 +47,4 @@ data class DeparturesResult(
     val fetchedAt: Instant,
     val siteId: Long,
     val departures: List<Departure>,
-    val siteDeviations: List<SiteDeviation>,
 )

@@ -14,9 +14,6 @@ import org.junit.Test
 import se.blick.app.data.repository.RoutineRepository
 import se.blick.app.domain.model.CommuteRoutine
 import se.blick.app.domain.model.TransportMode
-import se.blick.app.domain.usecase.LiveDeparturesState
-import se.blick.app.scheduling.RoutineScheduler
-import se.blick.app.widget.RoutineWidgetUpdater
 import java.time.DayOfWeek
 import java.time.LocalDate
 import java.time.LocalTime
@@ -55,8 +52,6 @@ class RoutineListViewModelTest {
 
     private class FakeRoutineRepository(initial: List<CommuteRoutine>) : RoutineRepository {
         private val state = MutableStateFlow(initial)
-        val deletedIds = mutableListOf<String>()
-        val pausedIds = mutableListOf<Pair<String, LocalDate>>()
 
         override fun observeAll(): Flow<List<CommuteRoutine>> = state
 
@@ -67,12 +62,10 @@ class RoutineListViewModelTest {
         }
 
         override suspend fun delete(id: String) {
-            deletedIds += id
             state.value = state.value.filterNot { it.id == id }
         }
 
         override suspend fun pauseForDate(id: String, date: LocalDate) {
-            pausedIds += id to date
             state.value = state.value.map { if (it.id == id) it.copy(pausedDate = date) else it }
         }
 
@@ -87,65 +80,10 @@ class RoutineListViewModelTest {
         override suspend fun hasAnyRoutine(): Boolean = state.value.isNotEmpty()
     }
 
-    /** Records every cancellation call — for proving deleteRoutine also cancels the deleted
-     * routine's scheduled activation, not just its stored data. */
-    private class FakeRoutineScheduler : RoutineScheduler {
-        val scheduledRoutines = mutableListOf<CommuteRoutine>()
-        val cancelledRoutineIds = mutableListOf<String>()
-        override fun scheduleActivation(routine: CommuteRoutine) {
-            scheduledRoutines += routine
-        }
-        override fun cancelActivation(routineId: String) {
-            cancelledRoutineIds += routineId
-        }
-    }
-
-    /** Records every call — for proving delete/pause reconcile the widget (see
-     * [se.blick.app.widget.RoutineWidgetUpdater.reconcile]'s own doc on why every routine-
-     * lifecycle mutation site outside the active-window worker must call this). */
-    private class FakeRoutineWidgetUpdater : RoutineWidgetUpdater {
-        var reconcileCallCount = 0
-        var clearCallCount = 0
-        val updateCalls = mutableListOf<CommuteRoutine>()
-
-        override suspend fun updateWithDepartures(routine: CommuteRoutine, departuresState: LiveDeparturesState, now: java.time.Instant) {
-            updateCalls += routine
-        }
-
-        override suspend fun clear() {
-            clearCallCount++
-        }
-
-        override suspend fun reconcile() {
-            reconcileCallCount++
-        }
-
-        override suspend fun showNotificationsUnavailable(routine: CommuteRoutine) = Unit
-    }
-
-    /** Throws from every method — proves deleteRoutine/pauseForToday wrap their
-     * [RoutineWidgetUpdater] call with `runWidgetUpdateSafely` rather than letting a widget/
-     * Glance/DataStore failure crash `viewModelScope` (which has no default exception handler
-     * on Android), even though the real repository mutation already succeeded. */
-    private class FailingRoutineWidgetUpdater : RoutineWidgetUpdater {
-        override suspend fun updateWithDepartures(routine: CommuteRoutine, departuresState: LiveDeparturesState, now: java.time.Instant) {
-            throw RuntimeException("widget update failed")
-        }
-        override suspend fun clear() {
-            throw RuntimeException("widget update failed")
-        }
-        override suspend fun reconcile() {
-            throw RuntimeException("widget update failed")
-        }
-        override suspend fun showNotificationsUnavailable(routine: CommuteRoutine) {
-            throw RuntimeException("widget update failed")
-        }
-    }
-
     @Test
     fun `starts in loading state before the repository emits`() = runTest(dispatcher) {
         val repository = FakeRoutineRepository(listOf(sampleRoutine()))
-        val viewModel = RoutineListViewModel(repository, FakeRoutineScheduler(), FakeRoutineWidgetUpdater())
+        val viewModel = RoutineListViewModel(repository)
 
         assertTrue(viewModel.uiState.value.isLoading)
     }
@@ -154,116 +92,11 @@ class RoutineListViewModelTest {
     fun `reflects routines from the repository once collected`() = runTest(dispatcher) {
         val routine = sampleRoutine()
         val repository = FakeRoutineRepository(listOf(routine))
-        val viewModel = RoutineListViewModel(repository, FakeRoutineScheduler(), FakeRoutineWidgetUpdater())
+        val viewModel = RoutineListViewModel(repository)
 
         dispatcher.scheduler.advanceUntilIdle()
 
         assertEquals(false, viewModel.uiState.value.isLoading)
         assertEquals(listOf(routine), viewModel.uiState.value.routines)
-    }
-
-    @Test
-    fun `deleteRoutine delegates to the repository and the list updates`() = runTest(dispatcher) {
-        val routine = sampleRoutine()
-        val repository = FakeRoutineRepository(listOf(routine))
-        val viewModel = RoutineListViewModel(repository, FakeRoutineScheduler(), FakeRoutineWidgetUpdater())
-        dispatcher.scheduler.advanceUntilIdle()
-
-        viewModel.deleteRoutine(routine.id)
-        dispatcher.scheduler.advanceUntilIdle()
-
-        assertEquals(listOf(routine.id), repository.deletedIds)
-        assertTrue(viewModel.uiState.value.routines.isEmpty())
-    }
-
-    @Test
-    fun `deleteRoutine also cancels the routine's scheduled activation`() = runTest(dispatcher) {
-        val routine = sampleRoutine()
-        val repository = FakeRoutineRepository(listOf(routine))
-        val scheduler = FakeRoutineScheduler()
-        val viewModel = RoutineListViewModel(repository, scheduler, FakeRoutineWidgetUpdater())
-        dispatcher.scheduler.advanceUntilIdle()
-
-        viewModel.deleteRoutine(routine.id)
-        dispatcher.scheduler.advanceUntilIdle()
-
-        assertEquals(listOf(routine.id), scheduler.cancelledRoutineIds)
-    }
-
-    @Test
-    fun `deleteRoutine reconciles the widget`() = runTest(dispatcher) {
-        val routine = sampleRoutine()
-        val repository = FakeRoutineRepository(listOf(routine))
-        val widgetUpdater = FakeRoutineWidgetUpdater()
-        val viewModel = RoutineListViewModel(repository, FakeRoutineScheduler(), widgetUpdater)
-        dispatcher.scheduler.advanceUntilIdle()
-
-        viewModel.deleteRoutine(routine.id)
-        dispatcher.scheduler.advanceUntilIdle()
-
-        assertEquals(1, widgetUpdater.reconcileCallCount)
-    }
-
-    @Test
-    fun `pauseForToday records today's date against the routine id`() = runTest(dispatcher) {
-        val routine = sampleRoutine()
-        val repository = FakeRoutineRepository(listOf(routine))
-        val viewModel = RoutineListViewModel(repository, FakeRoutineScheduler(), FakeRoutineWidgetUpdater())
-        dispatcher.scheduler.advanceUntilIdle()
-
-        viewModel.pauseForToday(routine.id)
-        dispatcher.scheduler.advanceUntilIdle()
-
-        assertEquals(routine.id, repository.pausedIds.single().first)
-        assertEquals(LocalDate.now(), repository.pausedIds.single().second)
-    }
-
-    @Test
-    fun `pauseForToday reconciles the widget`() = runTest(dispatcher) {
-        val routine = sampleRoutine()
-        val repository = FakeRoutineRepository(listOf(routine))
-        val widgetUpdater = FakeRoutineWidgetUpdater()
-        val viewModel = RoutineListViewModel(repository, FakeRoutineScheduler(), widgetUpdater)
-        dispatcher.scheduler.advanceUntilIdle()
-
-        viewModel.pauseForToday(routine.id)
-        dispatcher.scheduler.advanceUntilIdle()
-
-        assertEquals(1, widgetUpdater.reconcileCallCount)
-    }
-
-    // ---- Widget failures are best-effort: never crash viewModelScope (see
-    // se.blick.app.widget.runWidgetUpdateSafely's own doc) ----
-
-    @Test
-    fun `deleteRoutine still deletes and cancels scheduling when the widget updater throws`() = runTest(dispatcher) {
-        val routine = sampleRoutine()
-        val repository = FakeRoutineRepository(listOf(routine))
-        val scheduler = FakeRoutineScheduler()
-        val viewModel = RoutineListViewModel(repository, scheduler, FailingRoutineWidgetUpdater())
-        dispatcher.scheduler.advanceUntilIdle()
-
-        // If the widget failure were left unwrapped, this whole coroutine would crash
-        // (viewModelScope has no default exception handler) and neither assertion below would
-        // ever be reached.
-        viewModel.deleteRoutine(routine.id)
-        dispatcher.scheduler.advanceUntilIdle()
-
-        assertEquals(listOf(routine.id), repository.deletedIds)
-        assertEquals(listOf(routine.id), scheduler.cancelledRoutineIds)
-        assertTrue(viewModel.uiState.value.routines.isEmpty())
-    }
-
-    @Test
-    fun `pauseForToday still records the pause when the widget updater throws`() = runTest(dispatcher) {
-        val routine = sampleRoutine()
-        val repository = FakeRoutineRepository(listOf(routine))
-        val viewModel = RoutineListViewModel(repository, FakeRoutineScheduler(), FailingRoutineWidgetUpdater())
-        dispatcher.scheduler.advanceUntilIdle()
-
-        viewModel.pauseForToday(routine.id)
-        dispatcher.scheduler.advanceUntilIdle()
-
-        assertEquals(routine.id, repository.pausedIds.single().first)
     }
 }
