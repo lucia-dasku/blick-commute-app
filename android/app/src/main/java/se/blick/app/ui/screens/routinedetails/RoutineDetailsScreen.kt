@@ -19,6 +19,7 @@ import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
+import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
@@ -69,6 +70,7 @@ import se.blick.app.domain.usecase.PreparedDeparture
 import se.blick.app.domain.model.TransportMode
 import se.blick.app.notification.NotificationAvailability
 import se.blick.app.notification.NotificationPostResult
+import se.blick.app.ui.components.LineBadge
 import se.blick.app.ui.notification.notificationSettingsIntent
 import se.blick.app.ui.notification.promotedNotificationSettingsIntent
 import se.blick.app.ui.notification.rememberNotificationPermissionGate
@@ -243,7 +245,7 @@ internal fun RoutineDetailsContent(
         Spacer(Modifier.height(12.dp))
         DetailRow(stringResource(R.string.routine_details_mode_label), stringResource(routine.transportMode.detailsLabelResId()))
         routine.lineDesignation?.let { designation ->
-            DetailRow(stringResource(R.string.routine_details_line_label), designation)
+            LineDetailRow(stringResource(R.string.routine_details_line_label), designation, routine.transportMode)
         }
         routine.destinationLabel?.let { destination ->
             DetailRow(stringResource(R.string.routine_details_direction_label), destination)
@@ -296,7 +298,7 @@ internal fun RoutineDetailsContent(
         }
         Spacer(Modifier.height(12.dp))
 
-        DeparturesSection(departuresState, locale, onRefresh)
+        DeparturesSection(departuresState, routine.transportMode, locale, onRefresh)
 
         // The whole disruptions section -- heading included -- is skipped entirely once a
         // fetch has actually completed and found nothing relevant: a "Disruptions" heading
@@ -664,6 +666,21 @@ private fun DetailRow(label: String, value: String) {
     }
 }
 
+/** Same label/value row layout as [DetailRow], except the value is the same colored
+ * line-number badge used throughout the app rather than plain text — see
+ * [se.blick.app.ui.components.LineBadge]'s own doc. */
+@Composable
+private fun LineDetailRow(label: String, lineDesignation: String, transportMode: TransportMode) {
+    Row(
+        modifier = Modifier.fillMaxWidth().padding(vertical = 4.dp),
+        horizontalArrangement = Arrangement.SpaceBetween,
+        verticalAlignment = Alignment.CenterVertically,
+    ) {
+        Text(label, style = MaterialTheme.typography.bodyMedium, color = MaterialTheme.colorScheme.secondary)
+        LineBadge(lineDesignation = lineDesignation, transportMode = transportMode)
+    }
+}
+
 @Composable
 private fun statusLabel(routine: CommuteRoutine, isPausedToday: Boolean): String = when {
     isPausedToday -> stringResource(R.string.routine_details_status_paused_today)
@@ -674,6 +691,7 @@ private fun statusLabel(routine: CommuteRoutine, isPausedToday: Boolean): String
 @Composable
 private fun DeparturesSection(
     state: LiveDeparturesState,
+    transportMode: TransportMode,
     locale: java.util.Locale,
     onRefresh: () -> Unit,
 ) {
@@ -681,7 +699,7 @@ private fun DeparturesSection(
         is LiveDeparturesState.Loading -> CenteredBox(Modifier.fillMaxWidth().padding(vertical = 16.dp)) {
             CircularProgressIndicator()
         }
-        is LiveDeparturesState.Live -> DeparturesList(state.snapshot.departures, locale)
+        is LiveDeparturesState.Live -> DeparturesList(state.snapshot.departures, transportMode, locale)
         is LiveDeparturesState.Stale -> Column {
             Text(
                 stringResource(R.string.routine_details_stale_warning),
@@ -689,7 +707,7 @@ private fun DeparturesSection(
                 style = MaterialTheme.typography.bodySmall,
             )
             Spacer(Modifier.height(8.dp))
-            DeparturesList(state.snapshot.departures, locale)
+            DeparturesList(state.snapshot.departures, transportMode, locale)
         }
         is LiveDeparturesState.NoUpcomingDepartures -> RetryableMessage(R.string.routine_details_no_departures, onRefresh)
         is LiveDeparturesState.Offline -> RetryableMessage(R.string.routine_details_offline, onRefresh)
@@ -785,27 +803,31 @@ private fun RetryableMessage(messageRes: Int, onRefresh: () -> Unit) {
 }
 
 @Composable
-private fun DeparturesList(departures: List<PreparedDeparture>, locale: java.util.Locale) {
+private fun DeparturesList(departures: List<PreparedDeparture>, transportMode: TransportMode, locale: java.util.Locale) {
     Column {
         departures.forEach { departure ->
-            DepartureRow(departure, locale)
+            DepartureRow(departure, transportMode, locale)
             Spacer(Modifier.height(8.dp))
         }
     }
 }
 
 @Composable
-private fun DepartureRow(departure: PreparedDeparture, locale: java.util.Locale) {
+private fun DepartureRow(departure: PreparedDeparture, transportMode: TransportMode, locale: java.util.Locale) {
     Column(Modifier.fillMaxWidth().padding(vertical = 4.dp)) {
         Row(
             modifier = Modifier.fillMaxWidth(),
             horizontalArrangement = Arrangement.SpaceBetween,
             verticalAlignment = Alignment.CenterVertically,
         ) {
-            Text(
-                "${departure.lineDesignation}  →  ${departure.destination ?: stringResource(R.string.direction_unknown_destination)}",
-                style = MaterialTheme.typography.bodyLarge,
-            )
+            Row(verticalAlignment = Alignment.CenterVertically) {
+                LineBadge(lineDesignation = departure.lineDesignation, transportMode = transportMode)
+                Spacer(Modifier.width(8.dp))
+                Text(
+                    departure.destination ?: stringResource(R.string.direction_unknown_destination),
+                    style = MaterialTheme.typography.bodyLarge,
+                )
+            }
             Text(
                 stringResource(R.string.routine_details_minutes_remaining, departure.minutesRemaining),
                 style = MaterialTheme.typography.titleMedium,

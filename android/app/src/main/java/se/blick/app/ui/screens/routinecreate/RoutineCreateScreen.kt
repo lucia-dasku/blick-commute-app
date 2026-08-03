@@ -54,6 +54,7 @@ import se.blick.app.R
 import se.blick.app.data.repository.DirectionOption
 import se.blick.app.domain.model.Site
 import se.blick.app.domain.model.TransportMode
+import se.blick.app.ui.components.LineBadge
 import se.blick.app.ui.notification.rememberNotificationPermissionGate
 import java.time.DayOfWeek
 import java.time.LocalTime
@@ -291,8 +292,10 @@ private fun TransportModeStep(
     }
 }
 
+/** `internal`, not `private` — exercised directly by `RoutineCreateScreenTest`, the same
+ * direct-composable-test convention [WeekdaySelector]/`RoutineDetailsContent` already use. */
 @Composable
-private fun DirectionStep(
+internal fun DirectionStep(
     uiState: RoutineCreateUiState,
     onSelectDirection: (DirectionOption) -> Unit,
 ) {
@@ -301,7 +304,8 @@ private fun DirectionStep(
         items(options, key = { "${it.lineId}-${it.directionCode}" }) { option ->
             val destination = option.destinationLabel ?: stringResource(R.string.direction_unknown_destination)
             ListItem(
-                headlineContent = { Text("${option.lineDesignation}  →  $destination") },
+                leadingContent = { LineBadge(lineDesignation = option.lineDesignation, transportMode = option.transportMode) },
+                headlineContent = { Text(destination) },
                 modifier = Modifier.clickable { onSelectDirection(option) },
             )
         }

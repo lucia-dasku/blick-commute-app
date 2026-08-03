@@ -17,21 +17,19 @@ a claim that all of it already exists. This section is the authoritative summary
 what is actually built today; where the two disagree, this section wins.
 
 **Validation status of this update, stated plainly up front:** a complete local run —
-`testDebugUnitTest`, `lintDebug`, `assembleDebug`, `assembleRelease`, and
-`connectedDebugAndroidTest` — has now passed in full: all 482 JVM `@Test` functions, and all
-41 instrumented `@Test` functions on both the physical Lenovo TB350FU (Android 14) and a
-Samsung Galaxy S23 Ultra (`SM-S918B`, Android 16) (the two devices were connected at
-different points during this session rather than simultaneously; each independently ran and
-passed the full 41-test instrumented suite — see `android/README.md`'s own note on this).
-`lintDebug` completed with 0 errors (44 warnings,
-unchanged in composition from the previous run: two expected, already-guarded `InlinedApi`
-findings — the API-36 `ACTION_APP_NOTIFICATION_PROMOTION_SETTINGS` deep-link and the API-33
+`testDebugUnitTest`, `lintDebug`, `assembleDebug`, and `connectedDebugAndroidTest` — has now
+passed in full: all 482 JVM `@Test` functions, and all 56 instrumented `@Test` functions on
+the physical Samsung Galaxy S23 Ultra (`SM-S918B`, Android 16) (a Lenovo TB350FU was also
+used earlier this session for the notification-recovery fix's own 41-test instrumented run —
+see `android/README.md`'s own notes on both runs). `lintDebug` completed with 0 errors (44
+warnings, unchanged in composition from before this session's changes: two expected,
+already-guarded `InlinedApi` findings — the API-36
+`ACTION_APP_NOTIFICATION_PROMOTION_SETTINGS` deep-link and the API-33
 `POST_NOTIFICATIONS` permission constant — plus four expected `UnusedAttribute` findings
 on the widget provider XML's Android-12+-only sizing attributes, kept alongside their
 legacy fallbacks deliberately, and one expected `GradleDependency` finding for the
-`androidx.lifecycle:lifecycle-process` dependency), and both `assembleDebug` and
-`assembleRelease` (unsigned; no release signing config is configured in this project yet)
-completed successfully. The new notification-recovery-coordination and
+`androidx.lifecycle:lifecycle-process` dependency), and `assembleDebug` completed
+successfully. The new notification-recovery-coordination and
 worker-cleanup-ownership regression tests are themselves JVM-side Robolectric tests (several
 against a real, in-memory WorkManager instance, and two against a real, file-backed Room
 database/DataStore to prove state survives simulated process recreation), so they are
@@ -48,8 +46,22 @@ narrow, unavoidable race remains and is documented rather than hidden: `RoutineS
 and any subsequent `scheduleActivation` call are not atomic — a worker can transition from
 not-yet-started to genuinely `RUNNING` in the brief window between the two, since WorkManager
 exposes no atomic "replace-unless-running" primitive (see `NotificationRecoveryCoordinator`'s
-own doc for the full reasoning on why this residual window is accepted). The backend's own
-`npm test` also passed in full at 268/268 (unaffected by this Android-only change). **The
+own doc for the full reasoning on why this residual window is accepted). **The home-screen
+widget's own colored line-number badge is now reused throughout the rest of the app**
+(route selection, the routine list, Routine Details' line row, and departure rows) via a
+new standard-Compose `se.blick.app.ui.components.LineBadge`, sharing the widget's exact
+`LineBadgeColorMapping`/color values rather than a second mapping — the widget itself and
+all departure-preparation logic are unchanged. This added the 15 further instrumented
+tests (a new `LineBadgeTest`/`DirectionStepTest`, plus new coverage in
+`RoutineListScreenTest`/`RoutineDetailsScreenTest`) that make up the 56 figure above; no
+further JVM tests were needed since the color mapping itself was already exhaustively
+covered by `LineBadgeColorMappingTest`. Manually verified end to end on the Samsung Galaxy
+S23 Ultra: created a live routine against the real deployed backend and confirmed the
+badge renders correctly (colored by line family, centered, white bold text) on every one
+of those screens, including the departure row showing real live SL data, then deleted the
+test routine — see `android/README.md`'s own account for the full run. The backend's own
+`npm test` also passed in full at 268/268 (unaffected by any of this session's
+Android-only changes). **The
 home-screen
 widget's placement, resizing, live updates, and Stop-action behavior have since been
 manually confirmed on that same device, including its "Design 1" visual redesign — a
@@ -991,6 +1003,34 @@ equivalent instead, to avoid self-deadlocking on Kotlin's non-reentrant `Mutex`)
 one regression test that was confirmed to fail against the pre-fix code before being
 verified against the fix — reaching 482 JVM / 41 instrumented. No dead code was found in
 the audited files.
+
+A further session extended the home-screen widget's own colored, rounded line-number
+badge (`BlickRoutineWidget`'s Glance-based `LineBadge`, colored via
+`LineBadgeColorMapping` — Pendeltåg pink, metro blue/red/green, everything else neutral
+grey) to every other place a line number is shown: route selection
+(`RoutineCreateScreen`'s `DirectionStep`, bumped `internal` for direct testability, the
+same convention `WeekdaySelector`/`RoutineDetailsContent` already use), the routine list,
+Routine Details' own line-detail row, and each departure row. Since Glance composables
+cannot be called from standard Jetpack Compose, this required a second renderer — a new
+`se.blick.app.ui.components.LineBadge` — but not a second color mapping: the literal SL
+line-family color values (previously private to `BlickRoutineWidget.kt`) moved into
+`LineBadgeColorMapping.kt` as `internal` constants, so both renderers draw from the exact
+same values rather than risking drift between two independently hand-copied sets. The
+widget itself and all departure-preparation logic (`PreparedDeparture`, the departure
+mapper) are unchanged — `RoutineDetailsScreen`'s existing `DeparturesSection`/
+`DeparturesList`/`DepartureRow` chain gained one new `transportMode` parameter, threaded
+down from the already-in-scope routine, purely so each departure row can resolve its own
+badge color without adding a field to `PreparedDeparture`. Added 15 further instrumented
+`@Test` functions (a new `LineBadgeTest` for the shared composable itself, a new
+`DirectionStepTest`, and new coverage in `RoutineListScreenTest`/
+`RoutineDetailsScreenTest`) with no further JVM ones — the color mapping itself was
+already exhaustively covered by the existing, unaffected `LineBadgeColorMappingTest` —
+reaching 482 JVM / 56 instrumented, all passing on the Samsung Galaxy S23 Ultra.
+Manually verified end to end on that same device: created a live routine against the
+real deployed backend and confirmed the badge (green 17/18/19, red 13/14) renders
+correctly, centered with readable white-on-color contrast, on the direction-selection
+list, the routine list, the Line detail row, and the departure row showing real live SL
+departure data, then deleted the test routine.
 
 ### Backend
 

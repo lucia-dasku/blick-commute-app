@@ -37,6 +37,7 @@ import androidx.hilt.navigation.compose.hiltViewModel
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import se.blick.app.R
 import se.blick.app.domain.model.CommuteRoutine
+import se.blick.app.ui.components.LineBadge
 
 /** Extra bottom padding reserved for the last list row so the always-visible FAB (see
  * [RoutineListScreen]'s `floatingActionButton` slot) never obscures it — Material3's
@@ -147,6 +148,13 @@ fun RoutineListContent(
             ) {
                 items(uiState.routines, key = CommuteRoutine::id) { routine ->
                     ListItem(
+                        // The same colored line-number badge used throughout the app (route
+                        // selection, Routine Details, departure rows, and the home-screen
+                        // widget) — null only for a routine with no specific line configured,
+                        // matching every other display site's identical null-check.
+                        leadingContent = routine.lineDesignation?.let { designation ->
+                            { LineBadge(lineDesignation = designation, transportMode = routine.transportMode) }
+                        },
                         headlineContent = { Text(routine.name) },
                         supportingContent = { Text(routine.siteName) },
                         // Consistent with the details screen: enabled/disabled is always

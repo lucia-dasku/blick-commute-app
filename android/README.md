@@ -692,6 +692,34 @@ The 41 instrumented tests were then also re-run on the Samsung Galaxy S23 Ultra
 (`SM-S918B`, Android 16), once it was reconnected — all 41 pass there too (0 skipped, 0
 failed), confirming this fix's instrumented coverage on both physical devices.
 
+**Shared line-number badge, extended app-wide.** The colored, rounded line-number badge
+previously only rendered by the home-screen widget (`BlickRoutineWidget`'s own
+Glance-based `LineBadge`) is now reused everywhere else a line number is shown: route
+selection (`RoutineCreateScreen`'s direction step), the routine list, Routine Details'
+own line-detail row, and each departure row. A new standard Jetpack Compose composable,
+`se.blick.app.ui.components.LineBadge`, renders it outside the widget — Glance composables
+cannot be called from standard Compose, so this is a second renderer, but it draws from
+the exact same `LineBadgeColorMapping`/color values as the widget's own badge (moved into
+`LineBadgeColorMapping.kt`, `internal`, so both renderers share one source of truth rather
+than duplicating the literal SL line-family colors). Widget rendering and all
+departure-preparation logic are unchanged — only new UI call sites were added, plus one
+new `transportMode` parameter threaded through `RoutineDetailsScreen`'s existing
+`DeparturesSection`/`DeparturesList`/`DepartureRow` chain so departure rows can resolve
+their own badge color without changing `PreparedDeparture` itself. `RoutineCreateScreen`'s
+private `DirectionStep` was bumped to `internal` for direct testability, the same
+convention `WeekdaySelector`/`RoutineDetailsContent` already use. Added 15 further
+instrumented `@Test` functions (a new `LineBadgeTest` covering the shared composable
+itself; a new `DirectionStepTest`; and new coverage in `RoutineListScreenTest`/
+`RoutineDetailsScreenTest`) with no further JVM ones (colors themselves are already
+exhaustively covered by the existing, unaffected `LineBadgeColorMappingTest`), reaching
+482 JVM / 56 instrumented — all passing on the Samsung Galaxy S23 Ultra; `lintDebug` still
+reports 0 errors and the same 44 warnings, and `assembleDebug` succeeded. Manually
+verified end to end on that same device: created a live routine against the real deployed
+backend and confirmed the badge renders correctly (green line 17/18/19, red 13/14, red 14
+after saving) on the direction-selection list, the routine list, the Line detail row, and
+the departure row showing real live SL data — then deleted the test routine to leave the
+device clean.
+
 **Disruptions integration, verified end to end on-device (with one real-data caveat):**
 the previously-built-but-unwired `DisruptionRepository`/`RemoteDisruptionRepository`
 (see "Not yet implemented" in `../docs/Blick_Project_Documentation.md`'s prior revision)

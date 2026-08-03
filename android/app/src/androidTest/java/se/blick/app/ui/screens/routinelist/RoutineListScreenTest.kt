@@ -242,6 +242,37 @@ class RoutineListScreenTest {
     }
 
     @Test
+    fun aRoutineWithALineDesignationShowsTheSharedLineBadge() {
+        composeRule.setContent {
+            RoutineListContent(
+                uiState = RoutineListUiState(routines = listOf(sampleRoutine()), isLoading = false),
+                onAddRoutine = {},
+                onOpenRoutine = {},
+            )
+        }
+
+        // sampleRoutine() has lineDesignation = "14" -- see se.blick.app.ui.components.LineBadge,
+        // the same badge used on route selection, Routine Details, departure rows, and the
+        // home-screen widget.
+        composeRule.onNodeWithText("14").assertIsDisplayed()
+    }
+
+    @Test
+    fun aRoutineWithNoLineDesignationShowsNoLeadingBadge() {
+        composeRule.setContent {
+            RoutineListContent(
+                uiState = RoutineListUiState(routines = listOf(sampleRoutine().copy(lineDesignation = null)), isLoading = false),
+                onAddRoutine = {},
+                onOpenRoutine = {},
+            )
+        }
+
+        composeRule.onNodeWithText("14").assertDoesNotExist()
+        // The rest of the row still renders normally -- omitting the badge is not a wider failure.
+        composeRule.onNodeWithText("Morning commute").assertExists()
+    }
+
+    @Test
     fun aboutActionIsAlwaysVisibleAndInvokesOnOpenAbout() {
         var aboutOpened = false
 

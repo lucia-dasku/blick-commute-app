@@ -21,7 +21,9 @@ import se.blick.app.domain.model.DisruptionMessage
 import se.blick.app.domain.model.DisruptionPriority
 import se.blick.app.domain.model.TransportMode
 import se.blick.app.domain.usecase.DisruptionsState
+import se.blick.app.domain.usecase.LiveDeparturesSnapshot
 import se.blick.app.domain.usecase.LiveDeparturesState
+import se.blick.app.domain.usecase.PreparedDeparture
 import se.blick.app.notification.NotificationAvailability
 
 /**
@@ -72,13 +74,37 @@ class RoutineDetailsScreenTest {
         affectedModes = emptyList(),
     )
 
-    private fun setContent(disruptionsState: DisruptionsState) {
+    private fun sampleDeparture(
+        lineDesignation: String = "14",
+        destination: String? = "T-Centralen",
+    ) = PreparedDeparture(
+        departureId = "d1",
+        lineDesignation = lineDesignation,
+        direction = "Northbound",
+        destination = destination,
+        scheduledTime = Instant.parse("2026-08-02T07:05:00Z"),
+        expectedTime = null,
+        effectiveTime = Instant.parse("2026-08-02T07:05:00Z"),
+        minutesRemaining = 5,
+        isRealTime = false,
+        isCancelled = false,
+        state = "EXPECTED",
+        journeyState = "EXPECTED",
+        predictionState = null,
+        tripDeviations = emptyList(),
+    )
+
+    private fun setContent(
+        disruptionsState: DisruptionsState,
+        departuresState: LiveDeparturesState = LiveDeparturesState.Offline,
+        routine: CommuteRoutine = sampleRoutine(),
+    ) {
         composeRule.setContent {
             RoutineDetailsContent(
                 modifier = Modifier,
-                routine = sampleRoutine(),
+                routine = routine,
                 isPausedToday = false,
-                departuresState = LiveDeparturesState.Offline,
+                departuresState = departuresState,
                 isRefreshing = false,
                 disruptionsState = disruptionsState,
                 onRefresh = {},
@@ -171,5 +197,37 @@ class RoutineDetailsScreenTest {
 
         composeRule.onNodeWithText(first.message.header).assertExists()
         composeRule.onNodeWithText(second.message.header).assertExists()
+    }
+
+    // ---- Shared line-number badge (see se.blick.app.ui.components.LineBadge) — the same
+    // colored badge used on route selection, the routine list, departure rows, and the
+    // home-screen widget ----
+
+    @Test
+    fun theRoutineHeaderShowsTheSharedLineBadgeForItsOwnLine() {
+        // sampleRoutine() has lineDesignation = "14".
+        setContent(DisruptionsState.NoDisruptions)
+        composeRule.onNodeWithText("14").assertExists()
+    }
+
+    @Test
+    fun aRoutineWithNoLineDesignationShowsNoLineDetailRow() {
+        setContent(DisruptionsState.NoDisruptions, routine = sampleRoutine().copy(lineDesignation = null))
+        val lineLabel = composeRule.activity.getString(R.string.routine_details_line_label)
+        composeRule.onNodeWithText(lineLabel).assertDoesNotExist()
+    }
+
+    @Test
+    fun eachDepartureRowShowsTheSharedLineBadgeForItsOwnLine() {
+        // A different line AND destination than the routine's own ("14"/"T-Centralen",
+        // asserted separately above -- sampleRoutine()'s own destinationLabel already renders
+        // its own "T-Centralen" text elsewhere on this screen) so this assertion unambiguously
+        // targets the departure row's own badge/text, not the header's.
+        val departure = sampleDeparture(lineDesignation = "18", destination = "Farsta strand")
+        val snapshot = LiveDeparturesSnapshot(departures = listOf(departure), fetchedAt = Instant.parse("2026-08-02T07:00:00Z"))
+        setContent(DisruptionsState.NoDisruptions, departuresState = LiveDeparturesState.Live(snapshot))
+
+        composeRule.onNodeWithText("18").assertExists()
+        composeRule.onNodeWithText(departure.destination!!).assertExists()
     }
 }

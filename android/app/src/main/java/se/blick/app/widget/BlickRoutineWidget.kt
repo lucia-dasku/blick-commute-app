@@ -173,30 +173,12 @@ private fun sizeTierFor(width: Dp): WidgetSizeTier = when {
     else -> TIER_EXTRA_LARGE
 }
 
-// Darkened from SL's own brighter line-family colors specifically so white badge text stays at
-// or above the WCAG AA 4.5:1 contrast minimum for normal-size text — the original, brighter
-// values measured at only 3.11 (pink), 4.17 (red), and 2.46 (green) against white, all below
-// 4.5, with green badly so. Blue (4.54) and grey (4.83) already passed but blue's own margin was
-// razor-thin, so it got a small nudge too, for a safer margin against real-device subpixel/
-// anti-aliasing variance rather than a paper-thin pass. Hue is preserved (each channel scaled by
-// the same factor toward black) so the SL line-family color is still recognizably the same
-// family, just deep enough to stay readable. Exact contrast ratios are asserted directly against
-// these literal values in LineBadgeColorMappingTest, so a future edit here that regresses
-// contrast fails a test rather than shipping unnoticed.
-private val BADGE_PINK = Color(0xFFC73981)
-private val BADGE_BLUE = Color(0xFF1676B8)
-private val BADGE_RED = Color(0xFFDB2925)
-private val BADGE_GREEN = Color(0xFF38803F)
-private val BADGE_GREY = Color(0xFF6B7280)
+// The actual badge color values (LINE_BADGE_PINK/BLUE/RED/GREEN/GREY) and the toBadgeColor()
+// conversion now live in LineBadgeColorMapping.kt (same package, no import needed) — shared with
+// se.blick.app.ui.components.LineBadge's standard-Compose badge, so both renderers draw from one
+// source of truth rather than duplicating these literals. Only this Glance-specific white-text
+// ColorProvider stays here, since androidx.glance.unit.ColorProvider has no standard-Compose use.
 private val BADGE_TEXT_WHITE = ColorProvider(Color.White)
-
-internal fun LineBadgeColor.toBadgeColor(): Color = when (this) {
-    LineBadgeColor.Pink -> BADGE_PINK
-    LineBadgeColor.Blue -> BADGE_BLUE
-    LineBadgeColor.Red -> BADGE_RED
-    LineBadgeColor.Green -> BADGE_GREEN
-    LineBadgeColor.Unknown -> BADGE_GREY
-}
 
 @Composable
 private fun BlickWidgetContent(state: RoutineWidgetUiState) {
@@ -306,8 +288,9 @@ private fun StaleIndicator(tier: WidgetSizeTier) {
 }
 
 /** A small rounded badge with the real line number, colored by [LineBadgeColorMapping] — bold
- * white text on every color (including [BADGE_GREY] for an unmapped line), for reliable
- * contrast regardless of which family color is picked. */
+ * white text on every color (including [LINE_BADGE_GREY] for an unmapped line), for reliable
+ * contrast regardless of which family color is picked. See [se.blick.app.ui.components.LineBadge]
+ * for the same badge rendered outside the widget, elsewhere in the app. */
 @Composable
 private fun LineBadge(text: String, color: LineBadgeColor, textSize: TextUnit) {
     Box(
@@ -388,9 +371,9 @@ private fun CountdownText(context: Context, row: WidgetDepartureRow, tier: Widge
 }
 
 /** A small colored dot plus a "Live"/"Scheduled"/"Cancelled" label — green+"Live" for a
- * real-time departure (reusing [BADGE_GREEN], the same green given for the line-badge family,
- * as this widget's one shared "positive/live" color), a theme-neutral outline dot for a merely
- * scheduled one, and [GlanceTheme.colors.error] for a cancelled one. */
+ * real-time departure (reusing [LINE_BADGE_GREEN], the same green given for the line-badge
+ * family, as this widget's one shared "positive/live" color), a theme-neutral outline dot for a
+ * merely scheduled one, and [GlanceTheme.colors.error] for a cancelled one. */
 @Composable
 private fun StatusFooter(context: Context, next: WidgetDepartureRow, tier: WidgetSizeTier) {
     val dotColor: ColorProvider
@@ -401,7 +384,7 @@ private fun StatusFooter(context: Context, next: WidgetDepartureRow, tier: Widge
             label = context.getString(R.string.routine_details_departure_cancelled)
         }
         next.isRealTime -> {
-            dotColor = ColorProvider(BADGE_GREEN)
+            dotColor = ColorProvider(LINE_BADGE_GREEN)
             label = context.getString(R.string.routine_details_departure_live)
         }
         else -> {

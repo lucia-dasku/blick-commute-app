@@ -1,15 +1,17 @@
 package se.blick.app.widget
 
+import androidx.compose.ui.graphics.Color
 import se.blick.app.domain.model.TransportMode
 
 /**
  * Stockholm public-transport line-family colors, per SL's own line-color convention: Pendeltåg
  * (commuter rail) lines 40, 41, 42X, 43, 43X, 44, 48 in pink; Metro blue-line 10-11; Metro
- * red-line 13-14; Metro green-line 17-19. Used only for [BlickRoutineWidget]'s line-number
- * badge — no other screen colors lines by family. Deliberately independent of
- * [androidx.compose.ui.graphics.Color]/[androidx.glance.unit.ColorProvider] so this mapping
- * itself stays a plain, Android-independent function, testable as a plain JVM unit;
- * `BlickRoutineWidget` converts a [LineBadgeColor] to an actual color value for rendering.
+ * red-line 13-14; Metro green-line 17-19. Used by [BlickRoutineWidget]'s line-number badge AND
+ * [se.blick.app.ui.components.LineBadge] (the same badge reused throughout the rest of the
+ * app) — this is the one, shared mapping; neither renderer computes its own. Deliberately
+ * independent of [androidx.compose.ui.graphics.Color]/[androidx.glance.unit.ColorProvider] so
+ * this mapping itself stays a plain, Android-independent function, testable as a plain JVM
+ * unit; [toBadgeColor] converts a [LineBadgeColor] to an actual color value for rendering.
  */
 enum class LineBadgeColor {
     /** Pendeltåg (commuter rail, [TransportMode.TRAIN]) lines 40, 41, 42X, 43, 43X, 44, 48. */
@@ -57,4 +59,30 @@ object LineBadgeColorMapping {
             else -> LineBadgeColor.Unknown
         }
     }
+}
+
+// Darkened from SL's own brighter line-family colors specifically so white badge text stays at
+// or above the WCAG AA 4.5:1 contrast minimum for normal-size text — the original, brighter
+// values measured at only 3.11 (pink), 4.17 (red), and 2.46 (green) against white, all below
+// 4.5, with green badly so. Blue (4.54) and grey (4.83) already passed but blue's own margin was
+// razor-thin, so it got a small nudge too, for a safer margin against real-device subpixel/
+// anti-aliasing variance rather than a paper-thin pass. Hue is preserved (each channel scaled by
+// the same factor toward black) so the SL line-family color is still recognizably the same
+// family, just deep enough to stay readable. Exact contrast ratios are asserted directly against
+// these literal values in LineBadgeColorMappingTest, so a future edit here that regresses
+// contrast fails a test rather than shipping unnoticed. Internal (not private) — shared by
+// BlickRoutineWidget's Glance-based badge and se.blick.app.ui.components.LineBadge's standard
+// Compose badge, the one pair of renderers this mapping exists for.
+internal val LINE_BADGE_PINK = Color(0xFFC73981)
+internal val LINE_BADGE_BLUE = Color(0xFF1676B8)
+internal val LINE_BADGE_RED = Color(0xFFDB2925)
+internal val LINE_BADGE_GREEN = Color(0xFF38803F)
+internal val LINE_BADGE_GREY = Color(0xFF6B7280)
+
+internal fun LineBadgeColor.toBadgeColor(): Color = when (this) {
+    LineBadgeColor.Pink -> LINE_BADGE_PINK
+    LineBadgeColor.Blue -> LINE_BADGE_BLUE
+    LineBadgeColor.Red -> LINE_BADGE_RED
+    LineBadgeColor.Green -> LINE_BADGE_GREEN
+    LineBadgeColor.Unknown -> LINE_BADGE_GREY
 }
