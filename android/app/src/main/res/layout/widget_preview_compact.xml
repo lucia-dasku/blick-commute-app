@@ -1,0 +1,66 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!--
+    android:previewLayout target for blick_routine_widget_info_compact.xml (API 31+; the
+    widget picker inflates this as a plain view hierarchy to render a live, theme-correct
+    preview card — NOT the real Glance widget, which is Compose-based and can't be referenced
+    here directly). Mirrors BlickRoutineWidget.kt's own isCompactLayout=true rendering
+    (header + big countdown only, no "Next"/status row — see that function's own doc for why
+    there's no room for them below COMPACT_HEIGHT_THRESHOLD/COMPACT_WIDTH_THRESHOLD) with the
+    same worked example (line 14, Fruängen -> T-Centralen) used elsewhere in this project's
+    docs and the full/standard preview layout, so all three picker entries read as one
+    consistent example rather than three unrelated ones.
+-->
+<!-- tools:ignore="HardcodedText" — deliberately static, non-localized example content for
+     the widget picker's preview thumbnail only, matching how other apps' own picker previews
+     (e.g. the platform Countdown widget's "My birthday") show a fixed illustrative example
+     regardless of device locale; never shown as real app content. -->
+<LinearLayout xmlns:android="http://schemas.android.com/apk/res/android"
+    xmlns:tools="http://schemas.android.com/tools"
+    android:layout_width="match_parent"
+    android:layout_height="match_parent"
+    android:background="@drawable/widget_preview_card_background"
+    android:orientation="vertical"
+    android:gravity="center_vertical"
+    android:paddingHorizontal="16dp"
+    android:paddingVertical="10dp"
+    tools:ignore="HardcodedText">
+
+    <LinearLayout
+        android:layout_width="match_parent"
+        android:layout_height="wrap_content"
+        android:orientation="horizontal"
+        android:gravity="center_vertical">
+
+        <TextView
+            android:layout_width="wrap_content"
+            android:layout_height="wrap_content"
+            android:background="@drawable/widget_preview_line_badge"
+            android:paddingHorizontal="7dp"
+            android:paddingVertical="2dp"
+            android:text="14"
+            android:textColor="@color/widget_preview_line_badge_text"
+            android:textStyle="bold"
+            android:textSize="11sp" />
+
+        <TextView
+            android:layout_width="0dp"
+            android:layout_height="wrap_content"
+            android:layout_weight="1"
+            android:layout_marginStart="8dp"
+            android:maxLines="1"
+            android:ellipsize="end"
+            android:text="Fruängen → T-Centralen"
+            android:textColor="@color/widget_preview_on_background"
+            android:textStyle="bold"
+            android:textSize="12sp" />
+    </LinearLayout>
+
+    <TextView
+        android:layout_width="wrap_content"
+        android:layout_height="wrap_content"
+        android:layout_marginTop="6dp"
+        android:text="4 min"
+        android:textColor="@color/widget_preview_on_background"
+        android:textStyle="bold"
+        android:textSize="24sp" />
+</LinearLayout>

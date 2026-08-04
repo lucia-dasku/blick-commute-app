@@ -90,7 +90,19 @@ class BlickRoutineWidget : GlanceAppWidget() {
  * [WidgetReconcileWorker] (itself `@HiltWorker`-injected by [se.blick.app.BlickApplication]'s
  * `HiltWorkerFactory` when WorkManager actually runs it), rather than resolving
  * [RoutineWidgetUpdater] directly on this receiver.
- */
+ *
+ * [BlickRoutineWidgetReceiverCompact] and [BlickRoutineWidgetReceiverLarge] are two sibling
+ * receivers, each pairing a differently-sized `AppWidgetProviderInfo` (see
+ * `res/xml/blick_routine_widget_info_compact.xml` / `_large.xml`) with this exact same
+ * [BlickRoutineWidget] instance-per-class — giving the platform's widget picker three
+ * distinctly-sized, distinctly-previewed entries (the pattern real launchers, including
+ * Samsung's One UI picker, show as separate size cards, e.g. "2x1"/"2x2"/"4x2") without
+ * duplicating any rendering logic: [BlickRoutineWidget] already adapts to its live placed size
+ * via [SizeMode.Exact]/[isCompactLayout]/[sizeTierFor] regardless of which receiver placed it.
+ * This is the officially supported way to offer multiple provider sizes for one Glance widget —
+ * [GlanceAppWidgetManager.getGlanceIds] (see [RoutineWidgetUpdater.applyToAllInstances]) looks
+ * up instances by [BlickRoutineWidget]'s class, not by receiver, so it already finds instances
+ * placed from any of the three without needing to change at all. */
 class BlickRoutineWidgetReceiver : GlanceAppWidgetReceiver() {
     override val glanceAppWidget: GlanceAppWidget = BlickRoutineWidget()
 
@@ -116,6 +128,28 @@ class BlickRoutineWidgetReceiver : GlanceAppWidgetReceiver() {
      * own doc: "you must not call goAsync, as it will be called by the super implementation") —
      * not a concern here anyway, since enqueueing work is itself synchronous and fast, with no
      * need to extend this receiver's own lifetime to wait on it. */
+    override fun onUpdate(context: Context, appWidgetManager: AppWidgetManager, appWidgetIds: IntArray) {
+        super.onUpdate(context, appWidgetManager, appWidgetIds)
+        WidgetReconcileWorker.enqueue(context)
+    }
+}
+
+/** Pairs `res/xml/blick_routine_widget_info_compact.xml` with the same [BlickRoutineWidget] —
+ * see [BlickRoutineWidgetReceiver]'s own doc for why this sibling-receiver pattern is safe. */
+class BlickRoutineWidgetReceiverCompact : GlanceAppWidgetReceiver() {
+    override val glanceAppWidget: GlanceAppWidget = BlickRoutineWidget()
+
+    override fun onUpdate(context: Context, appWidgetManager: AppWidgetManager, appWidgetIds: IntArray) {
+        super.onUpdate(context, appWidgetManager, appWidgetIds)
+        WidgetReconcileWorker.enqueue(context)
+    }
+}
+
+/** Pairs `res/xml/blick_routine_widget_info_large.xml` with the same [BlickRoutineWidget] — see
+ * [BlickRoutineWidgetReceiver]'s own doc for why this sibling-receiver pattern is safe. */
+class BlickRoutineWidgetReceiverLarge : GlanceAppWidgetReceiver() {
+    override val glanceAppWidget: GlanceAppWidget = BlickRoutineWidget()
+
     override fun onUpdate(context: Context, appWidgetManager: AppWidgetManager, appWidgetIds: IntArray) {
         super.onUpdate(context, appWidgetManager, appWidgetIds)
         WidgetReconcileWorker.enqueue(context)

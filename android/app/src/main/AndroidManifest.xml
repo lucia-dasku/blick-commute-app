@@ -131,13 +131,50 @@
         -->
         <receiver
             android:name=".widget.BlickRoutineWidgetReceiver"
-            android:exported="false">
+            android:exported="false"
+            android:label="@string/widget_label_standard">
             <intent-filter>
                 <action android:name="android.appwidget.action.APPWIDGET_UPDATE" />
             </intent-filter>
             <meta-data
                 android:name="android.appwidget.provider"
                 android:resource="@xml/blick_routine_widget_info" />
+        </receiver>
+
+        <!-- Two sibling widget-picker entries for the same BlickRoutineWidget, differing only
+             in declared size/preview — see BlickRoutineWidgetReceiverCompact/Large's own doc
+             in BlickRoutineWidget.kt and res/xml/blick_routine_widget_info_compact.xml/
+             _large.xml for why this is safe (same GlanceAppWidget class, no update-logic
+             change needed) and why android:exported="false" is still correct here (the same
+             reasoning as the standard receiver's own comment above: the widget picker
+             discovers providers via a system_server Binder call, never direct component
+             visibility). android:label on all three (see this receiver and the standard one
+             above) gives each its own distinct picker card title — the picker's per-size title
+             comes from the RECEIVER's own resolved label, not from anything in the
+             appwidget-provider XML, so without it every entry fell back to the same
+             application-default "Blick" label. -->
+        <receiver
+            android:name=".widget.BlickRoutineWidgetReceiverCompact"
+            android:exported="false"
+            android:label="@string/widget_label_compact">
+            <intent-filter>
+                <action android:name="android.appwidget.action.APPWIDGET_UPDATE" />
+            </intent-filter>
+            <meta-data
+                android:name="android.appwidget.provider"
+                android:resource="@xml/blick_routine_widget_info_compact" />
+        </receiver>
+
+        <receiver
+            android:name=".widget.BlickRoutineWidgetReceiverLarge"
+            android:exported="false"
+            android:label="@string/widget_label_large">
+            <intent-filter>
+                <action android:name="android.appwidget.action.APPWIDGET_UPDATE" />
+            </intent-filter>
+            <meta-data
+                android:name="android.appwidget.provider"
+                android:resource="@xml/blick_routine_widget_info_large" />
         </receiver>
     </application>
 </manifest>

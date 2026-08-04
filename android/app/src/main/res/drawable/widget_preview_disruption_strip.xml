@@ -1,0 +1,9 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- Matches DisruptionStrip in BlickRoutineWidget.kt: a full-bleed band along the very bottom
+     edge, rounded only on its bottom corners to follow the card's own WIDGET_CORNER_RADIUS. -->
+<shape xmlns:android="http://schemas.android.com/apk/res/android">
+    <corners
+        android:bottomLeftRadius="16dp"
+        android:bottomRightRadius="16dp" />
+    <solid android:color="@color/widget_preview_disruption_background" />
+</shape>

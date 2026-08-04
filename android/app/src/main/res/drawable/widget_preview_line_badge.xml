@@ -1,0 +1,9 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- Matches BlickRoutineWidget.kt's own LineBadge composable (6dp corner radius) — static
+     stand-in for the widget-picker preview layouts only, colored for line 14 (Metro red,
+     see LineBadgeColorMapping.LINE_BADGE_RED) as the same worked example used elsewhere in
+     this project's docs (Fruängen -> T-Centralen). -->
+<shape xmlns:android="http://schemas.android.com/apk/res/android">
+    <corners android:radius="6dp" />
+    <solid android:color="@color/widget_preview_line_badge_red" />
+</shape>

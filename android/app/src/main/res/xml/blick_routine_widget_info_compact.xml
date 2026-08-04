@@ -1,0 +1,31 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!--
+    The smallest of the three picker-selectable Blick widget sizes (see
+    blick_routine_widget_info.xml and blick_routine_widget_info_large.xml for the other two,
+    and BlickRoutineWidgetReceiverCompact in BlickRoutineWidget.kt for the receiver pointing at
+    this file). android:maxResizeWidth/maxResizeHeight are deliberately capped at exactly
+    BlickRoutineWidget.kt's own isCompactLayout thresholds (COMPACT_WIDTH_THRESHOLD=220dp,
+    COMPACT_HEIGHT_THRESHOLD=110dp) so THIS specific provider entry is guaranteed to always
+    render the compact layout (header + big countdown only) no matter how far a user resizes an
+    instance placed from this picker entry — unlike the default/standard provider, which can be
+    resized past those thresholds into the fuller layout. minWidth/minHeight/minResizeWidth/
+    minResizeHeight reuse the existing default provider's own already-vetted minResizeWidth/
+    minResizeHeight floor (160dp/80dp) — see that file's own long comment for the Scaffold-
+    padding analysis behind those exact numbers; this file does not re-derive new ones.
+-->
+<appwidget-provider xmlns:android="http://schemas.android.com/apk/res/android"
+    android:minWidth="160dp"
+    android:minHeight="80dp"
+    android:targetCellWidth="2"
+    android:targetCellHeight="1"
+    android:minResizeWidth="160dp"
+    android:minResizeHeight="80dp"
+    android:maxResizeWidth="220dp"
+    android:maxResizeHeight="110dp"
+    android:updatePeriodMillis="0"
+    android:initialLayout="@layout/glance_default_loading_layout"
+    android:previewLayout="@layout/widget_preview_compact"
+    android:previewImage="@drawable/widget_preview_compact"
+    android:resizeMode="horizontal|vertical"
+    android:widgetCategory="home_screen"
+    android:description="@string/widget_description" />

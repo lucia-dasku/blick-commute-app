@@ -1,0 +1,8 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- Matches BlickRoutineWidget.kt's own WIDGET_CORNER_RADIUS (16dp) for the live widget's
+     rounded card chrome — this is a static stand-in used only by the widget-picker preview
+     layouts (res/layout/widget_preview_*.xml), never inflated into the real widget. -->
+<shape xmlns:android="http://schemas.android.com/apk/res/android">
+    <corners android:radius="16dp" />
+    <solid android:color="@color/widget_preview_background" />
+</shape>

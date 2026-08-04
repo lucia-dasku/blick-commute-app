@@ -1,0 +1,11 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <color name="widget_preview_background">#2B2B30</color>
+    <color name="widget_preview_on_background">#E4E2E6</color>
+    <color name="widget_preview_on_surface_variant">#C5C8CF</color>
+    <color name="widget_preview_line_badge_red">#DB2925</color>
+    <color name="widget_preview_line_badge_text">#FFFFFF</color>
+    <color name="widget_preview_live_dot">#5FAE68</color>
+    <color name="widget_preview_disruption_background">#4A2A27</color>
+    <color name="widget_preview_disruption_text">#F0B8B2</color>
+</resources>

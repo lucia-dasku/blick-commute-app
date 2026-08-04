@@ -195,6 +195,15 @@
          strings above verbatim, the same copy for the same states. -->
     <string name="widget_no_active_commute">No active commute.</string>
     <string name="widget_description">Shows your commute\'s next departures while its active window is open.</string>
+    <!-- android:label on each of the three widget-picker <receiver> entries in
+         AndroidManifest.xml (see BlickRoutineWidgetReceiver/Compact/Large in
+         widget/BlickRoutineWidget.kt) — the platform widget picker's own per-size card title
+         comes from the RECEIVER component's resolved label, not from anything in the
+         appwidget-provider XML resource, so without these all three previously showed the
+         same "Blick" application-default label with nothing distinguishing the three sizes. -->
+    <string name="widget_label_compact">Blick Compact</string>
+    <string name="widget_label_standard">Blick Standard</string>
+    <string name="widget_label_large">Blick Large</string>
     <!-- Shown instead of notification_loading when the active window is open but notifications
          are unavailable (see RoutineWidgetContent.NotificationsUnavailable's own doc) — the
          widget's only data source cannot run, so it says so rather than staying on "Updating

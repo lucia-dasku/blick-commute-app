@@ -29,6 +29,21 @@
     all (only physical, by-hand interaction — see android/README.md's "Widget re-audit" section
     for the same pre-existing limitation on this exact launcher), so these values are grounded in
     Scaffold's real source and this layout's own font-size constants, not a rendered screenshot.
+
+    android:previewImage/previewLayout give the widget picker a real, populated preview instead
+    of falling back to the bare app icon (the previous, unintentional behavior with neither
+    attribute set). previewLayout (API 31+) is a plain Android view layout the picker inflates
+    directly for a live, theme-correct preview — NOT the real Glance/Compose widget, which can't
+    be referenced here; see res/layout/widget_preview_standard.xml's own doc for why it shows the
+    COMPACT rendering (this provider's own declared minWidth=180dp is always below
+    BlickRoutineWidget.kt's isCompactLayout width threshold of 220dp, so compact is what this
+    size guarantees regardless of a specific launcher's real grid math) and
+    res/drawable-nodpi/widget_preview_standard.png for the same content as a static previewImage
+    fallback on API <31. See blick_routine_widget_info_compact.xml and
+    blick_routine_widget_info_large.xml for the two other picker-selectable sizes added
+    alongside this one, all three backed by the same BlickRoutineWidget GlanceAppWidget class
+    (see BlickRoutineWidget.kt's own doc on why multiple AppWidgetProviderInfo/receivers can
+    safely share one GlanceAppWidget).
 -->
 <appwidget-provider xmlns:android="http://schemas.android.com/apk/res/android"
     android:minWidth="180dp"
@@ -41,6 +56,8 @@
     android:maxResizeHeight="270dp"
     android:updatePeriodMillis="0"
     android:initialLayout="@layout/glance_default_loading_layout"
+    android:previewLayout="@layout/widget_preview_standard"
+    android:previewImage="@drawable/widget_preview_standard"
     android:resizeMode="horizontal|vertical"
     android:widgetCategory="home_screen"
     android:description="@string/widget_description" />
