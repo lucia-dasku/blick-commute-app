@@ -6,8 +6,11 @@ import android.content.Intent
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxSize
+import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
+import androidx.compose.foundation.rememberScrollState
+import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.ArrowBack
 import androidx.compose.material3.ExperimentalMaterial3Api
@@ -22,6 +25,7 @@ import androidx.compose.runtime.Composable
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.res.stringResource
+import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.unit.dp
 import androidx.core.net.toUri
 import se.blick.app.BuildConfig
@@ -32,11 +36,13 @@ import se.blick.app.R
 private const val TRAFIKLAB_URL = "https://www.trafiklab.se/"
 
 /**
- * The one place [R.string.attribution_text] is actually shown to the user (see
- * docs/api-contract.md §9) — reachable from an info action in [se.blick.app.ui.screens.routinelist.RoutineListScreen]'s
- * top app bar. Deliberately simple: attribution text, a link to Trafiklab.se, an explicit
- * non-affiliation disclaimer, and the app's own version — no settings are hosted here yet,
- * despite the name matching the product doc's "About/Settings screen" wording.
+ * The one place [R.string.attribution_text] and the privacy policy are actually shown to the
+ * user (see docs/api-contract.md §9) — reachable from an info action in
+ * [se.blick.app.ui.screens.routinelist.RoutineListScreen]'s top app bar. Deliberately simple:
+ * a tagline, the app's own version, a "Data and attribution" section (attribution text, a link
+ * to Trafiklab.se, and an explicit non-affiliation disclaimer), the full privacy policy, and a
+ * centered copyright line — no settings are hosted here yet, despite the name matching the
+ * product doc's "About/Settings screen" wording.
  */
 @Composable
 fun AboutScreen(onBack: () -> Unit) {
@@ -54,16 +60,26 @@ fun AboutScreen(onBack: () -> Unit) {
             )
         },
     ) { padding ->
-        Column(Modifier.fillMaxSize().padding(padding).padding(16.dp)) {
+        Column(
+            Modifier
+                .fillMaxSize()
+                .verticalScroll(rememberScrollState())
+                .padding(padding)
+                .padding(16.dp),
+        ) {
             Text(stringResource(R.string.app_name), style = MaterialTheme.typography.headlineSmall)
             Spacer(Modifier.height(4.dp))
+            Text(stringResource(R.string.about_tagline), style = MaterialTheme.typography.bodyMedium)
+            Spacer(Modifier.height(4.dp))
             Text(
-                stringResource(R.string.about_version_label, BuildConfig.VERSION_NAME),
+                stringResource(R.string.about_version_label, BuildConfig.VERSION_NAME, BuildConfig.VERSION_CODE),
                 style = MaterialTheme.typography.bodyMedium,
                 color = MaterialTheme.colorScheme.secondary,
             )
 
             Spacer(Modifier.height(20.dp))
+            Text(stringResource(R.string.about_section_data_attribution), style = MaterialTheme.typography.titleMedium)
+            Spacer(Modifier.height(8.dp))
             Text(stringResource(R.string.attribution_text), style = MaterialTheme.typography.bodyMedium)
             TextButton(
                 onClick = {
@@ -72,12 +88,42 @@ fun AboutScreen(onBack: () -> Unit) {
             ) {
                 Text(stringResource(R.string.about_trafiklab_link))
             }
-
-            Spacer(Modifier.height(12.dp))
             Text(
                 stringResource(R.string.about_disclaimer),
                 style = MaterialTheme.typography.bodySmall,
                 color = MaterialTheme.colorScheme.secondary,
+            )
+
+            Spacer(Modifier.height(20.dp))
+            Text(stringResource(R.string.about_section_privacy_policy), style = MaterialTheme.typography.titleMedium)
+            Spacer(Modifier.height(8.dp))
+            Text(
+                stringResource(R.string.about_privacy_last_updated),
+                style = MaterialTheme.typography.bodySmall,
+                color = MaterialTheme.colorScheme.secondary,
+            )
+            Spacer(Modifier.height(8.dp))
+            Text(stringResource(R.string.about_privacy_operator), style = MaterialTheme.typography.bodyMedium)
+            Spacer(Modifier.height(8.dp))
+            Text(stringResource(R.string.about_privacy_no_account), style = MaterialTheme.typography.bodyMedium)
+            Spacer(Modifier.height(8.dp))
+            Text(stringResource(R.string.about_privacy_local_storage), style = MaterialTheme.typography.bodyMedium)
+            Spacer(Modifier.height(8.dp))
+            Text(stringResource(R.string.about_privacy_backend), style = MaterialTheme.typography.bodyMedium)
+            Spacer(Modifier.height(8.dp))
+            Text(stringResource(R.string.about_privacy_usage), style = MaterialTheme.typography.bodyMedium)
+            Spacer(Modifier.height(8.dp))
+            Text(stringResource(R.string.about_privacy_contact), style = MaterialTheme.typography.bodyMedium)
+            Spacer(Modifier.height(8.dp))
+            Text(stringResource(R.string.about_privacy_updates), style = MaterialTheme.typography.bodyMedium)
+
+            Spacer(Modifier.height(20.dp))
+            Text(
+                stringResource(R.string.about_copyright),
+                style = MaterialTheme.typography.bodySmall,
+                color = MaterialTheme.colorScheme.secondary,
+                textAlign = TextAlign.Center,
+                modifier = Modifier.fillMaxWidth(),
             )
         }
     }

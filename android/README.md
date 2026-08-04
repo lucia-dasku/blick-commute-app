@@ -128,9 +128,13 @@ Android 16+, `launchLiveUpdateSettings` catches the resulting `ActivityNotFoundE
 and falls back to the ordinary per-app notification settings screen instead of leaving
 the tap do nothing. A real Android control, but distinct from and unable to reach Samsung's
 separate Now Bar developer gate (see Known limitations below). A simple `ui/screens/about/AboutScreen`
-(reached via an info icon in the routine list's top app bar) now shows the app name,
-version, `R.string.attribution_text`, a link to Trafiklab.se, and a non-affiliation
-disclaimer, closing the `../docs/api-contract.md` §9 attribution requirement.
+(reached via an info icon in the routine list's top app bar) now shows the app name, a
+tagline, the version and build number, `R.string.attribution_text`, a link to
+Trafiklab.se, a non-affiliation disclaimer, the full privacy policy (last-updated date,
+what Blick does and does not collect, where routine/preference data is stored, what the
+backend receives, and a contact address for privacy questions), and a centered copyright
+line, closing the `../docs/api-contract.md` §9 attribution requirement and giving the app
+its first real privacy policy.
 `LiveDeparturesDirectionOptionsSource` now requests the `forecast` window at Blick's own
 tested cap (1200 minutes ≈ 20 hours — an empirically observed value, not a maximum
 documented or guaranteed by Trafiklab/SL; see
@@ -1155,6 +1159,38 @@ screenshot, not assumption. Adds 9 further JVM `@Test` functions (three each in
 four-to-three-argument default-forwarding behaviour) with no further instrumented ones,
 reaching 491 JVM / 56 instrumented; `lintDebug` still reports 0 errors and the same 44
 warnings, and `assembleDebug` succeeded.
+
+**About screen rewritten with a real privacy policy, given exact copy to use.**
+`ui/screens/about/AboutScreen.kt` now shows, in order: the app name, a one-line tagline
+(`about_tagline`), the version and build number (`about_version_label`, now taking both
+`BuildConfig.VERSION_NAME` and `BuildConfig.VERSION_CODE` rather than just the version
+name), a "Data and attribution" section (the existing `attribution_text`, now also stating
+that departure/disruption information may be delayed or inaccurate, the existing
+Trafiklab.se link button, and a strengthened non-affiliation disclaimer), a full "Privacy
+Policy" section (last-updated date, the operating entity, what Blick does and does not
+collect, where routine/preference/cached-departure data is stored and how to remove it,
+what the backend receives from a station search or route selection versus what the hosting
+provider may separately log, a plain statement that this information is never sold or used
+for advertising, a contact address for privacy questions or deletion requests, and a
+standard "we may update this policy" line), and a centered copyright line at the bottom.
+All wording is a set of exact strings supplied directly, added as new string resources
+(`about_tagline`, `about_section_data_attribution`, `about_section_privacy_policy`,
+`about_privacy_last_updated`, `about_privacy_operator`, `about_privacy_no_account`,
+`about_privacy_local_storage`, `about_privacy_backend`, `about_privacy_usage`,
+`about_privacy_contact`, `about_privacy_updates`, `about_copyright`) rather than composed
+or paraphrased, matching this project's existing convention of sourcing user-facing/legal
+text from string resources rather than inline literals. The screen's `Column` gained
+`Modifier.verticalScroll(rememberScrollState())` since the added privacy-policy content is
+now long enough to exceed a typical phone screen's height. This is a pure content/layout
+change — no ViewModel, navigation, or non-UI behaviour was touched, and the existing
+`AboutScreenTest` (which reads `attribution_text` and the back button dynamically from
+string resources rather than asserting a hardcoded literal) required no changes and still
+passes. **Not confirmed by an on-device screenshot this session, stated plainly:** the
+physical Samsung Galaxy S23 Ultra used for this session's widget verification was no
+longer connected by the time this change was made, so it is verified by
+`testDebugUnitTest`/`lintDebug`/`assembleDebug` (491 JVM tests still passing, 0 errors/44
+warnings, debug APK builds) and by the instrumented `AboutScreenTest` covering this exact
+screen, but not by a live render.
 
 ## AGP 9 built-in Kotlin migration
 

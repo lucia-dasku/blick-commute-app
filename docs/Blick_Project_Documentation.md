@@ -154,7 +154,18 @@ this session, not the full `connectedDebugAndroidTest` instrumented suite** — 
 own correctness was instead confirmed directly on-device as described above, which is a
 stronger check for a Glance layout (a real render) than an instrumented test would be, but
 the existing 56 instrumented tests themselves were not re-executed since nothing they cover
-changed.
+changed. **The About screen was then rewritten with a real, user-facing privacy policy**,
+given exact copy to use rather than composed from scratch: a one-line tagline, the version
+and build number, a "Data and attribution" section, and a full "Privacy Policy" section
+(operator, what is and isn't collected, where data is stored, what the backend receives,
+a no-sale/no-advertising statement, a contact address, and an update-policy line), plus a
+centered copyright line — see §18 below and "About screen rewritten with a real privacy
+policy" in `android/README.md` for the full account. A pure content/layout change: no
+JVM or instrumented test needed to change, and the existing `AboutScreenTest` still passes
+unmodified. `testDebugUnitTest`/`lintDebug`/`assembleDebug` were re-run and confirm no
+regression (491 JVM tests, 0 errors/44 warnings, debug APK builds); **stated plainly, this
+was not confirmed by a live on-device screenshot**, since the physical device used earlier
+in this same session was no longer connected by the time this change was made.
 
 Getting there took three work sessions of source beyond the earlier 193-JVM-test
 baseline. First: the FAB restoration, the Routine Details 30-second auto-refresh, the
@@ -410,9 +421,10 @@ ones, bringing the fully verified total to 425 JVM / 33 instrumented, stated abo
   unable to affect Samsung's separate "Live notifications for all apps" developer-only
   gate — see "Requesting a promoted Live Update" below.
 - A simple About screen (`ui/screens/about/AboutScreen`, reached via an info icon in the
-  routine list's top app bar) satisfying MVP requirement 17: app name, version, the
-  required Trafiklab.se attribution text with a link to Trafiklab.se, and a
-  non-affiliation disclaimer.
+  routine list's top app bar) satisfying MVP requirement 17: app name, a tagline, the
+  version and build number, the required Trafiklab.se attribution text with a link to
+  Trafiklab.se, a non-affiliation disclaimer, a full user-facing privacy policy (see §18
+  below), and a centered copyright line.
 - An explicit backup/transfer decision to keep Blick simple: `AndroidManifest.xml`
   declares `android:dataExtractionRules` and `android:fullBackupContent` (see the
   referenced XML files' own doc comments), and a saved routine must never transfer or
@@ -1757,6 +1769,20 @@ No TV, casting, pairing, or cloud-synchronization code is included now.
 ---
 
 ## 18. Privacy and security
+
+**Implemented:** a real, user-facing privacy policy is now shown in `ui/screens/about/AboutScreen`
+(reachable from the routine list's top app bar), stating in plain terms that Blick is
+operated by Blick Labs, does not require an account and does not collect the user's name,
+email address, precise location, contacts, or advertising ID; that routines, preferences,
+and cached departure information are stored only locally on the device (not backed up,
+and removable by deleting the routine, clearing the app's data, or uninstalling it); that
+the backend receives only station searches and selected route identifiers to provide
+departure/disruption information, with the hosting provider separately able to process
+limited technical information (IP address, request logs) to deliver and secure the
+service; that this information is used only to operate, secure, and improve Blick, never
+sold or used for advertising; and a contact address, `contactblicklabs@gmail.com`, for
+privacy questions or deletion requests. See `android/README.md`'s "About screen rewritten
+with a real privacy policy" entry for the full account of exactly what was added and why.
 
 The first Android application does not require the user's identity or precise location.
 

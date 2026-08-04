@@ -112,16 +112,30 @@
     <string name="transport_mode_unknown">Other</string>
 
     <!-- Required attribution, see docs/api-contract.md §8 (Licensing and attribution). -->
-    <string name="attribution_text">Based on information from Trafiklab.se</string>
+    <string name="attribution_text">Based on information from Trafiklab.se. Departure and disruption information may be delayed or inaccurate.</string>
 
     <!-- About screen (see ui/screens/about/AboutScreen.kt) — the one place attribution_text
          above is actually shown to the user, plus a link to Trafiklab.se ("when practicable",
-         see docs/api-contract.md §8), reachable from the routine list's top app bar. -->
+         see docs/api-contract.md §8), reachable from the routine list's top app bar. Also the
+         one place the privacy policy is shown — see docs/api-contract.md §8's own note that
+         this project has no separate hosted privacy-policy page. -->
     <string name="about_action">About Blick</string>
     <string name="about_title">About</string>
-    <string name="about_version_label">Version %1$s</string>
+    <string name="about_tagline">Blick shows upcoming departures and disruptions for your saved commute.</string>
+    <string name="about_version_label">Version %1$s (build %2$d)</string>
+    <string name="about_section_data_attribution">Data and attribution</string>
     <string name="about_trafiklab_link">Trafiklab.se</string>
-    <string name="about_disclaimer">Blick is not affiliated with or endorsed by SL or Trafiklab.</string>
+    <string name="about_disclaimer">Blick is an independent app and is not affiliated with, operated by or endorsed by SL or Trafiklab.</string>
+    <string name="about_section_privacy_policy">Privacy Policy</string>
+    <string name="about_privacy_last_updated">Last updated: 4 August 2026</string>
+    <string name="about_privacy_operator">Blick is operated by Blick Labs.</string>
+    <string name="about_privacy_no_account">Blick does not require an account and does not collect your name, email address, precise location, contacts or advertising ID. Blick contains no advertising or analytics.</string>
+    <string name="about_privacy_local_storage">Your routines, preferences and cached departure information are stored locally on your device and are not backed up. You can remove this information by deleting your routine, clearing Blick\'s app data or uninstalling the app.</string>
+    <string name="about_privacy_backend">To provide departure and disruption information, Blick sends station searches and selected route identifiers to its backend. Our hosting provider may automatically process limited technical information, such as your IP address and request logs, to deliver and secure the service. Public transport information is obtained from Trafiklab and SL services.</string>
+    <string name="about_privacy_usage">We use this information only to operate, secure and improve Blick. We do not sell personal data or use it for advertising.</string>
+    <string name="about_privacy_contact">For privacy questions or deletion requests, contact: contactblicklabs@gmail.com</string>
+    <string name="about_privacy_updates">We may update this policy if Blick\'s features or data practices change.</string>
+    <string name="about_copyright">© 2026 Blick Labs</string>
 
     <!-- Ongoing commute notification (RoutineNotificationBuilder). A quiet, low-importance
          channel — see that class's doc comment for why IMPORTANCE_LOW is used. -->
