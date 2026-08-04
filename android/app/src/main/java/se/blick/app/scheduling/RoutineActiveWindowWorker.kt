@@ -285,7 +285,7 @@ class RoutineActiveWindowWorker @AssistedInject constructor(
                 // this function's own outer `catch (e: Exception)` below and be treated as a
                 // "handled failure" -- cutting the whole active-window loop short even though
                 // the notification above already posted successfully this tick.
-                runWidgetUpdateSafely { routineWidgetUpdater.updateWithDepartures(current, departuresState, now) }
+                runWidgetUpdateSafely { routineWidgetUpdater.updateWithDepartures(current, departuresState, now, disruptionAtPost) }
 
                 // Disruptions are fetched only AFTER departures have already posted, bounded by
                 // DISRUPTIONS_FETCH_TIMEOUT_MS so a slow SL Deviations request can never delay --
@@ -315,6 +315,10 @@ class RoutineActiveWindowWorker @AssistedInject constructor(
                 // RoutineNotificationBuilder), so this never re-alerts the user.
                 if (lastKnownDisruption != disruptionAtPost) {
                     routineNotifier.showOrUpdate(RoutineNotificationMapper.map(current, departuresState, now, lastKnownDisruption))
+                    // Mirrors the notification's own second, disruption-aware update above --
+                    // same tick, same already-fetched departuresState, no separate widget fetch
+                    // or timer.
+                    runWidgetUpdateSafely { routineWidgetUpdater.updateWithDepartures(current, departuresState, now, lastKnownDisruption) }
                 }
 
                 // Subtracts however long the disruptions fetch just above actually took (bounded

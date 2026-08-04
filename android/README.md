@@ -1090,6 +1090,72 @@ real issues, exactly what that workflow is there to catch:
   switching to `com.squareup.retrofit2:converter-kotlinx-serialization`, the first-party
   artifact Retrofit itself has shipped this exact converter under since 2.10.0.
 
+**Widget layout redesign to match the reference mock, plus a bottom disruption strip —
+verified end to end on-device, including responsive resizing this time:** a reported bug
+("widget's text is totally misaligned" on a real Samsung phone, with a screenshot showing
+the routine name duplicated above the header and everything crammed against the top edge)
+traced back to `Scaffold`'s own signature (confirmed via decompiling the Glance AAR's
+`-api.jar`, since its source isn't vendored): it applies only horizontal padding, none
+vertical, so `ActiveRoutineContent`'s content had zero top/bottom margin, and the routine
+name was rendered twice — once by a now-removed explicit `Text`, once inside the header
+row that already showed it. `ActiveRoutineContent` no longer uses the shared `Scaffold` at
+all (`NoActiveCommuteContent` still does, unaffected) — it hand-builds the same chrome
+(`GlanceModifier.appWidgetBackground().background(GlanceTheme.colors.widgetBackground)
+.cornerRadius(16.dp)`) around its own padded content column, specifically so a new bottom
+disruption strip can sit as an unpadded sibling and reach the widget's left/right/bottom
+edges directly — a full-bleed strip is not reachable from inside `Scaffold`'s single, uniformly-
+padded content slot. `DepartureMainContent` changed from a side-by-side `Row` to a left-aligned
+vertical `Column` (badge + destination, then the large countdown, then the route, then the
+next departure, then Live/Scheduled/Cancelled status), with explicit `Spacer`s between each
+line so the content actually fills the widget instead of clustering at the top, matching the
+reference mock's proportions.
+
+The disruption strip reuses data the worker already fetches — never a second, independent
+fetch — mirroring the notification's own existing disruption-in-expanded-view pattern:
+`RoutineWidgetModel` gained a `disruptionHeadline: String?` field, `RoutineWidgetMapper.map`
+gained a `topDisruption: Disruption?` parameter (`disruptionHeadline = topDisruption?.message?.header`),
+and `RoutineWidgetPreferences` persists it like every other identity field. `RoutineWidgetUpdater`
+gained a new four-argument `updateWithDepartures` overload (routine, departures, now,
+disruption) with a default body that forwards to the pre-existing three-argument one — a
+new overload, not a new parameter on the existing method, specifically so every one of the
+13 existing test fakes across seven unrelated files that only ever implemented the
+three-argument method keep compiling and behaving exactly as before, with only
+`GlanceRoutineWidgetUpdater` itself (and the worker's own `RecordingWidgetUpdater` test fake)
+needing to actually handle the new argument. `RoutineActiveWindowWorker`'s loop follows the
+exact same two-phase shape it already used for the notification: departures are fetched and
+the widget is updated first (with `disruptionAtPost`, whatever was already known before this
+tick's own disruption fetch), then disruptions are fetched (still bounded by the existing
+`DISRUPTIONS_FETCH_TIMEOUT_MS`), and only if `lastKnownDisruption != disruptionAtPost` does a
+second, silent widget update fold the newly-confirmed disruption in — same tick, no separate
+timer or fetch. The strip itself (`DisruptionStrip`) is a plain flat `GlanceTheme.colors
+.errorContainer`/`onErrorContainer` row — the same muted-red role `RoutineDetailsScreen`'s own
+`DisruptionRow` already uses for the identical visual purpose — rendered only when
+`disruptionHeadline` is non-null, with no hand-rounded bottom corners (Glance has no clean
+asymmetric-corner API, and Android 12+ launchers already clip the whole widget to their own
+rounded mask at the system level).
+
+Verified end to end on a physical Samsung Galaxy S23 Ultra: placed the redesigned widget
+fresh via the launcher's own widget picker, and it rendered exactly like the reference
+mock — no duplicated text, a large bold countdown, the route and next-departure lines, a
+green-dot "Live" status, and, genuinely by chance, a real live SL Deviations disruption
+("3 augusti stängs en utgång vid Slussen") rendering correctly in the new strip, not merely
+a synthetic fixture. Tapping the widget still opened Routine Details for the correct
+routine, confirming tap behaviour is unchanged. Responsiveness was also confirmed by
+actually resizing the placed widget on this launcher (which, unlike the Lenovo TB350FU used
+for earlier widget-resize verification, does support scripted `adb shell input draganddrop`
+resize-handle gestures) rather than only reasoning from `isCompactLayout`'s existing
+boundary-value tests: shrinking it to this launcher's own minimum height kept every line
+legible with no clipping or overlap, and shrinking it to a narrow single-column width
+correctly collapsed it to the compact tier (badge + destination + countdown only, with the
+route/next/status/disruption lines dropped rather than clipped) — both confirmed by
+screenshot, not assumption. Adds 9 further JVM `@Test` functions (three each in
+`RoutineWidgetMapperTest` and `RoutineWidgetPreferencesTest` for `topDisruption`/
+`disruptionHeadline`, two new disruption-triggered-update cases in
+`RoutineActiveWindowWorkerTest`, and a new `RoutineWidgetUpdaterTest` covering the
+four-to-three-argument default-forwarding behaviour) with no further instrumented ones,
+reaching 491 JVM / 56 instrumented; `lintDebug` still reports 0 errors and the same 44
+warnings, and `assembleDebug` succeeded.
+
 ## AGP 9 built-in Kotlin migration
 
 This project targets AGP 9's **built-in Kotlin** support rather than applying the

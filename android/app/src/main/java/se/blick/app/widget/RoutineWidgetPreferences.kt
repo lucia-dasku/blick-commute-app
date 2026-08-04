@@ -25,6 +25,7 @@ private object WidgetKeys {
     val DIRECTION_LABEL = stringPreferencesKey("directionLabel")
     val LINE_DESIGNATION = stringPreferencesKey("lineDesignation")
     val TRANSPORT_MODE = stringPreferencesKey("transportMode")
+    val DISRUPTION_HEADLINE = stringPreferencesKey("disruptionHeadline")
     val LAST_CHECKED_AT_EPOCH_MILLIS = longPreferencesKey("lastCheckedAtEpochMillis")
     val NEXT_LINE = stringPreferencesKey("nextLine")
     val NEXT_DESTINATION = stringPreferencesKey("nextDestination")
@@ -54,6 +55,7 @@ internal fun RoutineWidgetUiState.writeInto(prefs: MutablePreferences) {
             prefs[WidgetKeys.TRANSPORT_MODE] = model.transportMode.name
             model.directionLabel?.let { prefs[WidgetKeys.DIRECTION_LABEL] = it }
             model.lineDesignation?.let { prefs[WidgetKeys.LINE_DESIGNATION] = it }
+            model.disruptionHeadline?.let { prefs[WidgetKeys.DISRUPTION_HEADLINE] = it }
             when (val content = model.content) {
                 RoutineWidgetContent.Loading -> prefs[WidgetKeys.CONTENT_TYPE] = ContentType.LOADING.name
                 is RoutineWidgetContent.Live -> {
@@ -109,6 +111,7 @@ internal fun Preferences.toWidgetUiState(): RoutineWidgetUiState {
     val stationName = this[WidgetKeys.STATION_NAME].orEmpty()
     val directionLabel = this[WidgetKeys.DIRECTION_LABEL]
     val lineDesignation = this[WidgetKeys.LINE_DESIGNATION]
+    val disruptionHeadline = this[WidgetKeys.DISRUPTION_HEADLINE]
     // .toTransportMode() defaults to TransportMode.UNKNOWN both for a genuinely unrecognized
     // value and for a widget instance whose prefs were written by an app version before this
     // key existed (this[...] is then simply null) -- either way, a safe grey badge, never a
@@ -137,6 +140,7 @@ internal fun Preferences.toWidgetUiState(): RoutineWidgetUiState {
             content = content,
             lineDesignation = lineDesignation,
             transportMode = transportMode,
+            disruptionHeadline = disruptionHeadline,
         ),
     )
 }

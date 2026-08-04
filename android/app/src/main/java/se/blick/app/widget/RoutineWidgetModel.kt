@@ -42,6 +42,15 @@ data class RoutineWidgetModel(
      * every real production call site ([RoutineWidgetMapper]) always passes the routine's own
      * mode explicitly. */
     val transportMode: TransportMode = TransportMode.UNKNOWN,
+    /** The highest-priority currently-relevant disruption's header, or null if none was
+     * fetched/available — mirrors [se.blick.app.notification.RoutineNotificationModel.disruptionHeadline]
+     * exactly (see [RoutineWidgetMapper.map]'s `topDisruption` parameter), but the widget only
+     * ever shows the short header, never the longer body text: [BlickRoutineWidget]'s own
+     * disruption strip is a small, tap-for-more affordance, not a substitute for the full
+     * disruption text Routine Details already shows. Null in every state produced without fresh
+     * disruption data in hand (e.g. [RoutineWidgetReconciler]'s reconciliation paths), exactly
+     * like [lineDesignation] being null is handled — never shown, rather than shown empty. */
+    val disruptionHeadline: String? = null,
 )
 
 /** Mirrors [se.blick.app.notification.RoutineNotificationContent] one-for-one, except [Live] and

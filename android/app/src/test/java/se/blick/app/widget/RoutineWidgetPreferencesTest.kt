@@ -166,4 +166,43 @@ class RoutineWidgetPreferencesTest {
         val restored = roundTrip(RoutineWidgetUiState.ActiveRoutine(model)) as RoutineWidgetUiState.ActiveRoutine
         assertEquals(TransportMode.UNKNOWN, restored.model.transportMode)
     }
+
+    // ---- disruptionHeadline -- drives the bottom disruption strip ----
+
+    @Test
+    fun `disruptionHeadline round-trips exactly, for the bottom disruption strip`() {
+        val model = RoutineWidgetModel(
+            routineId = "r1",
+            routineName = "Morning commute",
+            stationName = "Fruängen",
+            directionLabel = "T-Centralen",
+            content = RoutineWidgetContent.Loading,
+            disruptionHeadline = "Delays on line 14",
+        )
+        val restored = roundTrip(RoutineWidgetUiState.ActiveRoutine(model)) as RoutineWidgetUiState.ActiveRoutine
+        assertEquals(model, restored.model)
+        assertEquals("Delays on line 14", restored.model.disruptionHeadline)
+    }
+
+    @Test
+    fun `a null disruptionHeadline round-trips as null, not an empty string`() {
+        val model = RoutineWidgetModel("r1", "Morning commute", "Fruängen", "T-Centralen", RoutineWidgetContent.Loading)
+        val restored = roundTrip(RoutineWidgetUiState.ActiveRoutine(model)) as RoutineWidgetUiState.ActiveRoutine
+        assertNull(restored.model.disruptionHeadline)
+    }
+
+    @Test
+    fun `a transition to a state with no disruption clears a previous state's leftover headline`() {
+        val prefs = mutablePreferencesOf()
+        val withDisruption = RoutineWidgetModel(
+            "r1", "Morning commute", "Fruängen", "T-Centralen", RoutineWidgetContent.Loading,
+            disruptionHeadline = "Delays on line 14",
+        )
+        RoutineWidgetUiState.ActiveRoutine(withDisruption).writeInto(prefs)
+
+        RoutineWidgetUiState.ActiveRoutine(withDisruption.copy(disruptionHeadline = null)).writeInto(prefs)
+
+        val restored = prefs.toPreferences().toWidgetUiState() as RoutineWidgetUiState.ActiveRoutine
+        assertNull(restored.model.disruptionHeadline)
+    }
 }

@@ -10,6 +10,7 @@ import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.flow.first
 import se.blick.app.data.repository.RoutineRepository
 import se.blick.app.domain.model.CommuteRoutine
+import se.blick.app.domain.model.Disruption
 import se.blick.app.domain.usecase.LiveDeparturesState
 import se.blick.app.notification.NotificationAvailability
 import se.blick.app.notification.NotificationAvailabilityChecker
@@ -32,6 +33,19 @@ interface RoutineWidgetUpdater {
      * [routine]/[departuresState]/[now] already fetched for the notification, via
      * [RoutineWidgetMapper]. No separate fetch, no separate 30-second timer. */
     suspend fun updateWithDepartures(routine: CommuteRoutine, departuresState: LiveDeparturesState, now: Instant)
+
+    /** Same as the three-argument [updateWithDepartures], plus [disruption] — the exact
+     * highest-priority disruption already fetched this tick for the notification's own second,
+     * disruption-aware [se.blick.app.notification.RoutineNotifier.showOrUpdate] call (see
+     * [se.blick.app.scheduling.RoutineActiveWindowWorker]'s own doc). Default implementation
+     * simply forwards to the three-argument overload, ignoring [disruption] — the correct,
+     * behaviorally-unchanged choice for any implementation (test fakes) that doesn't render a
+     * disruption strip; only [GlanceRoutineWidgetUpdater] overrides this meaningfully. Kept as a
+     * separate overload, not an added parameter on the existing method, specifically so no
+     * existing implementer needs to change at all. */
+    suspend fun updateWithDepartures(routine: CommuteRoutine, departuresState: LiveDeparturesState, now: Instant, disruption: Disruption?) {
+        updateWithDepartures(routine, departuresState, now)
+    }
 
     /** Called only from the worker's own `finally` block, mirroring
      * [se.blick.app.notification.RoutineNotifier.remove] exactly — the active window has just
@@ -116,7 +130,11 @@ class GlanceRoutineWidgetUpdater @Inject constructor(
 ) : RoutineWidgetUpdater {
 
     override suspend fun updateWithDepartures(routine: CommuteRoutine, departuresState: LiveDeparturesState, now: Instant) {
-        applyToAllInstances(RoutineWidgetUiState.ActiveRoutine(RoutineWidgetMapper.map(routine, departuresState, now)))
+        updateWithDepartures(routine, departuresState, now, disruption = null)
+    }
+
+    override suspend fun updateWithDepartures(routine: CommuteRoutine, departuresState: LiveDeparturesState, now: Instant, disruption: Disruption?) {
+        applyToAllInstances(RoutineWidgetUiState.ActiveRoutine(RoutineWidgetMapper.map(routine, departuresState, now, disruption)))
     }
 
     override suspend fun clear() {

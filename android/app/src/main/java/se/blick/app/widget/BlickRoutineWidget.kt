@@ -19,6 +19,7 @@ import androidx.glance.appwidget.GlanceAppWidget
 import androidx.glance.appwidget.GlanceAppWidgetReceiver
 import androidx.glance.appwidget.SizeMode
 import androidx.glance.appwidget.action.actionStartActivity
+import androidx.glance.appwidget.appWidgetBackground
 import androidx.glance.appwidget.components.Scaffold
 import androidx.glance.appwidget.cornerRadius
 import androidx.glance.appwidget.provideContent
@@ -28,10 +29,13 @@ import androidx.glance.layout.Alignment
 import androidx.glance.layout.Box
 import androidx.glance.layout.Column
 import androidx.glance.layout.Row
+import androidx.glance.layout.Spacer
 import androidx.glance.layout.fillMaxSize
 import androidx.glance.layout.fillMaxWidth
+import androidx.glance.layout.height
 import androidx.glance.layout.padding
 import androidx.glance.layout.size
+import androidx.glance.layout.width
 import androidx.glance.state.PreferencesGlanceStateDefinition
 import androidx.glance.text.FontWeight
 import androidx.glance.text.Text
@@ -180,15 +184,18 @@ private fun sizeTierFor(width: Dp): WidgetSizeTier = when {
 // ColorProvider stays here, since androidx.glance.unit.ColorProvider has no standard-Compose use.
 private val BADGE_TEXT_WHITE = ColorProvider(Color.White)
 
+/** [ActiveRoutineContent] builds its own chrome (background/corner radius) instead of using the
+ * shared [Scaffold] — see that function's own doc for why: a present disruption needs its own
+ * full-bleed strip along the very bottom edge, which [Scaffold]'s single uniformly-padded
+ * `content` slot cannot represent. [NoActiveCommuteContent] has no such need, so it keeps using
+ * [Scaffold] exactly as before. */
 @Composable
 private fun BlickWidgetContent(state: RoutineWidgetUiState) {
     val context = LocalContext.current
     GlanceTheme {
-        Scaffold {
-            when (state) {
-                RoutineWidgetUiState.NoActiveCommute -> NoActiveCommuteContent()
-                is RoutineWidgetUiState.ActiveRoutine -> ActiveRoutineContent(context, state.model)
-            }
+        when (state) {
+            RoutineWidgetUiState.NoActiveCommute -> Scaffold { NoActiveCommuteContent() }
+            is RoutineWidgetUiState.ActiveRoutine -> ActiveRoutineContent(context, state.model)
         }
     }
 }
@@ -206,10 +213,29 @@ private fun NoActiveCommuteContent() {
     }
 }
 
-/** "Design 1": a routine-name label, a line badge + destination header, a large next-departure
- * countdown with a smaller station/direction + following-departure block beside it, and a
- * live/scheduled/cancelled status row — see [WidgetContentBody]/[DepartureMainContent]/
- * [StatusFooter]. */
+/** Corner radius for [ActiveRoutineContent]'s own hand-built chrome — matches [Scaffold]'s own
+ * look closely enough that [NoActiveCommuteContent] (which still uses [Scaffold]) and this look
+ * like the same widget shell. */
+private val WIDGET_CORNER_RADIUS = 16.dp
+
+/** Horizontal inset for the main content column — matches [Scaffold]'s own default
+ * `horizontalPadding` (16dp) so this hand-built chrome reads identically to [Scaffold]'s. */
+private val WIDGET_HORIZONTAL_PADDING = 16.dp
+
+/**
+ * A clean, left-aligned vertical stack: a line badge + destination header, a large
+ * next-departure countdown, the station → direction route, the following departure's own
+ * countdown, and a live/scheduled/cancelled status row — see [WidgetContentBody]/
+ * [DepartureMainContent]/[StatusFooter]. A relevant disruption, if any, is shown as a distinct,
+ * full-bleed muted-red strip along the very bottom edge (see [DisruptionStrip]) — never inline
+ * with the rest of the content, and never in [compact] mode, where there simply isn't room.
+ *
+ * Builds its own chrome (background + corner radius via [androidx.glance.appwidget.appWidgetBackground]/
+ * [androidx.glance.appwidget.cornerRadius]) instead of delegating to the shared [Scaffold], which
+ * only ever offers one uniformly-padded content slot — insufficient for [DisruptionStrip]'s own
+ * full-bleed requirement. The main content column is still padded exactly like [Scaffold] would
+ * (see [WIDGET_HORIZONTAL_PADDING]), so the common (no disruption) case looks unchanged.
+ */
 @Composable
 private fun ActiveRoutineContent(context: Context, model: RoutineWidgetModel) {
     val clickAction = actionStartActivity(routineDetailsTapIntent(context, model.routineId))
@@ -227,21 +253,43 @@ private fun ActiveRoutineContent(context: Context, model: RoutineWidgetModel) {
     // header-level marker a genuinely failed refresh could look identical to a healthy state in
     // either case.
     val isStale = model.content is RoutineWidgetContent.Stale
-    Column(modifier = GlanceModifier.fillMaxSize().clickable(clickAction)) {
-        // The routine's own user-given name -- distinct from the station/destination text the
-        // header already shows -- dropped in compact mode along with the rest of the secondary
-        // context (see WidgetContentBody's own compact handling) to protect the tight
-        // header+countdown-only space budget that mode is built around.
-        if (!compact) {
-            Text(
-                text = model.routineName,
-                maxLines = 1,
-                style = TextStyle(fontSize = tier.statusSize, color = onSurfaceVariantColor()),
-            )
-        }
-        WidgetHeader(model, tier, destination, isStale)
-        Column(modifier = GlanceModifier.fillMaxWidth().padding(top = 6.dp)) {
-            WidgetContentBody(context, model, compact, tier)
+    // No room for the disruption strip in compact mode -- same reasoning as dropping the
+    // secondary station/next-departure block and status row there (see WidgetContentBody).
+    val disruptionHeadline = model.disruptionHeadline?.takeIf { !compact }
+
+    Box(
+        modifier = GlanceModifier
+            .fillMaxSize()
+            .appWidgetBackground()
+            .background(GlanceTheme.colors.widgetBackground)
+            .cornerRadius(WIDGET_CORNER_RADIUS)
+            .clickable(clickAction),
+    ) {
+        Column(modifier = GlanceModifier.fillMaxSize()) {
+            // defaultWeight() so this main block always fills whatever height the (optional)
+            // disruption strip below doesn't need -- see this composable's own doc on why
+            // "content fills the widget instead of being cramped at the top" is achieved by
+            // centering this block in the space available, not merely by adding fixed padding.
+            Column(
+                modifier = GlanceModifier
+                    .fillMaxWidth()
+                    .defaultWeight()
+                    .padding(horizontal = WIDGET_HORIZONTAL_PADDING, vertical = 14.dp),
+                verticalAlignment = Alignment.CenterVertically,
+            ) {
+                // The routine's own user-given name -- distinct from the station/destination
+                // text the header already shows -- is deliberately NOT repeated here: with the
+                // default auto-suggested name (see RoutineCreateViewModel.selectDirection), it's
+                // exactly "{line} → {destination}", i.e. the same information the header below
+                // already shows via the line badge + destination text, duplicated as plain text
+                // right above it. Dropped entirely rather than only in compact mode.
+                WidgetHeader(model, tier, destination, isStale)
+                Spacer(modifier = GlanceModifier.height(if (compact) 6.dp else 12.dp))
+                WidgetContentBody(context, model, compact, tier)
+            }
+            if (disruptionHeadline != null) {
+                DisruptionStrip(disruptionHeadline, tier)
+            }
         }
     }
 }
@@ -251,11 +299,7 @@ private fun WidgetHeader(model: RoutineWidgetModel, tier: WidgetSizeTier, destin
     Row(modifier = GlanceModifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
         model.lineDesignation?.let { line ->
             LineBadge(line, LineBadgeColorMapping.colorFor(model.transportMode, line), tier.badgeSize)
-            Text(
-                text = "  •  ",
-                maxLines = 1,
-                style = TextStyle(fontWeight = FontWeight.Bold, fontSize = tier.headerSize, color = onBackgroundColor()),
-            )
+            Spacer(modifier = GlanceModifier.width(8.dp))
         }
         Text(
             text = destination,
@@ -265,6 +309,42 @@ private fun WidgetHeader(model: RoutineWidgetModel, tier: WidgetSizeTier, destin
         if (isStale) {
             StaleIndicator(tier)
         }
+    }
+}
+
+/**
+ * A relevant disruption's headline as a distinct, full-bleed band along the very bottom edge —
+ * outside the main content [Column]'s own padding (see [ActiveRoutineContent]), so it touches
+ * the widget's left/right/bottom edges directly rather than sitting inset like the rest of the
+ * content. [GlanceTheme.colors.errorContainer]/`onErrorContainer` — the same theme-adaptive
+ * "muted red" role `RoutineDetailsScreen`'s own disruption cards use via
+ * `MaterialTheme.colorScheme.errorContainer`/`onErrorContainer` — rather than a hardcoded color,
+ * so this looks correct in both light and dark theme, like everything else in this file. A
+ * trailing "›" is a tap-for-more affordance only — tapping anywhere on the widget (including
+ * this strip) already opens Routine Details via [ActiveRoutineContent]'s own [clickable], where
+ * the disruption's full text is shown; this is not a second, separate tap target.
+ */
+@Composable
+private fun DisruptionStrip(headline: String, tier: WidgetSizeTier) {
+    Row(
+        modifier = GlanceModifier
+            .fillMaxWidth()
+            .background(GlanceTheme.colors.errorContainer)
+            .padding(horizontal = WIDGET_HORIZONTAL_PADDING, vertical = 8.dp),
+        verticalAlignment = Alignment.CenterVertically,
+    ) {
+        Text(
+            text = headline,
+            maxLines = 1,
+            modifier = GlanceModifier.defaultWeight(),
+            style = TextStyle(fontSize = tier.statusSize, color = GlanceTheme.colors.onErrorContainer),
+        )
+        Spacer(modifier = GlanceModifier.width(4.dp))
+        Text(
+            text = "›",
+            maxLines = 1,
+            style = TextStyle(fontWeight = FontWeight.Bold, fontSize = tier.statusSize, color = GlanceTheme.colors.onErrorContainer),
+        )
     }
 }
 
@@ -325,9 +405,13 @@ private fun WidgetContentBody(context: Context, model: RoutineWidgetModel, compa
     }
 }
 
-/** The "6 min" big countdown on the left, and — outside [compact] heights only — the
- * station → direction line plus the following departure's own smaller countdown on the right,
- * and the live/scheduled/cancelled status row underneath. */
+/** A clean, left-aligned vertical stack: the big "6 min" countdown, then — outside [compact]
+ * heights only, where there simply isn't room — the station → direction route, the following
+ * departure's own countdown, and the live/scheduled/cancelled status row. Previously a
+ * side-by-side layout (countdown on the left, station/next-departure column on the right); the
+ * fully vertical stack instead matches how every other section of this widget (and the rest of
+ * the app) presents a line/route/status sequence, and reads less cramped at ordinary widget
+ * sizes. */
 @Composable
 private fun DepartureMainContent(
     context: Context,
@@ -337,24 +421,19 @@ private fun DepartureMainContent(
     compact: Boolean,
     tier: WidgetSizeTier,
 ) {
-    Column(modifier = GlanceModifier.fillMaxWidth()) {
-        Row(modifier = GlanceModifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
-            Box(modifier = GlanceModifier.defaultWeight(), contentAlignment = Alignment.CenterStart) {
-                CountdownText(context, next, tier)
-            }
-            if (!compact) {
-                Column(horizontalAlignment = Alignment.End) {
-                    val subtitle = model.directionLabel?.let { "${model.stationName} → $it" } ?: model.stationName
-                    Text(text = subtitle, maxLines = 1, style = TextStyle(fontSize = tier.secondarySize, color = onSurfaceVariantColor()))
-                    following?.let { row ->
-                        val nextLabel = context.getString(R.string.widget_next_departure_label)
-                        val minutesText = context.getString(R.string.widget_countdown_minutes_format, row.minutesRemaining)
-                        Text(text = "$nextLabel  $minutesText", maxLines = 1, style = TextStyle(fontSize = tier.secondarySize, color = onSurfaceVariantColor()))
-                    }
-                }
-            }
-        }
+    Column(modifier = GlanceModifier.fillMaxWidth(), horizontalAlignment = Alignment.Start) {
+        CountdownText(context, next, tier)
         if (!compact) {
+            Spacer(modifier = GlanceModifier.height(10.dp))
+            val subtitle = model.directionLabel?.let { "${model.stationName} → $it" } ?: model.stationName
+            Text(text = subtitle, maxLines = 1, style = TextStyle(fontSize = tier.secondarySize, color = onSurfaceVariantColor()))
+            following?.let { row ->
+                Spacer(modifier = GlanceModifier.height(4.dp))
+                val nextLabel = context.getString(R.string.widget_next_departure_label)
+                val minutesText = context.getString(R.string.widget_countdown_minutes_format, row.minutesRemaining)
+                Text(text = "$nextLabel  $minutesText", maxLines = 1, style = TextStyle(fontSize = tier.secondarySize, color = onSurfaceVariantColor()))
+            }
+            Spacer(modifier = GlanceModifier.height(10.dp))
             StatusFooter(context, next, tier)
         }
     }
@@ -392,7 +471,7 @@ private fun StatusFooter(context: Context, next: WidgetDepartureRow, tier: Widge
             label = context.getString(R.string.routine_details_departure_scheduled)
         }
     }
-    Row(modifier = GlanceModifier.padding(top = 4.dp), verticalAlignment = Alignment.CenterVertically) {
+    Row(verticalAlignment = Alignment.CenterVertically) {
         Box(modifier = GlanceModifier.size(8.dp).background(dotColor).cornerRadius(4.dp)) {}
         Text(text = "  $label", maxLines = 1, style = TextStyle(fontSize = tier.statusSize, color = onSurfaceVariantColor()))
     }

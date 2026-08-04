@@ -5,6 +5,9 @@ import org.junit.Assert.assertNull
 import org.junit.Assert.assertTrue
 import org.junit.Test
 import se.blick.app.domain.model.CommuteRoutine
+import se.blick.app.domain.model.Disruption
+import se.blick.app.domain.model.DisruptionMessage
+import se.blick.app.domain.model.DisruptionPriority
 import se.blick.app.domain.model.TransportMode
 import se.blick.app.domain.usecase.LiveDeparturesSnapshot
 import se.blick.app.domain.usecase.LiveDeparturesState
@@ -313,5 +316,40 @@ class RoutineWidgetMapperTest {
         val model = RoutineWidgetMapper.notificationsUnavailable(routine(transportMode = TransportMode.TRAIN, lineDesignation = "42X"))
         assertEquals("42X", model.lineDesignation)
         assertEquals(TransportMode.TRAIN, model.transportMode)
+    }
+
+    // ---- topDisruption -- mirrors RoutineNotificationMapper's identical parameter ----
+
+    private fun disruption(header: String = "Delays on line 14") = Disruption(
+        disruptionId = "d1",
+        version = 1,
+        createdAt = now,
+        modifiedAt = null,
+        validFrom = null,
+        validUntil = null,
+        priority = DisruptionPriority(1, 1, 1),
+        message = DisruptionMessage(header, "Details", null, null, "en"),
+        affectedStopAreas = emptyList(),
+        affectedLines = emptyList(),
+        affectedModes = emptyList(),
+    )
+
+    @Test
+    fun `a topDisruption's header is carried into disruptionHeadline`() {
+        val model = RoutineWidgetMapper.map(routine(), LiveDeparturesState.Loading, now, disruption("Delays on line 14"))
+        assertEquals("Delays on line 14", model.disruptionHeadline)
+    }
+
+    @Test
+    fun `no topDisruption leaves disruptionHeadline null, not omitted or empty`() {
+        val model = RoutineWidgetMapper.map(routine(), LiveDeparturesState.Loading, now)
+        assertNull(model.disruptionHeadline)
+    }
+
+    @Test
+    fun `only the header is carried, never the longer details text`() {
+        val model = RoutineWidgetMapper.map(routine(), LiveDeparturesState.Loading, now, disruption("Delays on line 14"))
+        assertEquals("Delays on line 14", model.disruptionHeadline)
+        assertTrue(!model.disruptionHeadline!!.contains("Details"))
     }
 }

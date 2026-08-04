@@ -5,11 +5,11 @@
 **Document status:** Android-first MVP specification — see "Current implementation
 status" immediately below for what already exists in this repository versus what the
 rest of this document specifies as still planned.  
-**Updated:** 3 August 2026
+**Updated:** 4 August 2026
 
 ---
 
-## Current implementation status (as of 2 August 2026)
+## Current implementation status (as of 4 August 2026)
 
 This document specifies the full intended product. Most of the sections below describe
 that end-state design in the present tense, as a specification does — they are **not**
@@ -122,7 +122,39 @@ document's own "Relevant" product principle) were corrected to describe matching
 station + line + transport mode only, never direction, since SL Deviations provides no
 direction field to match against. See "Zero-delay fix, widget best-effort, decoupled
 disruption timing, and corrected relevance wording" in `android/README.md` for the full
-account.
+account. **The home-screen widget's layout was then redesigned to fix a reported bug** —
+a real Samsung phone screenshot showed the routine name rendered twice and everything
+crammed against the top edge, both traced to `Scaffold`'s own padding (horizontal only,
+none vertical, confirmed by decompiling the Glance AAR) plus a now-removed duplicate
+`Text`. `ActiveRoutineContent` no longer uses the shared `Scaffold`, so a new bottom
+disruption strip (muted-red, `GlanceTheme.colors.errorContainer`/`onErrorContainer`,
+shown only when a relevant disruption exists) can reach the widget's left/right/bottom
+edges directly, and the main content became a left-aligned vertical stack (badge +
+destination, large countdown, route, next departure, Live/Scheduled/Cancelled status)
+with explicit spacing instead of a cramped side-by-side row. The disruption strip reuses
+data the worker already fetches for the notification — never a second fetch — via the
+same two-phase update the notification already uses (widget updated with whatever
+disruption was already known, then updated again only if a newly-confirmed disruption
+differs); `RoutineWidgetUpdater` gained a new four-argument `updateWithDepartures`
+overload with a default body forwarding to the pre-existing three-argument one, so none
+of the 13 existing test fakes across seven unrelated files needed to change. Verified end
+to end on the same Samsung Galaxy S23 Ultra: the redesigned widget, placed fresh, matched
+the reference mock exactly, including a genuinely live SL Deviations disruption
+("3 augusti stängs en utgång vid Slussen") rendering correctly in the new strip; tapping
+it still opened Routine Details correctly. Responsiveness was confirmed by actually
+resizing the placed widget on this launcher (unlike the Lenovo TB350FU used for earlier
+widget verification, this one does support scripted resize-handle gestures) — shrunk to
+this launcher's own minimum height, every line stayed legible with no clipping; shrunk to
+a narrow single-column width, it correctly collapsed to the compact tier (badge +
+destination + countdown only) with no clipping or overlap either. This added 9 further
+JVM `@Test` functions, reaching 491 JVM / 56 instrumented (unaffected, since no
+instrumented source changed this session — see `android/README.md` for the full account).
+**Stated plainly: only `testDebugUnitTest`, `lintDebug`, and `assembleDebug` were re-run
+this session, not the full `connectedDebugAndroidTest` instrumented suite** — the widget's
+own correctness was instead confirmed directly on-device as described above, which is a
+stronger check for a Glance layout (a real render) than an instrumented test would be, but
+the existing 56 instrumented tests themselves were not re-executed since nothing they cover
+changed.
 
 Getting there took three work sessions of source beyond the earlier 193-JVM-test
 baseline. First: the FAB restoration, the Routine Details 30-second auto-refresh, the
@@ -409,17 +441,17 @@ ones, bringing the fully verified total to 425 JVM / 33 instrumented, stated abo
   `NotificationsUnavailable` state rather than a misleading placeholder. Android's own
   widget-update scheduler is explicitly disabled (`updatePeriodMillis="0"`); the widget
   responds to resizing (`SizeMode.Exact`) without clipping, against a theme-aware
-  readable background. Its placement, resizing, live updates, and Stop-action behavior
-  have been manually confirmed on a real launcher — see `android/README.md`'s Full
-  verification pass section for the complete account.
+  readable background. A relevant disruption (the same one the notification's own
+  expanded view already shows, never a second fetch) renders as a muted-red strip along
+  the widget's bottom edge, shown only when one exists. Its placement, resizing, live
+  updates, disruption strip, and Stop-action behavior have been manually confirmed on a
+  real launcher — see `android/README.md`'s Full verification pass section for the
+  complete account.
 
 **Not yet implemented** (described in the sections below purely as the plan):
 
 - Exact-time activation — see "Active-window scheduling" below for why this is
   deliberately best-effort, not exact.
-- The home-screen widget does not show disruptions — by design, not an oversight (see
-  "Home-screen widget" below): it reuses the notification/departures pipeline only, and
-  disruptions were deliberately kept out of scope for it in this phase.
 
 ---
 
@@ -703,30 +735,33 @@ that every device grants it.
 
 Implemented (`widget/BlickRoutineWidget`, Jetpack Glance — see "Current implementation
 status" above and `android/README.md`'s Status section for the full account; its
-placement, resizing, live updates, and Stop-action behavior — including its "Design 1"
-visual redesign — have been manually confirmed on a real launcher — see
-`android/README.md`'s Full verification pass section). A header row shows the routine's
-own pinned line number in a small rounded badge, colored by `LineBadgeColorMapping`
-(`widget/LineBadgeColorMapping.kt`) per Stockholm's own per-line-family convention —
-Pendeltåg (commuter rail) lines 40/41/42X/43/43X/44/48 in pink (`#FF49A5`), Metro
-blue-line 10-11 in blue (`#177BC0`), Metro red-line 13-14 in red (`#EE2D28`), Metro
-green-line 17-19 in green (`#51BA5B`), bold white badge text on every color, every other
-mode/line combination in a neutral grey — followed by the destination. Below that: a
-large, bold next-departure countdown on the left, the station → direction line and the
-following departure's own smaller countdown on the right (a minute-only countdown
-recomputed at render time, never a fixed or cached value, reusing the exact same
-`countdownMinutes` function and expired-departure filter the notification uses), and a
-colored dot plus "Live"/"Scheduled"/"Cancelled" label underneath reflecting the next
-departure's own real-time/cancelled state. The same loading/live/stale/offline/
-unavailable/no-upcoming-departures states apply, with a cancelled departure represented
-in the countdown/status area rather than a separate top-level case, plus a widget-only
+placement, resizing, live updates, disruption strip, and Stop-action behavior have been
+manually confirmed on a real launcher — see `android/README.md`'s Full verification pass
+section). A header row shows the routine's own pinned line number in a small rounded
+badge, colored by `LineBadgeColorMapping` (`widget/LineBadgeColorMapping.kt`) per
+Stockholm's own per-line-family convention — Pendeltåg (commuter rail) lines
+40/41/42X/43/43X/44/48 in pink (`#FF49A5`), Metro blue-line 10-11 in blue (`#177BC0`),
+Metro red-line 13-14 in red (`#EE2D28`), Metro green-line 17-19 in green (`#51BA5B`),
+bold white badge text on every color, every other mode/line combination in a neutral
+grey — followed by the destination. Below that, a left-aligned vertical stack: a large,
+bold next-departure countdown (a minute-only countdown recomputed at render time, never a
+fixed or cached value, reusing the exact same `countdownMinutes` function and
+expired-departure filter the notification uses), the station → direction route line, the
+following departure's own smaller countdown, and a colored dot plus
+"Live"/"Scheduled"/"Cancelled" label reflecting the next departure's own
+real-time/cancelled state. The same loading/live/stale/offline/unavailable/
+no-upcoming-departures states apply, with a cancelled departure represented in the
+countdown/status area rather than a separate top-level case, plus a widget-only
 `NotificationsUnavailable` state (no notification counterpart) shown when a
 window is active but notifications are blocked — live widget updates depend on
 notification availability by design, since the worker's loop is the widget's only data
-source, exactly like the notification. Outside
-any active window it reads exactly "No active commute." Tapping it opens the routine
-details screen, reusing `MainActivity`'s existing notification-tap navigation contract
-unchanged. Updated from `RoutineActiveWindowWorker`'s existing ~30-second active-
+source, exactly like the notification. A relevant disruption renders as a muted-red strip
+(`GlanceTheme.colors.errorContainer`/`onErrorContainer`) along the widget's full-width
+bottom edge, shown only when one exists — reusing the exact same disruption data the
+worker already fetches for the notification's own expanded view, never a second fetch.
+Outside any active window it reads exactly "No active commute." Tapping it opens the
+routine details screen, reusing `MainActivity`'s existing notification-tap navigation
+contract unchanged. Updated from `RoutineActiveWindowWorker`'s existing ~30-second active-
 window loop, every one of that worker's exit paths that cannot continue an active commute
 (missing/deleted/disabled routine, an elapsed window, notifications unavailable at
 startup or discovered mid-loop, a handled failure before or during foreground execution),
@@ -738,13 +773,11 @@ widget-update scheduler is explicitly disabled (`updatePeriodMillis="0"`). Expli
 overrides `SizeMode.Exact` (`GlanceAppWidget`'s own default, `SizeMode.Single`, would not
 respond to resizing) so the layout adapts to the widget's live size without clipping —
 badge, countdown, and secondary text scale through four `LocalSize`-width-driven
-responsive tiers (chosen because the "Design 1" reference mock was captured on a
-tablet-sized placement, whose grid cells are physically much larger than an ordinary
-phone's), and the secondary block/status row are dropped below a height threshold —
-against a theme-aware readable background. All installed
-widget instances update together; there is no per-instance configuration screen, since
-the existing first-beta one-routine limit means every instance has only one possible
-routine to show.
+responsive tiers, and the secondary block/status row are dropped below a height
+threshold, collapsing to a compact badge + destination + countdown layout — against a
+theme-aware readable background. All installed widget instances update together; there
+is no per-instance configuration screen, since the existing first-beta one-routine limit
+means every instance has only one possible routine to show.
 
 ---
 

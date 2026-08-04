@@ -272,14 +272,28 @@ class RoutineActiveWindowWorkerTest {
      * proving each loop tick updates the widget with the exact same
      * [CommuteRoutine]/[LiveDeparturesState] already fetched for the notification (no separate
      * fetch), and that every exit path that cannot continue an active commute touches the widget
-     * exactly once, with the right method. */
+     * exactly once, with the right method. [disruptionsAtUpdate] records the fourth
+     * ([Disruption]?) argument of every [updateWithDepartures] call, in the same order as
+     * [updateCalls] — the three-argument overload forwards here with `disruption = null`, so
+     * every call this worker makes lands in the same two lists regardless of which overload it
+     * used. */
     private class RecordingWidgetUpdater : RoutineWidgetUpdater {
         val updateCalls = mutableListOf<Pair<CommuteRoutine, LiveDeparturesState>>()
+        val disruptionsAtUpdate = mutableListOf<Disruption?>()
         val notificationsUnavailableCalls = mutableListOf<CommuteRoutine>()
         var clearCallCount = 0
         var reconcileCallCount = 0
         override suspend fun updateWithDepartures(routine: CommuteRoutine, departuresState: LiveDeparturesState, now: Instant) {
+            updateWithDepartures(routine, departuresState, now, disruption = null)
+        }
+        override suspend fun updateWithDepartures(
+            routine: CommuteRoutine,
+            departuresState: LiveDeparturesState,
+            now: Instant,
+            disruption: Disruption?,
+        ) {
             updateCalls += routine to departuresState
+            disruptionsAtUpdate += disruption
         }
         override suspend fun clear() {
             clearCallCount++
@@ -1287,6 +1301,61 @@ class RoutineActiveWindowWorkerTest {
         assertEquals(null, notifier.shown[0].disruptionHeadline)
         assertEquals(sampleDisruption().message.header, notifier.shown[1].disruptionHeadline)
         assertEquals(sampleDisruption().message.header, notifier.shown[2].disruptionHeadline)
+    }
+
+    @Test
+    fun `a newly-discovered disruption also triggers exactly one extra silent widget update, mirroring the notification`() = runTest {
+        val clock = TickingClock(Instant.parse("2026-07-27T05:00:00Z"), zone)
+        val routine = routine()
+        val repository = ScriptedRoutineRepository(clock) { routine }
+        val notifier = RecordingNotifier()
+        val widgetUpdater = RecordingWidgetUpdater()
+        val departures = FakeDepartureRepository { DeparturesResult(clock.instant(), 9145, listOf(sampleDeparture())) }
+        val disruptions = FakeDisruptionRepository { listOf(sampleDisruption()) }
+
+        val worker = buildWorker(
+            routine.id,
+            repository,
+            GetLiveDeparturesUseCase(departures, clock),
+            notifier,
+            RecordingScheduler(),
+            clock,
+            widgetUpdater = widgetUpdater,
+            getDisruptions = GetDisruptionsUseCase(disruptions),
+        )
+        worker.doWork()
+
+        // Same reasoning as the notification's own identical test just above: tick 1 updates the
+        // widget once with no disruption yet known, then once more when this tick's own fetch
+        // discovers one; tick 2 already knows about it from the start, so its own single update
+        // already carries it and nothing changes at the end of that tick -- three widget updates
+        // total, not two, not four.
+        assertEquals(3, widgetUpdater.updateCalls.size)
+        assertEquals(listOf(null, sampleDisruption(), sampleDisruption()), widgetUpdater.disruptionsAtUpdate)
+    }
+
+    @Test
+    fun `no disruption ever found means every widget update carries a null disruption`() = runTest {
+        val clock = TickingClock(Instant.parse("2026-07-27T05:00:00Z"), zone)
+        val routine = routine()
+        val repository = ScriptedRoutineRepository(clock) { routine }
+        val notifier = RecordingNotifier()
+        val widgetUpdater = RecordingWidgetUpdater()
+        val departures = FakeDepartureRepository { DeparturesResult(clock.instant(), 9145, listOf(sampleDeparture())) }
+
+        val worker = buildWorker(
+            routine.id,
+            repository,
+            GetLiveDeparturesUseCase(departures, clock),
+            notifier,
+            RecordingScheduler(),
+            clock,
+            widgetUpdater = widgetUpdater,
+        )
+        worker.doWork()
+
+        assertTrue(widgetUpdater.updateCalls.isNotEmpty())
+        assertTrue(widgetUpdater.disruptionsAtUpdate.all { it == null })
     }
 
     @Test
