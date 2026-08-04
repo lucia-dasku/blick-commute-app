@@ -16,12 +16,17 @@ that end-state design in the present tense, as a specification does — they are
 a claim that all of it already exists. This section is the authoritative summary of
 what is actually built today; where the two disagree, this section wins.
 
-**Validation status of this update, stated plainly up front:** a complete local run —
-`testDebugUnitTest`, `lintDebug`, `assembleDebug`, and `connectedDebugAndroidTest` — has now
-passed in full: all 482 JVM `@Test` functions, and all 56 instrumented `@Test` functions on
-the physical Samsung Galaxy S23 Ultra (`SM-S918B`, Android 16) (a Lenovo TB350FU was also
-used earlier this session for the notification-recovery fix's own 41-test instrumented run —
-see `android/README.md`'s own notes on both runs). `lintDebug` completed with 0 errors (44
+**Validation status of this update, stated plainly up front:** the source now contains 495
+JVM `@Test` functions and 56 instrumented `@Test` functions — four more JVM tests than the
+482 last fully re-verified below, added by `WidgetPreviewLayoutsTest` for the widget
+picker's new real preview (see the final entry of this section's narrative). A fresh local
+`testDebugUnitTest`/`lintDebug`/`assembleDebug` run confirms all 495 JVM tests pass with 0
+lint errors (55 warnings — see the final narrative entry below for why that rose from 44)
+and a debug APK built; the 56 instrumented tests were not re-run this session (no physical
+device was connected) and remain as last confirmed on the physical Samsung
+Galaxy S23 Ultra (`SM-S918B`, Android 16) (a Lenovo TB350FU was also
+used earlier that session for the notification-recovery fix's own 41-test instrumented run —
+see `android/README.md`'s own notes on both runs). That prior run's `lintDebug` completed with 0 errors (44
 warnings, unchanged in composition from before this session's changes: two expected,
 already-guarded `InlinedApi` findings — the API-36
 `ACTION_APP_NOTIFICATION_PROMOTION_SETTINGS` deep-link and the API-33
@@ -233,6 +238,29 @@ countdown and the status row are unchanged. 491 JVM tests still pass, 0 errors/4
 warnings, debug APK builds; **stated plainly, not confirmed by a live on-device
 screenshot** — the physical device was actively in the user's hands both times a reinstall
 was attempted this session, so scripted input was deliberately not sent.
+**The widget picker was then given a real preview, in three sizes** — it previously showed
+only the bare app icon, with no `previewImage`/`previewLayout` declared at all. A live
+`previewLayout` (API 31+, inflated through `RemoteViews`) plus a static `previewImage`
+fallback were added, alongside two new sibling picker entries (Compact and Large) next to
+the existing size, all backed by the same live `BlickRoutineWidget` Glance widget via
+sibling receivers sharing one `GlanceAppWidget` class, each with its own distinct picker
+label. The Large entry initially failed to add in Samsung's picker because `RemoteViews`
+cannot inflate a bare `android.view.View` (used for the "Live" status dot) — fixed by
+replacing it with an `ImageView` — and its `minHeight` was raised from 180dp to 240dp so
+its static preview content doesn't clip. `WidgetPreviewLayoutsTest` constructs a real
+`RemoteViews` for each of the three preview layouts and applies it, reproducing the exact
+production inflation path; confirmed to fail with the pre-fix `InflateException` and pass
+after. See "The widget picker previously showed only the bare app icon" in
+`android/README.md` for the full account. This added 4 further JVM `@Test` functions with
+no further instrumented ones, reaching **495 JVM / 56 instrumented**.
+`testDebugUnitTest`/`lintDebug`/`assembleDebug` were re-run and confirm no regression (495
+JVM tests; 0 errors, 55 warnings — up from 44, since the two new size variants tripled the
+already-expected `UnusedAttribute` findings from 4 to 15, one new `UseCompoundDrawables`
+finding was added by the new preview layout, and the rest are time-sensitive
+dependency/AGP-version-freshness findings unrelated to this session's source — see
+`android/README.md` for the itemized breakdown; debug APK builds); **stated plainly, this
+was not confirmed by a live on-device screenshot** — no physical device was connected this
+session.
 
 Getting there took three work sessions of source beyond the earlier 193-JVM-test
 baseline. First: the FAB restoration, the Routine Details 30-second auto-refresh, the

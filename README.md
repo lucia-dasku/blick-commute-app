@@ -111,13 +111,15 @@ exact mapping), next to a large next-departure countdown, the station → direct
 following-departure countdown, and a live/scheduled/cancelled status row. Tapping it
 opens the routine details screen via the same navigation contract the notification's
 tap already uses.
-364 JVM `@Test` functions and 24 instrumented `@Test` functions exist in source as of
-this update, all passing in a fresh local `./gradlew testDebugUnitTest lintDebug
-assembleDebug connectedDebugAndroidTest` run (0 lint errors, 43 warnings, debug APK
-built, all instrumented tests run on a physical device), and the widget's placement,
-resizing, live updates, and Stop-action behavior were manually verified on that same
-device — see `android/README.md`'s Build section for the exact toolchain and test
-breakdown. A simple About screen (info
+495 JVM `@Test` functions and 56 instrumented `@Test` functions exist in source as of
+this update — several sessions of widget redesign (a colored line-number badge shared
+app-wide, a disruption strip, and a real picker preview across three sizes), notification
+content simplification, and an About screen rewrite landed since the count above was last
+verified. A fresh local `./gradlew testDebugUnitTest lintDebug assembleDebug` run confirms
+all 495 JVM tests still pass with 0 lint errors and a debug APK built; the 56 instrumented
+tests were not re-run this session (no physical device was connected), matching the count
+last confirmed on a Samsung Galaxy S23 Ultra — see `android/README.md`'s Build section for
+the exact toolchain and test breakdown. A simple About screen (info
 icon in the routine list's top app bar) now carries the Trafiklab.se attribution, and the
 routine details screen offers a deep-link (Android 16+ only) to Android's own per-app Live Update
 settings when promotion isn't currently eligible — see `android/README.md`'s Status

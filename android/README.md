@@ -1318,6 +1318,38 @@ sending further scripted input while someone is actively using their own phone w
 judged not appropriate, so this rests on the code change plus the passing test suite
 alone until it can be checked live.
 
+**The widget picker previously showed only the bare app icon — no `previewImage` or
+`previewLayout` had ever been declared — so it now gets a real preview, in three sizes.**
+`BlickRoutineWidget`'s manifest entry gained a live `android:previewLayout` (API 31+,
+inflated through `RemoteViews` against the same static sample data as the fallback) plus a
+static `android:previewImage` fallback for older devices, and two sibling picker entries —
+Compact and Large — were added alongside the existing (now Standard) size, all three backed
+by the same live `BlickRoutineWidget` Glance widget via sibling receivers sharing one
+`GlanceAppWidget` class, each with its own `android:label` (Blick Compact/Standard/Large) so
+the picker shows a distinct title per size instead of all three falling back to the app's
+own default label. The Large entry initially still failed with "Couldn't add widget" in
+Samsung's picker — `android:previewLayout` is inflated through `RemoteViews`, not a plain
+`LayoutInflater` pass, and `RemoteViews` has no support for a bare `android.view.View`,
+used here for the "Live" status dot — fixed by replacing it with an `ImageView`
+(`RemoteViews`-supported). The Large provider's `minHeight` was also raised from 180dp to
+240dp, with documented headroom math, so its static preview content (header, countdown,
+Next row, Live status, disruption strip) doesn't clip at ordinary or moderately scaled
+system font sizes. Added `WidgetPreviewLayoutsTest`, which constructs a real `RemoteViews`
+for each of the three preview layouts and applies it — reproducing the exact production
+inflation path — confirmed to fail with the same `InflateException` before the fix and pass
+after: 4 further JVM `@Test` functions with no further instrumented ones, reaching 495
+JVM / 56 instrumented. `testDebugUnitTest`/`lintDebug`/`assembleDebug` were re-run and
+confirm no regression (495 JVM tests; 0 errors, 55 warnings — up from 44, since the two new
+size variants tripled the already-expected `UnusedAttribute` findings on the widget-info
+XML's Android-12+-only sizing attributes from 4 to 15 (one set per size), the new preview
+layout added one `UseCompoundDrawables` finding, and the rest are inherently time-sensitive
+dependency/AGP-version-freshness findings unrelated to this session's source: 22
+`GradleDependency`, 12 `NewerVersionAvailable`, and 1 `AndroidGradlePluginVersion`; debug
+APK builds); **stated plainly, this was not confirmed by a live on-device screenshot** — no
+physical device was connected this session, so the three picker entries and their preview
+layouts rest on the new `RemoteViews`-inflation test and source review alone until they can
+be checked live.
+
 ## AGP 9 built-in Kotlin migration
 
 This project targets AGP 9's **built-in Kotlin** support rather than applying the
