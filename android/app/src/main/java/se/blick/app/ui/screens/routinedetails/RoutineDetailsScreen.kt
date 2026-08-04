@@ -238,9 +238,10 @@ internal fun RoutineDetailsContent(
     val locale = LocalLocale.current.platformLocale
 
     Column(modifier.verticalScroll(rememberScrollState()).padding(16.dp)) {
+        // routine.name's own default pattern is "{siteName} → {destination}" (see
+        // RoutineCreateViewModel.selectDirection) -- a separate site-name line here would
+        // just repeat it a second time.
         Text(routine.name, style = MaterialTheme.typography.headlineSmall)
-        Spacer(Modifier.height(4.dp))
-        Text(routine.siteName, style = MaterialTheme.typography.bodyLarge)
 
         Spacer(Modifier.height(12.dp))
         DetailRow(stringResource(R.string.routine_details_mode_label), stringResource(routine.transportMode.detailsLabelResId()))

@@ -1273,6 +1273,30 @@ fewer than before, from consolidating a few now-redundant assertions) with no fu
 instrumented ones — still 56 instrumented; `lintDebug` still reports 0 errors and the
 same 44 warnings, and `assembleDebug` succeeded.
 
+**Routine default names and rows collapsed to one line, badge doing the work text
+previously duplicated.** A routine's default name (`RoutineCreateViewModel.selectDirection`'s
+`suggestedName`) used to be `"{lineDesignation} → {destination}"` (e.g. `"14 → Fruängen"`),
+shown as its own line in both the routine list and Routine Details, with the site name
+repeated as a second, separate line right below it (`"Fruängen"`) — two lines carrying
+overlapping information, and the line number spelled out as plain text even though every
+one of those screens already shows it via the colored `LineBadge` right next to the name.
+`suggestedName` now builds `"{chosen stop} → {destination}"` instead (e.g.
+`"Slussen → Norsborg"`) — the line number is dropped from the text entirely, since the
+badge already says it — matching the same "identity shown once, via the badge; the text
+line covers the route" shape `RoutineNotificationBuilder`'s own title already uses.
+`RoutineListContent`'s `ListItem` no longer has a `supportingContent` line for the site
+name (now redundant, since the name already includes it) — badge plus one line of text
+only. `RoutineDetailsScreen`'s header dropped the same now-redundant `Text(routine.siteName)`
+line that would otherwise have shown the site name a second time directly under a name
+that already contains it. Neither the notification nor the widget needed any change at
+all — both already build their own station/direction text straight from
+`routine.siteName`/`routine.destinationLabel`, never from `routine.name`, so this was a
+pure display-layer change. Updated the one JVM test asserting the old suggested-name
+pattern (`RoutineCreateViewModelTest`); `RoutineListScreenTest`/`RoutineDetailsScreenTest`
+needed no changes, since neither ever asserted the site name as its own separately
+displayed text node. `testDebugUnitTest`/`lintDebug`/`assembleDebug` all still pass (491
+JVM tests, 0 errors/44 warnings, debug APK builds).
+
 ## AGP 9 built-in Kotlin migration
 
 This project targets AGP 9's **built-in Kotlin** support rather than applying the

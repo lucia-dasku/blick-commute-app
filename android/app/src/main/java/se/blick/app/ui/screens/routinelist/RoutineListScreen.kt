@@ -155,8 +155,11 @@ fun RoutineListContent(
                         leadingContent = routine.lineDesignation?.let { designation ->
                             { LineBadge(lineDesignation = designation, transportMode = routine.transportMode) }
                         },
+                        // One line only: badge + "{stop} → {direction}" (routine.name's own
+                        // default pattern, see RoutineCreateViewModel.selectDirection) — no
+                        // separate supportingContent line for the site name, which would just
+                        // repeat it a second time since the name already includes it.
                         headlineContent = { Text(routine.name) },
-                        supportingContent = { Text(routine.siteName) },
                         // Consistent with the details screen: enabled/disabled is always
                         // stated in words here too, never colour-only (see
                         // RoutineDetailsScreen's statusLabel for the same rule; "paused

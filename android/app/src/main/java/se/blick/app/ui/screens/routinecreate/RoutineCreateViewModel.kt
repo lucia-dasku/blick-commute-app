@@ -379,8 +379,12 @@ class RoutineCreateViewModel @Inject constructor(
 
     fun selectDirection(direction: DirectionOption) {
         _uiState.update { current ->
+            // "{chosen stop} → {direction}" -- the line number is deliberately left out here,
+            // since every place this name is shown (the routine list, Routine Details, this
+            // wizard's own name field) already shows it via the colored LineBadge right next
+            // to it; repeating it as text here would duplicate what the badge already says.
             val suggestedName = listOfNotNull(
-                direction.lineDesignation,
+                current.selectedSite?.name,
                 direction.destinationLabel?.let { "→ $it" },
             ).joinToString(" ")
             current.copy(

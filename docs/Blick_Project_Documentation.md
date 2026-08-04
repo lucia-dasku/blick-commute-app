@@ -207,7 +207,23 @@ rendered fully "expanded", still with no chevron) now shows only the indicator w
 real message used to appear. Reaching 491 JVM `@Test` functions (one fewer, from
 consolidating a couple of now-redundant assertions) with no further instrumented ones;
 `lintDebug` still reports 0 errors and the same 44 warnings, and `assembleDebug`
-succeeded.
+succeeded. **Routine default names and rows were then collapsed to one line, letting the
+colored line badge do the work the text was previously duplicating.** A routine's default
+name used to be `"{line} → {destination}"` (e.g. `"14 → Fruängen"`), shown as its own line
+in both the routine list and Routine Details with the site name repeated as a second,
+separate line right below it — two lines carrying overlapping information, with the line
+number spelled out as text even though every one of those screens already shows it via
+the colored line badge sitting right next to it. The default name is now
+`"{chosen stop} → {destination}"` instead (e.g. `"Slussen → Norsborg"`) — the line number
+dropped from the text entirely, since the badge already says it — matching the same
+"identity shown once, via the badge; the text covers the route" shape the notification's
+own title already uses. Both the routine list row and Routine Details' header dropped
+their now-redundant separate site-name line, since the name already includes it. Neither
+the notification nor the widget needed any change — both already build their own
+station/direction text from the routine's own `siteName`/`destinationLabel` fields
+directly, never from its `name`. See "Routine default names and rows collapsed to one
+line" in `android/README.md` for the full account. 491 JVM tests still pass, 0 errors/44
+warnings, debug APK builds.
 
 Getting there took three work sessions of source beyond the earlier 193-JVM-test
 baseline. First: the FAB restoration, the Routine Details 30-second auto-refresh, the

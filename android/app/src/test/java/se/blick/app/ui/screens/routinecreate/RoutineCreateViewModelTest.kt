@@ -645,7 +645,7 @@ class RoutineCreateViewModelTest {
 
         vm.selectDirection(metroOption)
         assertEquals(RoutineCreateStep.SCHEDULE, vm.uiState.value.step)
-        assertEquals("14 → T-Centralen", vm.uiState.value.name)
+        assertEquals("Fruängen → T-Centralen", vm.uiState.value.name)
 
         vm.toggleDay(DayOfWeek.MONDAY)
         vm.toggleDay(DayOfWeek.TUESDAY)
