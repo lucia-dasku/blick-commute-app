@@ -188,7 +188,26 @@ once expanded; tapping the notification opened Routine Details for the correct r
 and tapping Stop removed it immediately (confirmed via `dumpsys notification`). A net one
 further JVM `@Test` function (many old tests replaced one-for-one rather than added
 alongside), reaching 492 JVM / 56 instrumented; `lintDebug` still reports 0 errors and the
-same 44 warnings, and `assembleDebug` succeeded.
+same 44 warnings, and `assembleDebug` succeeded. **A follow-up report on the same device
+then surfaced a real gap: the disruption's real text was always visible, with no
+collapse/expand control on the notification at all to hide it behind.** Confirmed
+directly, not assumed — `uiautomator dump`'s raw view hierarchy shows Blick's notification
+row has no `android:id/expand_button` node, unlike ordinary notifications in the same
+shade, consistent with `dumpsys notification` reporting `PROMOTED_ONGOING|
+FOREGROUND_SERVICE` in both `flags` and `originalFlags`. This is genuine Android 16
+platform behavior for a promoted-ongoing (Live Update) notification, not a defect in how
+the collapsed/expanded content was composed: once eligible for promotion, whatever
+`BigTextStyle` contains is unconditionally shown, so there is no reliable "expand to
+reveal" gate left. Fixed by never placing the disruption's real header/details in
+`BigTextStyle` at all — only the same fixed "Disruption available · Tap for details"
+indicator, identically in the collapsed and "expanded" body, so the real text can never
+leak regardless of promotion state; it is read by tapping into Routine Details' own
+Disruptions section instead. Re-verified on the same device: the notification (still
+rendered fully "expanded", still with no chevron) now shows only the indicator where the
+real message used to appear. Reaching 491 JVM `@Test` functions (one fewer, from
+consolidating a couple of now-redundant assertions) with no further instrumented ones;
+`lintDebug` still reports 0 errors and the same 44 warnings, and `assembleDebug`
+succeeded.
 
 Getting there took three work sessions of source beyond the earlier 193-JVM-test
 baseline. First: the FAB restoration, the Routine Details 30-second auto-refresh, the
@@ -540,21 +559,25 @@ the full account):
 
 The same notification updates during the selected period. When the first departure is no longer relevant, the following departure becomes the next one. At 08:00, the notification disappears and active updating stops.
 
-When there is a relevant disruption, the collapsed view adds only a fixed indicator, never the disruption's own wording:
+When there is a relevant disruption, a fixed indicator is added — never the disruption's own wording, in the notification itself, in any state:
 
 > **14 · Fruängen → T-Centralen**  
 > 4 min · Live  
 > Next 11 min  
 > Disruption available · Tap for details
 
-Expanding the notification replaces that indicator with the disruption's actual message:
+Tapping the notification (the same tap that always opens Routine Details) is where the
+disruption's actual message is read, in that screen's own Disruptions section — not by
+expanding the notification itself. This is a deliberate correction, not the original
+design: a promoted-ongoing notification (Android 16's Live Update) has no collapse state
+once eligible for promotion, confirmed directly on a real device (`uiautomator dump`
+shows no `expand_button` on Blick's notification row, unlike ordinary notifications in
+the same shade), so there is no reliable "expand to reveal" gate to hide the real message
+behind — whatever `BigTextStyle` contains would simply always be visible. Keeping the
+real text out of the notification entirely, in both its collapsed and "expanded" forms,
+is what actually satisfies "only in an expandable window" given that platform reality.
 
-> **14 · Fruängen → T-Centralen**  
-> 4 min · Live  
-> Next 11 min  
-> Delays on line 14 due to a signal fault
-
-If no relevant disruption exists, neither the indicator nor the expanded message appears.
+If no relevant disruption exists, the indicator does not appear at all.
 
 ---
 

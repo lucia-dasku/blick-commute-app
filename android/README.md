@@ -1239,6 +1239,40 @@ rather than simply added alongside the old) with no further instrumented ones, r
 492 JVM / 56 instrumented; `lintDebug` still reports 0 errors and the same 44 warnings,
 and `assembleDebug` succeeded.
 
+**Correction: a promoted-ongoing notification has no collapse state at all, so the
+disruption's real text was leaking at a glance — fixed by never rendering it in the
+notification in the first place.** A follow-up report on a real device (the same physical
+Samsung Galaxy S23 Ultra) showed the disruption's actual header/details always fully
+visible, with no expand/collapse chevron anywhere on the notification to even attempt to
+collapse it. Confirmed directly rather than assumed: `uiautomator dump`'s raw view
+hierarchy shows the Blick notification's row has no `android:id/expand_button` node at
+all, while every ordinary (non-promoted) notification in the same shade does — consistent
+with `dumpsys notification` showing `PROMOTED_ONGOING|FOREGROUND_SERVICE` in both
+`flags` and `originalFlags`. This is genuine Android 16 platform behavior, not a bug in
+how the collapsed/expanded content was composed: once a notification is actually promoted
+to a Live Update, `NotificationCompat.BigTextStyle`'s "expanded-only" body is
+unconditionally what's shown — there is no reliable "expand to reveal" gate left to hide
+anything behind, which defeated the entire point of keeping the disruption's real message
+out of the collapsed view. Fixed by no longer ever placing `disruptionHeadline`/
+`disruptionDetails` in `BigTextStyle` at all — only the same fixed
+`notification_disruption_available` indicator, identically in both the collapsed
+`contentText` and the "expanded" `bigText`, so the real message can never appear in the
+notification regardless of whether a given instance ends up promoted. "Tap for details"
+now means exactly what it says: the real message is read by tapping the notification into
+Routine Details' own Disruptions section, which already showed it in full. Re-verified on
+the same device: the notification (still rendered fully "expanded", still with no
+chevron, confirming the platform behavior is unchanged) now shows only
+"Disruption available · Tap for details" where the real disruption text used to appear.
+`RoutineNotificationModel.disruptionHeadline`/`disruptionDetails` themselves are
+unchanged — `RoutineNotificationBuilder` simply stopped reading their text (only whether
+`disruptionHeadline` is non-null, to decide whether to show the indicator at all).
+`RoutineNotificationBuilderTest`'s disruption assertions were updated to check for the
+indicator string rather than the literal "Delays on line 14" fixture text wherever they
+previously asserted the real message appeared. Reaching 491 JVM `@Test` functions (one
+fewer than before, from consolidating a few now-redundant assertions) with no further
+instrumented ones — still 56 instrumented; `lintDebug` still reports 0 errors and the
+same 44 warnings, and `assembleDebug` succeeded.
+
 ## AGP 9 built-in Kotlin migration
 
 This project targets AGP 9's **built-in Kotlin** support rather than applying the

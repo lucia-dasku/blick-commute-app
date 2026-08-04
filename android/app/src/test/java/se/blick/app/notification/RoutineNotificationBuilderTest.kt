@@ -338,14 +338,15 @@ class RoutineNotificationBuilderTest {
         assertTrue(lines.any { it.contains(expectedTimeText) })
     }
 
-    // ---- Disruption content: real message expanded-only, fixed indicator collapsed ----
+    // ---- Disruption content: never the real text anywhere, only a fixed indicator ----
     //
-    // See RoutineNotificationBuilder's own class doc: a disruption's own header/details are
-    // only ever rendered in the expanded (BigTextStyle) body, appended AFTER whatever
-    // departure/last-checked lines that state already produces. The one collapsed-view change
-    // a disruption is allowed to make is a fixed "Disruption available" indicator line appended
-    // to contentText (see the tests below this section) -- shortCriticalText and the Stop
-    // action are still never touched by it.
+    // See RoutineNotificationBuilder's own class doc: verified directly on a real Android 16
+    // device that a promoted-ongoing notification's row has no expand_button at all, so
+    // whatever BigTextStyle contains is unconditionally shown -- there is no reliable
+    // collapsed state to hide a disruption's real header/details behind. Both the collapsed
+    // contentText AND the "expanded" bigText therefore only ever carry the fixed
+    // "Disruption available" indicator; the real message is read by tapping into Routine
+    // Details instead. shortCriticalText and the Stop action are still never touched by it.
 
     @Test
     fun `no disruption adds no expanded-view line beyond Live's own departure rows`() {
@@ -354,7 +355,7 @@ class RoutineNotificationBuilderTest {
     }
 
     @Test
-    fun `a disruption's headline and details are appended after Live's departure rows`() {
+    fun `a disruption adds only the fixed indicator after Live's departure rows, never the real headline or details`() {
         val notification = builder.build(
             model(
                 content = RoutineNotificationContent.Live(listOf(sampleRow())),
@@ -363,38 +364,26 @@ class RoutineNotificationBuilderTest {
             ),
         )
         val lines = bigTextLines(notification)
-        assertEquals(3, lines.size) // 1 departure row + headline + details
-        assertEquals("Delays on line 14", lines[1])
-        assertEquals("Expect longer travel times.", lines[2])
+        assertEquals(listOf(context.getString(R.string.notification_disruption_available)), lines.drop(1))
     }
 
     @Test
-    fun `a disruption with no details appends only the headline`() {
-        val notification = builder.build(
-            model(content = RoutineNotificationContent.Live(listOf(sampleRow())), disruptionHeadline = "Delays on line 14"),
-        )
-        val lines = bigTextLines(notification)
-        assertEquals(2, lines.size)
-        assertEquals("Delays on line 14", lines[1])
-    }
-
-    @Test
-    fun `a disruption is appended after Stale's departure and last-checked lines`() {
+    fun `a disruption adds the fixed indicator after Stale's departure and last-checked lines`() {
         val notification = builder.build(
             model(
                 content = RoutineNotificationContent.Stale(listOf(sampleRow()), now),
                 disruptionHeadline = "Delays on line 14",
             ),
         )
-        assertEquals("Delays on line 14", bigTextLines(notification).last())
+        assertEquals(context.getString(R.string.notification_disruption_available), bigTextLines(notification).last())
     }
 
     @Test
-    fun `a disruption is appended after NoUpcomingDepartures' last-checked line`() {
+    fun `a disruption adds the fixed indicator after NoUpcomingDepartures' last-checked line`() {
         val notification = builder.build(
             model(content = RoutineNotificationContent.NoUpcomingDepartures(now), disruptionHeadline = "Delays on line 14"),
         )
-        assertEquals("Delays on line 14", bigTextLines(notification).last())
+        assertEquals(context.getString(R.string.notification_disruption_available), bigTextLines(notification).last())
     }
 
     @Test
@@ -404,23 +393,23 @@ class RoutineNotificationBuilderTest {
     }
 
     @Test
-    fun `a disruption gives Offline an expanded view with its offline message plus the disruption`() {
+    fun `a disruption gives Offline an expanded view with its offline message plus the fixed indicator, never the real message`() {
         val notification = builder.build(
             model(content = RoutineNotificationContent.Offline, disruptionHeadline = "Delays on line 14", disruptionDetails = "Details"),
         )
         assertEquals(
-            listOf(context.getString(R.string.notification_offline), "Delays on line 14", "Details"),
+            listOf(context.getString(R.string.notification_offline), context.getString(R.string.notification_disruption_available)),
             bigTextLines(notification),
         )
     }
 
     @Test
-    fun `a disruption gives Unavailable an expanded view with its unavailable message plus the disruption`() {
+    fun `a disruption gives Unavailable an expanded view with its unavailable message plus the fixed indicator, never the real message`() {
         val notification = builder.build(
             model(content = RoutineNotificationContent.Unavailable, disruptionHeadline = "Delays on line 14"),
         )
         assertEquals(
-            listOf(context.getString(R.string.notification_unavailable), "Delays on line 14"),
+            listOf(context.getString(R.string.notification_unavailable), context.getString(R.string.notification_disruption_available)),
             bigTextLines(notification),
         )
     }
@@ -436,7 +425,7 @@ class RoutineNotificationBuilderTest {
     }
 
     @Test
-    fun `the collapsed contentText never contains the disruption's own header or details`() {
+    fun `neither the collapsed contentText nor the expanded bigText ever contains the disruption's own header or details`() {
         val notification = builder.build(
             model(
                 content = RoutineNotificationContent.Live(listOf(sampleRow())),
@@ -446,6 +435,9 @@ class RoutineNotificationBuilderTest {
         )
         assertFalse(contentText(notification).contains("Delays on line 14"))
         assertFalse(contentText(notification).contains("Expect longer travel times."))
+        val bigText = notification.extras.getCharSequence(Notification.EXTRA_BIG_TEXT).toString()
+        assertFalse(bigText.contains("Delays on line 14"))
+        assertFalse(bigText.contains("Expect longer travel times."))
     }
 
     @Test

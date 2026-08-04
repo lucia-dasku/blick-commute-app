@@ -28,13 +28,17 @@ data class RoutineNotificationModel(
     /** The highest-priority currently-relevant disruption's header, or null if none was
      * fetched/available — see [RoutineNotificationMapper.map]'s `topDisruption` parameter.
      * Trailing, defaulted fields (not inserted earlier in the constructor) so existing
-     * positional call sites keep compiling unchanged. [RoutineNotificationBuilder] renders
-     * this only in the notification's expanded view, appended after the existing
-     * departure/last-checked lines — never in place of, or ahead of, the collapsed
-     * countdown/departure/Stop action/Live Update content (see that class's own doc). */
+     * positional call sites keep compiling unchanged. [RoutineNotificationBuilder] never
+     * renders this header's own text — only whether it is non-null, to decide whether to show
+     * a fixed "Disruption available" indicator. A promoted-ongoing notification (Android 16's
+     * Live Update) has no collapse state once eligible for promotion, so there is no reliable
+     * "expand to reveal" gate to hide the real text behind; the real message is read by tapping
+     * into Routine Details' own Disruptions section instead (see that class's own doc). */
     val disruptionHeadline: String? = null,
-    /** The same disruption's longer body text, shown directly under [disruptionHeadline] in
-     * the expanded view only. Never populated without [disruptionHeadline] also being set. */
+    /** The same disruption's longer body text. Not currently read by [RoutineNotificationBuilder]
+     * for the same reason as [disruptionHeadline] — kept here as the natural counterpart to it
+     * in this model, available to any future consumer that needs it. Never populated without
+     * [disruptionHeadline] also being set. */
     val disruptionDetails: String? = null,
 )
 
