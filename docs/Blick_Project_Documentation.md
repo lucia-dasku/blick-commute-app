@@ -166,6 +166,29 @@ unmodified. `testDebugUnitTest`/`lintDebug`/`assembleDebug` were re-run and conf
 regression (491 JVM tests, 0 errors/44 warnings, debug APK builds); **stated plainly, this
 was not confirmed by a live on-device screenshot**, since the physical device used earlier
 in this same session was no longer connected by the time this change was made.
+**The ongoing notification's content was then simplified to a set of exactly-specified
+standard `NotificationCompat` fields** — one bold title carrying the routine's pinned
+line, station, and destination (`"14 · Slussen → Fruängen"`, the one place that identity
+now appears at all), a collapsed body of up to three short lines (the soonest departure's
+own countdown and status, the following departure's own countdown when a second one
+exists, and a fixed disruption indicator when relevant), and the disruption's own real
+message shown only once the notification is expanded, replacing the indicator rather than
+sitting alongside it. `setSubText` (the old, now-redundant line+direction summary) was
+removed, the old per-departure row text that repeated the line designation and
+destination on every row was replaced by much shorter countdown-only formats, and a real
+inclusive-vs-exclusive bug in the previous design was fixed in passing: Offline/
+Unavailable/Loading's expanded view previously showed *only* the disruption when one
+existed, silently dropping their own status message — it now always shows both. See
+"Ongoing notification simplified to standard `NotificationCompat` fields only" in
+`android/README.md` for the full account, including which string resources were renamed
+or replaced. Verified end to end on the physical Samsung Galaxy S23 Ultra: created a live
+routine and confirmed the posted notification matched the required format exactly,
+including a genuinely live SL Deviations disruption rendering as its own real message
+once expanded; tapping the notification opened Routine Details for the correct routine,
+and tapping Stop removed it immediately (confirmed via `dumpsys notification`). A net one
+further JVM `@Test` function (many old tests replaced one-for-one rather than added
+alongside), reaching 492 JVM / 56 instrumented; `lintDebug` still reports 0 errors and the
+same 44 warnings, and `assembleDebug` succeeded.
 
 Getting there took three work sessions of source beyond the earlier 193-JVM-test
 baseline. First: the FAB restoration, the Routine Details 30-second auto-refresh, the
@@ -507,22 +530,31 @@ The user creates a scheduled commute routine, for example:
 | Days | Monday-Friday |
 | Active period | 07:30-08:00 |
 
-At 07:30, a quiet, ongoing notification appears:
+At 07:30, a quiet, ongoing notification appears (matching `RoutineNotificationBuilder`'s
+real, standard-`NotificationCompat` output — see §8's "Active-window scheduling" below for
+the full account):
 
-> **Fruängen to T-Centralen**  
-> Next: 4 min  
-> Then: 11 min / 18 min
+> **14 · Fruängen → T-Centralen**  
+> 4 min · Live  
+> Next 11 min
 
 The same notification updates during the selected period. When the first departure is no longer relevant, the following departure becomes the next one. At 08:00, the notification disappears and active updating stops.
 
-When there is a relevant disruption, it is added below the departures:
+When there is a relevant disruption, the collapsed view adds only a fixed indicator, never the disruption's own wording:
 
-> **Fruängen to T-Centralen**  
-> Next: 4 min  
-> Then: 11 min / 18 min  
-> Disruption: Delays on line 14 due to a signal fault
+> **14 · Fruängen → T-Centralen**  
+> 4 min · Live  
+> Next 11 min  
+> Disruption available · Tap for details
 
-If no relevant disruption exists, the disruption area is not shown.
+Expanding the notification replaces that indicator with the disruption's actual message:
+
+> **14 · Fruängen → T-Centralen**  
+> 4 min · Live  
+> Next 11 min  
+> Delays on line 14 due to a signal fault
+
+If no relevant disruption exists, neither the indicator nor the expanded message appears.
 
 ---
 
@@ -608,10 +640,12 @@ Line and direction options are initially discovered from live departures at the 
 *All 7 steps below are implemented in source and verified on a real device — see
 "Current implementation status" above and the "Active-window scheduling and the
 30-second notification loop" architecture note below. Step 6's disruption fetch was
-verified live for the no-disruption and fetch-failure cases; a disruption actually being
-present was verified only through the automated test suite, not by direct observation of
-a real one rendering on-screen — see "Current implementation status" above for the exact
-account.*
+originally verified live only for the no-disruption and fetch-failure cases, with a
+disruption actually being present confirmed only through the automated test suite;
+a genuinely live SL Deviations disruption has since rendered correctly on a real device
+in both the notification's expanded view and the home-screen widget's own disruption
+strip, in separate sessions — see "Current implementation status" above for the exact
+account of each.*
 
 1. The routine becomes active around the configured start time (best-effort, not exact
    — see the scheduling section below).

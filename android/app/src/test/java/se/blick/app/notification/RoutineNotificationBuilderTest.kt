@@ -139,83 +139,47 @@ class RoutineNotificationBuilderTest {
         assertEquals("r2", savedIntent.getStringExtra(RoutineNotificationIds.EXTRA_ROUTINE_ID))
     }
 
-    // ---- Title / collapsed content ----
+    // ---- Title: the one place route/line/destination is shown ----
+
+    private fun title(notification: Notification): String = notification.extras.getCharSequence(Notification.EXTRA_TITLE).toString()
 
     @Test
-    fun `title is the station name`() {
-        val notification = builder.build(model(stationName = "Slussen"))
-        assertEquals("Slussen", notification.extras.getCharSequence(Notification.EXTRA_TITLE).toString())
+    fun `title combines the pinned line, station, and destination in one line`() {
+        val notification = builder.build(model(stationName = "Slussen", lineLabel = "14", directionLabel = "Fruängen"))
+        assertEquals(
+            context.getString(R.string.notification_title_format, "14", "Slussen", "Fruängen"),
+            title(notification),
+        )
     }
 
     @Test
-    fun `missing pinned line and direction use fallback wording in the subtext summary`() {
+    fun `missing pinned line and direction use fallback wording in the title`() {
         val notification = builder.build(model(lineLabel = null, directionLabel = null))
-        val summary = notification.extras.getCharSequence(Notification.EXTRA_SUB_TEXT).toString()
-        assertTrue(summary.contains(context.getString(R.string.notification_line_fallback)))
-        assertTrue(summary.contains(context.getString(R.string.notification_direction_fallback)))
+        assertTrue(title(notification).contains(context.getString(R.string.notification_line_fallback)))
+        assertTrue(title(notification).contains(context.getString(R.string.notification_direction_fallback)))
     }
 
-    // ---- Line/direction context preserved in every state (Fix 4) ----
-
-    private fun subText(notification: Notification): String = notification.extras.getCharSequence(Notification.EXTRA_SUB_TEXT).toString()
+    // ---- Title is identical regardless of content state (Fix 4's original intent) ----
 
     @Test
-    fun `Live preserves the line and direction summary as subtext`() {
-        val notification = builder.build(model(lineLabel = "14", directionLabel = "Fruängen"))
-        assertTrue(subText(notification).contains("14"))
-        assertTrue(subText(notification).contains("Fruängen"))
-    }
-
-    @Test
-    fun `Stale preserves the line and direction summary as subtext`() {
-        val notification = builder.build(
-            model(lineLabel = "14", directionLabel = "Fruängen", content = RoutineNotificationContent.Stale(listOf(sampleRow()), now)),
+    fun `the title carries the same line, station, and destination in every state`() {
+        val states = listOf(
+            RoutineNotificationContent.Offline,
+            RoutineNotificationContent.Unavailable,
+            RoutineNotificationContent.Loading,
+            RoutineNotificationContent.NoUpcomingDepartures(now),
+            RoutineNotificationContent.Stale(listOf(sampleRow()), now),
+            RoutineNotificationContent.Live(listOf(sampleRow())),
         )
-        assertTrue(subText(notification).contains("14"))
-        assertTrue(subText(notification).contains("Fruängen"))
+        val expected = context.getString(R.string.notification_title_format, "14", "Fruängen", "Fruängen")
+        states.forEach { content ->
+            val notification = builder.build(model(lineLabel = "14", stationName = "Fruängen", directionLabel = "Fruängen", content = content))
+            assertEquals("expected the same title for $content", expected, title(notification))
+        }
     }
 
     @Test
-    fun `NoUpcomingDepartures preserves the line and direction summary as subtext`() {
-        val notification = builder.build(
-            model(lineLabel = "14", directionLabel = "Fruängen", content = RoutineNotificationContent.NoUpcomingDepartures(now)),
-        )
-        assertTrue(subText(notification).contains("14"))
-        assertTrue(subText(notification).contains("Fruängen"))
-    }
-
-    @Test
-    fun `Offline preserves the line and direction summary as subtext alongside the offline message`() {
-        val notification = builder.build(
-            model(lineLabel = "14", directionLabel = "Fruängen", content = RoutineNotificationContent.Offline),
-        )
-        assertTrue(subText(notification).contains("14"))
-        assertTrue(subText(notification).contains("Fruängen"))
-        assertEquals(context.getString(R.string.notification_offline), notification.extras.getCharSequence(Notification.EXTRA_TEXT).toString())
-    }
-
-    @Test
-    fun `Unavailable preserves the line and direction summary as subtext alongside the unavailable message`() {
-        val notification = builder.build(
-            model(lineLabel = "14", directionLabel = "Fruängen", content = RoutineNotificationContent.Unavailable),
-        )
-        assertTrue(subText(notification).contains("14"))
-        assertTrue(subText(notification).contains("Fruängen"))
-        assertEquals(context.getString(R.string.notification_unavailable), notification.extras.getCharSequence(Notification.EXTRA_TEXT).toString())
-    }
-
-    @Test
-    fun `Loading preserves the line and direction summary as subtext alongside the loading message`() {
-        val notification = builder.build(
-            model(lineLabel = "14", directionLabel = "Fruängen", content = RoutineNotificationContent.Loading),
-        )
-        assertTrue(subText(notification).contains("14"))
-        assertTrue(subText(notification).contains("Fruängen"))
-        assertEquals(context.getString(R.string.notification_loading), notification.extras.getCharSequence(Notification.EXTRA_TEXT).toString())
-    }
-
-    @Test
-    fun `missing line falls back to the line-fallback wording in the subtext, in every state`() {
+    fun `missing line falls back to the line-fallback wording in the title, in every state`() {
         val states = listOf(
             RoutineNotificationContent.Offline,
             RoutineNotificationContent.Unavailable,
@@ -227,14 +191,14 @@ class RoutineNotificationBuilderTest {
         states.forEach { content ->
             val notification = builder.build(model(lineLabel = null, content = content))
             assertTrue(
-                "expected line fallback in subtext for $content",
-                subText(notification).contains(context.getString(R.string.notification_line_fallback)),
+                "expected line fallback in title for $content",
+                title(notification).contains(context.getString(R.string.notification_line_fallback)),
             )
         }
     }
 
     @Test
-    fun `missing direction falls back to the direction-fallback wording in the subtext, in every state`() {
+    fun `missing direction falls back to the direction-fallback wording in the title, in every state`() {
         val states = listOf(
             RoutineNotificationContent.Offline,
             RoutineNotificationContent.Unavailable,
@@ -246,10 +210,25 @@ class RoutineNotificationBuilderTest {
         states.forEach { content ->
             val notification = builder.build(model(directionLabel = null, content = content))
             assertTrue(
-                "expected direction fallback in subtext for $content",
-                subText(notification).contains(context.getString(R.string.notification_direction_fallback)),
+                "expected direction fallback in title for $content",
+                title(notification).contains(context.getString(R.string.notification_direction_fallback)),
             )
         }
+    }
+
+    @Test
+    fun `the collapsed and expanded body never repeat the line designation or destination shown in the title`() {
+        val notification = builder.build(
+            model(
+                lineLabel = "14",
+                directionLabel = "Fruängen",
+                content = RoutineNotificationContent.Live(listOf(sampleRow(lineDesignation = "14", destinationLabel = "Fruängen"))),
+            ),
+        )
+        val collapsed = notification.extras.getCharSequence(Notification.EXTRA_TEXT).toString()
+        val expanded = notification.extras.getCharSequence(Notification.EXTRA_BIG_TEXT).toString()
+        assertFalse(collapsed.contains("Fruängen"))
+        assertFalse(expanded.contains("Fruängen"))
     }
 
     // ---- Expanded departure lines ----
@@ -273,59 +252,100 @@ class RoutineNotificationBuilderTest {
         notification.extras.getCharSequence(Notification.EXTRA_TEXT).toString()
 
     @Test
-    fun `Live content shows up to two expanded departure lines`() {
+    fun `the primary departure line shows its countdown and Live status`() {
+        val notification = builder.build(
+            model(content = RoutineNotificationContent.Live(listOf(sampleRow(minutesRemaining = 3, isRealTime = true)))),
+        )
+        assertEquals(
+            listOf(context.getString(R.string.notification_departure_status_format, 3L, context.getString(R.string.routine_details_departure_live))),
+            bigTextLines(notification),
+        )
+    }
+
+    @Test
+    fun `the primary departure line shows Scheduled status for a non-real-time departure`() {
+        val notification = builder.build(
+            model(content = RoutineNotificationContent.Live(listOf(sampleRow(minutesRemaining = 18, isRealTime = false)))),
+        )
+        assertEquals(
+            listOf(context.getString(R.string.notification_departure_status_format, 18L, context.getString(R.string.routine_details_departure_scheduled))),
+            bigTextLines(notification),
+        )
+    }
+
+    @Test
+    fun `a second departure adds a Next line with its own countdown`() {
         val notification = builder.build(
             model(
                 content = RoutineNotificationContent.Live(
-                    listOf(sampleRow(minutesRemaining = 4, isRealTime = true), sampleRow(minutesRemaining = 11, isRealTime = false)),
+                    listOf(sampleRow(minutesRemaining = 3, isRealTime = true), sampleRow(minutesRemaining = 18, isRealTime = false)),
                 ),
             ),
         )
         val lines = bigTextLines(notification)
         assertEquals(2, lines.size)
-        assertTrue(lines[0].contains("4"))
-        assertTrue(lines[0].contains(context.getString(R.string.routine_details_departure_live)))
-        assertTrue(lines[1].contains("11"))
-        assertTrue(lines[1].contains(context.getString(R.string.routine_details_departure_scheduled)))
+        assertEquals(context.getString(R.string.notification_next_departure_format, 18L), lines[1])
     }
 
     @Test
-    fun `a cancelled departure's line states cancellation ahead of any countdown`() {
+    fun `no following departure omits the Next line entirely`() {
+        val notification = builder.build(model(content = RoutineNotificationContent.Live(listOf(sampleRow()))))
+        assertEquals(1, bigTextLines(notification).size)
+    }
+
+    @Test
+    fun `a cancelled primary departure shows Cancelled alone, with no countdown`() {
         val notification = builder.build(
             model(content = RoutineNotificationContent.Live(listOf(sampleRow(isCancelled = true, minutesRemaining = 4, isRealTime = true)))),
         )
         val line = bigTextLines(notification).single()
-        assertTrue(line.contains(context.getString(R.string.routine_details_departure_cancelled)))
-        // Checking for the literal countdown suffix ("4 min", from notification_row_format's
-        // "%1$d min" segment) rather than a bare "4 " -- the sample row's own line designation
-        // is "14", so "4 " is also a substring of "14 →" and a bare check false-fails here even
-        // though no countdown is actually present.
-        assertFalse(line.contains("4 min"))
+        assertEquals(context.getString(R.string.routine_details_departure_cancelled), line)
+    }
+
+    @Test
+    fun `a cancelled following departure shows a distinct Next Cancelled line`() {
+        val notification = builder.build(
+            model(
+                content = RoutineNotificationContent.Live(
+                    listOf(sampleRow(), sampleRow(isCancelled = true, minutesRemaining = 18)),
+                ),
+            ),
+        )
+        assertEquals(context.getString(R.string.notification_next_departure_cancelled), bigTextLines(notification)[1])
     }
 
     // ---- Distinct state content ----
 
     @Test
-    fun `Stale content states that refresh failed and includes a last-checked time`() {
+    fun `Stale content states that refresh failed in the collapsed text`() {
         val lastCheckedAt = now.minusSeconds(600)
         val notification = builder.build(
             model(content = RoutineNotificationContent.Stale(listOf(sampleRow()), lastCheckedAt)),
         )
         val text = notification.extras.getCharSequence(Notification.EXTRA_TEXT).toString()
         assertEquals(context.getString(R.string.notification_stale_warning), text)
-
-        val expectedTimeText = formatDepartureTime(lastCheckedAt, Locale.getDefault())
-        assertTrue(bigTextLines(notification).any { it.contains(expectedTimeText) })
     }
 
-    // ---- Disruption content: full text expanded-only, fixed indicator collapsed ----
+    @Test
+    fun `Stale's expanded view includes the last-known departure and a last-checked time`() {
+        val lastCheckedAt = now.minusSeconds(600)
+        val notification = builder.build(
+            model(content = RoutineNotificationContent.Stale(listOf(sampleRow(minutesRemaining = 6)), lastCheckedAt)),
+        )
+        val lines = bigTextLines(notification)
+        assertTrue(lines.any { it.contains("6") })
+        val expectedTimeText = formatDepartureTime(lastCheckedAt, Locale.getDefault())
+        assertTrue(lines.any { it.contains(expectedTimeText) })
+    }
+
+    // ---- Disruption content: real message expanded-only, fixed indicator collapsed ----
     //
     // See RoutineNotificationBuilder's own class doc: a disruption's own header/details are
     // only ever rendered in the expanded (BigTextStyle) body, appended AFTER whatever
     // departure/last-checked lines that state already produces. The one collapsed-view change
-    // a disruption is allowed to make is a fixed "Disruptions…" indicator line appended to
-    // contentText (see the tests below this section) -- subText, shortCriticalText, and the
-    // Stop action are still never touched by it.
+    // a disruption is allowed to make is a fixed "Disruption available" indicator line appended
+    // to contentText (see the tests below this section) -- shortCriticalText and the Stop
+    // action are still never touched by it.
 
     @Test
     fun `no disruption adds no expanded-view line beyond Live's own departure rows`() {
@@ -384,29 +404,35 @@ class RoutineNotificationBuilderTest {
     }
 
     @Test
-    fun `a disruption gives Offline an expanded view containing only the disruption`() {
+    fun `a disruption gives Offline an expanded view with its offline message plus the disruption`() {
         val notification = builder.build(
             model(content = RoutineNotificationContent.Offline, disruptionHeadline = "Delays on line 14", disruptionDetails = "Details"),
         )
-        assertEquals(listOf("Delays on line 14", "Details"), bigTextLines(notification))
+        assertEquals(
+            listOf(context.getString(R.string.notification_offline), "Delays on line 14", "Details"),
+            bigTextLines(notification),
+        )
     }
 
     @Test
-    fun `a disruption gives Unavailable an expanded view containing only the disruption`() {
+    fun `a disruption gives Unavailable an expanded view with its unavailable message plus the disruption`() {
         val notification = builder.build(
             model(content = RoutineNotificationContent.Unavailable, disruptionHeadline = "Delays on line 14"),
         )
-        assertEquals(listOf("Delays on line 14"), bigTextLines(notification))
+        assertEquals(
+            listOf(context.getString(R.string.notification_unavailable), "Delays on line 14"),
+            bigTextLines(notification),
+        )
     }
 
     @Test
-    fun `a disruption appends a fixed Disruptions indicator line to the collapsed contentText`() {
+    fun `a disruption appends a fixed disruption-available indicator line to the collapsed contentText`() {
         val withoutDisruption = builder.build(model(content = RoutineNotificationContent.Live(listOf(sampleRow()))))
         val withDisruption = builder.build(
             model(content = RoutineNotificationContent.Live(listOf(sampleRow())), disruptionHeadline = "Delays on line 14"),
         )
-        val indicator = context.getString(R.string.notification_disruptions_indicator)
-        assertEquals(contentText(withoutDisruption) + "\n\n" + indicator, contentText(withDisruption))
+        val indicator = context.getString(R.string.notification_disruption_available)
+        assertEquals(contentText(withoutDisruption) + "\n" + indicator, contentText(withDisruption))
     }
 
     @Test
@@ -423,17 +449,17 @@ class RoutineNotificationBuilderTest {
     }
 
     @Test
-    fun `the collapsed contentText keeps the departure information ahead of the Disruptions indicator`() {
+    fun `the collapsed contentText keeps the departure information ahead of the disruption indicator`() {
         val notification = builder.build(
             model(content = RoutineNotificationContent.Live(listOf(sampleRow())), disruptionHeadline = "Delays on line 14"),
         )
         val text = contentText(notification)
-        val indicator = context.getString(R.string.notification_disruptions_indicator)
+        val indicator = context.getString(R.string.notification_disruption_available)
         assertTrue("expected departure row to precede the indicator in: $text", text.indexOf(indicator) > 0)
     }
 
     @Test
-    fun `states with no disruption never show the Disruptions indicator, in every state`() {
+    fun `states with no disruption never show the disruption indicator, in every state`() {
         val states = listOf(
             RoutineNotificationContent.Offline,
             RoutineNotificationContent.Unavailable,
@@ -442,7 +468,7 @@ class RoutineNotificationBuilderTest {
             RoutineNotificationContent.Stale(listOf(sampleRow()), now),
             RoutineNotificationContent.Live(listOf(sampleRow())),
         )
-        val indicator = context.getString(R.string.notification_disruptions_indicator)
+        val indicator = context.getString(R.string.notification_disruption_available)
         states.forEach { content ->
             val notification = builder.build(model(content = content))
             assertFalse("expected no indicator for $content", contentText(notification).contains(indicator))
@@ -450,7 +476,7 @@ class RoutineNotificationBuilderTest {
     }
 
     @Test
-    fun `a disruption adds the Disruptions indicator to the collapsed text in every state`() {
+    fun `a disruption adds the disruption indicator to the collapsed text in every state`() {
         val states = listOf(
             RoutineNotificationContent.Offline,
             RoutineNotificationContent.Unavailable,
@@ -459,7 +485,7 @@ class RoutineNotificationBuilderTest {
             RoutineNotificationContent.Stale(listOf(sampleRow()), now),
             RoutineNotificationContent.Live(listOf(sampleRow())),
         )
-        val indicator = context.getString(R.string.notification_disruptions_indicator)
+        val indicator = context.getString(R.string.notification_disruption_available)
         states.forEach { content ->
             val notification = builder.build(model(content = content, disruptionHeadline = "Delays on line 14"))
             assertTrue("expected the indicator for $content", contentText(notification).contains(indicator))
@@ -467,10 +493,10 @@ class RoutineNotificationBuilderTest {
     }
 
     @Test
-    fun `a disruption never changes the subText line-direction summary`() {
+    fun `a disruption never changes the title`() {
         val withoutDisruption = builder.build(model())
         val withDisruption = builder.build(model(disruptionHeadline = "Delays on line 14"))
-        assertEquals(subText(withoutDisruption), subText(withDisruption))
+        assertEquals(title(withoutDisruption), title(withDisruption))
     }
 
     @Test
@@ -604,7 +630,7 @@ class AndroidRoutineNotifierTest {
 
         assertEquals(1, manager.activeNotifications.size)
         val posted = manager.activeNotifications.single { it.id == RoutineNotificationIds.NOTIFICATION_ID }
-        assertEquals("Slussen", posted.notification.extras.getCharSequence(Notification.EXTRA_TITLE).toString())
+        assertTrue(posted.notification.extras.getCharSequence(Notification.EXTRA_TITLE).toString().contains("Slussen"))
     }
 
     @Test

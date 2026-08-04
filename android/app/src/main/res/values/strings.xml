@@ -141,27 +141,33 @@
          channel — see that class's doc comment for why IMPORTANCE_LOW is used. -->
     <string name="notification_channel_name">Commute departures</string>
     <string name="notification_channel_description">Ongoing departure updates for your active commute routine</string>
-    <!-- Header/summary line: pinned line + direction, each with its own fallback below when
-         the routine did not pin a specific value. -->
-    <string name="notification_header_format">%1$s → %2$s</string>
+    <!-- Title: pinned line + station + destination, all in one line (the system renders the
+         title bold by default — no custom styling is applied). Line/destination each fall
+         back to the wording below when the routine did not pin a specific value. -->
+    <string name="notification_title_format">%1$s · %2$s → %3$s</string>
     <string name="notification_line_fallback">All lines</string>
     <string name="notification_direction_fallback">Any direction</string>
-    <!-- Expanded (BigTextStyle) departure row text. Cancelled is deliberately its own format
-         with no countdown, and takes priority over the real-time/scheduled row format even
-         for a departure that is otherwise real-time. -->
-    <string name="notification_row_format">%1$d min • %2$s • %3$s → %4$s</string>
-    <string name="notification_row_cancelled_format">%1$s • %2$s → %3$s</string>
+    <!-- Collapsed/expanded body: the next departure's own countdown + status, e.g. "3 min ·
+         Live". A cancelled next departure shows routine_details_departure_cancelled alone
+         instead, with no countdown. -->
+    <string name="notification_departure_status_format">%1$d min · %2$s</string>
+    <!-- The following departure's own countdown, shown only when a second departure exists —
+         e.g. "Next 18 min". A cancelled following departure shows
+         notification_next_departure_cancelled instead. -->
+    <string name="notification_next_departure_format">Next %1$d min</string>
+    <string name="notification_next_departure_cancelled">Next · Cancelled</string>
     <string name="notification_loading">Updating departures…</string>
     <string name="notification_last_checked_format">Last checked %1$s</string>
-    <!-- Deliberately generic, same rationale as the routine details screen's error strings:
+    <!-- Deliberately generic, same rationale as the routine details screen's own error strings:
          never interpolate the raw exception/hostname/class name here. -->
     <string name="notification_offline">Couldn\'t reach the server. Can\'t update your departures right now.</string>
     <string name="notification_unavailable">Couldn\'t load departures right now. Will try again soon.</string>
     <string name="notification_no_departures">No upcoming departures right now.</string>
     <string name="notification_stale_warning">Couldn\'t refresh — showing the last departures we could load.</string>
     <!-- The one collapsed-view hint that a disruption exists — see RoutineNotificationBuilder's
-         own doc on why the disruption's actual header/details never appear here. -->
-    <string name="notification_disruptions_indicator">Disruptions…</string>
+         own doc on why the disruption's actual message only appears once the notification is
+         expanded, never here. -->
+    <string name="notification_disruption_available">Disruption available · Tap for details</string>
     <!-- The ongoing/promoted notification's Stop action (see RoutineNotificationBuilder,
          StopRoutineNotificationReceiver) — stops today's active window early, same effect
          as "pause for today" on the routine details screen. -->

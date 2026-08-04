@@ -1192,6 +1192,53 @@ longer connected by the time this change was made, so it is verified by
 warnings, debug APK builds) and by the instrumented `AboutScreenTest` covering this exact
 screen, but not by a live render.
 
+**Ongoing notification simplified to standard `NotificationCompat` fields only, verified
+end to end on-device with a genuinely live disruption.** Given an exact target format
+(`"14 · Slussen → Fruängen"` title, `"3 min · Live"` / `"Next 18 min"` /
+`"Disruption available · Tap for details"` collapsed body lines, the real disruption
+message expanded-only, the Stop action, and no repeated route/line/destination/disruption
+text anywhere), `RoutineNotificationBuilder` was rewritten around one new `title()` helper
+(`R.string.notification_title_format`, `"%1$s · %2$s → %3$s"`) that is now the single
+place a routine's pinned line, station, and destination render — `setSubText` (the old
+line+direction summary, now redundant with the title) was removed entirely. The old
+per-departure row text (`"%1$d min • %2$s • %3$s → %4$s"`, repeating the line designation
+and destination on every row) was replaced by two new, much shorter formats:
+`notification_departure_status_format` (`"%1$d min · %2$s"`) for the soonest departure,
+and `notification_next_departure_format` (`"Next %1$d min"`) for the following one, shown
+only when a second departure actually exists — a cancelled departure drops the countdown
+entirely (`routine_details_departure_cancelled` alone for the primary line,
+`notification_next_departure_cancelled` for the following one), matching the existing
+cancellation-takes-priority convention. `notification_disruptions_indicator`
+(`"Disruptions…"`) was renamed to `notification_disruption_available`
+(`"Disruption available · Tap for details"`) to match the required wording exactly, and
+the previous exception where Offline/Unavailable/Loading's expanded view showed *only*
+the disruption (silently dropping their own status message) was fixed in passing — their
+expanded view now always includes their own message alongside a real disruption, never
+one or the other. `RoutineNotificationContent.Stale`'s expanded view keeps its
+last-known departure line(s) (via the same `departureLines` helper every other state
+uses) after its own warning text, preserving previously-available information the new
+three-line collapsed budget has no room for. No mapper, worker, Stop-action, or Live
+Update code changed at all — this was a pure `RoutineNotificationBuilder`/string-resource
+change, so `RoutineNotificationMapperTest` and every other test file needed no updates;
+`RoutineNotificationBuilderTest` itself was rewritten section by section to assert the
+new title/body shape (title tests replace the old subtext tests one-for-one; new
+Next-line/cancelled-Next-line tests; disruption tests updated for the renamed indicator
+and the Offline/Unavailable inclusive-expanded-view fix). Verified end to end on the
+physical Samsung Galaxy S23 Ultra: created a live routine (`14 → Fruängen` from Slussen)
+against the real deployed backend, and the posted notification matched the required
+format exactly, including a genuinely live SL Deviations disruption
+("3 augusti stängs en utgång vid Slussen…") rendering as its own real message once
+expanded — not a synthetic fixture. Tapping the notification's body opened Routine
+Details for the correct routine; tapping Stop (its exact tap target found via
+`uiautomator dump`'s `android:id/action0`, since a same-position tap after the shade had
+auto-collapsed once already missed it and instead reopened Routine Details) removed the
+notification immediately, confirmed via `dumpsys notification` showing zero
+`pkg=se.blick.app` records afterward. A net one further JVM `@Test` function (many old
+row/subtext tests replaced one-for-one by new title/Next-line/cancelled-Next-line ones,
+rather than simply added alongside the old) with no further instrumented ones, reaching
+492 JVM / 56 instrumented; `lintDebug` still reports 0 errors and the same 44 warnings,
+and `assembleDebug` succeeded.
+
 ## AGP 9 built-in Kotlin migration
 
 This project targets AGP 9's **built-in Kotlin** support rather than applying the
