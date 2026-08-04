@@ -1297,6 +1297,27 @@ needed no changes, since neither ever asserted the site name as its own separate
 displayed text node. `testDebugUnitTest`/`lintDebug`/`assembleDebug` all still pass (491
 JVM tests, 0 errors/44 warnings, debug APK builds).
 
+**The widget's own header extended to match, given a real-device photo as the reference.**
+`WidgetHeader` showed only the destination next to the line badge (e.g. `"14 · Fruängen"`),
+with a separate `"Slussen → Fruängen"` route line repeated below the countdown — the same
+"identity spelled out twice" shape the routine list/Routine Details fix above had just
+removed elsewhere, just not yet here. `ActiveRoutineContent`'s `routeText` now builds
+`"{stationName} → {destinationLabel}"` (falling back to the station alone with no pinned
+direction) and passes it to the header instead of the bare destination, and
+`DepartureMainContent`'s own now-redundant copy of that same text was deleted outright —
+the following departure's own "Next X min" line and the status row are unaffected, still
+shown directly below the countdown exactly as before. `DepartureMainContent` no longer
+takes a `RoutineWidgetModel` parameter at all, since removing the route line was its only
+remaining use of it. `BlickRoutineWidgetTest` needed no changes — it only ever tested pure
+functions (`isCompactLayout`, badge color/contrast math), never asserted on rendered
+Glance text content. `testDebugUnitTest`/`lintDebug`/`assembleDebug` all still pass (491
+JVM tests, 0 errors/44 warnings, debug APK builds); **stated plainly, this one was not
+confirmed by a live on-device screenshot** — the physical device was mid-interaction
+(the user actively typing into it) both times reinstall was attempted this session, and
+sending further scripted input while someone is actively using their own phone was
+judged not appropriate, so this rests on the code change plus the passing test suite
+alone until it can be checked live.
+
 ## AGP 9 built-in Kotlin migration
 
 This project targets AGP 9's **built-in Kotlin** support rather than applying the

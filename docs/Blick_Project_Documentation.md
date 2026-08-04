@@ -223,7 +223,16 @@ the notification nor the widget needed any change — both already build their o
 station/direction text from the routine's own `siteName`/`destinationLabel` fields
 directly, never from its `name`. See "Routine default names and rows collapsed to one
 line" in `android/README.md` for the full account. 491 JVM tests still pass, 0 errors/44
-warnings, debug APK builds.
+warnings, debug APK builds. **The widget's own header was then extended to match, given a
+real-device photo as the reference:** it showed only the destination next to the line
+badge, with the full `"{station} → {destination}"` route repeated as a separate line
+below the countdown — the same duplication the routine list/Routine Details fix above had
+just removed elsewhere. The header now shows the full route next to the badge, and the
+now-redundant copy below the countdown was deleted; the following departure's own
+countdown and the status row are unchanged. 491 JVM tests still pass, 0 errors/44
+warnings, debug APK builds; **stated plainly, not confirmed by a live on-device
+screenshot** — the physical device was actively in the user's hands both times a reinstall
+was attempted this session, so scripted input was deliberately not sent.
 
 Getting there took three work sessions of source beyond the earlier 193-JVM-test
 baseline. First: the FAB restoration, the Routine Details 30-second auto-refresh, the
@@ -828,11 +837,13 @@ Stockholm's own per-line-family convention — Pendeltåg (commuter rail) lines
 40/41/42X/43/43X/44/48 in pink (`#FF49A5`), Metro blue-line 10-11 in blue (`#177BC0`),
 Metro red-line 13-14 in red (`#EE2D28`), Metro green-line 17-19 in green (`#51BA5B`),
 bold white badge text on every color, every other mode/line combination in a neutral
-grey — followed by the destination. Below that, a left-aligned vertical stack: a large,
-bold next-departure countdown (a minute-only countdown recomputed at render time, never a
-fixed or cached value, reusing the exact same `countdownMinutes` function and
-expired-departure filter the notification uses), the station → direction route line, the
-following departure's own smaller countdown, and a colored dot plus
+grey — followed by the route, "{station} → {destination}" (matching the same pattern the
+ongoing notification's own title and a routine's own default name both use — the station
+and destination are shown once, in this header, never repeated elsewhere in the widget).
+Below that, a left-aligned vertical stack: a large, bold next-departure countdown (a
+minute-only countdown recomputed at render time, never a fixed or cached value, reusing
+the exact same `countdownMinutes` function and expired-departure filter the notification
+uses), the following departure's own smaller countdown, and a colored dot plus
 "Live"/"Scheduled"/"Cancelled" label reflecting the next departure's own
 real-time/cancelled state. The same loading/live/stale/offline/unavailable/
 no-upcoming-departures states apply, with a cancelled departure represented in the

@@ -122,20 +122,19 @@ class BlickRoutineWidgetReceiver : GlanceAppWidgetReceiver() {
     }
 }
 
-/** Below this height, only the header (line badge + destination) plus the single big countdown
+/** Below this height, only the header (line badge + route) plus the single big countdown
  * reliably fit without clipping (`blick_routine_widget_info.xml`'s declared `minHeight` is
- * 90dp) — the station/direction + "Next" secondary block and the live/scheduled/cancelled
- * status row are dropped rather than clipped or left to overflow the widget's bounds. */
+ * 90dp) — the "Next" secondary block and the live/scheduled/cancelled status row are dropped
+ * rather than clipped or left to overflow the widget's bounds. */
 private val COMPACT_HEIGHT_THRESHOLD = 110.dp
 
-/** Below this width, the secondary station/direction + "Next" block (an un-weighted column
- * placed beside the big countdown — see [DepartureMainContent]) has too little room to render
- * its own text without wrapping into the countdown's own space or clipping — a narrow-but-tall
- * grid cell (e.g. a single-column placement) needs the same compact layout as a short-but-wide
- * one, not just smaller fonts. Matches [sizeTierFor]'s own smallest width tier boundary (see
- * that function's doc on why 220dp is "a realistic phone grid cell") so anything narrow enough
- * to already get the smallest font tier also drops to the compact layout, not just smaller text
- * within the full one. */
+/** Below this width, the secondary "Next" block and status row (see [DepartureMainContent])
+ * have too little room to render their own text without wrapping into the countdown's own
+ * space or clipping — a narrow-but-tall grid cell (e.g. a single-column placement) needs the
+ * same compact layout as a short-but-wide one, not just smaller fonts. Matches [sizeTierFor]'s
+ * own smallest width tier boundary (see that function's doc on why 220dp is "a realistic phone
+ * grid cell") so anything narrow enough to already get the smallest font tier also drops to
+ * the compact layout, not just smaller text within the full one. */
 private val COMPACT_WIDTH_THRESHOLD = 220.dp
 
 /** Whether [ActiveRoutineContent] should render the compact (header + countdown only) layout —
@@ -223,12 +222,15 @@ private val WIDGET_CORNER_RADIUS = 16.dp
 private val WIDGET_HORIZONTAL_PADDING = 16.dp
 
 /**
- * A clean, left-aligned vertical stack: a line badge + destination header, a large
- * next-departure countdown, the station → direction route, the following departure's own
- * countdown, and a live/scheduled/cancelled status row — see [WidgetContentBody]/
- * [DepartureMainContent]/[StatusFooter]. A relevant disruption, if any, is shown as a distinct,
- * full-bleed muted-red strip along the very bottom edge (see [DisruptionStrip]) — never inline
- * with the rest of the content, and never in [compact] mode, where there simply isn't room.
+ * A clean, left-aligned vertical stack: a line badge + "{station} → {destination}" route
+ * header, a large next-departure countdown, the following departure's own countdown, and a
+ * live/scheduled/cancelled status row — see [WidgetHeader]/[WidgetContentBody]/
+ * [DepartureMainContent]/[StatusFooter]. The route is shown once, in the header — never
+ * repeated below the countdown, matching the same "identity shown once, next to the badge"
+ * shape the ongoing notification's own title and a routine's own default name both use. A
+ * relevant disruption, if any, is shown as a distinct, full-bleed muted-red strip along the
+ * very bottom edge (see [DisruptionStrip]) — never inline with the rest of the content, and
+ * never in [compact] mode, where there simply isn't room.
  *
  * Builds its own chrome (background + corner radius via [androidx.glance.appwidget.appWidgetBackground]/
  * [androidx.glance.appwidget.cornerRadius]) instead of delegating to the shared [Scaffold], which
@@ -244,7 +246,11 @@ private fun ActiveRoutineContent(context: Context, model: RoutineWidgetModel) {
     val size = LocalSize.current
     val compact = isCompactLayout(size.width, size.height)
     val tier = sizeTierFor(size.width)
-    val destination = model.directionLabel ?: model.stationName
+    // "{station} → {destination}" -- matches the same pattern the ongoing notification's own
+    // title and a routine's own default name both use (see RoutineNotificationBuilder.title,
+    // RoutineCreateViewModel.selectDirection); falls back to the station alone when the
+    // routine never pinned a specific direction.
+    val routeText = model.directionLabel?.let { "${model.stationName} → $it" } ?: model.stationName
     // Only ever a Stale case's own doc for why this must be rendered as a short, ALWAYS-visible
     // header marker rather than the fuller body-text sentence WidgetContentBody's Stale branch
     // already shows in non-compact mode with a next departure -- that longer sentence is dropped
@@ -283,7 +289,7 @@ private fun ActiveRoutineContent(context: Context, model: RoutineWidgetModel) {
                 // exactly "{line} → {destination}", i.e. the same information the header below
                 // already shows via the line badge + destination text, duplicated as plain text
                 // right above it. Dropped entirely rather than only in compact mode.
-                WidgetHeader(model, tier, destination, isStale)
+                WidgetHeader(model, tier, routeText, isStale)
                 Spacer(modifier = GlanceModifier.height(if (compact) 6.dp else 12.dp))
                 WidgetContentBody(context, model, compact, tier)
             }
@@ -295,14 +301,14 @@ private fun ActiveRoutineContent(context: Context, model: RoutineWidgetModel) {
 }
 
 @Composable
-private fun WidgetHeader(model: RoutineWidgetModel, tier: WidgetSizeTier, destination: String, isStale: Boolean) {
+private fun WidgetHeader(model: RoutineWidgetModel, tier: WidgetSizeTier, routeText: String, isStale: Boolean) {
     Row(modifier = GlanceModifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
         model.lineDesignation?.let { line ->
             LineBadge(line, LineBadgeColorMapping.colorFor(model.transportMode, line), tier.badgeSize)
             Spacer(modifier = GlanceModifier.width(8.dp))
         }
         Text(
-            text = destination,
+            text = routeText,
             maxLines = 1,
             style = TextStyle(fontWeight = FontWeight.Bold, fontSize = tier.headerSize, color = onBackgroundColor()),
         )
@@ -388,12 +394,12 @@ private fun LineBadge(text: String, color: LineBadgeColor, textSize: TextUnit) {
 private fun WidgetContentBody(context: Context, model: RoutineWidgetModel, compact: Boolean, tier: WidgetSizeTier) {
     when (val content = model.content) {
         RoutineWidgetContent.Loading -> BodyText(context.getString(R.string.notification_loading), tier)
-        is RoutineWidgetContent.Live -> DepartureMainContent(context, model, content.next, content.following, compact, tier)
+        is RoutineWidgetContent.Live -> DepartureMainContent(context, content.next, content.following, compact, tier)
         is RoutineWidgetContent.Stale -> {
             val next = content.next
             if (next != null) {
                 if (!compact) BodyText(context.getString(R.string.notification_stale_warning), tier)
-                DepartureMainContent(context, model, next, content.following, compact, tier)
+                DepartureMainContent(context, next, content.following, compact, tier)
             } else {
                 BodyText(context.getString(R.string.notification_no_departures), tier)
             }
@@ -406,16 +412,16 @@ private fun WidgetContentBody(context: Context, model: RoutineWidgetModel, compa
 }
 
 /** A clean, left-aligned vertical stack: the big "6 min" countdown, then — outside [compact]
- * heights only, where there simply isn't room — the station → direction route, the following
- * departure's own countdown, and the live/scheduled/cancelled status row. Previously a
- * side-by-side layout (countdown on the left, station/next-departure column on the right); the
- * fully vertical stack instead matches how every other section of this widget (and the rest of
- * the app) presents a line/route/status sequence, and reads less cramped at ordinary widget
- * sizes. */
+ * heights only, where there simply isn't room — the following departure's own countdown and
+ * the live/scheduled/cancelled status row. The station → direction route is shown once, in
+ * [WidgetHeader] next to the line badge, not repeated here (see this function's own comment
+ * below). Previously a side-by-side layout (countdown on the left, station/next-departure
+ * column on the right); the fully vertical stack instead matches how every other section of
+ * this widget (and the rest of the app) presents a line/route/status sequence, and reads less
+ * cramped at ordinary widget sizes. */
 @Composable
 private fun DepartureMainContent(
     context: Context,
-    model: RoutineWidgetModel,
     next: WidgetDepartureRow,
     following: WidgetDepartureRow?,
     compact: Boolean,
@@ -424,11 +430,11 @@ private fun DepartureMainContent(
     Column(modifier = GlanceModifier.fillMaxWidth(), horizontalAlignment = Alignment.Start) {
         CountdownText(context, next, tier)
         if (!compact) {
-            Spacer(modifier = GlanceModifier.height(10.dp))
-            val subtitle = model.directionLabel?.let { "${model.stationName} → $it" } ?: model.stationName
-            Text(text = subtitle, maxLines = 1, style = TextStyle(fontSize = tier.secondarySize, color = onSurfaceVariantColor()))
+            // The station → direction route is deliberately NOT repeated here -- WidgetHeader
+            // already shows it next to the line badge (see ActiveRoutineContent's own
+            // routeText), so a second copy directly below the countdown would just duplicate it.
             following?.let { row ->
-                Spacer(modifier = GlanceModifier.height(4.dp))
+                Spacer(modifier = GlanceModifier.height(10.dp))
                 val nextLabel = context.getString(R.string.widget_next_departure_label)
                 val minutesText = context.getString(R.string.widget_countdown_minutes_format, row.minutesRemaining)
                 Text(text = "$nextLabel  $minutesText", maxLines = 1, style = TextStyle(fontSize = tier.secondarySize, color = onSurfaceVariantColor()))
