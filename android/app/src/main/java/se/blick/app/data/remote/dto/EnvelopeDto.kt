@@ -8,15 +8,3 @@ data class SuccessEnvelopeDto<T>(
     val schemaVersion: Int,
     val data: T,
 )
-
-@Serializable
-data class ErrorEnvelopeDto(
-    val schemaVersion: Int,
-    val error: ErrorBodyDto,
-)
-
-@Serializable
-data class ErrorBodyDto(
-    val code: String,
-    val message: String,
-)
