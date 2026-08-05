@@ -159,12 +159,33 @@ class NotificationRecoveryCoordinator @Inject constructor(
         }
     }
 
+    /** Reading the routine list itself, and reconciling each one, are both wrapped in their own
+     * try/catch (a genuine [CancellationException] always rethrows unconverted) so a Room read
+     * failure, a corrupted routine record, or a WorkManager call throwing on some OEM can't
+     * propagate uncaught up through [onAppStart] to crash the app on cold start, and can't abort
+     * the `forEach` and silently leave every routine after the failing one in iteration order
+     * unreconciled too. Mirrors [attemptPendingRecoveryIfNeeded]'s own catch around the
+     * equivalent calls, which this function's own lack of one (before this) did not. */
     private suspend fun reconcileAllRoutinesUnconditionally() {
         val now = zonedNow()
-        routineRepository.observeAll().first().forEach { routine ->
+        val routines = try {
+            routineRepository.observeAll().first()
+        } catch (e: CancellationException) {
+            throw e
+        } catch (e: Exception) {
+            Log.w(LOG_TAG, "Failed to read the routine list at startup; reconciling nothing this pass", e)
+            emptyList()
+        }
+        routines.forEach { routine ->
             if (!routine.enabled) return@forEach
-            val occurrence = NextOccurrenceCalculator.nextOccurrence(routine, now, excludedDate = routine.pausedDate)
-            scheduleIfSafe(routine, occurrence)
+            try {
+                val occurrence = NextOccurrenceCalculator.nextOccurrence(routine, now, excludedDate = routine.pausedDate)
+                scheduleIfSafe(routine, occurrence)
+            } catch (e: CancellationException) {
+                throw e
+            } catch (e: Exception) {
+                Log.w(LOG_TAG, "Failed to reconcile routine ${routine.id} at startup; continuing with the rest", e)
+            }
         }
         runWidgetUpdateSafely { routineWidgetUpdater.reconcile() }
     }

@@ -4,6 +4,7 @@ import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.test.runTest
 import org.junit.Assert.assertEquals
+import org.junit.Assert.assertTrue
 import org.junit.Test
 import se.blick.app.data.repository.RoutineRepository
 import se.blick.app.domain.model.CommuteRoutine
@@ -50,9 +51,13 @@ class RoutineScheduleReconcilerTest {
         override suspend fun hasAnyRoutine(): Boolean = routines.isNotEmpty()
     }
 
-    private class RecordingScheduler : RoutineScheduler {
+    /** [throwForId] simulates a single routine's [scheduleActivation] failing — a corrupted
+     * record, or a WorkManager call throwing on some OEM — to prove `reconcileAll` recovers
+     * (logs and continues) rather than letting it abort the whole reconcile pass. */
+    private class RecordingScheduler(private val throwForId: String? = null) : RoutineScheduler {
         val scheduled = mutableListOf<String>()
         override fun scheduleActivation(routine: CommuteRoutine) {
+            if (routine.id == throwForId) throw RuntimeException("scheduling failed for ${routine.id}")
             scheduled += routine.id
         }
         override fun cancelActivation(routineId: String) = Unit
@@ -146,5 +151,49 @@ class RoutineScheduleReconcilerTest {
         RoutineScheduleReconciler(repository, scheduler, FailingWidgetUpdater()).reconcileAll()
 
         assertEquals(listOf("r1", "r3"), scheduler.scheduled)
+    }
+
+    @Test
+    fun `one routine's scheduling failure does not prevent the rest from being scheduled`() = runTest {
+        // r2 throws; r1 comes before it and r3 comes after it in iteration order -- proving
+        // this isn't just "the first failure is swallowed" but that the forEach genuinely
+        // continues past a mid-batch failure rather than aborting there.
+        val repository = FakeRoutineRepository(
+            listOf(routine("r1", enabled = true), routine("r2", enabled = true), routine("r3", enabled = true)),
+        )
+        val scheduler = RecordingScheduler(throwForId = "r2")
+
+        val result = kotlin.runCatching {
+            RoutineScheduleReconciler(repository, scheduler, RecordingWidgetUpdater()).reconcileAll()
+        }
+
+        assertTrue(result.isSuccess)
+        assertEquals(listOf("r1", "r3"), scheduler.scheduled)
+    }
+
+    @Test
+    fun `a routine list read failure is handled -- no crash, widget still reconciled`() = runTest {
+        val repository = object : RoutineRepository {
+            override fun observeAll(): Flow<List<CommuteRoutine>> = kotlinx.coroutines.flow.flow {
+                throw RuntimeException("Room read failed")
+            }
+            override suspend fun getById(id: String): CommuteRoutine? = throw NotImplementedError()
+            override suspend fun save(routine: CommuteRoutine) = throw NotImplementedError()
+            override suspend fun delete(id: String) = throw NotImplementedError()
+            override suspend fun pauseForDate(id: String, date: LocalDate) = throw NotImplementedError()
+            override suspend fun clearPause(id: String) = throw NotImplementedError()
+            override suspend fun setEnabled(id: String, enabled: Boolean) = throw NotImplementedError()
+            override suspend fun hasAnyRoutine(): Boolean = throw NotImplementedError()
+        }
+        val scheduler = RecordingScheduler()
+        val widgetUpdater = RecordingWidgetUpdater()
+
+        val result = kotlin.runCatching {
+            RoutineScheduleReconciler(repository, scheduler, widgetUpdater).reconcileAll()
+        }
+
+        assertTrue(result.isSuccess)
+        assertEquals(emptyList<String>(), scheduler.scheduled)
+        assertEquals(1, widgetUpdater.reconcileCallCount)
     }
 }

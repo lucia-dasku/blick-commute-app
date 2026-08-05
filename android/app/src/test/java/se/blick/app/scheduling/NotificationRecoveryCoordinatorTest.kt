@@ -378,6 +378,55 @@ class NotificationRecoveryCoordinatorTest {
             assertEquals(false, pendingStore.recoveryPending.first())
         }
 
+    // ---- onAppStart's own reconcileAllRoutinesUnconditionally: one routine's failure must not
+    // abort reconciling the rest, and a routine-list read failure must not crash the app on
+    // cold start -- neither was true before this behavior was added. ----
+
+    @Test
+    fun `onAppStart schedules every enabled routine even when an earlier one's scheduling throws`() = runTest {
+        val routineA = routine(id = "a")
+        val routineB = routine(id = "b")
+        val routineC = routine(id = "c")
+        val repository = FakeRoutineRepository(listOf(routineA, routineB, routineC))
+        // Fails only the FIRST scheduleActivation call (routineA, in iteration order) --
+        // proving b and c still get scheduled rather than the forEach aborting there.
+        val scheduler = RecordingRoutineScheduler(failNextSchedulesCount = 1)
+        val pendingStore = InMemoryRecoveryPendingStateStore(initiallyPending = false)
+        val coordinator = buildCoordinator(repository, scheduler, pendingStore, available = true)
+
+        coordinator.onAppStart()
+
+        assertEquals(listOf("b", "c"), scheduler.scheduledRoutines.map { it.id })
+    }
+
+    @Test
+    fun `onAppStart does not crash when reading the routine list fails`() = runTest {
+        val repository = object : RoutineRepository {
+            override fun observeAll(): Flow<List<CommuteRoutine>> = flow { throw RuntimeException("Room read failed") }
+            override suspend fun getById(id: String): CommuteRoutine? = throw NotImplementedError()
+            override suspend fun save(routine: CommuteRoutine) = throw NotImplementedError()
+            override suspend fun delete(id: String) = throw NotImplementedError()
+            override suspend fun pauseForDate(id: String, date: LocalDate) = throw NotImplementedError()
+            override suspend fun clearPause(id: String) = throw NotImplementedError()
+            override suspend fun setEnabled(id: String, enabled: Boolean) = throw NotImplementedError()
+            override suspend fun hasAnyRoutine(): Boolean = throw NotImplementedError()
+        }
+        val scheduler = RecordingRoutineScheduler()
+        val widgetUpdater = RecordingWidgetUpdater()
+        val coordinator = buildCoordinator(
+            repository, scheduler, InMemoryRecoveryPendingStateStore(initiallyPending = false), available = true,
+            widgetUpdater = widgetUpdater,
+        )
+
+        val result = kotlin.runCatching { coordinator.onAppStart() }
+
+        assertTrue("a routine-list read failure must not crash onAppStart", result.isSuccess)
+        assertTrue(scheduler.scheduledRoutines.isEmpty())
+        // Still runs -- a Room failure fetching the routine list is unrelated to whether the
+        // widget itself needs reconciling.
+        assertEquals(1, widgetUpdater.reconcileCallCount)
+    }
+
     // ---- 14. Cancellation is always rethrown, never converted to an ordinary failure/success ----
 
     @Test
