@@ -57,6 +57,24 @@ class BlickRoutineWidgetTest {
         assertTrue(isCompactLayout(width = 219.dp, height = 200.dp))
     }
 
+    // ---- res/xml/blick_routine_widget_info_compact.xml's own declared maxResizeWidth/
+    // maxResizeHeight must stay strictly below this function's thresholds, not merely equal to
+    // them -- an earlier version of that file capped at exactly 220dp/110dp, which this
+    // function's own "exactly at the threshold is not yet compact" tests above already prove is
+    // one dp too permissive: at precisely that size, the real widget would render the FULLER
+    // layout at its own declared maximum resize, the one size the "Compact" picker entry most
+    // needs to stay compact. These two constants are hardcoded to match that XML file's own
+    // android:maxResizeWidth/maxResizeHeight exactly (not read from the resource itself, which
+    // would need a Robolectric/Android Context) specifically so a future edit to either side
+    // without the other has a fair chance of being caught here.
+    private val compactProviderMaxResizeWidth = 219.dp
+    private val compactProviderMaxResizeHeight = 109.dp
+
+    @Test
+    fun `the compact provider's own declared maximum resize stays compact`() {
+        assertTrue(isCompactLayout(compactProviderMaxResizeWidth, compactProviderMaxResizeHeight))
+    }
+
     // ---- Line-badge colors: WCAG AA 4.5:1 contrast against the white badge text ----
     //
     // Reimplements the WCAG relative-luminance/contrast-ratio formula directly here (rather than
