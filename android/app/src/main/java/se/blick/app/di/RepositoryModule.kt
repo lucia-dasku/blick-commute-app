@@ -13,9 +13,11 @@ import se.blick.app.data.repository.LiveDeparturesDirectionOptionsSource
 import se.blick.app.data.repository.RemoteDepartureRepository
 import se.blick.app.data.repository.RemoteDisruptionRepository
 import se.blick.app.data.repository.RemoteStopRepository
+import se.blick.app.data.repository.RoomRoutineOccurrenceRuntimeRepository
 import se.blick.app.data.repository.RoomRoutineRepository
 import se.blick.app.data.repository.RoomRoutineWorkOwnershipRepository
 import se.blick.app.data.repository.RoomStaleSnapshotRepository
+import se.blick.app.data.repository.RoutineOccurrenceRuntimeRepository
 import se.blick.app.data.repository.RoutineRepository
 import se.blick.app.data.repository.RoutineWorkOwnershipRepository
 import se.blick.app.data.repository.StaleSnapshotRepository
@@ -59,4 +61,10 @@ abstract class RepositoryModule {
     abstract fun bindRoutineWorkOwnershipRepository(
         impl: RoomRoutineWorkOwnershipRepository,
     ): RoutineWorkOwnershipRepository
+
+    @Binds
+    @Singleton
+    abstract fun bindRoutineOccurrenceRuntimeRepository(
+        impl: RoomRoutineOccurrenceRuntimeRepository,
+    ): RoutineOccurrenceRuntimeRepository
 }

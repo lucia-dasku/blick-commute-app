@@ -25,6 +25,8 @@ import org.robolectric.RuntimeEnvironment
 import org.robolectric.annotation.Config
 import se.blick.app.data.repository.DepartureRepository
 import se.blick.app.data.repository.DisruptionRepository
+import se.blick.app.data.repository.RoutineOccurrenceRuntimeRepository
+import se.blick.app.data.repository.RoutineOccurrenceRuntimeState
 import se.blick.app.data.repository.RoutineRepository
 import se.blick.app.data.repository.RoutineWorkOwnershipRepository
 import se.blick.app.data.repository.StaleSnapshotRepository
@@ -55,6 +57,7 @@ import se.blick.app.widget.RoutineWidgetUpdater
 import java.io.IOException
 import java.time.Clock
 import java.time.DayOfWeek
+import java.time.Duration
 import java.time.Instant
 import java.time.LocalDate
 import java.time.LocalTime
@@ -132,14 +135,60 @@ class RoutineActiveWindowWorkerTest {
         tripDeviations = emptyList(),
     )
 
+    /** Settable, monotonically-advanceable fake -- [ScriptedRoutineRepository] defaults to
+     * advancing this in lockstep with [TickingClock] to represent normal real-time passage; the
+     * hard-runtime-cap tests that specifically probe wall-clock drift (NTP, user changes)
+     * advance this independently of the wall clock instead, to prove the cap only ever reacts to
+     * REAL (monotonic) elapsed time, never to [Clock]/[java.time.Instant]. */
+    private class FakeElapsedRealtimeProvider(startMillis: Long = 0L) : ElapsedRealtimeProvider {
+        var millis: Long = startMillis
+        override fun elapsedRealtimeMillis(): Long = millis
+    }
+
+    /** Settable fake -- defaults to a fixed value matching every existing test's implicit
+     * assumption of "no reboot happened during this run." The reboot-recovery tests change this
+     * mid-test (or seed a DIFFERENT value than what a pre-seeded [RoutineOccurrenceRuntimeState]
+     * carries) to simulate a device restart. */
+    private class FakeBootCountProvider(var bootCount: Int = 1) : BootCountProvider {
+        override fun currentBootCount(): Int = bootCount
+    }
+
+    /** In-memory fake mirroring [se.blick.app.data.repository.RoomRoutineOccurrenceRuntimeRepository]'s
+     * real persistence semantics (get-or-nothing, upsert, delete) closely enough to prove
+     * [RoutineActiveWindowWorker]'s own get-or-create-and-reuse / clear-on-completion logic --
+     * without needing a real Room database for these worker-level tests (see
+     * `RoomRoutineOccurrenceRuntimeRepositoryTest` for that). [preSeed] lets a test simulate
+     * state a PREVIOUS worker instance (or a previous boot) already persisted, before the worker
+     * under test even starts. */
+    private class FakeRoutineOccurrenceRuntimeRepository : RoutineOccurrenceRuntimeRepository {
+        private val stored = mutableMapOf<String, RoutineOccurrenceRuntimeState>()
+        val clearedRoutineIds = mutableListOf<String>()
+        override suspend fun get(routineId: String): RoutineOccurrenceRuntimeState? = stored[routineId]
+        override suspend fun save(routineId: String, state: RoutineOccurrenceRuntimeState) {
+            stored[routineId] = state
+        }
+        override suspend fun clear(routineId: String) {
+            clearedRoutineIds += routineId
+            stored.remove(routineId)
+        }
+        fun preSeed(routineId: String, state: RoutineOccurrenceRuntimeState) {
+            stored[routineId] = state
+        }
+        fun peek(routineId: String): RoutineOccurrenceRuntimeState? = stored[routineId]
+    }
+
     /** Advances [clock] by [advanceSecondsPerCall] on every [getById] call (simulating "time
      * passed since the last loop iteration") and returns whatever [routineForCall] produces for
      * that call index -- lets a test script exactly when a routine becomes disabled, is
      * deleted, or a window boundary is crossed, independent of the coroutine dispatcher's own
-     * virtual time. */
+     * virtual time. When [elapsedRealtime] is supplied, it advances by the SAME amount every
+     * call, in lockstep with [clock] -- representing normal real-time passage for BOTH the
+     * wall clock and the monotonic clock together (see the hard-runtime-cap tests, which
+     * deliberately desync the two instead to prove the cap tracks only the monotonic one). */
     private class ScriptedRoutineRepository(
         private val clock: TickingClock,
         private val advanceSecondsPerCall: Long = 30,
+        private val elapsedRealtime: FakeElapsedRealtimeProvider? = null,
         private val routineForCall: (callIndex: Int) -> CommuteRoutine?,
     ) : RoutineRepository {
         var callCount = 0
@@ -148,6 +197,7 @@ class RoutineActiveWindowWorkerTest {
             val result = routineForCall(callCount)
             callCount++
             clock.instant = clock.instant.plusSeconds(advanceSecondsPerCall)
+            elapsedRealtime?.let { it.millis += advanceSecondsPerCall * 1000 }
             return result
         }
         override suspend fun save(routine: CommuteRoutine) = throw NotImplementedError()
@@ -433,6 +483,9 @@ class RoutineActiveWindowWorkerTest {
         getDisruptions: GetDisruptionsUseCase = GetDisruptionsUseCase(FakeDisruptionRepository()),
         notificationRecoveryReporter: NotificationRecoveryReporter = FakeNotificationRecoveryReporter(),
         routineWorkOwnershipRepository: RoutineWorkOwnershipRepository = FakeRoutineWorkOwnershipRepository(),
+        routineOccurrenceRuntimeRepository: RoutineOccurrenceRuntimeRepository = FakeRoutineOccurrenceRuntimeRepository(),
+        elapsedRealtimeProvider: ElapsedRealtimeProvider = FakeElapsedRealtimeProvider(),
+        bootCountProvider: BootCountProvider = FakeBootCountProvider(),
     ): RoutineActiveWindowWorker =
         TestListenableWorkerBuilder<RoutineActiveWindowWorker>(context)
             .setInputData(workDataOf(RoutineActiveWindowWorker.KEY_ROUTINE_ID to routineId))
@@ -455,8 +508,11 @@ class RoutineActiveWindowWorkerTest {
                     notificationAvailabilityChecker,
                     notificationRecoveryReporter,
                     routineWorkOwnershipRepository,
+                    routineOccurrenceRuntimeRepository,
                     clock,
                     deviceZoneProvider,
+                    elapsedRealtimeProvider,
+                    bootCountProvider,
                 )
             })
             .build()
@@ -481,8 +537,11 @@ class RoutineActiveWindowWorkerTest {
                         FakeNotificationAvailabilityChecker(),
                         FakeNotificationRecoveryReporter(),
                         FakeRoutineWorkOwnershipRepository(),
+                        FakeRoutineOccurrenceRuntimeRepository(),
                         Clock.systemUTC(),
                         zoneProvider,
+                        FakeElapsedRealtimeProvider(),
+                        FakeBootCountProvider(),
                     )
             })
             .build()
@@ -614,6 +673,437 @@ class RoutineActiveWindowWorkerTest {
         assertTrue(scheduler.scheduledRoutines.isEmpty())
         assertEquals(listOf(overLimitRoutine.id), scheduler.cancelledRoutineIds)
         assertEquals(1, widgetUpdater.reconcileCallCount)
+    }
+
+    // ---- Hard real-elapsed-time safety cap (see HARD_FOREGROUND_RUNTIME_CAP_MINUTES's own doc)
+    // -- independent of windowEnd, which can diverge from real elapsed time on a DST transition
+    // ----
+
+    @Test
+    fun `a hard real-elapsed-time safety cap stops the loop before a DST-extended window's natural end`() = runTest {
+        // 2026-10-25 is Stockholm's actual autumn DST transition (clocks fall back from 03:00
+        // CEST to 02:00 CET) -- verified directly via java.time: a configured "00:00-05:00"
+        // window (naively 5h, passes validateSelf's own <= MAX_DAILY_ACTIVE_MINUTES check) on
+        // this specific Sunday spans a REAL 6 hours, from instant 2026-10-24T22:00:00Z to
+        // 2026-10-25T04:00:00Z -- 30 real minutes past this worker's own
+        // HARD_FOREGROUND_RUNTIME_CAP_MINUTES (330min/5h30m) safety backstop. This proves the
+        // cap stops the loop on its own merit, rather than this worker trusting
+        // NextOccurrenceCalculator's own (correctly DST-aware, but still just one signal)
+        // windowEnd alone. elapsedRealtime advances in lockstep with clock here (30min/tick)
+        // -- both clocks representing NORMAL real-time passage together, unlike the dedicated
+        // wall-clock-drift tests below, which deliberately desync them.
+        val stockholm = ZoneId.of("Europe/Stockholm")
+        val stockholmZoneProvider = DeviceZoneProvider { stockholm }
+        val windowStartInstant = Instant.parse("2026-10-24T22:00:00Z")
+        val naturalWindowEndInstant = Instant.parse("2026-10-25T04:00:00Z") // verified: real 6h later
+        val clock = TickingClock(windowStartInstant, stockholm)
+        val elapsedRealtime = FakeElapsedRealtimeProvider()
+        val dstRoutine = routine(startTime = LocalTime.of(0, 0), endTime = LocalTime.of(5, 0))
+            .copy(activeDays = setOf(DayOfWeek.SUNDAY))
+        // 10 real minutes/tick -- deliberately less than the 30-minute margin between where the
+        // cap fires (roughly HARD_FOREGROUND_RUNTIME_CAP_MINUTES plus one tick, since the very
+        // first getById call -- before any occurrence-runtime state exists -- already advances
+        // both clocks once) and the natural DST-extended end at 360 minutes, so the two can
+        // never collide at the same tick regardless of that extra advance.
+        val repository = ScriptedRoutineRepository(clock, advanceSecondsPerCall = 600, elapsedRealtime = elapsedRealtime) { dstRoutine }
+        val notifier = RecordingNotifier()
+        val scheduler = RecordingScheduler()
+        val departures = FakeDepartureRepository { DeparturesResult(clock.instant(), 9145, listOf(sampleDeparture())) }
+
+        val worker = buildWorker(
+            dstRoutine.id,
+            repository,
+            GetLiveDeparturesUseCase(departures, clock),
+            notifier,
+            scheduler,
+            clock,
+            deviceZoneProvider = stockholmZoneProvider,
+            elapsedRealtimeProvider = elapsedRealtime,
+        )
+        val result = worker.doWork()
+
+        assertTrue(result is ListenableWorker.Result.Success)
+        // Stopped meaningfully before the DST-extended natural end (360 real minutes in)...
+        assertTrue(clock.instant.isBefore(naturalWindowEndInstant))
+        // ...but not before the hard cap itself could plausibly have been reached (330 real
+        // minutes in) -- together these two bounds pin down exactly where the loop stopped.
+        assertTrue(elapsedRealtime.millis >= Duration.ofMinutes(HARD_FOREGROUND_RUNTIME_CAP_MINUTES).toMillis())
+        // rescheduleSkippingToday (not rescheduleNext) was used -- proves this was treated as an
+        // early, non-natural stop, exactly like the notifications-unavailable/handled-failure
+        // paths, not a normal end-of-window completion.
+        assertEquals(LocalDate.of(2026, 10, 25), scheduler.scheduledRoutines.single().pausedDate)
+    }
+
+    @Test
+    fun `a wall clock jump backward while the worker runs does not affect the hard cap's timing`() = runTest {
+        // Same DST setup as above (natural end ~360 real minutes in) -- but the wall clock is
+        // yanked backward by 5 hours mid-run (simulating the user changing the device clock, or
+        // an NTP correction). A backward jump only ever makes "is the window still open"
+        // (windowEnd, wall-clock-based) look MORE true, never less, so it can't itself end the
+        // loop -- only the hard cap, tracking elapsedRealtime (deliberately advanced in lockstep
+        // with the clock here, desynced only by the one jump below), can.
+        val stockholm = ZoneId.of("Europe/Stockholm")
+        val stockholmZoneProvider = DeviceZoneProvider { stockholm }
+        val windowStartInstant = Instant.parse("2026-10-24T22:00:00Z")
+        val clock = TickingClock(windowStartInstant, stockholm)
+        val elapsedRealtime = FakeElapsedRealtimeProvider()
+        val dstRoutine = routine(startTime = LocalTime.of(0, 0), endTime = LocalTime.of(5, 0))
+            .copy(activeDays = setOf(DayOfWeek.SUNDAY))
+        val baseRepository = ScriptedRoutineRepository(clock, advanceSecondsPerCall = 600, elapsedRealtime = elapsedRealtime) { dstRoutine }
+        var callCount = 0
+        val repository = object : RoutineRepository by baseRepository {
+            override suspend fun getById(id: String): CommuteRoutine? {
+                val result = baseRepository.getById(id)
+                callCount++
+                if (callCount == 5) {
+                    // A one-time backward jump, well after the loop has already started --
+                    // elapsedRealtime is untouched by this.
+                    clock.instant = clock.instant.minusSeconds(5 * 3600)
+                }
+                return result
+            }
+        }
+        val notifier = RecordingNotifier()
+        val scheduler = RecordingScheduler()
+        val departures = FakeDepartureRepository { DeparturesResult(clock.instant(), 9145, listOf(sampleDeparture())) }
+
+        val worker = buildWorker(
+            dstRoutine.id,
+            repository,
+            GetLiveDeparturesUseCase(departures, clock),
+            notifier,
+            scheduler,
+            clock,
+            deviceZoneProvider = stockholmZoneProvider,
+            elapsedRealtimeProvider = elapsedRealtime,
+        )
+        val result = worker.doWork()
+
+        assertTrue(result is ListenableWorker.Result.Success)
+        // The hard cap still fired based on elapsedRealtime, unaffected by the wall-clock jump.
+        assertTrue(elapsedRealtime.millis >= Duration.ofMinutes(HARD_FOREGROUND_RUNTIME_CAP_MINUTES).toMillis())
+        assertEquals(LocalDate.of(2026, 10, 25), scheduler.scheduledRoutines.single().pausedDate)
+    }
+
+    @Test
+    fun `a wall clock jump forward while the worker runs does not accelerate the hard cap`() = runTest {
+        // Same DST setup, but the wall clock jumps FORWARD by 5 minutes mid-run (simulating an
+        // NTP correction) -- small enough that, added to its own normal 10min/tick progression,
+        // it still never reaches the natural (DST-extended, ~360min) window end, so only the
+        // hard cap -- tracking the UNAFFECTED elapsedRealtime -- can be what stops the loop.
+        val stockholm = ZoneId.of("Europe/Stockholm")
+        val stockholmZoneProvider = DeviceZoneProvider { stockholm }
+        val windowStartInstant = Instant.parse("2026-10-24T22:00:00Z")
+        val naturalWindowEndInstant = Instant.parse("2026-10-25T04:00:00Z")
+        val clock = TickingClock(windowStartInstant, stockholm)
+        val elapsedRealtime = FakeElapsedRealtimeProvider()
+        val dstRoutine = routine(startTime = LocalTime.of(0, 0), endTime = LocalTime.of(5, 0))
+            .copy(activeDays = setOf(DayOfWeek.SUNDAY))
+        val baseRepository = ScriptedRoutineRepository(clock, advanceSecondsPerCall = 600, elapsedRealtime = elapsedRealtime) { dstRoutine }
+        var callCount = 0
+        val repository = object : RoutineRepository by baseRepository {
+            override suspend fun getById(id: String): CommuteRoutine? {
+                val result = baseRepository.getById(id)
+                callCount++
+                if (callCount == 5) {
+                    clock.instant = clock.instant.plusSeconds(5 * 60)
+                }
+                return result
+            }
+        }
+        val notifier = RecordingNotifier()
+        val scheduler = RecordingScheduler()
+        val departures = FakeDepartureRepository { DeparturesResult(clock.instant(), 9145, listOf(sampleDeparture())) }
+
+        val worker = buildWorker(
+            dstRoutine.id,
+            repository,
+            GetLiveDeparturesUseCase(departures, clock),
+            notifier,
+            scheduler,
+            clock,
+            deviceZoneProvider = stockholmZoneProvider,
+            elapsedRealtimeProvider = elapsedRealtime,
+        )
+        val result = worker.doWork()
+
+        assertTrue(result is ListenableWorker.Result.Success)
+        assertTrue("expected the forward jump to still land before the natural DST-extended end", clock.instant.isBefore(naturalWindowEndInstant))
+        // Stopped via the hard cap (elapsedRealtime-based), not accelerated by the forward jump.
+        assertTrue(elapsedRealtime.millis >= Duration.ofMinutes(HARD_FOREGROUND_RUNTIME_CAP_MINUTES).toMillis())
+        assertEquals(LocalDate.of(2026, 10, 25), scheduler.scheduledRoutines.single().pausedDate)
+    }
+
+    // ---- Exact boundary: 329min proceeds, 330min stops (short window, no DST involved -- the
+    // routine's own natural end is far enough away that only the hard cap can be what fires) ----
+
+    @Test
+    fun `329 minutes of real elapsed time does not stop the loop`() = runTest {
+        val clock = TickingClock(Instant.parse("2026-07-27T05:00:00Z"), zone) // 07:00 local, Monday
+        val testRoutine = routine() // 07:00-07:02
+        val repository = ScriptedRoutineRepository(clock) { testRoutine }
+        val notifier = RecordingNotifier()
+        val scheduler = RecordingScheduler()
+        val runtimeRepository = FakeRoutineOccurrenceRuntimeRepository()
+        val occurrenceIdentity = ZonedDateTime.of(LocalDate.of(2026, 7, 27), testRoutine.endTime, zone).toInstant().toEpochMilli()
+        runtimeRepository.preSeed(
+            testRoutine.id,
+            RoutineOccurrenceRuntimeState(
+                occurrenceWindowEndEpochMilli = occurrenceIdentity,
+                monotonicStartElapsedRealtimeMillis = 0L,
+                bootCountAtStart = 1,
+                hardStopEpochMilli = Long.MAX_VALUE, // irrelevant here -- same boot, monotonic path used
+            ),
+        )
+        val elapsedRealtime = FakeElapsedRealtimeProvider(startMillis = Duration.ofMinutes(329).toMillis())
+        val departures = FakeDepartureRepository { DeparturesResult(clock.instant(), 9145, listOf(sampleDeparture())) }
+
+        val worker = buildWorker(
+            testRoutine.id,
+            repository,
+            GetLiveDeparturesUseCase(departures, clock),
+            notifier,
+            scheduler,
+            clock,
+            routineOccurrenceRuntimeRepository = runtimeRepository,
+            elapsedRealtimeProvider = elapsedRealtime,
+        )
+        worker.doWork()
+
+        assertTrue("expected the loop to proceed normally at 329 minutes", notifier.shown.isNotEmpty())
+    }
+
+    @Test
+    fun `exactly 330 minutes of real elapsed time stops the loop cleanly`() = runTest {
+        val clock = TickingClock(Instant.parse("2026-07-27T05:00:00Z"), zone)
+        val testRoutine = routine()
+        val repository = ScriptedRoutineRepository(clock) { testRoutine }
+        val notifier = RecordingNotifier()
+        val scheduler = RecordingScheduler()
+        val runtimeRepository = FakeRoutineOccurrenceRuntimeRepository()
+        val occurrenceIdentity = ZonedDateTime.of(LocalDate.of(2026, 7, 27), testRoutine.endTime, zone).toInstant().toEpochMilli()
+        runtimeRepository.preSeed(
+            testRoutine.id,
+            RoutineOccurrenceRuntimeState(
+                occurrenceWindowEndEpochMilli = occurrenceIdentity,
+                monotonicStartElapsedRealtimeMillis = 0L,
+                bootCountAtStart = 1,
+                hardStopEpochMilli = Long.MAX_VALUE,
+            ),
+        )
+        val elapsedRealtime = FakeElapsedRealtimeProvider(startMillis = Duration.ofMinutes(HARD_FOREGROUND_RUNTIME_CAP_MINUTES).toMillis())
+        val departures = FakeDepartureRepository { DeparturesResult(clock.instant(), 9145, listOf(sampleDeparture())) }
+
+        val worker = buildWorker(
+            testRoutine.id,
+            repository,
+            GetLiveDeparturesUseCase(departures, clock),
+            notifier,
+            scheduler,
+            clock,
+            routineOccurrenceRuntimeRepository = runtimeRepository,
+            elapsedRealtimeProvider = elapsedRealtime,
+        )
+        val result = worker.doWork()
+
+        assertTrue(result is ListenableWorker.Result.Success)
+        // The cap fired on the VERY FIRST tick check, before any loop-tick notification posted.
+        assertTrue(notifier.shown.isEmpty())
+        // enteredForeground was still true (setForeground's own initial notification did post),
+        // so the finally block's normal ownership-safe cleanup still removes it.
+        assertEquals(1, notifier.removeCallCount)
+        assertEquals(LocalDate.of(2026, 7, 27), scheduler.scheduledRoutines.single().pausedDate)
+    }
+
+    // ---- Reboot fallback and cross-instance continuation ----
+
+    @Test
+    fun `a reboot does not grant a fresh 330-minute allowance`() = runTest {
+        val clock = TickingClock(Instant.parse("2026-07-27T05:00:00Z"), zone)
+        val testRoutine = routine()
+        val repository = ScriptedRoutineRepository(clock) { testRoutine }
+        val notifier = RecordingNotifier()
+        val scheduler = RecordingScheduler()
+        val runtimeRepository = FakeRoutineOccurrenceRuntimeRepository()
+        // The device rebooted since this occurrence started -- elapsedRealtime has reset to a
+        // fresh, low value, and the persisted bootCountAtStart (1) no longer matches the
+        // CURRENT boot (2).
+        val elapsedRealtime = FakeElapsedRealtimeProvider(startMillis = Duration.ofMinutes(2).toMillis())
+        val bootCountProvider = FakeBootCountProvider(bootCount = 2)
+        val occurrenceIdentity = ZonedDateTime.of(LocalDate.of(2026, 7, 27), testRoutine.endTime, zone).toInstant().toEpochMilli()
+        // hardStopEpochMilli was computed from the wall clock BEFORE the reboot, and that
+        // threshold has already passed by the time this post-reboot worker runs.
+        runtimeRepository.preSeed(
+            testRoutine.id,
+            RoutineOccurrenceRuntimeState(
+                occurrenceWindowEndEpochMilli = occurrenceIdentity,
+                monotonicStartElapsedRealtimeMillis = 0L,
+                bootCountAtStart = 1,
+                hardStopEpochMilli = clock.instant.toEpochMilli() - 1,
+            ),
+        )
+        val departures = FakeDepartureRepository { DeparturesResult(clock.instant(), 9145, listOf(sampleDeparture())) }
+
+        val worker = buildWorker(
+            testRoutine.id,
+            repository,
+            GetLiveDeparturesUseCase(departures, clock),
+            notifier,
+            scheduler,
+            clock,
+            routineOccurrenceRuntimeRepository = runtimeRepository,
+            elapsedRealtimeProvider = elapsedRealtime,
+            bootCountProvider = bootCountProvider,
+        )
+        val result = worker.doWork()
+
+        assertTrue(result is ListenableWorker.Result.Success)
+        // Stopped immediately despite elapsedRealtime showing only 2 minutes since boot -- the
+        // reboot fallback (wall-clock hardStopEpochMilli, already past) correctly refused to
+        // grant a fresh allowance just because the monotonic clock reset.
+        assertTrue(notifier.shown.isEmpty())
+        assertEquals(LocalDate.of(2026, 7, 27), scheduler.scheduledRoutines.single().pausedDate)
+    }
+
+    @Test
+    fun `a replacement worker starting after four hours has only 90 minutes remaining, not a fresh 330`() = runTest {
+        val clock = TickingClock(Instant.parse("2026-07-27T05:00:00Z"), zone) // 07:00 local, Monday
+        // A long (5h, still within validateSelf's own limit), plain non-DST window -- its
+        // natural end is comfortably far away, so only the hard cap (using the pre-seeded,
+        // reused start below) can be what stops this run within the few ticks this test needs.
+        val testRoutine = routine(startTime = LocalTime.of(7, 0), endTime = LocalTime.of(12, 0))
+        val runtimeRepository = FakeRoutineOccurrenceRuntimeRepository()
+        val bootCountProvider = FakeBootCountProvider(bootCount = 1)
+        val occurrenceIdentity = ZonedDateTime.of(LocalDate.of(2026, 7, 27), testRoutine.endTime, zone).toInstant().toEpochMilli()
+        val originalStartMillis = 1_000_000L
+        // An earlier (now-dead) worker instance already ran for 4 hours before being replaced --
+        // same boot, so the monotonic comparison path applies.
+        runtimeRepository.preSeed(
+            testRoutine.id,
+            RoutineOccurrenceRuntimeState(
+                occurrenceWindowEndEpochMilli = occurrenceIdentity,
+                monotonicStartElapsedRealtimeMillis = originalStartMillis,
+                bootCountAtStart = 1,
+                hardStopEpochMilli = Long.MAX_VALUE,
+            ),
+        )
+        val elapsedRealtime = FakeElapsedRealtimeProvider(startMillis = originalStartMillis + Duration.ofHours(4).toMillis())
+        // 30 real minutes per tick from here.
+        val repository = ScriptedRoutineRepository(clock, advanceSecondsPerCall = 1800, elapsedRealtime = elapsedRealtime) { testRoutine }
+        val notifier = RecordingNotifier()
+        val scheduler = RecordingScheduler()
+        val departures = FakeDepartureRepository { DeparturesResult(clock.instant(), 9145, listOf(sampleDeparture())) }
+
+        val worker = buildWorker(
+            testRoutine.id,
+            repository,
+            GetLiveDeparturesUseCase(departures, clock),
+            notifier,
+            scheduler,
+            clock,
+            routineOccurrenceRuntimeRepository = runtimeRepository,
+            elapsedRealtimeProvider = elapsedRealtime,
+            bootCountProvider = bootCountProvider,
+        )
+        worker.doWork()
+
+        // Only ~90 more minutes of REAL elapsed time were needed before the cap fired -- proving
+        // the replacement worker continued the ORIGINAL 330-minute budget rather than resetting
+        // it: elapsedRealtime lands close to originalStartMillis + 330min, nowhere near
+        // originalStartMillis + 4h + 330min (what a wrongly-reset "fresh allowance" would need).
+        val elapsedSinceOriginalStart = elapsedRealtime.millis - originalStartMillis
+        assertTrue(elapsedSinceOriginalStart >= Duration.ofMinutes(HARD_FOREGROUND_RUNTIME_CAP_MINUTES).toMillis())
+        // Comfortably under a FRESH 330-minute allowance measured from the 4-hour mark (4h +
+        // 330min = 570min) -- proving the cap fired around the ORIGINAL 330-minute mark, not a
+        // reset one, while still allowing headroom for this test's own extra pre-loop tick.
+        assertTrue(elapsedSinceOriginalStart < Duration.ofHours(4).toMillis() + Duration.ofMinutes(200).toMillis())
+        assertEquals(LocalDate.of(2026, 7, 27), scheduler.scheduledRoutines.single().pausedDate)
+    }
+
+    @Test
+    fun `a process restart on the same boot continues counting from the originally persisted start, not a fresh one`() = runTest {
+        val clock = TickingClock(Instant.parse("2026-07-27T05:00:00Z"), zone)
+        val testRoutine = routine()
+        val repository = ScriptedRoutineRepository(clock) { testRoutine }
+        val notifier = RecordingNotifier()
+        val scheduler = RecordingScheduler()
+        val runtimeRepository = FakeRoutineOccurrenceRuntimeRepository()
+        val bootCountProvider = FakeBootCountProvider(bootCount = 1)
+        val occurrenceIdentity = ZonedDateTime.of(LocalDate.of(2026, 7, 27), testRoutine.endTime, zone).toInstant().toEpochMilli()
+        val originalStartMillis = 12_345_678L // an arbitrary, non-zero reference
+        runtimeRepository.preSeed(
+            testRoutine.id,
+            RoutineOccurrenceRuntimeState(
+                occurrenceWindowEndEpochMilli = occurrenceIdentity,
+                monotonicStartElapsedRealtimeMillis = originalStartMillis,
+                bootCountAtStart = 1, // same boot as the "restarted process" below
+                hardStopEpochMilli = Long.MAX_VALUE,
+            ),
+        )
+        // This "restarted process" instance's OWN current elapsedRealtime reading is already
+        // exactly HARD_FOREGROUND_RUNTIME_CAP_MINUTES past the ORIGINAL persisted start. If that
+        // original start is correctly reused, the cap must fire immediately, on the very first
+        // tick -- if a bug instead reset monotonicStart to THIS worker's own current reading (a
+        // fresh zero-point), elapsed-since-start would wrongly read as zero and never fire here.
+        val elapsedRealtime = FakeElapsedRealtimeProvider(
+            startMillis = originalStartMillis + Duration.ofMinutes(HARD_FOREGROUND_RUNTIME_CAP_MINUTES).toMillis(),
+        )
+        val departures = FakeDepartureRepository { DeparturesResult(clock.instant(), 9145, listOf(sampleDeparture())) }
+
+        val worker = buildWorker(
+            testRoutine.id,
+            repository,
+            GetLiveDeparturesUseCase(departures, clock),
+            notifier,
+            scheduler,
+            clock,
+            routineOccurrenceRuntimeRepository = runtimeRepository,
+            elapsedRealtimeProvider = elapsedRealtime,
+            bootCountProvider = bootCountProvider,
+        )
+        worker.doWork()
+
+        assertTrue("expected the ORIGINAL persisted start to be reused, stopping immediately", notifier.shown.isEmpty())
+        assertEquals(LocalDate.of(2026, 7, 27), scheduler.scheduledRoutines.single().pausedDate)
+    }
+
+    // ---- Clearing persisted runtime state once an occurrence is over ----
+
+    @Test
+    fun `occurrence runtime state is cleared once the hard cap stops the loop`() = runTest {
+        val clock = TickingClock(Instant.parse("2026-07-27T05:00:00Z"), zone)
+        val testRoutine = routine()
+        val repository = ScriptedRoutineRepository(clock) { testRoutine }
+        val notifier = RecordingNotifier()
+        val scheduler = RecordingScheduler()
+        val runtimeRepository = FakeRoutineOccurrenceRuntimeRepository()
+        val occurrenceIdentity = ZonedDateTime.of(LocalDate.of(2026, 7, 27), testRoutine.endTime, zone).toInstant().toEpochMilli()
+        runtimeRepository.preSeed(
+            testRoutine.id,
+            RoutineOccurrenceRuntimeState(
+                occurrenceWindowEndEpochMilli = occurrenceIdentity,
+                monotonicStartElapsedRealtimeMillis = 0L,
+                bootCountAtStart = 1,
+                hardStopEpochMilli = Long.MAX_VALUE,
+            ),
+        )
+        val elapsedRealtime = FakeElapsedRealtimeProvider(startMillis = Duration.ofMinutes(HARD_FOREGROUND_RUNTIME_CAP_MINUTES).toMillis())
+        val departures = FakeDepartureRepository { DeparturesResult(clock.instant(), 9145, listOf(sampleDeparture())) }
+
+        val worker = buildWorker(
+            testRoutine.id,
+            repository,
+            GetLiveDeparturesUseCase(departures, clock),
+            notifier,
+            scheduler,
+            clock,
+            routineOccurrenceRuntimeRepository = runtimeRepository,
+            elapsedRealtimeProvider = elapsedRealtime,
+        )
+        worker.doWork()
+
+        assertEquals(listOf(testRoutine.id), runtimeRepository.clearedRoutineIds)
+        assertNull(runtimeRepository.peek(testRoutine.id))
     }
 
     @Test

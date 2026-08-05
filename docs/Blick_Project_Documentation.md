@@ -1478,9 +1478,26 @@ run continuously — it schedules work only around each routine's own configured
   operation, not media, location, or camera/mic use. See [Foreground service
   types](https://developer.android.com/develop/background-work/services/fgs/service-types).
   Android 15+ limits a `dataSync` foreground service to six total hours in any rolling
-  24-hour period — routine windows are expected to be short (a typical commute window),
-  which is why the worker stops reliably at the routine's configured end time rather
-  than running indefinitely.
+  24-hour period. Blick enforces its own, more conservative
+  `MAX_DAILY_ACTIVE_MINUTES` (five hours) under that platform limit
+  (`RoutineDurationValidator`), rejected at save time in the create/edit flow,
+  with a defensive, single-routine re-check before scheduling or activating
+  (`WorkManagerRoutineScheduler`, `RoutineActiveWindowWorker`) so an old or
+  otherwise-invalid stored routine can never be scheduled either. The check
+  evaluates every rolling 24-hour window a set of routines' occurrences could
+  fall into — not just each configured weekday in isolation — since two
+  routines on adjacent days (e.g. one ending late Monday, another starting
+  early Tuesday) can combine inside a single rolling 24-hour span even though
+  each day's own total is within the limit on its own.
+  `RoutineActiveWindowWorker` also enforces its own hard, real-elapsed-time
+  safety cap (`HARD_FOREGROUND_RUNTIME_CAP_MINUTES`, 5h30m) independent of a
+  routine's configured end time, since a daylight-saving "fall back" transition
+  can make a nominally-5-hour local-clock window run up to an hour longer in
+  real time than the configured duration alone would suggest — this is why the
+  worker stops reliably well inside Android's own limit rather than running
+  indefinitely — routine windows are expected to be short (a typical commute
+  window), and these two checks are what keep that true rather than merely
+  assuming it.
 
 ### Scheduling, replacing, and cancelling work
 

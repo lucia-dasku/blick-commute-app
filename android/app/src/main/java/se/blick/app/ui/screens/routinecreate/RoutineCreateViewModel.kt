@@ -85,9 +85,10 @@ data class RoutineCreateUiState(
     /** True when the most recent [RoutineCreateViewModel.save] attempt was blocked because this
      * routine, combined with every other enabled routine active on one of its days, would
      * exceed [se.blick.app.domain.usecase.MAX_DAILY_ACTIVE_MINUTES] — see
-     * [RoutineDurationValidator]. Reset (like [saveFailed]) only at the start of the next save
-     * attempt, not reactively on every field change, matching this screen's existing
-     * save-failure pattern. */
+     * [RoutineDurationValidator]. Unlike [saveFailed] (which only clears on the next save
+     * attempt), this is also cleared as soon as the user changes the start time, end time, or
+     * active days — the exact inputs this validation depends on — so a stale error can never
+     * linger after the user has already adjusted the schedule to fix it. */
     val durationLimitExceeded: Boolean = false,
     /** True when this screen was opened to edit an existing routine (see
      * [RoutineCreateViewModel]'s edit-mode support) rather than to create a new one. */
@@ -408,16 +409,16 @@ class RoutineCreateViewModel @Inject constructor(
         _uiState.update {
             val days = it.activeDays.toMutableSet()
             if (!days.add(day)) days.remove(day)
-            it.copy(activeDays = days)
+            it.copy(activeDays = days, durationLimitExceeded = false)
         }
     }
 
     fun setStartTime(time: LocalTime) {
-        _uiState.update { it.copy(startTime = time) }
+        _uiState.update { it.copy(startTime = time, durationLimitExceeded = false) }
     }
 
     fun setEndTime(time: LocalTime) {
-        _uiState.update { it.copy(endTime = time) }
+        _uiState.update { it.copy(endTime = time, durationLimitExceeded = false) }
     }
 
     fun setName(name: String) {

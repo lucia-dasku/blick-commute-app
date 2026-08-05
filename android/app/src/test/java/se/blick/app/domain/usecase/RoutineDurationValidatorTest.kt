@@ -150,6 +150,41 @@ class RoutineDurationValidatorTest {
         assertExceeds(result, DayOfWeek.MONDAY, 480)
     }
 
+    @Test
+    fun `Monday 18-00-23-00 plus Tuesday 00-00-05-00 is rejected by the rolling-24-hour check`() {
+        // The exact motivating example for the rolling-24h redesign: each day's own total is
+        // only 5h (300min), which a per-weekday-only check would accept -- but the two
+        // occurrences sit only an hour apart, so a window from Monday 18:00 to Tuesday 18:00
+        // contains both in full: 10 real configured hours inside one rolling 24-hour span.
+        val monday = routine(id = "monday", activeDays = setOf(DayOfWeek.MONDAY), startTime = LocalTime.of(18, 0), endTime = LocalTime.of(23, 0))
+        val result = RoutineDurationValidator.validate(
+            proposedRoutineId = null,
+            proposedStartTime = LocalTime.of(0, 0),
+            proposedEndTime = LocalTime.of(5, 0),
+            proposedActiveDays = setOf(DayOfWeek.TUESDAY),
+            proposedEnabled = true,
+            existingRoutines = listOf(monday),
+        )
+        assertExceeds(result, DayOfWeek.MONDAY, 600)
+    }
+
+    @Test
+    fun `the equivalent Sunday-to-Monday week-boundary case is also rejected`() {
+        // Same shape as the Monday-Tuesday example, but spanning the week wrap (Sunday into
+        // Monday) -- proves the rolling-24h scan correctly sees across the cycle boundary, not
+        // just between "normal" adjacent weekdays in the middle of the week.
+        val sunday = routine(id = "sunday", activeDays = setOf(DayOfWeek.SUNDAY), startTime = LocalTime.of(18, 0), endTime = LocalTime.of(23, 0))
+        val result = RoutineDurationValidator.validate(
+            proposedRoutineId = null,
+            proposedStartTime = LocalTime.of(0, 0),
+            proposedEndTime = LocalTime.of(5, 0),
+            proposedActiveDays = setOf(DayOfWeek.MONDAY),
+            proposedEnabled = true,
+            existingRoutines = listOf(sunday),
+        )
+        assertExceeds(result, DayOfWeek.SUNDAY, 600)
+    }
+
     // ---- Disabled routines ----
 
     @Test
@@ -169,7 +204,12 @@ class RoutineDurationValidatorTest {
     }
 
     @Test
-    fun `a disabled proposed routine is accepted even when its own duration exceeds the limit`() {
+    fun `a disabled proposed routine is still rejected when its own duration exceeds the limit`() {
+        // Regression: a routine disabled today can be re-enabled later without ever going
+        // through this validator again (see RoutineDetailsViewModel.toggleEnabled) -- if an
+        // over-limit duration were accepted merely because it's disabled, re-enabling it would
+        // silently fail to schedule with no user-visible feedback. The proposal's own duration
+        // must always be checked, regardless of enabled state.
         val result = RoutineDurationValidator.validate(
             proposedRoutineId = null,
             proposedStartTime = LocalTime.of(6, 0),
@@ -177,6 +217,24 @@ class RoutineDurationValidatorTest {
             proposedActiveDays = setOf(DayOfWeek.MONDAY),
             proposedEnabled = false,
             existingRoutines = emptyList(),
+        )
+        assertExceeds(result, DayOfWeek.MONDAY, 420)
+    }
+
+    @Test
+    fun `a disabled proposed routine with a valid own duration is still exempt from combining with others`() {
+        // Existing ENABLED routine already uses 4h on Monday. The proposed routine is also 4h
+        // on Monday, which would exceed the limit if summed (8h) -- but since the proposal
+        // itself is disabled, it doesn't compete for Monday's budget right now, only its own
+        // (valid, 4h) duration is checked.
+        val existing = routine(id = "existing-1", activeDays = setOf(DayOfWeek.MONDAY), startTime = LocalTime.of(6, 0), endTime = LocalTime.of(10, 0))
+        val result = RoutineDurationValidator.validate(
+            proposedRoutineId = null,
+            proposedStartTime = LocalTime.of(16, 0),
+            proposedEndTime = LocalTime.of(20, 0),
+            proposedActiveDays = setOf(DayOfWeek.MONDAY),
+            proposedEnabled = false,
+            existingRoutines = listOf(existing),
         )
         assertValid(result)
     }
@@ -270,8 +328,11 @@ class RoutineDurationValidatorTest {
     }
 
     @Test
-    fun `validateSelf accepts a disabled routine regardless of its configured duration`() {
+    fun `validateSelf rejects a disabled routine whose own duration exceeds the limit`() {
+        // A disabled routine can be re-enabled later without ever going through save-time
+        // validation again -- validateSelf must not wave through an excessive duration merely
+        // because the routine happens to be disabled right now.
         val subject = routine(id = "subject", activeDays = setOf(DayOfWeek.MONDAY), startTime = LocalTime.of(6, 0), endTime = LocalTime.of(13, 0), enabled = false)
-        assertValid(RoutineDurationValidator.validateSelf(subject))
+        assertExceeds(RoutineDurationValidator.validateSelf(subject), DayOfWeek.MONDAY, 420)
     }
 }

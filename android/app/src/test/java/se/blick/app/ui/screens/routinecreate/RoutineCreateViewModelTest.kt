@@ -1203,6 +1203,54 @@ class RoutineCreateViewModelTest {
     }
 
     @Test
+    fun `editing a DISABLED routine to an over-the-limit duration is still blocked`() = runTest(dispatcher) {
+        // Regression: disabling a routine must never bypass its own duration cap -- otherwise
+        // editing it to an excessive window while disabled would save successfully, and
+        // re-enabling it later (RoutineDetailsViewModel.toggleEnabled) would silently fail to
+        // schedule with no user-visible feedback, even though Room and the UI both report the
+        // routine as enabled.
+        val disabledRoutine = existingRoutine(id = "existing-1", enabled = false) // Mon+Wed, 07:30-08:30
+        val routines = FakeRoutineRepository(listOf(disabledRoutine))
+        val scheduler = FakeRoutineScheduler()
+        val vm = viewModel(routines = routines, scheduler = scheduler, routineId = disabledRoutine.id)
+        dispatcher.scheduler.advanceUntilIdle()
+
+        vm.setStartTime(LocalTime.of(6, 0))
+        vm.setEndTime(LocalTime.of(13, 0)) // 7h
+
+        var saved = false
+        vm.save { saved = true }
+        dispatcher.scheduler.advanceUntilIdle()
+
+        assertFalse(saved)
+        assertTrue(vm.uiState.value.durationLimitExceeded)
+        assertFalse(vm.uiState.value.isSaving)
+        assertEquals(0, routines.saved.size)
+        assertEquals(LocalTime.of(7, 30), routines.getById(disabledRoutine.id)?.startTime) // unchanged
+        assertEquals(0, scheduler.scheduledRoutines.size)
+    }
+
+    @Test
+    fun `changing the start time, end time, or active days clears a stale duration-limit error`() = runTest(dispatcher) {
+        val vm = viewModel(routines = FakeRoutineRepository(emptyList()))
+        dispatcher.scheduler.advanceUntilIdle()
+        vm.selectSite(fruangen)
+        dispatcher.scheduler.advanceUntilIdle()
+        vm.selectTransportMode(TransportMode.METRO)
+        vm.selectDirection(metroOption)
+        vm.toggleDay(DayOfWeek.MONDAY)
+        vm.setStartTime(LocalTime.of(6, 0))
+        vm.setEndTime(LocalTime.of(13, 0)) // 7h, over the limit
+        vm.save {}
+        dispatcher.scheduler.advanceUntilIdle()
+        assertTrue(vm.uiState.value.durationLimitExceeded)
+
+        vm.setEndTime(LocalTime.of(9, 0))
+
+        assertFalse(vm.uiState.value.durationLimitExceeded)
+    }
+
+    @Test
     fun `editing a routine to remove its own previously stored version from the total still allows re-saving unchanged`() = runTest(dispatcher) {
         // Regression guard for double-counting: re-saving an edit-mode routine with NO changes
         // at all must never be rejected merely because its own already-stored version is still
