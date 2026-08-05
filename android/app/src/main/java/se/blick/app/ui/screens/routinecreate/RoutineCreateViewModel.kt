@@ -26,6 +26,8 @@ import se.blick.app.data.repository.StopRepository
 import se.blick.app.domain.model.CommuteRoutine
 import se.blick.app.domain.model.Site
 import se.blick.app.domain.model.TransportMode
+import se.blick.app.domain.usecase.RoutineDurationValidationResult
+import se.blick.app.domain.usecase.RoutineDurationValidator
 import se.blick.app.scheduling.RoutineScheduler
 import se.blick.app.ui.navigation.Routes
 import se.blick.app.widget.RoutineWidgetUpdater
@@ -80,6 +82,13 @@ data class RoutineCreateUiState(
     val name: String = "",
     val isSaving: Boolean = false,
     val saveFailed: Boolean = false,
+    /** True when the most recent [RoutineCreateViewModel.save] attempt was blocked because this
+     * routine, combined with every other enabled routine active on one of its days, would
+     * exceed [se.blick.app.domain.usecase.MAX_DAILY_ACTIVE_MINUTES] — see
+     * [RoutineDurationValidator]. Reset (like [saveFailed]) only at the start of the next save
+     * attempt, not reactively on every field change, matching this screen's existing
+     * save-failure pattern. */
+    val durationLimitExceeded: Boolean = false,
     /** True when this screen was opened to edit an existing routine (see
      * [RoutineCreateViewModel]'s edit-mode support) rather than to create a new one. */
     val isEditMode: Boolean = false,
@@ -453,6 +462,13 @@ class RoutineCreateViewModel @Inject constructor(
      * enabled/paused. In create mode, [RoutineCreateUiState.oneRoutineLimitReached] blocks
      * saving outright (defence in depth alongside [RoutineCreateUiState.canSave] and the
      * list screen's own guard — see the class doc on [editingRoutineId]).
+     *
+     * Also re-validates [toSave]'s active-window duration against every other currently
+     * enabled routine via [RoutineDurationValidator] — see [RoutineCreateUiState.durationLimitExceeded]
+     * — BEFORE writing anything to [routineRepository] or [routineScheduler]: an edit
+     * excludes [originalRoutine]'s own stored id from the comparison (via
+     * [RoutineDurationValidator.validate]'s `proposedRoutineId`), so an edited routine never
+     * counts its own pre-edit version twice.
      */
     fun save(onSaved: () -> Unit) {
         val state = _uiState.value
@@ -462,7 +478,7 @@ class RoutineCreateViewModel @Inject constructor(
         if (!state.canSave) return
         if (!state.isEditMode && state.oneRoutineLimitReached) return
 
-        _uiState.update { it.copy(isSaving = true, saveFailed = false) }
+        _uiState.update { it.copy(isSaving = true, saveFailed = false, durationLimitExceeded = false) }
         viewModelScope.launch {
             try {
                 val existing = originalRoutine
@@ -482,6 +498,21 @@ class RoutineCreateViewModel @Inject constructor(
                     enabled = existing?.enabled ?: true,
                     pausedDate = existing?.pausedDate,
                 )
+
+                val otherRoutines = routineRepository.observeAll().first()
+                val durationValidation = RoutineDurationValidator.validate(
+                    proposedRoutineId = toSave.id,
+                    proposedStartTime = toSave.startTime,
+                    proposedEndTime = toSave.endTime,
+                    proposedActiveDays = toSave.activeDays,
+                    proposedEnabled = toSave.enabled,
+                    existingRoutines = otherRoutines,
+                )
+                if (durationValidation is RoutineDurationValidationResult.ExceedsDailyLimit) {
+                    _uiState.update { it.copy(isSaving = false, durationLimitExceeded = true) }
+                    return@launch
+                }
+
                 routineRepository.save(toSave)
                 // Schedules (or, for an edit, replaces) this routine's next active-window
                 // activation — see RoutineScheduler.scheduleActivation's own doc on why this

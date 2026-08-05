@@ -29,6 +29,8 @@ import se.blick.app.data.repository.RoutineRepository
 import se.blick.app.domain.model.CommuteRoutine
 import se.blick.app.domain.model.TransportMode
 import se.blick.app.domain.usecase.LiveDeparturesState
+import se.blick.app.domain.usecase.RoutineDurationValidationResult
+import se.blick.app.domain.usecase.RoutineDurationValidator
 import se.blick.app.notification.NotificationAvailability
 import se.blick.app.notification.NotificationAvailabilityChecker
 import se.blick.app.notification.RecoveryPendingStateStore
@@ -425,6 +427,41 @@ class NotificationRecoveryCoordinatorTest {
         // Still runs -- a Room failure fetching the routine list is unrelated to whether the
         // widget itself needs reconciling.
         assertEquals(1, widgetUpdater.reconcileCallCount)
+    }
+
+    // ---- Defensive daily-duration-limit re-check (see RoutineDurationValidator): onAppStart's
+    // reconciliation must behave correctly when the scheduler it calls silently declines an
+    // over-limit routine, exactly like the real WorkManagerRoutineScheduler does. ----
+
+    /** Mirrors [WorkManagerRoutineScheduler]'s own defensive duration re-check using the SAME
+     * shared [RoutineDurationValidator], without needing a real [WorkManager] instance for this
+     * -- proves the coordinator's reconciliation continues past a silently-declined (no
+     * exception, unlike [RecordingRoutineScheduler]'s `failNextSchedulesCount`) over-limit
+     * routine exactly as it does past a throwing one. */
+    private class DurationValidatingScheduler : RoutineScheduler {
+        val scheduledRoutines = mutableListOf<CommuteRoutine>()
+        override fun scheduleActivation(routine: CommuteRoutine) {
+            val validation = RoutineDurationValidator.validateSelf(routine)
+            if (validation is RoutineDurationValidationResult.ExceedsDailyLimit) return
+            scheduledRoutines += routine
+        }
+        override fun cancelActivation(routineId: String) = Unit
+        override suspend fun isActivationRunning(routineId: String): Boolean = false
+    }
+
+    @Test
+    fun `onAppStart silently skips an over-limit routine without preventing the rest from being reconciled`() = runTest {
+        val validBefore = routine(id = "a")
+        val overLimit = routine(id = "b").copy(startTime = LocalTime.of(6, 0), endTime = LocalTime.of(13, 0)) // 7h
+        val validAfter = routine(id = "c")
+        val repository = FakeRoutineRepository(listOf(validBefore, overLimit, validAfter))
+        val scheduler = DurationValidatingScheduler()
+        val pendingStore = InMemoryRecoveryPendingStateStore(initiallyPending = false)
+        val coordinator = buildCoordinator(repository, scheduler, pendingStore, available = true)
+
+        coordinator.onAppStart()
+
+        assertEquals(listOf("a", "c"), scheduler.scheduledRoutines.map { it.id })
     }
 
     // ---- 14. Cancellation is always rethrown, never converted to an ordinary failure/success ----

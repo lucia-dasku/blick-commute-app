@@ -25,6 +25,8 @@ import se.blick.app.domain.usecase.DisruptionsState
 import se.blick.app.domain.usecase.GetDisruptionsUseCase
 import se.blick.app.domain.usecase.GetLiveDeparturesUseCase
 import se.blick.app.domain.usecase.LiveDeparturesState
+import se.blick.app.domain.usecase.RoutineDurationValidationResult
+import se.blick.app.domain.usecase.RoutineDurationValidator
 import se.blick.app.domain.usecase.departureIdentity
 import se.blick.app.notification.NotificationAvailability
 import se.blick.app.notification.NotificationAvailabilityChecker
@@ -180,6 +182,26 @@ class RoutineActiveWindowWorker @AssistedInject constructor(
             return Result.success()
         }
         if (!routine.enabled) {
+            runWidgetUpdateSafely { routineWidgetUpdater.reconcile() }
+            return Result.success()
+        }
+
+        // Defensive backstop for a routine already enqueued (in WorkManager's own durable
+        // queue) before this limit existed, or one written by a future code change or a
+        // corrupted/edited database -- WorkManagerRoutineScheduler.scheduleActivation already
+        // refuses to enqueue such a routine going forward, but that check can't retroactively
+        // reach a OneTimeWorkRequest that was persisted before this code shipped. Never enters
+        // foreground execution, never crashes, never modifies the stored routine -- just
+        // cancels any (now-redundant) scheduled work and leaves it for the user to correct.
+        val durationValidation = RoutineDurationValidator.validateSelf(routine)
+        if (durationValidation is RoutineDurationValidationResult.ExceedsDailyLimit) {
+            Log.w(
+                LOG_TAG,
+                "Routine $routineId exceeds the daily active-duration limit " +
+                    "(${durationValidation.totalMinutes}min on ${durationValidation.weekday}); " +
+                    "refusing to activate it. Leaving it stored so the user can correct it.",
+            )
+            routineScheduler.cancelActivation(routineId)
             runWidgetUpdateSafely { routineWidgetUpdater.reconcile() }
             return Result.success()
         }

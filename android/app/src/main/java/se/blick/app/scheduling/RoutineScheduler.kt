@@ -20,7 +20,13 @@ interface RoutineScheduler {
     /** Schedules (or reschedules, replacing any existing pending activation for this routine
      * id) the routine's next eligible active window. A disabled routine, or one with no
      * [CommuteRoutine.activeDays], has any existing scheduled work cancelled instead — there
-     * is nothing to activate. */
+     * is nothing to activate. A routine whose own configured duration exceeds
+     * [se.blick.app.domain.usecase.MAX_DAILY_ACTIVE_MINUTES] (see
+     * [se.blick.app.domain.usecase.RoutineDurationValidator]) is treated the same way —
+     * scheduling is refused and any existing work cancelled — as a defensive backstop against
+     * an old database, corrupted data, or a future code change, since ordinary create/edit
+     * validation should already have rejected it. The stored routine itself is never modified
+     * either way. */
     fun scheduleActivation(routine: CommuteRoutine)
 
     /** Cancels any pending or in-flight scheduled activation for this routine id — a no-op if

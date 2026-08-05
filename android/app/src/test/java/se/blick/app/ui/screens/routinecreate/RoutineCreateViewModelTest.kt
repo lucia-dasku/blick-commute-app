@@ -1106,6 +1106,120 @@ class RoutineCreateViewModelTest {
         assertEquals(0, routines.saved.size)
     }
 
+    // ---- Daily duration limit ----
+    //
+    // The first-beta one-routine limit (see "One-routine beta limit" above) means CREATE mode
+    // can never itself have an "other" enabled routine to combine against -- oneRoutineLimitReached
+    // (and therefore canSave) already blocks save() before RoutineDurationValidator ever runs. So
+    // the create-mode case below exercises a routine that exceeds the limit entirely on its own;
+    // the combined-with-another-routine case is exercised via edit mode instead, which has no
+    // such restriction and is where RoutineDurationValidator's multi-routine future-proofing
+    // (see its own doc) is actually reachable today.
+
+    @Test
+    fun `saving a new routine whose own duration exceeds the daily limit is blocked`() = runTest(dispatcher) {
+        val routines = FakeRoutineRepository(emptyList())
+        val scheduler = FakeRoutineScheduler()
+        val vm = viewModel(routines = routines, scheduler = scheduler)
+        dispatcher.scheduler.advanceUntilIdle()
+
+        vm.selectSite(fruangen)
+        dispatcher.scheduler.advanceUntilIdle()
+        vm.selectTransportMode(TransportMode.METRO)
+        vm.selectDirection(metroOption)
+        vm.toggleDay(DayOfWeek.MONDAY)
+        vm.setStartTime(LocalTime.of(6, 0))
+        vm.setEndTime(LocalTime.of(13, 0)) // 7h, over the 5h limit on its own
+        assertTrue(vm.uiState.value.canSave) // canSave itself doesn't know about the duration limit
+
+        var saved = false
+        vm.save { saved = true }
+        dispatcher.scheduler.advanceUntilIdle()
+
+        assertFalse(saved)
+        assertTrue(vm.uiState.value.durationLimitExceeded)
+        assertFalse(vm.uiState.value.isSaving)
+        assertEquals(0, routines.saved.size)
+        assertEquals(0, scheduler.scheduledRoutines.size)
+    }
+
+    @Test
+    fun `editing a routine that combines with another enabled routine over the daily limit is blocked`() = runTest(dispatcher) {
+        val edited = existingRoutine(id = "existing-1") // Mon+Wed, 07:30-08:30 (1h)
+        val other = existingRoutine(id = "other-1").copy(
+            activeDays = setOf(DayOfWeek.MONDAY),
+            startTime = LocalTime.of(16, 0),
+            endTime = LocalTime.of(19, 0), // 3h on Monday
+        )
+        val routines = FakeRoutineRepository(listOf(edited, other))
+        val scheduler = FakeRoutineScheduler()
+        val vm = viewModel(routines = routines, scheduler = scheduler, routineId = edited.id)
+        dispatcher.scheduler.advanceUntilIdle()
+
+        // Stretch the edited routine's Monday+Wednesday window to 4h (06:00-10:00). Combined
+        // with "other"'s 3h on Monday alone, Monday totals 7h -- over the limit -- even though
+        // Wednesday alone (4h) would be fine on its own.
+        vm.setStartTime(LocalTime.of(6, 0))
+        vm.setEndTime(LocalTime.of(10, 0))
+
+        var saved = false
+        vm.save { saved = true }
+        dispatcher.scheduler.advanceUntilIdle()
+
+        assertFalse(saved)
+        assertTrue(vm.uiState.value.durationLimitExceeded)
+        assertFalse(vm.uiState.value.isSaving)
+        // Neither the edit nor anything else was written, and nothing was (re)scheduled.
+        assertEquals(0, routines.saved.size)
+        assertEquals(LocalTime.of(7, 30), routines.getById(edited.id)?.startTime)
+        assertEquals(0, scheduler.scheduledRoutines.size)
+    }
+
+    @Test
+    fun `editing a routine that stays within the combined daily limit still saves and schedules`() = runTest(dispatcher) {
+        val edited = existingRoutine(id = "existing-1") // Mon+Wed, 07:30-08:30 (1h)
+        val other = existingRoutine(id = "other-1").copy(
+            activeDays = setOf(DayOfWeek.MONDAY),
+            startTime = LocalTime.of(16, 0),
+            endTime = LocalTime.of(17, 0), // 1h on Monday
+        )
+        val routines = FakeRoutineRepository(listOf(edited, other))
+        val scheduler = FakeRoutineScheduler()
+        val vm = viewModel(routines = routines, scheduler = scheduler, routineId = edited.id)
+        dispatcher.scheduler.advanceUntilIdle()
+
+        // Mon+Wed 07:30-09:00 (90min) + "other"'s 60min on Monday = 150min, comfortably under
+        // the 300min limit.
+        vm.setEndTime(LocalTime.of(9, 0))
+
+        var saved = false
+        vm.save { saved = true }
+        dispatcher.scheduler.advanceUntilIdle()
+
+        assertTrue(saved)
+        assertFalse(vm.uiState.value.durationLimitExceeded)
+        assertEquals(LocalTime.of(9, 0), routines.getById(edited.id)?.endTime)
+        assertEquals(1, scheduler.scheduledRoutines.size)
+    }
+
+    @Test
+    fun `editing a routine to remove its own previously stored version from the total still allows re-saving unchanged`() = runTest(dispatcher) {
+        // Regression guard for double-counting: re-saving an edit-mode routine with NO changes
+        // at all must never be rejected merely because its own already-stored version is still
+        // sitting in the repository.
+        val edited = existingRoutine(id = "existing-1") // Mon+Wed, 07:30-08:30 (1h)
+        val routines = FakeRoutineRepository(listOf(edited))
+        val vm = viewModel(routines = routines, routineId = edited.id)
+        dispatcher.scheduler.advanceUntilIdle()
+
+        var saved = false
+        vm.save { saved = true }
+        dispatcher.scheduler.advanceUntilIdle()
+
+        assertTrue(saved)
+        assertFalse(vm.uiState.value.durationLimitExceeded)
+    }
+
     // ---- Scheduler integration ----
 
     @Test

@@ -170,6 +170,36 @@ class WorkManagerRoutineSchedulerTest {
         assertTrue(workInfosFor("r1").isEmpty())
     }
 
+    // ---- Defensive daily-duration-limit re-check (see RoutineDurationValidator) ----
+    //
+    // Ordinary create/edit validation should already prevent a routine like this from ever
+    // being saved -- these tests cover the defensive backstop for an old database, corrupted
+    // data, or a future code change that bypasses that validation.
+
+    @Test
+    fun `scheduling a routine whose own duration exceeds the daily limit does not enqueue any work`() {
+        scheduler.scheduleActivation(routine(startTime = LocalTime.of(6, 0), endTime = LocalTime.of(13, 0))) // 7h
+        assertTrue(workInfosFor("r1").isEmpty())
+    }
+
+    @Test
+    fun `scheduling an over-limit routine cancels any work already scheduled for it`() {
+        scheduler.scheduleActivation(routine())
+        assertEquals(1, workInfosFor("r1").count { it.state == WorkInfo.State.ENQUEUED })
+
+        // The same routine id is edited to now exceed the limit -- its previously valid,
+        // still-pending activation must be torn down, not left stale.
+        scheduler.scheduleActivation(routine(startTime = LocalTime.of(6, 0), endTime = LocalTime.of(13, 0)))
+
+        assertTrue(workInfosFor("r1").none { it.state == WorkInfo.State.ENQUEUED })
+    }
+
+    @Test
+    fun `a routine exactly at the daily limit still schedules normally`() {
+        scheduler.scheduleActivation(routine(startTime = LocalTime.of(7, 0), endTime = LocalTime.of(12, 0))) // exactly 5h
+        assertEquals(1, workInfosFor("r1").count { it.state == WorkInfo.State.ENQUEUED })
+    }
+
     @Test
     fun `re-scheduling the same routine replaces the previous work rather than adding a second one`() {
         scheduler.scheduleActivation(routine())

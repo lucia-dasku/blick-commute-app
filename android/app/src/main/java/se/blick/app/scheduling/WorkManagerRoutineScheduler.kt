@@ -1,6 +1,7 @@
 package se.blick.app.scheduling
 
 import android.content.Context
+import android.util.Log
 import androidx.work.ExistingWorkPolicy
 import androidx.work.OneTimeWorkRequestBuilder
 import androidx.work.WorkInfo
@@ -10,11 +11,16 @@ import dagger.hilt.android.qualifiers.ApplicationContext
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.withContext
 import se.blick.app.domain.model.CommuteRoutine
+import se.blick.app.domain.usecase.MAX_DAILY_ACTIVE_MINUTES
+import se.blick.app.domain.usecase.RoutineDurationValidationResult
+import se.blick.app.domain.usecase.RoutineDurationValidator
 import java.time.Clock
 import java.time.Duration
 import java.time.ZonedDateTime
 import javax.inject.Inject
 import javax.inject.Singleton
+
+private const val LOG_TAG = "WorkManagerRoutineScheduler"
 
 /**
  * WorkManager-backed [RoutineScheduler]. Uses exactly one mechanism — a single
@@ -57,6 +63,29 @@ class WorkManagerRoutineScheduler @Inject constructor(
 
     override fun scheduleActivation(routine: CommuteRoutine) {
         val workManager = WorkManager.getInstance(context)
+
+        // Defensive re-check, independent of whatever validated this routine when it was
+        // created/edited (see RoutineDurationValidator's own doc) -- an old database, a
+        // corrupted record, or a future code change could still contain a routine longer than
+        // MAX_DAILY_ACTIVE_MINUTES. Every scheduling/reconciliation entry point (save, enable/
+        // disable/pause/resume, RoutineScheduleReconciler, NotificationRecoveryCoordinator,
+        // BootCompletedReceiver, the timezone-change receiver) funnels through this one method,
+        // so checking here covers all of them uniformly. Never silently shortens the routine or
+        // touches Room -- it stays exactly as stored so the user can correct it in the app; only
+        // its WorkManager scheduling is refused.
+        val durationValidation = RoutineDurationValidator.validateSelf(routine)
+        if (durationValidation is RoutineDurationValidationResult.ExceedsDailyLimit) {
+            Log.w(
+                LOG_TAG,
+                "Routine ${routine.id} exceeds the $MAX_DAILY_ACTIVE_MINUTES-minute daily " +
+                    "active-duration limit (${durationValidation.totalMinutes}min on " +
+                    "${durationValidation.weekday}); refusing to schedule it. Leaving it stored " +
+                    "so the user can correct it.",
+            )
+            workManager.cancelUniqueWork(uniqueWorkName(routine.id))
+            return
+        }
+
         val now = ZonedDateTime.ofInstant(clock.instant(), deviceZoneProvider.currentZone())
         val excludedDate = routine.pausedDate
 

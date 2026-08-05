@@ -322,10 +322,13 @@ class RoutineActiveWindowWorkerTest {
 
     private class RecordingScheduler : RoutineScheduler {
         val scheduledRoutines = mutableListOf<CommuteRoutine>()
+        val cancelledRoutineIds = mutableListOf<String>()
         override fun scheduleActivation(routine: CommuteRoutine) {
             scheduledRoutines += routine
         }
-        override fun cancelActivation(routineId: String) = Unit
+        override fun cancelActivation(routineId: String) {
+            cancelledRoutineIds += routineId
+        }
         override suspend fun isActivationRunning(routineId: String): Boolean = false
     }
 
@@ -569,6 +572,47 @@ class RoutineActiveWindowWorkerTest {
         assertTrue(result is ListenableWorker.Result.Success)
         assertTrue(notifier.shown.isEmpty())
         assertEquals(1, scheduler.scheduledRoutines.size)
+        assertEquals(1, widgetUpdater.reconcileCallCount)
+    }
+
+    // ---- Defensive daily-duration-limit re-check (see RoutineDurationValidator) ----
+    //
+    // Ordinary create/edit validation should already prevent a routine like this from ever
+    // being saved -- this covers the defensive backstop for a routine already sitting in
+    // WorkManager's own durable queue from before this limit existed, or one written by a
+    // future code change or a corrupted/edited database (see doWork's own comment at this
+    // check).
+
+    @Test
+    fun `a routine whose own duration exceeds the daily limit is never activated, even though its window is open`() = runTest {
+        val clock = TickingClock(Instant.parse("2026-07-27T05:00:00Z"), zone) // 07:00 local
+        // 06:00-13:00 (7h) -- genuinely ActiveNow at 07:00, so without the duration check this
+        // would enter the loop exactly like any other in-window routine.
+        val overLimitRoutine = routine(startTime = LocalTime.of(6, 0), endTime = LocalTime.of(13, 0))
+        val repository = ScriptedRoutineRepository(clock) { overLimitRoutine }
+        val notifier = RecordingNotifier()
+        val scheduler = RecordingScheduler()
+        val widgetUpdater = RecordingWidgetUpdater()
+
+        val worker = buildWorker(
+            overLimitRoutine.id,
+            repository,
+            GetLiveDeparturesUseCase(FakeDepartureRepository { error("unused") }, clock),
+            notifier,
+            scheduler,
+            clock,
+            widgetUpdater = widgetUpdater,
+        )
+        val result = worker.doWork()
+
+        assertTrue(result is ListenableWorker.Result.Success)
+        // Never enters foreground execution -- no notification posted, no loop, no remove().
+        assertTrue(notifier.shown.isEmpty())
+        assertEquals(0, notifier.removeCallCount)
+        // Cancelled directly, not rescheduled via scheduleActivation -- WorkManagerRoutineScheduler
+        // would just reject it again anyway.
+        assertTrue(scheduler.scheduledRoutines.isEmpty())
+        assertEquals(listOf(overLimitRoutine.id), scheduler.cancelledRoutineIds)
         assertEquals(1, widgetUpdater.reconcileCallCount)
     }
 

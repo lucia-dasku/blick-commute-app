@@ -359,6 +359,13 @@ private fun ScheduleStep(
                 style = MaterialTheme.typography.bodySmall,
             )
         }
+        if (uiState.durationLimitExceeded) {
+            Text(
+                stringResource(R.string.routine_create_error_duration_limit),
+                color = MaterialTheme.colorScheme.error,
+                style = MaterialTheme.typography.bodySmall,
+            )
+        }
 
         Spacer(Modifier.height(16.dp))
         OutlinedTextField(

@@ -10,6 +10,8 @@ import se.blick.app.data.repository.RoutineRepository
 import se.blick.app.domain.model.CommuteRoutine
 import se.blick.app.domain.model.TransportMode
 import se.blick.app.domain.usecase.LiveDeparturesState
+import se.blick.app.domain.usecase.RoutineDurationValidationResult
+import se.blick.app.domain.usecase.RoutineDurationValidator
 import se.blick.app.widget.RoutineWidgetUpdater
 import java.time.DayOfWeek
 import java.time.Instant
@@ -168,6 +170,38 @@ class RoutineScheduleReconcilerTest {
         }
 
         assertTrue(result.isSuccess)
+        assertEquals(listOf("r1", "r3"), scheduler.scheduled)
+    }
+
+    /** Mirrors [WorkManagerRoutineScheduler]'s own defensive duration re-check using the SAME
+     * shared [RoutineDurationValidator], without needing the Robolectric/WorkManager harness
+     * `WorkManagerRoutineSchedulerTest` already covers that concrete implementation with —
+     * proves `reconcileAll` behaves correctly when the scheduler it calls silently declines to
+     * schedule an over-limit routine (no exception, unlike [RecordingScheduler]'s `throwForId`),
+     * exactly like the real implementation does. */
+    private class DurationValidatingScheduler : RoutineScheduler {
+        val scheduled = mutableListOf<String>()
+        override fun scheduleActivation(routine: CommuteRoutine) {
+            val validation = RoutineDurationValidator.validateSelf(routine)
+            if (validation is RoutineDurationValidationResult.ExceedsDailyLimit) return
+            scheduled += routine.id
+        }
+        override fun cancelActivation(routineId: String) = Unit
+        override suspend fun isActivationRunning(routineId: String): Boolean = false
+    }
+
+    @Test
+    fun `an over-limit routine is silently skipped, without preventing other routines from being reconciled`() = runTest {
+        val validBefore = routine("r1", enabled = true) // default 07:00-09:00, 2h
+        val overLimit = routine("r2", enabled = true).copy(startTime = LocalTime.of(6, 0), endTime = LocalTime.of(13, 0)) // 7h
+        val validAfter = routine("r3", enabled = true)
+        val repository = FakeRoutineRepository(listOf(validBefore, overLimit, validAfter))
+        val scheduler = DurationValidatingScheduler()
+
+        RoutineScheduleReconciler(repository, scheduler, RecordingWidgetUpdater()).reconcileAll()
+
+        // r2 is silently dropped by the scheduler itself; r1 and r3 (before and after it in
+        // iteration order) are scheduled exactly as if r2 were never there.
         assertEquals(listOf("r1", "r3"), scheduler.scheduled)
     }
 
