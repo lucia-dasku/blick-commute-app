@@ -171,7 +171,7 @@
          notifications have no reliable collapse state to hide the real text behind). "Tap for
          details" means what it says: tapping opens Routine Details, which shows the real
          message in full. -->
-    <string name="notification_disruption_available">Disruption available · Tap for details</string>
+    <string name="notification_disruption_available">⚠️ Disruption available · Tap for details</string>
     <!-- The ongoing/promoted notification's Stop action (see RoutineNotificationBuilder,
          StopRoutineNotificationReceiver) — stops today's active window early, same effect
          as "pause for today" on the routine details screen. -->

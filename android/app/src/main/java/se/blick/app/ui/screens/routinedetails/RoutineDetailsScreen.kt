@@ -238,6 +238,50 @@ internal fun RoutineDetailsContent(
     val locale = LocalLocale.current.platformLocale
 
     Column(modifier.verticalScroll(rememberScrollState()).padding(16.dp)) {
+        // Shown first, above everything else including the routine's own name -- a relevant
+        // disruption is the whole reason someone taps the notification or widget to "see more"
+        // (see RoutineNotificationBuilder.contentIntent / RoutineWidgetTapIntent, which both
+        // land here), so it must be the first thing visible without any scrolling, not buried
+        // below routine details/actions/departures. Skipped entirely once a fetch has actually
+        // completed and found nothing relevant: a "Disruptions" heading over an empty/"none"
+        // message is noise once that's confirmed, not useful signal. Loading and Unavailable are
+        // each still shown -- neither one means "no disruptions", just "don't know yet" /
+        // "couldn't check".
+        if (disruptionsState !is DisruptionsState.NoDisruptions) {
+            Text(stringResource(R.string.routine_details_disruptions_heading), style = MaterialTheme.typography.titleMedium)
+            Spacer(Modifier.height(12.dp))
+            DisruptionsSection(disruptionsState)
+            Spacer(Modifier.height(20.dp))
+            HorizontalDivider()
+            Spacer(Modifier.height(16.dp))
+        }
+
+        // Live departures come right after disruptions (or first, if there are none) -- the
+        // other reason someone opens this screen from the notification/widget, ahead of the
+        // routine's own (static, rarely-checked) name/schedule details and management actions
+        // below.
+        Row(
+            modifier = Modifier.fillMaxWidth(),
+            horizontalArrangement = Arrangement.SpaceBetween,
+            verticalAlignment = Alignment.CenterVertically,
+        ) {
+            Text(stringResource(R.string.routine_details_departures_heading), style = MaterialTheme.typography.titleMedium)
+            Button(onClick = onRefresh, enabled = !isRefreshing) {
+                Text(stringResource(R.string.routine_details_refresh_action))
+            }
+        }
+        if (isRefreshing) {
+            Spacer(Modifier.height(8.dp))
+            LinearProgressIndicator(Modifier.fillMaxWidth())
+        }
+        Spacer(Modifier.height(12.dp))
+
+        DeparturesSection(departuresState, routine.transportMode, locale, onRefresh)
+
+        Spacer(Modifier.height(20.dp))
+        HorizontalDivider()
+        Spacer(Modifier.height(16.dp))
+
         // routine.name's own default pattern is "{siteName} → {destination}" (see
         // RoutineCreateViewModel.selectDirection) -- a separate site-name line here would
         // just repeat it a second time.
@@ -278,43 +322,6 @@ internal fun RoutineDetailsContent(
             deleteFailed = deleteFailed,
             onRequestDelete = onRequestDelete,
         )
-
-        Spacer(Modifier.height(20.dp))
-        HorizontalDivider()
-        Spacer(Modifier.height(16.dp))
-
-        Row(
-            modifier = Modifier.fillMaxWidth(),
-            horizontalArrangement = Arrangement.SpaceBetween,
-            verticalAlignment = Alignment.CenterVertically,
-        ) {
-            Text(stringResource(R.string.routine_details_departures_heading), style = MaterialTheme.typography.titleMedium)
-            Button(onClick = onRefresh, enabled = !isRefreshing) {
-                Text(stringResource(R.string.routine_details_refresh_action))
-            }
-        }
-        if (isRefreshing) {
-            Spacer(Modifier.height(8.dp))
-            LinearProgressIndicator(Modifier.fillMaxWidth())
-        }
-        Spacer(Modifier.height(12.dp))
-
-        DeparturesSection(departuresState, routine.transportMode, locale, onRefresh)
-
-        // The whole disruptions section -- heading included -- is skipped entirely once a
-        // fetch has actually completed and found nothing relevant: a "Disruptions" heading
-        // over an empty/"none" message is noise once that's confirmed, not useful signal.
-        // Loading and Unavailable are each still shown -- neither one means "no disruptions",
-        // just "don't know yet" / "couldn't check".
-        if (disruptionsState !is DisruptionsState.NoDisruptions) {
-            Spacer(Modifier.height(20.dp))
-            HorizontalDivider()
-            Spacer(Modifier.height(16.dp))
-
-            Text(stringResource(R.string.routine_details_disruptions_heading), style = MaterialTheme.typography.titleMedium)
-            Spacer(Modifier.height(12.dp))
-            DisruptionsSection(disruptionsState)
-        }
 
         // Debug-only manual notification trigger (Part 6 of the ongoing-notification
         // foundation milestone) — see RoutineDetailsViewModel.showDebugTestNotification's
@@ -776,7 +783,7 @@ private fun DisruptionRow(disruption: Disruption) {
                 horizontalArrangement = Arrangement.SpaceBetween,
                 verticalAlignment = Alignment.CenterVertically,
             ) {
-                Text(disruption.message.header, style = MaterialTheme.typography.bodyLarge, modifier = Modifier.weight(1f))
+                Text("⚠️ ${disruption.message.header}", style = MaterialTheme.typography.bodyLarge, modifier = Modifier.weight(1f))
                 IconButton(onClick = { expanded = !expanded }) {
                     Icon(
                         imageVector = if (expanded) Icons.Filled.KeyboardArrowUp else Icons.Filled.KeyboardArrowDown,

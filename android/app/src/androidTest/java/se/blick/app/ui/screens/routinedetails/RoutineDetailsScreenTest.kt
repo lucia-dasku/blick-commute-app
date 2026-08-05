@@ -157,7 +157,8 @@ class RoutineDetailsScreenTest {
         setContent(DisruptionsState.Loaded(listOf(d)))
 
         composeRule.onNodeWithText(heading()).assertExists()
-        composeRule.onNodeWithText(d.message.header).assertExists()
+        // substring = true -- the rendered header is prefixed with a "⚠️ " warning symbol.
+        composeRule.onNodeWithText(d.message.header, substring = true).assertExists()
         composeRule.onNodeWithText(d.message.details).assertDoesNotExist()
     }
 
@@ -166,10 +167,10 @@ class RoutineDetailsScreenTest {
         val d = disruption()
         setContent(DisruptionsState.Loaded(listOf(d)))
 
-        // The card sits below several other sections in RoutineDetailsContent's scrollable
-        // Column -- performScrollTo() is required first since the button can be off-screen at
-        // the initial scroll position, and a click at an off-screen coordinate is silently a
-        // no-op on a real device rather than throwing.
+        // The disruptions section is the first thing in RoutineDetailsContent's scrollable
+        // Column, so this button is normally already on-screen -- performScrollTo() is kept
+        // anyway as a defensive no-op, since a click at an off-screen coordinate would otherwise
+        // be silently ignored on a real device rather than throwing.
         val expandDescription = composeRule.activity.getString(R.string.routine_details_disruption_expand)
         composeRule.onNodeWithContentDescription(expandDescription).performScrollTo().performClick()
 
@@ -195,8 +196,9 @@ class RoutineDetailsScreenTest {
         val second = disruption(id = "d2", header = "Escalator out of service")
         setContent(DisruptionsState.Loaded(listOf(first, second)))
 
-        composeRule.onNodeWithText(first.message.header).assertExists()
-        composeRule.onNodeWithText(second.message.header).assertExists()
+        // substring = true -- the rendered header is prefixed with a "⚠️ " warning symbol.
+        composeRule.onNodeWithText(first.message.header, substring = true).assertExists()
+        composeRule.onNodeWithText(second.message.header, substring = true).assertExists()
     }
 
     // ---- Shared line-number badge (see se.blick.app.ui.components.LineBadge) — the same
