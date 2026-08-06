@@ -335,4 +335,16 @@ class RoutineDurationValidatorTest {
         val subject = routine(id = "subject", activeDays = setOf(DayOfWeek.MONDAY), startTime = LocalTime.of(6, 0), endTime = LocalTime.of(13, 0), enabled = false)
         assertExceeds(RoutineDurationValidator.validateSelf(subject), DayOfWeek.MONDAY, 420)
     }
+
+    @Test
+    fun `validateSelf accepts a routine whose own duration is exactly 300 minutes`() {
+        val subject = routine(id = "subject", activeDays = setOf(DayOfWeek.MONDAY), startTime = LocalTime.of(7, 0), endTime = LocalTime.of(12, 0))
+        assertValid(RoutineDurationValidator.validateSelf(subject))
+    }
+
+    @Test
+    fun `validateSelf rejects a routine whose own duration is 301 minutes`() {
+        val subject = routine(id = "subject", activeDays = setOf(DayOfWeek.MONDAY), startTime = LocalTime.of(7, 0), endTime = LocalTime.of(12, 1))
+        assertExceeds(RoutineDurationValidator.validateSelf(subject), DayOfWeek.MONDAY, 301)
+    }
 }

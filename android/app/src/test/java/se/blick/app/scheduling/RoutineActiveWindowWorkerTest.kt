@@ -680,31 +680,27 @@ class RoutineActiveWindowWorkerTest {
     // ----
 
     @Test
-    fun `a hard real-elapsed-time safety cap stops the loop before a DST-extended window's natural end`() = runTest {
-        // 2026-10-25 is Stockholm's actual autumn DST transition (clocks fall back from 03:00
-        // CEST to 02:00 CET) -- verified directly via java.time: a configured "00:00-05:00"
-        // window (naively 5h, passes validateSelf's own <= MAX_DAILY_ACTIVE_MINUTES check) on
-        // this specific Sunday spans a REAL 6 hours, from instant 2026-10-24T22:00:00Z to
-        // 2026-10-25T04:00:00Z -- 30 real minutes past this worker's own
-        // HARD_FOREGROUND_RUNTIME_CAP_MINUTES (330min/5h30m) safety backstop. This proves the
-        // cap stops the loop on its own merit, rather than this worker trusting
-        // NextOccurrenceCalculator's own (correctly DST-aware, but still just one signal)
-        // windowEnd alone. elapsedRealtime advances in lockstep with clock here (30min/tick)
-        // -- both clocks representing NORMAL real-time passage together, unlike the dedicated
-        // wall-clock-drift tests below, which deliberately desync them.
+    fun `autumn DST -- a 5-hour local window spans 6 real hours, but the flat 330-minute cap stops it first`() = runTest {
+        // 2027-10-31 is a real Stockholm autumn DST transition (clocks fall back from 03:00 CEST
+        // to 02:00 CET) -- verified directly via java.time: a configured "00:00-05:00" window
+        // (300 local minutes -- exactly MAX_DAILY_ACTIVE_MINUTES) on this specific Sunday spans a
+        // REAL 360 minutes (6 hours), from instant 2027-10-30T22:00:00Z to 2027-10-31T04:00:00Z.
+        // Autumn never shortens the gap to the NEXT occurrence (see
+        // EffectiveHardCapMinutesTest's own autumn test), so this occurrence's effective cap
+        // stays the full, unreduced HARD_FOREGROUND_RUNTIME_CAP_MINUTES -- proving that constant
+        // ALONE (no DST-specific reduction needed here, exactly as its own doc describes) stops
+        // this run 30 real minutes before its own natural, DST-extended end.
         val stockholm = ZoneId.of("Europe/Stockholm")
         val stockholmZoneProvider = DeviceZoneProvider { stockholm }
-        val windowStartInstant = Instant.parse("2026-10-24T22:00:00Z")
-        val naturalWindowEndInstant = Instant.parse("2026-10-25T04:00:00Z") // verified: real 6h later
+        val windowStartInstant = Instant.parse("2027-10-30T22:00:00Z")
+        val naturalWindowEndInstant = Instant.parse("2027-10-31T04:00:00Z") // verified: real 360min later
         val clock = TickingClock(windowStartInstant, stockholm)
         val elapsedRealtime = FakeElapsedRealtimeProvider()
         val dstRoutine = routine(startTime = LocalTime.of(0, 0), endTime = LocalTime.of(5, 0))
             .copy(activeDays = setOf(DayOfWeek.SUNDAY))
-        // 10 real minutes/tick -- deliberately less than the 30-minute margin between where the
-        // cap fires (roughly HARD_FOREGROUND_RUNTIME_CAP_MINUTES plus one tick, since the very
-        // first getById call -- before any occurrence-runtime state exists -- already advances
-        // both clocks once) and the natural DST-extended end at 360 minutes, so the two can
-        // never collide at the same tick regardless of that extra advance.
+        // 10 real minutes/tick -- elapsedRealtime advances in lockstep with clock here, both
+        // representing NORMAL real-time passage together, unlike the wall-clock-drift test
+        // below, which deliberately desyncs them.
         val repository = ScriptedRoutineRepository(clock, advanceSecondsPerCall = 600, elapsedRealtime = elapsedRealtime) { dstRoutine }
         val notifier = RecordingNotifier()
         val scheduler = RecordingScheduler()
@@ -723,33 +719,27 @@ class RoutineActiveWindowWorkerTest {
         val result = worker.doWork()
 
         assertTrue(result is ListenableWorker.Result.Success)
-        // Stopped meaningfully before the DST-extended natural end (360 real minutes in)...
+        // Stopped well before the DST-extended natural end (360 real minutes in)...
         assertTrue(clock.instant.isBefore(naturalWindowEndInstant))
-        // ...but not before the hard cap itself could plausibly have been reached (330 real
-        // minutes in) -- together these two bounds pin down exactly where the loop stopped.
+        // ...specifically via the hard cap tracking real elapsed time, not the local-clock
+        // windowEnd, which this DST-extended occurrence would not have reached for another 30
+        // real minutes.
         assertTrue(elapsedRealtime.millis >= Duration.ofMinutes(HARD_FOREGROUND_RUNTIME_CAP_MINUTES).toMillis())
-        // rescheduleSkippingToday (not rescheduleNext) was used -- proves this was treated as an
-        // early, non-natural stop, exactly like the notifications-unavailable/handled-failure
-        // paths, not a normal end-of-window completion.
-        assertEquals(LocalDate.of(2026, 10, 25), scheduler.scheduledRoutines.single().pausedDate)
+        assertEquals(LocalDate.of(2027, 10, 31), scheduler.scheduledRoutines.single().pausedDate)
     }
 
     @Test
     fun `a wall clock jump backward while the worker runs does not affect the hard cap's timing`() = runTest {
-        // Same DST setup as above (natural end ~360 real minutes in) -- but the wall clock is
-        // yanked backward by 5 hours mid-run (simulating the user changing the device clock, or
-        // an NTP correction). A backward jump only ever makes "is the window still open"
-        // (windowEnd, wall-clock-based) look MORE true, never less, so it can't itself end the
-        // loop -- only the hard cap, tracking elapsedRealtime (deliberately advanced in lockstep
-        // with the clock here, desynced only by the one jump below), can.
-        val stockholm = ZoneId.of("Europe/Stockholm")
-        val stockholmZoneProvider = DeviceZoneProvider { stockholm }
-        val windowStartInstant = Instant.parse("2026-10-24T22:00:00Z")
-        val clock = TickingClock(windowStartInstant, stockholm)
+        // A plain, non-DST 5-hour routine -- the wall clock is yanked backward by 5 hours mid-run
+        // (simulating the user changing the device clock, or an NTP correction). A backward jump
+        // only ever makes "is the window still open" (windowEnd, wall-clock-based) look MORE
+        // true, never less -- so it makes windowEnd permanently unreachable for the rest of this
+        // run, and only the hard cap, tracking elapsedRealtime (deliberately advanced in lockstep
+        // with the clock here, desynced only by the one jump below), can be what stops the loop.
+        val clock = TickingClock(Instant.parse("2026-07-27T05:00:00Z"), zone) // 07:00 local, Monday
         val elapsedRealtime = FakeElapsedRealtimeProvider()
-        val dstRoutine = routine(startTime = LocalTime.of(0, 0), endTime = LocalTime.of(5, 0))
-            .copy(activeDays = setOf(DayOfWeek.SUNDAY))
-        val baseRepository = ScriptedRoutineRepository(clock, advanceSecondsPerCall = 600, elapsedRealtime = elapsedRealtime) { dstRoutine }
+        val testRoutine = routine(startTime = LocalTime.of(7, 0), endTime = LocalTime.of(12, 0)) // 5h
+        val baseRepository = ScriptedRoutineRepository(clock, advanceSecondsPerCall = 600, elapsedRealtime = elapsedRealtime) { testRoutine }
         var callCount = 0
         val repository = object : RoutineRepository by baseRepository {
             override suspend fun getById(id: String): CommuteRoutine? {
@@ -768,70 +758,22 @@ class RoutineActiveWindowWorkerTest {
         val departures = FakeDepartureRepository { DeparturesResult(clock.instant(), 9145, listOf(sampleDeparture())) }
 
         val worker = buildWorker(
-            dstRoutine.id,
+            testRoutine.id,
             repository,
             GetLiveDeparturesUseCase(departures, clock),
             notifier,
             scheduler,
             clock,
-            deviceZoneProvider = stockholmZoneProvider,
             elapsedRealtimeProvider = elapsedRealtime,
         )
         val result = worker.doWork()
 
         assertTrue(result is ListenableWorker.Result.Success)
-        // The hard cap still fired based on elapsedRealtime, unaffected by the wall-clock jump.
+        // The hard cap still fired based on elapsedRealtime, unaffected by the wall-clock jump --
+        // without it, the backward jump would make this run continue indefinitely, since
+        // windowEnd (wall-clock-based) can never be reached again.
         assertTrue(elapsedRealtime.millis >= Duration.ofMinutes(HARD_FOREGROUND_RUNTIME_CAP_MINUTES).toMillis())
-        assertEquals(LocalDate.of(2026, 10, 25), scheduler.scheduledRoutines.single().pausedDate)
-    }
-
-    @Test
-    fun `a wall clock jump forward while the worker runs does not accelerate the hard cap`() = runTest {
-        // Same DST setup, but the wall clock jumps FORWARD by 5 minutes mid-run (simulating an
-        // NTP correction) -- small enough that, added to its own normal 10min/tick progression,
-        // it still never reaches the natural (DST-extended, ~360min) window end, so only the
-        // hard cap -- tracking the UNAFFECTED elapsedRealtime -- can be what stops the loop.
-        val stockholm = ZoneId.of("Europe/Stockholm")
-        val stockholmZoneProvider = DeviceZoneProvider { stockholm }
-        val windowStartInstant = Instant.parse("2026-10-24T22:00:00Z")
-        val naturalWindowEndInstant = Instant.parse("2026-10-25T04:00:00Z")
-        val clock = TickingClock(windowStartInstant, stockholm)
-        val elapsedRealtime = FakeElapsedRealtimeProvider()
-        val dstRoutine = routine(startTime = LocalTime.of(0, 0), endTime = LocalTime.of(5, 0))
-            .copy(activeDays = setOf(DayOfWeek.SUNDAY))
-        val baseRepository = ScriptedRoutineRepository(clock, advanceSecondsPerCall = 600, elapsedRealtime = elapsedRealtime) { dstRoutine }
-        var callCount = 0
-        val repository = object : RoutineRepository by baseRepository {
-            override suspend fun getById(id: String): CommuteRoutine? {
-                val result = baseRepository.getById(id)
-                callCount++
-                if (callCount == 5) {
-                    clock.instant = clock.instant.plusSeconds(5 * 60)
-                }
-                return result
-            }
-        }
-        val notifier = RecordingNotifier()
-        val scheduler = RecordingScheduler()
-        val departures = FakeDepartureRepository { DeparturesResult(clock.instant(), 9145, listOf(sampleDeparture())) }
-
-        val worker = buildWorker(
-            dstRoutine.id,
-            repository,
-            GetLiveDeparturesUseCase(departures, clock),
-            notifier,
-            scheduler,
-            clock,
-            deviceZoneProvider = stockholmZoneProvider,
-            elapsedRealtimeProvider = elapsedRealtime,
-        )
-        val result = worker.doWork()
-
-        assertTrue(result is ListenableWorker.Result.Success)
-        assertTrue("expected the forward jump to still land before the natural DST-extended end", clock.instant.isBefore(naturalWindowEndInstant))
-        // Stopped via the hard cap (elapsedRealtime-based), not accelerated by the forward jump.
-        assertTrue(elapsedRealtime.millis >= Duration.ofMinutes(HARD_FOREGROUND_RUNTIME_CAP_MINUTES).toMillis())
-        assertEquals(LocalDate.of(2026, 10, 25), scheduler.scheduledRoutines.single().pausedDate)
+        assertEquals(LocalDate.of(2026, 7, 27), scheduler.scheduledRoutines.single().pausedDate)
     }
 
     // ---- Exact boundary: 329min proceeds, 330min stops (short window, no DST involved -- the
@@ -874,13 +816,14 @@ class RoutineActiveWindowWorkerTest {
     }
 
     @Test
-    fun `exactly 330 minutes of real elapsed time stops the loop cleanly`() = runTest {
+    fun `an occurrence already at exactly 330 minutes of real elapsed time is detected as exhausted before foreground even starts`() = runTest {
         val clock = TickingClock(Instant.parse("2026-07-27T05:00:00Z"), zone)
         val testRoutine = routine()
         val repository = ScriptedRoutineRepository(clock) { testRoutine }
         val notifier = RecordingNotifier()
         val scheduler = RecordingScheduler()
         val runtimeRepository = FakeRoutineOccurrenceRuntimeRepository()
+        val ownershipRepository = FakeRoutineWorkOwnershipRepository()
         val occurrenceIdentity = ZonedDateTime.of(LocalDate.of(2026, 7, 27), testRoutine.endTime, zone).toInstant().toEpochMilli()
         runtimeRepository.preSeed(
             testRoutine.id,
@@ -903,16 +846,22 @@ class RoutineActiveWindowWorkerTest {
             clock,
             routineOccurrenceRuntimeRepository = runtimeRepository,
             elapsedRealtimeProvider = elapsedRealtime,
+            routineWorkOwnershipRepository = ownershipRepository,
         )
         val result = worker.doWork()
 
         assertTrue(result is ListenableWorker.Result.Success)
-        // The cap fired on the VERY FIRST tick check, before any loop-tick notification posted.
+        // Caught by doWork's own pre-foreground read -- setForeground is never even called, so
+        // nothing was ever posted, content ownership was never claimed, and there is nothing to
+        // remove.
         assertTrue(notifier.shown.isEmpty())
-        // enteredForeground was still true (setForeground's own initial notification did post),
-        // so the finally block's normal ownership-safe cleanup still removes it.
-        assertEquals(1, notifier.removeCallCount)
+        assertEquals(0, notifier.removeCallCount)
+        assertTrue(ownershipRepository.claimedIds.isEmpty())
         assertEquals(LocalDate.of(2026, 7, 27), scheduler.scheduledRoutines.single().pausedDate)
+        // rescheduleSkippingToday -- not a plain rescheduleNext, which would recompute the SAME
+        // still-open occurrence and cause WorkManagerRoutineScheduler to enqueue it with a zero
+        // initial delay, spinning this exact same exhaustion check in a tight loop.
+        assertNoZeroDelayReschedule(scheduler, clock)
     }
 
     // ---- Reboot fallback and cross-instance continuation ----
@@ -968,10 +917,10 @@ class RoutineActiveWindowWorkerTest {
     @Test
     fun `a replacement worker starting after four hours has only 90 minutes remaining, not a fresh 330`() = runTest {
         val clock = TickingClock(Instant.parse("2026-07-27T05:00:00Z"), zone) // 07:00 local, Monday
-        // A long (5h, still within validateSelf's own limit), plain non-DST window -- its
+        // A long (4h, still within validateSelf's own limit), plain non-DST window -- its
         // natural end is comfortably far away, so only the hard cap (using the pre-seeded,
         // reused start below) can be what stops this run within the few ticks this test needs.
-        val testRoutine = routine(startTime = LocalTime.of(7, 0), endTime = LocalTime.of(12, 0))
+        val testRoutine = routine(startTime = LocalTime.of(7, 0), endTime = LocalTime.of(11, 0))
         val runtimeRepository = FakeRoutineOccurrenceRuntimeRepository()
         val bootCountProvider = FakeBootCountProvider(bootCount = 1)
         val occurrenceIdentity = ZonedDateTime.of(LocalDate.of(2026, 7, 27), testRoutine.endTime, zone).toInstant().toEpochMilli()
@@ -1067,27 +1016,20 @@ class RoutineActiveWindowWorkerTest {
         assertEquals(LocalDate.of(2026, 7, 27), scheduler.scheduledRoutines.single().pausedDate)
     }
 
-    // ---- Clearing persisted runtime state once an occurrence is over ----
+    // ---- Effective (possibly DST-reduced) cap survives reboot/replacement identically to the
+    // flat 330-minute one -- see EffectiveHardCapMinutesTest for the pure-function arithmetic ----
 
     @Test
-    fun `occurrence runtime state is cleared once the hard cap stops the loop`() = runTest {
-        val clock = TickingClock(Instant.parse("2026-07-27T05:00:00Z"), zone)
-        val testRoutine = routine()
-        val repository = ScriptedRoutineRepository(clock) { testRoutine }
+    fun `a normal, non-DST-adjacent 5-hour occurrence is freshly established with the full, unreduced 330-minute cap`() = runTest {
+        // A plain Monday-only routine -- its own next occurrence is a full, ordinary week away,
+        // nowhere near any DST transition, so effectiveHardCapMinutes must not reduce anything.
+        val clock = TickingClock(Instant.parse("2026-07-27T05:00:00Z"), zone) // 07:00 local, Monday
+        val testRoutine = routine(startTime = LocalTime.of(7, 0), endTime = LocalTime.of(12, 0)) // 5h
+        val runtimeRepository = FakeRoutineOccurrenceRuntimeRepository()
+        val elapsedRealtime = FakeElapsedRealtimeProvider(startMillis = Duration.ofMinutes(42).toMillis())
+        val repository = ScriptedRoutineRepository(clock, advanceSecondsPerCall = 0) { testRoutine }
         val notifier = RecordingNotifier()
         val scheduler = RecordingScheduler()
-        val runtimeRepository = FakeRoutineOccurrenceRuntimeRepository()
-        val occurrenceIdentity = ZonedDateTime.of(LocalDate.of(2026, 7, 27), testRoutine.endTime, zone).toInstant().toEpochMilli()
-        runtimeRepository.preSeed(
-            testRoutine.id,
-            RoutineOccurrenceRuntimeState(
-                occurrenceWindowEndEpochMilli = occurrenceIdentity,
-                monotonicStartElapsedRealtimeMillis = 0L,
-                bootCountAtStart = 1,
-                hardStopEpochMilli = Long.MAX_VALUE,
-            ),
-        )
-        val elapsedRealtime = FakeElapsedRealtimeProvider(startMillis = Duration.ofMinutes(HARD_FOREGROUND_RUNTIME_CAP_MINUTES).toMillis())
         val departures = FakeDepartureRepository { DeparturesResult(clock.instant(), 9145, listOf(sampleDeparture())) }
 
         val worker = buildWorker(
@@ -1099,6 +1041,324 @@ class RoutineActiveWindowWorkerTest {
             clock,
             routineOccurrenceRuntimeRepository = runtimeRepository,
             elapsedRealtimeProvider = elapsedRealtime,
+        )
+        val job = launch { worker.doWork() }
+        runCurrent() // let the first tick run up to its delay(30s) suspension point
+        job.cancel()
+        job.join()
+
+        // No reduction was applied: the persisted start exactly matches elapsedRealtime's own
+        // value at the moment foreground execution began (42 minutes -- unchanged from its
+        // starting value, since advanceSecondsPerCall = 0 here), proving
+        // createFreshOccurrenceRuntimeState did not shift it earlier at all.
+        val established = runtimeRepository.peek(testRoutine.id)
+        assertEquals(Duration.ofMinutes(42).toMillis(), established?.monotonicStartElapsedRealtimeMillis)
+    }
+
+    @Test
+    fun `a reboot after a DST-reduced occurrence started respects the REDUCED 270-minute cap, not the flat 330`() = runTest {
+        val stockholm = ZoneId.of("Europe/Stockholm")
+        val stockholmZoneProvider = DeviceZoneProvider { stockholm }
+        // Saturday 27 March 2027 07:00-12:00 (5h) -- the occurrence immediately before the
+        // Stockholm spring transition, whose effective cap createFreshOccurrenceRuntimeState
+        // computes as 270 minutes (see EffectiveHardCapMinutesTest for the exact arithmetic):
+        // true start 2027-03-27T06:00:00Z, so its reduced hard stop is 2027-03-27T10:30:00Z --
+        // 06:00Z + 270min -- rather than the flat cap's 2027-03-27T11:30:00Z -- 06:00Z + 330min.
+        val dstRoutine = routine(startTime = LocalTime.of(7, 0), endTime = LocalTime.of(12, 0))
+            .copy(activeDays = setOf(DayOfWeek.SATURDAY, DayOfWeek.SUNDAY))
+        val runtimeRepository = FakeRoutineOccurrenceRuntimeRepository()
+        val bootCountProvider = FakeBootCountProvider(bootCount = 1)
+
+        // First worker instance: establishes this occurrence's runtime state for real (a genuine
+        // fresh creation, exercising effectiveHardCapMinutes), then is torn down mid-run --
+        // simulating the process being killed -- before ever reaching its own hard cap or
+        // natural end.
+        run {
+            val clock = TickingClock(Instant.parse("2027-03-27T06:00:00Z"), stockholm) // 07:00 local
+            val elapsedRealtime = FakeElapsedRealtimeProvider()
+            val repository = ScriptedRoutineRepository(clock, advanceSecondsPerCall = 0, elapsedRealtime = elapsedRealtime) { dstRoutine }
+            val notifier = RecordingNotifier()
+            val scheduler = RecordingScheduler()
+            val departures = FakeDepartureRepository { DeparturesResult(clock.instant(), 9145, listOf(sampleDeparture())) }
+            val worker = buildWorker(
+                dstRoutine.id,
+                repository,
+                GetLiveDeparturesUseCase(departures, clock),
+                notifier,
+                scheduler,
+                clock,
+                deviceZoneProvider = stockholmZoneProvider,
+                routineOccurrenceRuntimeRepository = runtimeRepository,
+                elapsedRealtimeProvider = elapsedRealtime,
+                bootCountProvider = bootCountProvider,
+            )
+            val job = launch { worker.doWork() }
+            runCurrent()
+            job.cancel()
+            job.join()
+        }
+        assertTrue("expected the first run to have established runtime state", runtimeRepository.peek(dstRoutine.id) != null)
+
+        // Second worker instance: a different boot (the device rebooted), wall clock now sitting
+        // BETWEEN the REDUCED (270min -> 10:30Z) and the flat (330min -> 11:30Z) thresholds, and
+        // still strictly before Saturday's own natural windowEnd (12:00 local -> 11:00Z, so
+        // NextOccurrenceCalculator still reports this occurrence as ActiveNow rather than already
+        // elapsed) -- only reported as exhausted here if the reduction survived the reboot.
+        val postRebootClock = TickingClock(Instant.parse("2027-03-27T10:45:00Z"), stockholm)
+        val postRebootElapsedRealtime = FakeElapsedRealtimeProvider(startMillis = Duration.ofMinutes(2).toMillis())
+        val postRebootBootCountProvider = FakeBootCountProvider(bootCount = 2)
+        val postRebootNotifier = RecordingNotifier()
+        val postRebootScheduler = RecordingScheduler()
+        val postRebootRepository = ScriptedRoutineRepository(postRebootClock, elapsedRealtime = postRebootElapsedRealtime) { dstRoutine }
+        val postRebootDepartures = FakeDepartureRepository { DeparturesResult(postRebootClock.instant(), 9145, listOf(sampleDeparture())) }
+        val postRebootWorker = buildWorker(
+            dstRoutine.id,
+            postRebootRepository,
+            GetLiveDeparturesUseCase(postRebootDepartures, postRebootClock),
+            postRebootNotifier,
+            postRebootScheduler,
+            postRebootClock,
+            deviceZoneProvider = stockholmZoneProvider,
+            routineOccurrenceRuntimeRepository = runtimeRepository,
+            elapsedRealtimeProvider = postRebootElapsedRealtime,
+            bootCountProvider = postRebootBootCountProvider,
+        )
+        val result = postRebootWorker.doWork()
+
+        assertTrue(result is ListenableWorker.Result.Success)
+        // Never entered foreground -- the reboot-fallback wall-clock check (using the SAME
+        // reduced 270-minute effective cap the first run computed) already shows this occurrence
+        // exhausted, at a wall-clock instant that would NOT yet have tripped the flat 330-minute
+        // cap.
+        assertTrue(postRebootNotifier.shown.isEmpty())
+        assertEquals(0, postRebootNotifier.removeCallCount)
+        assertEquals(LocalDate.of(2027, 3, 27), postRebootScheduler.scheduledRoutines.single().pausedDate)
+    }
+
+    @Test
+    fun `the next genuine occurrence replaces a left-in-place exhausted state normally`() = runTest {
+        // Continues the reboot scenario above -- once Sunday's OWN occurrence becomes eligible
+        // (a genuinely different windowEnd), createFreshOccurrenceRuntimeState must overwrite the
+        // stale, still-exhausted Saturday row rather than being confused by it.
+        val stockholm = ZoneId.of("Europe/Stockholm")
+        val stockholmZoneProvider = DeviceZoneProvider { stockholm }
+        val dstRoutine = routine(startTime = LocalTime.of(7, 0), endTime = LocalTime.of(12, 0))
+            .copy(activeDays = setOf(DayOfWeek.SATURDAY, DayOfWeek.SUNDAY))
+        val runtimeRepository = FakeRoutineOccurrenceRuntimeRepository()
+        val staleSaturdayIdentity = ZonedDateTime.of(LocalDate.of(2027, 3, 27), dstRoutine.endTime, stockholm).toInstant().toEpochMilli()
+        // Saturday's occurrence already exhausted its (reduced, 270min) cap and was correctly
+        // left in place (see the hard-cap-does-not-clear tests above) -- simulating that Sunday
+        // now starts completely independently, in a fresh process.
+        runtimeRepository.preSeed(
+            dstRoutine.id,
+            RoutineOccurrenceRuntimeState(
+                occurrenceWindowEndEpochMilli = staleSaturdayIdentity,
+                monotonicStartElapsedRealtimeMillis = -Duration.ofMinutes(60).toMillis(),
+                bootCountAtStart = 1,
+                hardStopEpochMilli = Instant.parse("2027-03-27T10:30:00Z").toEpochMilli(),
+            ),
+        )
+
+        val clock = TickingClock(Instant.parse("2027-03-28T05:00:00Z"), stockholm) // Sunday 07:00 local
+        val elapsedRealtime = FakeElapsedRealtimeProvider(startMillis = Duration.ofMinutes(500).toMillis())
+        val bootCountProvider = FakeBootCountProvider(bootCount = 1)
+        val repository = ScriptedRoutineRepository(clock, advanceSecondsPerCall = 0, elapsedRealtime = elapsedRealtime) { dstRoutine }
+        val notifier = RecordingNotifier()
+        val scheduler = RecordingScheduler()
+        val departures = FakeDepartureRepository { DeparturesResult(clock.instant(), 9145, listOf(sampleDeparture())) }
+
+        val worker = buildWorker(
+            dstRoutine.id,
+            repository,
+            GetLiveDeparturesUseCase(departures, clock),
+            notifier,
+            scheduler,
+            clock,
+            deviceZoneProvider = stockholmZoneProvider,
+            routineOccurrenceRuntimeRepository = runtimeRepository,
+            elapsedRealtimeProvider = elapsedRealtime,
+            bootCountProvider = bootCountProvider,
+        )
+        val job = launch { worker.doWork() }
+        runCurrent()
+
+        // Sunday's occurrence runs normally -- the stale Saturday row (a different windowEnd) did
+        // not block it at all.
+        assertTrue("expected Sunday's occurrence to run normally despite Saturday's stale exhausted row", notifier.shown.isNotEmpty())
+        val sundayIdentity = ZonedDateTime.of(LocalDate.of(2027, 3, 28), dstRoutine.endTime, stockholm).toInstant().toEpochMilli()
+        assertEquals(sundayIdentity, runtimeRepository.peek(dstRoutine.id)?.occurrenceWindowEndEpochMilli)
+
+        job.cancel()
+        job.join()
+    }
+
+    // ---- Fail-safe: a runtime-state READ failure must never be treated as "nothing exists,
+    // safe to start fresh" -- see RoutineActiveWindowWorker.doWork's own comment ----
+
+    @Test
+    fun `a runtime-state read failure before foreground refuses to grant a fresh allowance`() = runTest {
+        val clock = TickingClock(Instant.parse("2026-07-27T05:00:00Z"), zone)
+        val testRoutine = routine(startTime = LocalTime.of(7, 0), endTime = LocalTime.of(12, 0)) // 5h
+        val repository = ScriptedRoutineRepository(clock) { testRoutine }
+        val notifier = RecordingNotifier()
+        val scheduler = RecordingScheduler()
+        val ownershipRepository = FakeRoutineWorkOwnershipRepository()
+        val failingRuntimeRepository = object : RoutineOccurrenceRuntimeRepository {
+            override suspend fun get(routineId: String): RoutineOccurrenceRuntimeState = throw IOException("Room unavailable")
+            override suspend fun save(routineId: String, state: RoutineOccurrenceRuntimeState) {
+                throw AssertionError("must never be reached -- doWork should return before any save is attempted")
+            }
+            override suspend fun clear(routineId: String) {
+                throw AssertionError("must never be reached -- doWork should return before any clear is attempted")
+            }
+        }
+        val departures = FakeDepartureRepository { error("unused -- the loop must never be entered") }
+
+        val worker = buildWorker(
+            testRoutine.id,
+            repository,
+            GetLiveDeparturesUseCase(departures, clock),
+            notifier,
+            scheduler,
+            clock,
+            routineOccurrenceRuntimeRepository = failingRuntimeRepository,
+            routineWorkOwnershipRepository = ownershipRepository,
+        )
+        val result = worker.doWork()
+
+        assertTrue(result is ListenableWorker.Result.Success)
+        // Never entered foreground -- a read failure is treated with the same caution as
+        // "possibly already exhausted," not optimistically as "definitely fresh."
+        assertTrue(notifier.shown.isEmpty())
+        assertEquals(0, notifier.removeCallCount)
+        assertTrue(ownershipRepository.claimedIds.isEmpty())
+        assertEquals(LocalDate.of(2026, 7, 27), scheduler.scheduledRoutines.single().pausedDate)
+        assertNoZeroDelayReschedule(scheduler, clock)
+    }
+
+    @Test
+    fun `a fresh occurrence's runtime-state SAVE failure before foreground refuses to grant a fresh allowance`() = runTest {
+        // Nothing persisted yet (a genuinely new occurrence) -- get() succeeds and returns null,
+        // but the subsequent save() of the freshly-computed state fails. This must be refused
+        // exactly like the read-failure case above: a fresh occurrence's safety record must be
+        // DURABLY persisted BEFORE foreground execution, not used in-memory-only, or a
+        // replacement worker/reboot later finding nothing in Room would wrongly treat this same
+        // occurrence as never having started and grant it a second, unbounded allowance.
+        val clock = TickingClock(Instant.parse("2026-07-27T05:00:00Z"), zone)
+        val testRoutine = routine(startTime = LocalTime.of(7, 0), endTime = LocalTime.of(12, 0)) // 5h
+        val repository = ScriptedRoutineRepository(clock) { testRoutine }
+        val notifier = RecordingNotifier()
+        val scheduler = RecordingScheduler()
+        val ownershipRepository = FakeRoutineWorkOwnershipRepository()
+        var saveAttempted = false
+        val failingSaveRepository = object : RoutineOccurrenceRuntimeRepository {
+            override suspend fun get(routineId: String): RoutineOccurrenceRuntimeState? = null
+            override suspend fun save(routineId: String, state: RoutineOccurrenceRuntimeState) {
+                saveAttempted = true
+                throw IOException("Room unavailable")
+            }
+            override suspend fun clear(routineId: String) {
+                throw AssertionError("must never be reached -- doWork should return before any clear is attempted")
+            }
+        }
+        val departures = FakeDepartureRepository { error("unused -- the loop must never be entered") }
+
+        val worker = buildWorker(
+            testRoutine.id,
+            repository,
+            GetLiveDeparturesUseCase(departures, clock),
+            notifier,
+            scheduler,
+            clock,
+            routineOccurrenceRuntimeRepository = failingSaveRepository,
+            routineWorkOwnershipRepository = ownershipRepository,
+        )
+        val result = worker.doWork()
+
+        assertTrue(result is ListenableWorker.Result.Success)
+        assertTrue("expected the save to have actually been attempted", saveAttempted)
+        // Never entered foreground -- setForeground is called AFTER the fresh state is durably
+        // saved, not before, so a save failure here is caught in time to refuse foreground
+        // entirely rather than proceeding on an in-memory-only budget.
+        assertTrue(notifier.shown.isEmpty())
+        assertEquals(0, notifier.removeCallCount)
+        assertTrue(ownershipRepository.claimedIds.isEmpty())
+        assertEquals(LocalDate.of(2026, 7, 27), scheduler.scheduledRoutines.single().pausedDate)
+        assertNoZeroDelayReschedule(scheduler, clock)
+    }
+
+    // ---- Clearing persisted runtime state once an occurrence is over ----
+
+    @Test
+    fun `occurrence runtime state is NOT cleared when the loop itself hits the hard cap`() = runTest {
+        val clock = TickingClock(Instant.parse("2026-07-27T05:00:00Z"), zone) // 07:00 local, Monday
+        val testRoutine = routine(startTime = LocalTime.of(7, 0), endTime = LocalTime.of(8, 0)) // 1h -- room for a few ticks
+        val runtimeRepository = FakeRoutineOccurrenceRuntimeRepository()
+        val occurrenceIdentity = ZonedDateTime.of(LocalDate.of(2026, 7, 27), testRoutine.endTime, zone).toInstant().toEpochMilli()
+        runtimeRepository.preSeed(
+            testRoutine.id,
+            RoutineOccurrenceRuntimeState(
+                occurrenceWindowEndEpochMilli = occurrenceIdentity,
+                monotonicStartElapsedRealtimeMillis = 0L,
+                bootCountAtStart = 1,
+                hardStopEpochMilli = Long.MAX_VALUE,
+            ),
+        )
+        // Starts at 327 minutes -- still under the cap by the time doWork's own pre-foreground
+        // check reads it (after the one, unavoidable tick from fetching the routine itself,
+        // before this check even runs), and still under it for the loop's own first tick (so at
+        // least one notification posts, proving the loop genuinely ran) -- but crosses the cap on
+        // the loop's SECOND tick. This test genuinely exercises the loop's own hitHardRuntimeCap
+        // path, not the pre-foreground one (see the dedicated pre-foreground exhaustion test
+        // elsewhere in this file for that case).
+        val elapsedRealtime = FakeElapsedRealtimeProvider(startMillis = Duration.ofMinutes(327).toMillis())
+        val repository = ScriptedRoutineRepository(clock, advanceSecondsPerCall = 60, elapsedRealtime = elapsedRealtime) { testRoutine }
+        val notifier = RecordingNotifier()
+        val scheduler = RecordingScheduler()
+        val departures = FakeDepartureRepository { DeparturesResult(clock.instant(), 9145, listOf(sampleDeparture())) }
+
+        val worker = buildWorker(
+            testRoutine.id,
+            repository,
+            GetLiveDeparturesUseCase(departures, clock),
+            notifier,
+            scheduler,
+            clock,
+            routineOccurrenceRuntimeRepository = runtimeRepository,
+            elapsedRealtimeProvider = elapsedRealtime,
+        )
+        worker.doWork()
+
+        // The loop did genuinely run (proving the pre-foreground check let it through)...
+        assertTrue("expected at least one tick to post before the cap fired", notifier.shown.isNotEmpty())
+        // ...but once it hit the cap, its record was left in place rather than cleared -- so a
+        // replacement worker or reboot-recovered process can still see this occurrence is
+        // exhausted (see the dedicated reboot/replacement tests for that).
+        assertTrue(runtimeRepository.clearedRoutineIds.isEmpty())
+        assertEquals(occurrenceIdentity, runtimeRepository.peek(testRoutine.id)?.occurrenceWindowEndEpochMilli)
+        assertEquals(LocalDate.of(2026, 7, 27), scheduler.scheduledRoutines.single().pausedDate)
+    }
+
+    @Test
+    fun `occurrence runtime state IS cleared on a normal natural-end completion`() = runTest {
+        // Contrast with the test above -- clearing is only skipped specifically because the hard
+        // cap fired; every OTHER ending still clears normally, exactly as before.
+        val clock = TickingClock(Instant.parse("2026-07-27T05:00:00Z"), zone)
+        val testRoutine = routine() // 07:00-07:02
+        val repository = ScriptedRoutineRepository(clock) { testRoutine }
+        val notifier = RecordingNotifier()
+        val scheduler = RecordingScheduler()
+        val runtimeRepository = FakeRoutineOccurrenceRuntimeRepository()
+        val departures = FakeDepartureRepository { DeparturesResult(clock.instant(), 9145, listOf(sampleDeparture())) }
+
+        val worker = buildWorker(
+            testRoutine.id,
+            repository,
+            GetLiveDeparturesUseCase(departures, clock),
+            notifier,
+            scheduler,
+            clock,
+            routineOccurrenceRuntimeRepository = runtimeRepository,
         )
         worker.doWork()
 

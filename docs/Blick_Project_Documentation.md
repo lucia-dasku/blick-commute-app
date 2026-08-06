@@ -1477,27 +1477,79 @@ run continuously — it schedules work only around each routine's own configured
   departures over the network and reflecting them in a notification — is a data-sync
   operation, not media, location, or camera/mic use. See [Foreground service
   types](https://developer.android.com/develop/background-work/services/fgs/service-types).
-  Android 15+ limits a `dataSync` foreground service to six total hours in any rolling
-  24-hour period. Blick enforces its own, more conservative
-  `MAX_DAILY_ACTIVE_MINUTES` (five hours) under that platform limit
-  (`RoutineDurationValidator`), rejected at save time in the create/edit flow,
-  with a defensive, single-routine re-check before scheduling or activating
-  (`WorkManagerRoutineScheduler`, `RoutineActiveWindowWorker`) so an old or
-  otherwise-invalid stored routine can never be scheduled either. The check
-  evaluates every rolling 24-hour window a set of routines' occurrences could
-  fall into — not just each configured weekday in isolation — since two
-  routines on adjacent days (e.g. one ending late Monday, another starting
-  early Tuesday) can combine inside a single rolling 24-hour span even though
-  each day's own total is within the limit on its own.
-  `RoutineActiveWindowWorker` also enforces its own hard, real-elapsed-time
-  safety cap (`HARD_FOREGROUND_RUNTIME_CAP_MINUTES`, 5h30m) independent of a
-  routine's configured end time, since a daylight-saving "fall back" transition
-  can make a nominally-5-hour local-clock window run up to an hour longer in
-  real time than the configured duration alone would suggest — this is why the
-  worker stops reliably well inside Android's own limit rather than running
-  indefinitely — routine windows are expected to be short (a typical commute
-  window), and these two checks are what keep that true rather than merely
-  assuming it.
+  Android 15+ limits a `dataSync` foreground service to six total hours (360
+  minutes) in any rolling 24-hour period. Blick enforces its own, more
+  conservative `MAX_DAILY_ACTIVE_MINUTES` (5 hours / 300 minutes) under that
+  platform limit (`RoutineDurationValidator`), rejected at save time in the
+  create/edit flow, with a defensive, single-routine re-check before
+  scheduling or activating (`WorkManagerRoutineScheduler`,
+  `RoutineActiveWindowWorker`) so an old or otherwise-invalid stored routine
+  can never be scheduled either. The check evaluates every rolling 24-hour
+  window a set of routines' occurrences could fall into — not just each
+  configured weekday in isolation — since two routines on adjacent days (e.g.
+  one ending late Monday, another starting early Tuesday) can combine inside
+  a single rolling 24-hour span even though each day's own total is within
+  the limit on its own. This validator is deliberately timezone-naive — it
+  models recurrence on a synthetic week of fixed, exactly 1440-minute-apart
+  local-clock days, which real clocks are not across a daylight-saving
+  transition — so it plays no part in the DST protection described below;
+  that lives entirely downstream, in `RoutineActiveWindowWorker` itself.
+
+  `RoutineActiveWindowWorker` separately enforces its own hard,
+  real-elapsed-time safety cap, `HARD_FOREGROUND_RUNTIME_CAP_MINUTES` (330
+  minutes), measured via `SystemClock.elapsedRealtime()` rather than
+  wall-clock time so it stays correct across wall-clock jumps and even a
+  device reboot mid-occurrence (the persisted start is reused, never reset).
+  This single constant covers two distinct DST risks, though only one needs
+  special handling:
+
+  - **Autumn ("fall back")**: a single occurrence's own local-clock window
+    can span the repeated hour, so a nominally 5-hour configured window can
+    genuinely take up to 6 real hours to elapse. The flat 330-minute cap
+    alone already stops that safely, 30 minutes short of Android's real
+    360-minute limit — no extra mechanism needed.
+  - **Spring ("spring forward")**: the real gap between one occurrence's
+    start and the NEXT one's can be shortened — e.g. Stockholm: Saturday
+    27 March 2027 07:00 to Sunday 28 March 07:00 are only 23 real hours
+    apart, not the 24 a local-clock model assumes. If both occurrences were
+    allowed the full 330 minutes, up to 330 + (24h − 23h) = 390 real minutes
+    could land inside a single rolling 24-hour window. `effectiveHardCapMinutes`
+    detects exactly this — using real `ZonedDateTime`/`NextOccurrenceCalculator`
+    arithmetic, never a hardcoded date or `isDaylightSavings` check — and
+    reduces the CURRENT occurrence's own effective cap by exactly the
+    shortfall (60 minutes for the standard Stockholm case, giving 270), just
+    enough to keep the combined real total at or under 330. The FOLLOWING
+    occurrence (Sunday's) is not permanently affected — its own next gap is
+    an ordinary week later, so its cap is the full 330 again. See
+    `EffectiveHardCapMinutesTest` for this arithmetic verified against the
+    actual 2027 transition, and `RoutineActiveWindowWorkerTest` for the
+    end-to-end proof.
+
+  The reduced value is persisted in the EXISTING `RoutineOccurrenceRuntimeState`
+  (no new table, column, or repository) by recording a start shifted earlier
+  than the true foreground-entry instant by exactly the reduction — so the
+  worker's own unchanged, fixed-330-minute comparison fires sooner, at the
+  correct reduced threshold, identically whether the same worker keeps
+  running, a replacement worker takes over, or the device reboots
+  mid-occurrence. Reaching the cap deliberately does NOT clear this record —
+  a still-open occurrence whose runtime is merely exhausted must remain
+  detectable, otherwise a replacement worker or reboot-recovered process
+  could treat it as fresh and grant a brand new allowance, defeating the cap
+  entirely. `doWork` checks the persisted state BEFORE calling
+  `setForeground` for exactly this reason: an already-exhausted occurrence
+  never re-enters foreground at all (avoiding even a brief restart after
+  reboot/recovery), and a read failure is treated with the same caution as
+  "possibly already exhausted" rather than optimistically as "definitely
+  fresh," so uncertainty can never manufacture additional foreground time.
+  The next GENUINE occurrence (a different window) always replaces an old
+  record normally regardless, via the same upsert used today.
+
+  This is a release guard for Blick's current one-routine Stockholm beta,
+  not a complete solution: it does not model multiple simultaneously-active
+  routines against real elapsed time, arbitrary non-Stockholm time-zone
+  changes, or Android's actual app-wide foreground-service accounting — a
+  correct long-term answer needs an app-wide ledger of actual foreground
+  runtime, not recurring local-clock minutes.
 
 ### Scheduling, replacing, and cancelling work
 

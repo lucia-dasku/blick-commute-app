@@ -7,12 +7,27 @@ import java.time.LocalTime
 
 /**
  * Android limits a `dataSync` foreground service (see
- * [se.blick.app.scheduling.RoutineActiveWindowWorker]'s own class doc) to six combined hours per
- * rolling 24 hours while Blick is in the background. Five hours is a deliberately conservative
- * application-level ceiling under that platform limit — shared by the create/edit validation
- * ([RoutineDurationValidator]) and the defensive scheduling checks
- * ([se.blick.app.scheduling.WorkManagerRoutineScheduler],
+ * [se.blick.app.scheduling.RoutineActiveWindowWorker]'s own class doc) to six combined hours
+ * (360 minutes) per rolling 24 hours while Blick is in the background — see
+ * [Android foreground-service timeouts](https://developer.android.com/develop/background-work/services/fgs/timeout).
+ * 300 minutes (5 hours) is a deliberately conservative application-level ceiling under that
+ * platform limit — shared by the create/edit validation ([RoutineDurationValidator]) and the
+ * defensive scheduling checks ([se.blick.app.scheduling.WorkManagerRoutineScheduler],
  * [se.blick.app.scheduling.RoutineActiveWindowWorker]) so every caller agrees on the same number.
+ *
+ * This validator is deliberately timezone-naive: it models every occurrence purely from the
+ * routine's own configured [java.time.LocalTime]s and [java.time.DayOfWeek]s, on a synthetic
+ * repeating week where consecutive days are always exactly 1440 minutes apart (see [validate]'s
+ * own doc). Real clocks are not always 1440 minutes apart across a daylight-saving transition, so
+ * a 5-hour-configured occurrence can genuinely take longer than 5 real hours to elapse, or land
+ * closer to a neighboring occurrence than this model assumes. That real-elapsed-time risk is
+ * handled separately, downstream, by
+ * [se.blick.app.scheduling.RoutineActiveWindowWorker]'s own `HARD_FOREGROUND_RUNTIME_CAP_MINUTES`
+ * — a real-elapsed-time backstop (measured via [android.os.SystemClock.elapsedRealtime], never
+ * wall-clock time) that both stops a single occurrence outright if it runs too long, and reduces
+ * its own effective cap for the specific occurrence immediately before a daylight-saving-shortened
+ * gap to the next one — see that constant's own doc for exactly how. This validator's job is only
+ * ever the CONFIGURED ceiling in local clock time; it does not need to know about DST at all.
  */
 const val MAX_DAILY_ACTIVE_MINUTES = 5 * 60
 
@@ -75,10 +90,18 @@ sealed interface RoutineDurationValidationResult {
  * ever allowed to save while disabled, re-enabling it would silently fail to schedule (caught
  * only by [validateSelf]'s defensive check, deep in the scheduler, with no user-visible feedback)
  * even though the UI would report the toggle as a success. Rejecting the excessive duration up
- * front, whether enabled or not, means that state can never be saved in the first place. (A
- * single routine's own recurring daily occurrences can never combine with EACH OTHER this way
- * regardless: the same clock-time window on consecutive days is always exactly 24 hours apart,
- * which a half-open 24-hour window can never fully contain twice.)
+ * front, whether enabled or not, means that state can never be saved in the first place. (Within
+ * this validator's OWN synthetic model, a single routine's own recurring daily occurrences can
+ * never combine with EACH OTHER to exceed its own configured duration: every occurrence for a
+ * given routine repeats on an exactly [MINUTES_PER_DAY]-minute cycle and every window this sweep
+ * scans is exactly [MINUTES_PER_DAY] minutes wide, so a window's combined contribution from two
+ * adjacent same-routine occurrences is invariant at exactly the configured duration, never more —
+ * whatever a window gains from one occurrence's tail is always exactly offset by what it loses
+ * from the next occurrence's head. That is a property of the MODEL, not a claim about real
+ * elapsed time: real clocks are not always exactly [MINUTES_PER_DAY] minutes apart across a
+ * daylight-saving transition, which is exactly why real-elapsed-time protection for THIS specific
+ * scenario lives downstream in [se.blick.app.scheduling.RoutineActiveWindowWorker] instead —
+ * see `HARD_FOREGROUND_RUNTIME_CAP_MINUTES`'s own doc.)
  *
  * Sums each qualifying occurrence's own configured duration rather than computing the union of
  * overlapping time ranges. Two routines active at the very same time still each run their OWN

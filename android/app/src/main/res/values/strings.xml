@@ -97,7 +97,7 @@
     <string name="routine_create_name_label">Routine name</string>
     <string name="routine_create_error_no_days">Select at least one day.</string>
     <string name="routine_create_error_time_range">End time must be after start time.</string>
-    <string name="routine_create_error_duration_limit">Your active routines can run for up to 5 hours per day.</string>
+    <string name="routine_create_error_duration_limit">Your active commute window can be up to 5 hours.</string>
     <string name="routine_create_save">Save routine</string>
     <string name="routine_create_save_error">Couldn\'t save your routine. Check your connection and try again.</string>
     <string name="routine_create_existing_not_found">This routine could not be found. It may have already been deleted.</string>

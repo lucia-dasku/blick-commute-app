@@ -65,25 +65,100 @@ internal const val DISRUPTIONS_FETCH_TIMEOUT_MS = 5_000L
  * independent of a routine's configured [ACTIVE_WINDOW_REFRESH_INTERVAL_MS]-ticked `windowEnd`,
  * which is derived from local clock-face start/end times and can diverge from real elapsed time
  * on a daylight-saving-time transition ([se.blick.app.domain.usecase.RoutineDurationValidator]'s
- * create/edit validation has no date/zone to see this with): the "clocks repeat one hour"
- * autumn transition means a nominally [se.blick.app.domain.usecase.MAX_DAILY_ACTIVE_MINUTES]-long
- * configured window can genuinely run up to an hour longer in real time than its clock-face
- * duration suggests. 330 minutes (5h30m) sits comfortably under Android's actual six-hour
- * `dataSync` foreground-service limit even in that worst case, so this worker always stops
- * itself well before the platform would — regardless of why real elapsed time might exceed
- * what was expected; DST is the one known cause, but this is a general safety net, not a
- * DST-specific special case.
+ * create/edit validation has no date/zone to see this with). Two distinct DST risks exist, and
+ * this one constant covers both, though only one of them needs a REDUCED effective cap:
+ *
+ * - **Autumn ("fall back")**: a single occurrence's own local-clock window can span the repeated
+ *   hour, so a nominally [se.blick.app.domain.usecase.MAX_DAILY_ACTIVE_MINUTES]-long (5h)
+ *   configured window can genuinely take up to an hour longer in real time than its clock-face
+ *   duration suggests — up to 6 real hours. This constant alone (330min/5h30m) already stops that
+ *   safely, comfortably under Android's actual six-hour `dataSync` foreground-service limit, with
+ *   no extra mechanism needed — see [doWork]'s main loop, which checks this independently of
+ *   `windowEnd` on every tick.
+ * - **Spring ("spring forward")**: the real gap between one occurrence's start and the NEXT one's
+ *   can be shortened to as little as 23 real hours (e.g. Stockholm: Saturday 07:00 to Sunday
+ *   07:00). If BOTH occurrences were allowed the full 330 minutes, up to 330 + (24h - 23h) = 390
+ *   minutes of combined foreground time could land inside a single real rolling 24-hour window —
+ *   over Android's limit. [effectiveHardCapMinutes] detects exactly this (using real
+ *   [ZonedDateTime]/[NextOccurrenceCalculator] arithmetic, never a hardcoded date or
+ *   `isDaylightSavings` check) and reduces the CURRENT occurrence's own effective cap just enough
+ *   to keep the combined total at or under this constant — see that function's own doc for the
+ *   exact calculation, and [RoutineOccurrenceRuntimeState] for how the reduced value is persisted
+ *   and enforced identically whether this same worker instance keeps running, a replacement
+ *   worker takes over, or the device reboots mid-occurrence.
  *
  * Measured via [ElapsedRealtimeProvider] (backed by [android.os.SystemClock.elapsedRealtime]),
  * never [clock]/[java.time.Instant]: wall-clock time can be moved forward or backward at any
  * moment by the user, NTP sync, or the network, none of which reflect how much real device time
  * has actually elapsed. This budget also belongs to the whole routine OCCURRENCE, not to a single
- * worker instance — see [RoutineOccurrenceRuntimeRepository] and [establishOccurrenceRuntimeState]
- * for how a replacement worker (WorkManager restarting this routine's unique work while the same
- * occurrence is still open) continues counting from the ORIGINAL start rather than being handed a
- * fresh allowance, and how a device reboot (which resets the monotonic clock itself) falls back to
- * a conservative wall-clock check instead of silently granting one either. */
+ * worker instance — see [RoutineOccurrenceRuntimeRepository] and
+ * [createFreshOccurrenceRuntimeState] for how a replacement worker (WorkManager restarting this
+ * routine's unique work while the same occurrence is still open) continues counting from the
+ * ORIGINAL start rather than being handed a fresh allowance, and how a device reboot (which
+ * resets the monotonic clock itself) falls back to a conservative wall-clock check instead of
+ * silently granting one either. */
 internal const val HARD_FOREGROUND_RUNTIME_CAP_MINUTES = 330L
+
+/**
+ * The real-elapsed-time cap THIS SPECIFIC occurrence ([windowStart]..[windowEnd], both already
+ * resolved to real instants via [NextOccurrenceCalculator]) should be measured against: normally
+ * [HARD_FOREGROUND_RUNTIME_CAP_MINUTES], but reduced when the gap to [routine]'s own NEXT genuine
+ * occurrence has been shortened by a daylight-saving transition — see
+ * [HARD_FOREGROUND_RUNTIME_CAP_MINUTES]'s own doc for why only the "spring forward" direction
+ * needs this (a "fall back" transition only ever LENGTHENS the gap between two same-clock-time
+ * starts, never shortens it).
+ *
+ * Deliberately reuses [NextOccurrenceCalculator] (unmodified) rather than any new date/timezone
+ * logic: calling it with THIS occurrence's own [windowEnd] as the reference instant correctly
+ * finds [routine]'s next eligible occurrence strictly after today, using the exact same DST-aware
+ * [ZonedDateTime] resolution the rest of the scheduling path already relies on.
+ *
+ * Two conditions must BOTH hold before any reduction applies:
+ *
+ * 1. The real gap to the next occurrence must itself be UNDER 24 real hours. A next occurrence
+ *    24 real hours or more away can never share any single rolling 24-hour window with THIS one
+ *    at all, however much DST distortion happens to sit somewhere between them — e.g. a routine
+ *    active Friday and the following Monday spans a real gap of roughly 71 hours even across a
+ *    spring transition, nowhere near the danger zone, and must NOT be reduced just because a
+ *    transition happens to fall somewhere in that multi-day span. Checked first, using the REAL
+ *    gap alone, before the local-vs-real comparison below is even computed.
+ * 2. Only once that holds does the real gap need to be SHORTER than the LOCAL one — the real
+ *    world diverging from what [se.blick.app.domain.usecase.RoutineDurationValidator]'s own
+ *    synthetic model assumes, i.e. a spring-forward transition sitting between the two
+ *    occurrences — for there to be any shortfall to protect against. [CommuteRoutine] has a
+ *    single, fixed start/end time applied to EVERY active day, so the closest two of a routine's
+ *    own occurrences can ever be, in LOCAL terms, is exactly 1440 minutes apart (consecutive
+ *    active days, same clock time each day); what can make the REAL gap shorter than that is only
+ *    ever a DST transition sitting between them, never a difference in configured clock time —
+ *    with no such transition nearby, the real gap tracks the local one exactly, so this never
+ *    reduces the cap either.
+ *
+ * The reduction itself compares two different ways of measuring the same gap:
+ * - the REAL gap: [Duration.between] the two occurrences' own [ZonedDateTime]s (zone/DST-aware).
+ * - the LOCAL (clock-face) gap: [Duration.between] the same two starts as plain
+ *   [java.time.LocalDateTime]s (zone-naive).
+ *
+ * For the standard Stockholm case (23 real hours where 24 local hours were expected — comfortably
+ * under the 24-hour gate above), the shortfall is 60 minutes, so the effective cap becomes
+ * 330 - 60 = 270 — see `EffectiveHardCapMinutesTest` for this, and the Friday-to-Monday
+ * counterexample above, both verified with real `java.time`/`Europe/Stockholm` arithmetic against
+ * the actual 2027 transition dates.
+ *
+ * Never negative: reduces the cap to zero at most, however large a shortfall this ever computes
+ * (not expected to exceed one DST hour in practice for any real [java.time.ZoneId]).
+ */
+internal fun effectiveHardCapMinutes(routine: CommuteRoutine, windowStart: ZonedDateTime, windowEnd: ZonedDateTime): Long {
+    val next = NextOccurrenceCalculator.nextOccurrence(routine, windowEnd, excludedDate = routine.pausedDate)
+    val nextStart = (next as? NextOccurrence.Upcoming)?.windowStart ?: return HARD_FOREGROUND_RUNTIME_CAP_MINUTES
+
+    val realGapMinutes = Duration.between(windowStart, nextStart).toMinutes()
+    if (realGapMinutes >= 24 * 60) return HARD_FOREGROUND_RUNTIME_CAP_MINUTES
+
+    val localGapMinutes = Duration.between(windowStart.toLocalDateTime(), nextStart.toLocalDateTime()).toMinutes()
+    val shortfallMinutes = (localGapMinutes - realGapMinutes).coerceAtLeast(0)
+
+    return (HARD_FOREGROUND_RUNTIME_CAP_MINUTES - shortfallMinutes).coerceAtLeast(0)
+}
 
 /**
  * Runs one routine's active window end to end: checks notification availability, enters
@@ -247,6 +322,52 @@ class RoutineActiveWindowWorker @AssistedInject constructor(
             return Result.success()
         }
         val windowEnd = occurrence.windowEnd
+        val windowStart = ZonedDateTime.of(windowEnd.toLocalDate(), routine.startTime, windowEnd.zone)
+
+        // Read BEFORE any foreground execution begins, and reused below rather than re-read --
+        // both so an already-exhausted occurrence (a replacement worker or reboot-recovered
+        // process picking up where an earlier run left off after hitting
+        // HARD_FOREGROUND_RUNTIME_CAP_MINUTES -- see RoutineOccurrenceRuntimeRepository's own
+        // doc on why that earlier run's record is never cleared) never even briefly re-enters
+        // foreground, and so a read failure here can be treated with the same fail-safe caution
+        // as "possibly already exhausted" rather than optimistically as "definitely fresh" -- see
+        // this call's own catch below. A WRITE failure, later, when a genuinely fresh occurrence's
+        // state is first durably saved, is treated with that exact same caution, not more
+        // leniently -- see createFreshOccurrenceRuntimeState's own doc and its call site's `?: run
+        // { ... }` fallback, which refuses foreground entry just the same as this READ failure
+        // does.
+        val persistedRuntimeState = try {
+            routineOccurrenceRuntimeRepository.get(routineId)
+        } catch (e: CancellationException) {
+            throw e
+        } catch (e: Exception) {
+            Log.w(
+                LOG_TAG,
+                "Failed to read occurrence runtime state for routine $routineId before entering " +
+                    "foreground; refusing to grant foreground time until this can be confirmed " +
+                    "safe, rather than risking a hidden already-exhausted occurrence being treated " +
+                    "as a fresh one",
+                e,
+            )
+            rescheduleSkippingToday(routineId)
+            runWidgetUpdateSafely { routineWidgetUpdater.reconcile() }
+            return Result.success()
+        }
+        // Only a state matching THIS exact occurrence (same windowEnd) is relevant here -- any
+        // other value belongs to an earlier, different occurrence and is simply stale (see
+        // createFreshOccurrenceRuntimeState, which overwrites it the normal way once this run
+        // proceeds).
+        val matchingRuntimeState = persistedRuntimeState?.takeIf { it.occurrenceWindowEndEpochMilli == windowEnd.toInstant().toEpochMilli() }
+        if (matchingRuntimeState != null && hasReachedHardRuntimeCap(matchingRuntimeState)) {
+            Log.w(
+                LOG_TAG,
+                "Routine $routineId's occurrence already exhausted its persisted real-elapsed-time " +
+                    "cap before this run even started -- not re-entering foreground execution.",
+            )
+            rescheduleSkippingToday(routineId)
+            runWidgetUpdateSafely { routineWidgetUpdater.reconcile() }
+            return Result.success()
+        }
 
         // Checked BEFORE any foreground execution or notification/channel construction begins
         // (see class doc) -- if unavailable, this occurrence is skipped exactly like a late
@@ -268,6 +389,18 @@ class RoutineActiveWindowWorker @AssistedInject constructor(
             return Result.success()
         }
 
+        // A genuinely fresh occurrence (matchingRuntimeState is null -- nothing usable was
+        // persisted above) needs its own runtime state established and DURABLY saved BEFORE
+        // foreground execution begins, not after: if the save fails, this refuses foreground
+        // entry exactly like the read failure above, rather than silently continuing on an
+        // in-memory-only budget a replacement worker or reboot could never see -- see
+        // createFreshOccurrenceRuntimeState's own doc.
+        val occurrenceRuntime = matchingRuntimeState ?: createFreshOccurrenceRuntimeState(routine, windowStart, windowEnd) ?: run {
+            rescheduleSkippingToday(routineId)
+            runWidgetUpdateSafely { routineWidgetUpdater.reconcile() }
+            return Result.success()
+        }
+
         var enteredForeground = false
         var notificationsBecameUnavailable = false
         var handledFailure = false
@@ -284,12 +417,6 @@ class RoutineActiveWindowWorker @AssistedInject constructor(
             setForeground(createForegroundInfo(routine))
             enteredForeground = true
             claimContentOwnership(routineId)
-
-            // Belongs to this OCCURRENCE (identified by windowEnd), not to this worker instance
-            // -- see establishOccurrenceRuntimeState's own doc. A replacement worker restarted
-            // for the same occurrence reuses the same recorded start rather than being handed a
-            // fresh HARD_FOREGROUND_RUNTIME_CAP_MINUTES allowance.
-            val occurrenceRuntime = establishOccurrenceRuntimeState(routineId, windowEnd)
 
             while (true) {
                 val current = routineRepository.getById(routineId) ?: break
@@ -465,17 +592,28 @@ class RoutineActiveWindowWorker @AssistedInject constructor(
             }
         }
 
-        // This occurrence is over one way or another (naturally, or via the hard cap) -- clear
-        // its runtime tracking so a genuinely NEW occurrence later never has to share space with
+        // This occurrence is over one way or another -- EXCEPT via the hard cap, its runtime
+        // tracking is cleared so a genuinely NEW occurrence later never has to share space with
         // stale data (though its own different windowEnd would already make old state
-        // irrelevant on its own -- see establishOccurrenceRuntimeState). Best-effort: a Room
-        // failure here must never prevent the reschedule decision below from running.
-        try {
-            routineOccurrenceRuntimeRepository.clear(routineId)
-        } catch (e: CancellationException) {
-            throw e
-        } catch (e: Exception) {
-            Log.w(LOG_TAG, "Failed to clear occurrence runtime state for routine $routineId", e)
+        // irrelevant on its own -- see createFreshOccurrenceRuntimeState). Deliberately NOT
+        // cleared when hitHardRuntimeCap is why this run stopped: this occurrence's window
+        // (windowEnd) has NOT actually ended yet, only its real-elapsed-time budget has -- if a
+        // replacement worker or reboot-recovered process ran again for this SAME still-open
+        // occurrence and found no persisted state (because it had been cleared here), it would
+        // treat it as fresh and grant a brand new allowance, defeating the whole cap. Leaving the
+        // exhausted record in place lets doWork's own pre-foreground check (above) detect that
+        // reliably instead -- the next GENUINE occurrence (a different windowEnd) replaces it the
+        // normal way regardless, via createFreshOccurrenceRuntimeState's own upsert, so nothing
+        // here is needed for that case either. Best-effort: a Room failure here must never
+        // prevent the reschedule decision below from running.
+        if (!hitHardRuntimeCap) {
+            try {
+                routineOccurrenceRuntimeRepository.clear(routineId)
+            } catch (e: CancellationException) {
+                throw e
+            } catch (e: Exception) {
+                Log.w(LOG_TAG, "Failed to clear occurrence runtime state for routine $routineId", e)
+            }
         }
 
         // notificationsBecameUnavailable/handledFailure/hitHardRuntimeCap: the loop broke or the
@@ -552,66 +690,84 @@ class RoutineActiveWindowWorker @AssistedInject constructor(
         }
     }
 
-    /** Returns the [RoutineOccurrenceRuntimeState] this run should measure
-     * [HARD_FOREGROUND_RUNTIME_CAP_MINUTES] against — either a FRESH one (a genuinely new
-     * occurrence, identified by [windowEnd]; or nothing usable was persisted, e.g. a Room
-     * failure reading it), or the ALREADY-PERSISTED one from an earlier worker instance for this
-     * SAME occurrence, reused as-is so a replacement worker (or one restarted after a reboot)
-     * continues counting from the ORIGINAL start rather than being handed a fresh allowance.
-     * [RoutineOccurrenceRuntimeState.occurrenceWindowEndEpochMilli] is what distinguishes "same
-     * occurrence" from "a new one" — every occurrence of a routine has a distinct [windowEnd].
+    /** Creates and DURABLY persists a FRESH [RoutineOccurrenceRuntimeState] for [routine]'s
+     * occurrence identified by [windowEnd] — called only once [doWork]'s own pre-foreground read
+     * has already confirmed no matching state exists yet to reuse instead. [windowStart] and
+     * [windowEnd] are the two real instants [NextOccurrenceCalculator] resolved this occurrence's
+     * own local start/end times to.
      *
-     * Called once, right after entering foreground execution, since establishing (or persisting
-     * a freshly-established) state is itself irrelevant to a run that never gets that far (the
-     * pre-loop late-start/notifications-unavailable early returns reschedule and exit before any
-     * of this matters).
+     * The [effectiveHardCapMinutes] this occurrence should be measured against — ordinarily
+     * [HARD_FOREGROUND_RUNTIME_CAP_MINUTES], but reduced when [routine]'s NEXT genuine occurrence
+     * has been pulled closer by a daylight-saving transition (see that function's own doc) — is
+     * encoded into BOTH persisted fields by recording a start shifted EARLIER than the true start
+     * by exactly the reduction, rather than by adding a new field: [hasReachedHardRuntimeCap]
+     * always compares against the same fixed [HARD_FOREGROUND_RUNTIME_CAP_MINUTES] constant, so a
+     * start shifted `reduction` minutes into the past makes that SAME fixed-constant comparison
+     * fire exactly `effectiveHardCapMinutes` minutes after the TRUE start — on both the monotonic
+     * and the reboot-fallback wall-clock path identically, since both are derived from this one
+     * shifted reference point.
      *
-     * Best-effort on both the read and the write: a Room failure here must never prevent this
-     * run's foreground loop from proceeding — it just means this one run's hard-cap measurement
-     * starts fresh from now (in memory only) rather than continuing a previous run's count,
-     * which is the same conservative direction as this whole cap already errs in (stopping
-     * sooner, never later, than a perfectly-continuous count would). */
-    private suspend fun establishOccurrenceRuntimeState(routineId: String, windowEnd: ZonedDateTime): RoutineOccurrenceRuntimeState {
-        val occurrenceIdentityMillis = windowEnd.toInstant().toEpochMilli()
-        val existing = try {
-            routineOccurrenceRuntimeRepository.get(routineId)
+     * Returns `null` if the write itself fails, rather than a state this run would otherwise use
+     * in-memory-only: a fresh occurrence's safety record must be DURABLY persisted before
+     * foreground execution begins, or a replacement worker or reboot-recovered process later,
+     * finding nothing in Room for this routine, would wrongly treat this SAME occurrence as never
+     * having started and grant it a second, fresh allowance on top of whatever real time this run
+     * already used — exactly the "uncertainty manufactures extra foreground time" outcome this
+     * whole mechanism exists to prevent (see [doWork]'s own pre-foreground READ failure handling
+     * for the symmetric case, and its own comment at the call site here for how a `null` return is
+     * handled: foreground execution is refused entirely, the same as an already-exhausted
+     * occurrence). */
+    private suspend fun createFreshOccurrenceRuntimeState(
+        routine: CommuteRoutine,
+        windowStart: ZonedDateTime,
+        windowEnd: ZonedDateTime,
+    ): RoutineOccurrenceRuntimeState? {
+        val capMinutes = effectiveHardCapMinutes(routine, windowStart, windowEnd)
+        val reductionMillis = Duration.ofMinutes(HARD_FOREGROUND_RUNTIME_CAP_MINUTES - capMinutes).toMillis()
+        val trueStartElapsedRealtimeMillis = elapsedRealtimeProvider.elapsedRealtimeMillis()
+        val trueStartInstant = clock.instant()
+
+        val fresh = RoutineOccurrenceRuntimeState(
+            occurrenceWindowEndEpochMilli = windowEnd.toInstant().toEpochMilli(),
+            monotonicStartElapsedRealtimeMillis = trueStartElapsedRealtimeMillis - reductionMillis,
+            bootCountAtStart = bootCountProvider.currentBootCount(),
+            hardStopEpochMilli = trueStartInstant.minusMillis(reductionMillis)
+                .plus(Duration.ofMinutes(HARD_FOREGROUND_RUNTIME_CAP_MINUTES))
+                .toEpochMilli(),
+        )
+        return try {
+            routineOccurrenceRuntimeRepository.save(routine.id, fresh)
+            fresh
         } catch (e: CancellationException) {
             throw e
         } catch (e: Exception) {
-            Log.w(LOG_TAG, "Failed to read occurrence runtime state for routine $routineId; starting a fresh runtime budget for this run", e)
+            Log.w(
+                LOG_TAG,
+                "Failed to durably persist a fresh occurrence runtime state for routine " +
+                    "${routine.id} before entering foreground; refusing to grant foreground time " +
+                    "until this can be confirmed safe, rather than risking an in-memory-only " +
+                    "budget a replacement worker or reboot could never see",
+                e,
+            )
             null
         }
-        if (existing != null && existing.occurrenceWindowEndEpochMilli == occurrenceIdentityMillis) {
-            return existing
-        }
-        val fresh = RoutineOccurrenceRuntimeState(
-            occurrenceWindowEndEpochMilli = occurrenceIdentityMillis,
-            monotonicStartElapsedRealtimeMillis = elapsedRealtimeProvider.elapsedRealtimeMillis(),
-            bootCountAtStart = bootCountProvider.currentBootCount(),
-            hardStopEpochMilli = clock.instant().toEpochMilli() + Duration.ofMinutes(HARD_FOREGROUND_RUNTIME_CAP_MINUTES).toMillis(),
-        )
-        try {
-            routineOccurrenceRuntimeRepository.save(routineId, fresh)
-        } catch (e: CancellationException) {
-            throw e
-        } catch (e: Exception) {
-            Log.w(LOG_TAG, "Failed to persist occurrence runtime state for routine $routineId; the hard cap still applies for this run using an in-memory start", e)
-        }
-        return fresh
     }
 
-    /** Whether [state]'s occurrence has now run for [HARD_FOREGROUND_RUNTIME_CAP_MINUTES] of
-     * REAL elapsed time. While the device's boot count still matches
-     * [RoutineOccurrenceRuntimeState.bootCountAtStart], [elapsedRealtimeProvider] (monotonic,
-     * unaffected by wall-clock changes) is the authoritative measurement. Once the boot count no
-     * longer matches, the device has rebooted since this occurrence started —
+    /** Whether [state]'s occurrence has now run for [HARD_FOREGROUND_RUNTIME_CAP_MINUTES] of REAL
+     * elapsed time SINCE ITS RECORDED START — which [createFreshOccurrenceRuntimeState] may have
+     * deliberately set earlier than the occurrence's true foreground-entry instant, to encode a
+     * REDUCED effective cap using this same fixed constant (see that function's own doc); this
+     * comparison itself never changes on either path below. While the device's boot count still
+     * matches [RoutineOccurrenceRuntimeState.bootCountAtStart], [elapsedRealtimeProvider]
+     * (monotonic, unaffected by wall-clock changes) is the authoritative measurement. Once the
+     * boot count no longer matches, the device has rebooted since this occurrence started —
      * [android.os.SystemClock.elapsedRealtime] has been reset by the OS and comparing against
      * [RoutineOccurrenceRuntimeState.monotonicStartElapsedRealtimeMillis] directly would be
      * meaningless — so this falls back to [RoutineOccurrenceRuntimeState.hardStopEpochMilli], an
-     * absolute wall-clock instant computed once when the occurrence first began, which survives
-     * a reboot precisely because it is NOT itself reset by one. Either way, this never grants a
-     * fresh [HARD_FOREGROUND_RUNTIME_CAP_MINUTES] allowance just because the worker (or the
-     * device) restarted. */
+     * absolute wall-clock instant computed once when the occurrence first began (from that SAME,
+     * possibly-shifted start), which survives a reboot precisely because it is NOT itself reset by
+     * one. Either way, this never grants a fresh [HARD_FOREGROUND_RUNTIME_CAP_MINUTES] allowance
+     * just because the worker (or the device) restarted. */
     private fun hasReachedHardRuntimeCap(state: RoutineOccurrenceRuntimeState): Boolean {
         val capMillis = Duration.ofMinutes(HARD_FOREGROUND_RUNTIME_CAP_MINUTES).toMillis()
         return if (bootCountProvider.currentBootCount() == state.bootCountAtStart) {
