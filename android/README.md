@@ -80,11 +80,21 @@ gates a proper rationale UI behind `AppSettingsDataStore.hasSeenNotificationRati
 and the routine details screen's own notification-status hint re-checks availability on
 every lifecycle resume (e.g. after returning from system settings), not just once. A
 device timezone change is reconciled live via a runtime-registered
-`ACTION_TIMEZONE_CHANGED` receiver in `BlickApplication` calling the same
-`RoutineScheduleReconciler` used at process start. A `scheduling/BootCompletedReceiver`
-also re-schedules every enabled routine immediately on `ACTION_BOOT_COMPLETED`, as a
-backstop alongside WorkManager's own persistence and the process-start reconciliation pass
-for a reboot after which the app process never happens to start on its own first. The last
+`ACTION_TIMEZONE_CHANGED` receiver in `BlickApplication`, routed through
+`scheduling/NotificationRecoveryCoordinator.onTimeZoneChanged()` — the same coordinator
+that also owns process-start (`onAppStart`) and foreground (`onForeground`) reconciliation,
+serialized by one shared `Mutex` so none of the three can ever race and replace each
+other's work. `onTimeZoneChanged` deliberately still calls `RoutineScheduleReconciler`'s
+own unconditional `reconcileAll()` (replacing even an already-`RUNNING` worker — a
+genuine timezone change must reinterpret a routine's configured local time against the
+new zone even for a window that's active right now), while `onAppStart`/`onForeground`
+instead respect `RoutineScheduler.isActivationRunning` and never replace one. There is no
+dedicated Blick-specific `BOOT_COMPLETED` receiver: `Application.onCreate()` always runs
+before any component executes in a freshly-started process, so WorkManager's own bundled
+boot receiver (which independently re-establishes its persisted work's scheduling after a
+reboot) already causes `onAppStart()` to run on every boot that starts the process at
+all — a separate Blick-specific receiver only added an uncoordinated second reconciler
+capable of replacing a worker `onAppStart()` had already correctly left running. The last
 successful departure snapshot used for the `Stale` fallback is durably persisted via a
 Room-backed `StaleSnapshotRepository` (`data/local/room/StaleSnapshotEntity.kt`), keyed by
 routine id and scoped to the exact `DepartureIdentity` that produced it, and shared by both
@@ -99,7 +109,8 @@ stays valid on the promoted surface too. Its `PendingIntent` targets
 `@AndroidEntryPoint` `BroadcastReceiver` only ever triggered by this app's own explicit
 intent, which hands off to `notification/StopRoutineNotificationAction` — kept as its
 own plain, unit-tested class rather than logic embedded directly in the receiver (see
-`scheduling/RoutineScheduleReconciler` for the same split behind `BootCompletedReceiver`).
+`scheduling/NotificationRecoveryCoordinator` for the same split behind `BlickApplication`'s
+own receivers).
 Tapping it has exactly the same effect as the existing "pause for today" control:
 it writes `pausedDate` to today's date (resolved in the device's own zone, matching
 `RoutineActiveWindowWorker`'s own break condition, not a zone-less clock) and
@@ -180,9 +191,11 @@ handled failure before or during foreground execution), each mapped to whichever
 exit — see `RoutineActiveWindowWorker.doWork`'s own doc for the full enumeration; no
 second worker, timer, foreground service, or departure engine exists. Every other
 routine-lifecycle mutation (create/edit save, enable/disable, pause/resume, delete, the
-notification's own Stop action via `StopRoutineNotificationAction`) and
-`RoutineScheduleReconciler.reconcileAll()` (covering process start, device-timezone
-change, and reboot via `BootCompletedReceiver`) call `RoutineWidgetUpdater.reconcile()`,
+notification's own Stop action via `StopRoutineNotificationAction`),
+`NotificationRecoveryCoordinator` (covering process start, foreground, and
+notification-availability recovery — which itself also covers reboot), and
+`RoutineScheduleReconciler.reconcileAll()` (covering device-timezone change, invoked via
+that same coordinator's `onTimeZoneChanged()`) call `RoutineWidgetUpdater.reconcile()`,
 which reuses `NextOccurrenceCalculator` (the same active-window calculation the worker
 and scheduler already use) to decide the correct resulting state from scratch — including
 checking `NotificationAvailabilityChecker` itself, so `reconcile()` reports

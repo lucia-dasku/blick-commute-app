@@ -471,7 +471,9 @@ ones, bringing the fully verified total to 425 JVM / 33 instrumented, stated abo
   it never starts a foreground service directly from the `BOOT_COMPLETED` broadcast
   itself, so the "no `dataSync` foreground service directly from `BOOT_COMPLETED`"
   restriction on modern Android (see the architecture section) is still respected —
-  WorkManager decides when the actual foreground worker later runs.
+  WorkManager decides when the actual foreground worker later runs. **Later removed** —
+  see "Reboot and process death" below for why this dedicated receiver turned out to be
+  redundant with, and unsafe alongside, the process-start reconciliation it ran next to.
 - Persistent stale-data storage: the last successful departure snapshot used for the
   `Stale` fallback is now Room-backed (`data/local/room/StaleSnapshotEntity.kt`), keyed
   by routine id and scoped to the exact site/line/direction/mode that produced it, and
@@ -1702,7 +1704,7 @@ notification-drawer entry:
   departures; it appears on the lock screen; it survives Blick being swiped away from
   Recent Apps; it disappears at the routine's configured end time; disabling an active
   routine removes its notification and re-enabling one during its active window restores
-  it; reboot recovery (`BootCompletedReceiver`) still works; and tapping the notification
+  it; reboot recovery still works; and tapping the notification
   while Blick is already open does not create a duplicate screen. This is the coverage
   that matters for every real user until promotion's rollout gate (above) opens up.
 - The notification always carries a Stop action (a plain `NotificationCompat.Action`,
@@ -1711,8 +1713,8 @@ notification-drawer entry:
   `StopRoutineNotificationReceiver` — an `exported="false"` `@AndroidEntryPoint`
   `BroadcastReceiver` only ever triggered by this app's own explicit intent, never a
   system or cross-app broadcast — which hands off to `StopRoutineNotificationAction`, a
-  small, separately unit-tested class (the same split used for `BootCompletedReceiver`
-  and `RoutineScheduleReconciler`). Stopping today's window early is given exactly the
+  small, separately unit-tested class (the same split used for `NotificationRecoveryCoordinator`
+  — a plain injectable class doing the real work behind a thin receiver). Stopping today's window early is given exactly the
   same effect as the existing "pause for today" control: it writes `pausedDate` to
   today's date and reschedules, which `RoutineActiveWindowWorker`'s own next loop tick
   already observes and stops on (see "The 30-second loop itself" above) — and the
@@ -1735,15 +1737,45 @@ notification-drawer entry:
 ### Reboot and process death
 
 WorkManager persists scheduled work through ordinary process death and device reboot on
-its own. `BlickApplication.onCreate()` additionally reschedules every enabled saved
-routine at process start, as an idempotent reconciliation safety net — this is not the
-primary scheduling path. A dedicated `BootCompletedReceiver` runs that same
-reconciliation directly on `ACTION_BOOT_COMPLETED`, as a further backstop for a reboot
-after which the app process never happens to start on its own before a routine's next
-window would have opened; it only ever enqueues WorkManager work from that receiver and
-does not start a foreground service directly from `BOOT_COMPLETED` (restricted on modern
-Android; see [Restrictions on background
-starts](https://developer.android.com/develop/background-work/services/fgs/restrictions-bg-start)).
+its own — it bundles its own `BOOT_COMPLETED` receiver (merged into this app's manifest
+automatically from the WorkManager library, independent of anything Blick declares
+itself) that re-establishes the necessary system-level scheduling for whatever work was
+already enqueued, and is dynamically enabled only while there is relevant work to
+reschedule. `BlickApplication.onCreate()` additionally reschedules every enabled saved
+routine at process start, via `NotificationRecoveryCoordinator.onAppStart()`, as an
+idempotent reconciliation safety net — this is not the primary scheduling path, and it
+is NOT skipped on reboot: `Application.onCreate()` always runs before any component (a
+`BroadcastReceiver` included) executes in a freshly-started process, so any
+`BOOT_COMPLETED` broadcast that starts Blick's process at all — whether via Blick's own
+receiver or, as it does today, purely via WorkManager's own bundled one — already reaches
+this exact call first, before anything else in the process runs.
+
+A previous revision also shipped a dedicated `scheduling/BootCompletedReceiver`,
+reconciling directly on `ACTION_BOOT_COMPLETED` as a further backstop. It was removed:
+`Application.onCreate()`'s own guarantee above already made it redundant with
+`onAppStart()`, and it was also the unsafe half of a real race — its direct call had no
+`RoutineScheduler.isActivationRunning` guard at all, so on a reboot where a routine's
+window was already active, it could `ExistingWorkPolicy.REPLACE` (cancelling and
+restarting) a worker that `onAppStart()`, or WorkManager's own reboot-triggered run, had
+already correctly left alone — interrupting an in-progress commute notification for no
+reason. Removing the duplicate path closes that race by construction rather than adding
+a second lock around it: there is exactly one reconciliation path today
+(`NotificationRecoveryCoordinator`, covering app start, foreground, notification-
+availability recovery, and — see below — device-timezone change), serialized by its own
+single `Mutex`.
+
+A live device-timezone change is reconciled the same way, through
+`NotificationRecoveryCoordinator.onTimeZoneChanged()` — but deliberately using
+`RoutineScheduleReconciler.reconcileAll()`'s own UNCONDITIONAL scheduling rather than
+`onAppStart()`'s `isActivationRunning`-guarded version: a routine's configured local
+start/end time must be reinterpreted against the new zone even for a window that is
+active right now, so replacing an already-running worker here is correct, not merely
+tolerated — the replacement immediately re-enters `doWork`, which recomputes its own
+window boundary fresh against the current zone. Both paths only ever enqueue WorkManager
+work; neither starts a foreground service directly from a `BroadcastReceiver`, so the "no
+`dataSync` foreground service directly from `BOOT_COMPLETED`" restriction on modern
+Android (see the architecture section) is not applicable to begin with — WorkManager
+decides when the actual foreground worker later runs, as a separate, later execution.
 
 ### What remains best-effort, not exact
 

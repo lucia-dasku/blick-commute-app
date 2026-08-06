@@ -209,12 +209,17 @@ class NotificationRecoveryCoordinatorTest {
         available: Boolean,
         coordinatorClock: Clock = clock,
         widgetUpdater: RoutineWidgetUpdater = RecordingWidgetUpdater(),
+        // Defaults to a REAL reconciler wired to the same fakes -- most tests here don't care
+        // about onTimeZoneChanged at all; the dedicated tests for it override this with one
+        // built against a gate/real WorkManager as needed.
+        routineScheduleReconciler: RoutineScheduleReconciler = RoutineScheduleReconciler(repository, scheduler, widgetUpdater),
     ) = NotificationRecoveryCoordinator(
         routineRepository = repository,
         routineScheduler = scheduler,
         routineWidgetUpdater = widgetUpdater,
         notificationAvailabilityChecker = FakeNotificationAvailabilityChecker(available),
         recoveryPendingStore = pendingStore,
+        routineScheduleReconciler = routineScheduleReconciler,
         clock = coordinatorClock,
         deviceZoneProvider = zoneProvider,
     )
@@ -281,6 +286,42 @@ class NotificationRecoveryCoordinatorTest {
                 pendingStore.recoveryPending.first(),
             )
         }
+
+    // ---- onTimeZoneChanged is serialized against the other three entry points through the
+    // SAME mutex, not a second lock ----
+
+    @Test
+    fun `onTimeZoneChanged is serialized against a concurrent onForeground call through the same mutex`() = runTest {
+        val routine = routine()
+        val repository = ControllableRoutineRepository(listOf(routine))
+        val scheduler = RecordingRoutineScheduler()
+        // Nothing pending: onForeground's own work (recordCurrentAvailabilityIfUnavailable +
+        // attemptPendingRecoveryIfNeeded) would otherwise return near-instantly without ever
+        // touching the repository -- exactly why this proves onForeground blocks on the MUTEX
+        // itself, not merely on some unrelated I/O the two calls happen to share.
+        val pendingStore = InMemoryRecoveryPendingStateStore(initiallyPending = false)
+        val reconciler = RoutineScheduleReconciler(repository, scheduler, RecordingWidgetUpdater())
+        val coordinator = buildCoordinator(repository, scheduler, pendingStore, available = true, routineScheduleReconciler = reconciler)
+
+        val gate = repository.pauseNextObserveAll()
+        val tzJob = launch { coordinator.onTimeZoneChanged() }
+        runCurrent() // tzJob acquires the Mutex, reaches reconcileAll's own observeAll(), suspends on the gate
+        val foregroundJob = launch { coordinator.onForeground() }
+        runCurrent() // foregroundJob must block on the Mutex itself
+
+        assertTrue(
+            "onForeground must still be blocked on the Mutex while onTimeZoneChanged holds it -- " +
+                "with nothing pending it would otherwise have already completed by now",
+            foregroundJob.isActive,
+        )
+
+        gate.complete(Unit)
+        tzJob.join()
+        foregroundJob.join()
+
+        // onTimeZoneChanged's own reconcileAll() genuinely ran once the gate released.
+        assertEquals(listOf(routine.id), scheduler.scheduledRoutines.map { it.id })
+    }
 
     // ---- 5. Re-enabling notifications after a background disable->enable recovers the
     // missing worker ----
@@ -586,6 +627,152 @@ class NotificationRecoveryCoordinatorTest {
         assertEquals("the already-running worker's own work id must be unchanged", runningBefore.id, runningAfter.id)
 
         releaseLatch.countDown() // let the worker finish so it doesn't leak past this test
+    }
+
+    // ---- Boot-race regression: a worker already RUNNING before onAppStart ever gets a chance
+    // to run (simulating WorkManager's own bundled boot receiver having already re-established
+    // this routine's scheduling and started it) is not replaced. This is the scenario a
+    // dedicated, unguarded BootCompletedReceiver-style reconcileAll() call used to race --
+    // removing that duplicate path means boot now reduces to exactly this already-guarded case. ----
+
+    @Test
+    fun `a worker already RUNNING before onAppStart runs at all is not replaced by it`() = runTest {
+        setUpRealWorkManager()
+        val routine = routine()
+        val startedLatch = CountDownLatch(1)
+        val releaseLatch = CountDownLatch(1)
+        nextWorkerBehavior = WorkerBehavior.Blocking(startedLatch, releaseLatch)
+        val realScheduler = WorkManagerRoutineScheduler(context, clock, zoneProvider)
+
+        // Stands in for WorkManager's own bundled boot receiver independently re-establishing
+        // this routine's scheduling and starting it -- entirely before this test's coordinator
+        // is even constructed, let alone run.
+        realScheduler.scheduleActivation(routine)
+        assertTrue("worker never started running", startedLatch.await(5, TimeUnit.SECONDS))
+        val runningBefore = workInfosFor(routine.id).single { it.state == WorkInfo.State.RUNNING }
+
+        val pendingStore = InMemoryRecoveryPendingStateStore(initiallyPending = false)
+        val coordinator = buildCoordinator(
+            repository = FakeRoutineRepository(listOf(routine)),
+            scheduler = realScheduler,
+            pendingStore = pendingStore,
+            available = true,
+        )
+
+        coordinator.onAppStart()
+
+        val runningAfter = workInfosFor(routine.id).single { it.state == WorkInfo.State.RUNNING }
+        assertEquals("the already-running worker's own work id must be unchanged", runningBefore.id, runningAfter.id)
+
+        releaseLatch.countDown() // let the worker finish so it doesn't leak past this test
+    }
+
+    // ---- onTimeZoneChanged: unlike onAppStart/onForeground above, it deliberately DOES replace
+    // an already-RUNNING worker, and correctly reschedules an Upcoming routine with a real delay ----
+
+    @Test
+    fun `onTimeZoneChanged replaces an already-RUNNING worker, unlike onAppStart or onForeground`() = runTest {
+        setUpRealWorkManager()
+        val routine = routine()
+        val firstStartedLatch = CountDownLatch(1)
+        val firstReleaseLatch = CountDownLatch(1)
+        nextWorkerBehavior = WorkerBehavior.Blocking(firstStartedLatch, firstReleaseLatch)
+        val realScheduler = WorkManagerRoutineScheduler(context, clock, zoneProvider)
+
+        realScheduler.scheduleActivation(routine)
+        assertTrue("worker never started running", firstStartedLatch.await(5, TimeUnit.SECONDS))
+        val runningBefore = workInfosFor(routine.id).single { it.state == WorkInfo.State.RUNNING }
+
+        // A second, separately-latched behavior for the REPLACEMENT worker -- once IT starts,
+        // the original work id can no longer be the one RUNNING (WorkManager only ever runs one
+        // worker at a time for the same unique work name), so waiting for this to start is
+        // definitive proof the replacement genuinely took effect, not a race against this test's
+        // own assertions.
+        val secondStartedLatch = CountDownLatch(1)
+        val secondReleaseLatch = CountDownLatch(1)
+        nextWorkerBehavior = WorkerBehavior.Blocking(secondStartedLatch, secondReleaseLatch)
+        val realReconciler = RoutineScheduleReconciler(FakeRoutineRepository(listOf(routine)), realScheduler, RecordingWidgetUpdater())
+        val pendingStore = InMemoryRecoveryPendingStateStore(initiallyPending = false)
+        val coordinator = buildCoordinator(
+            repository = FakeRoutineRepository(listOf(routine)),
+            scheduler = realScheduler,
+            pendingStore = pendingStore,
+            available = true,
+            routineScheduleReconciler = realReconciler,
+        )
+
+        coordinator.onTimeZoneChanged()
+
+        assertTrue("the replacement worker never started running", secondStartedLatch.await(5, TimeUnit.SECONDS))
+        val runningAfter = workInfosFor(routine.id).single { it.state == WorkInfo.State.RUNNING }
+        assertTrue(
+            "expected a genuinely NEW work id to now own this unique work, not the original running one",
+            runningAfter.id != runningBefore.id,
+        )
+
+        firstReleaseLatch.countDown()
+        secondReleaseLatch.countDown()
+    }
+
+    @Test
+    fun `onTimeZoneChanged reschedules an Upcoming routine with a real delay, not a zero-delay loop`() = runTest {
+        setUpRealWorkManager()
+        val routine = routine()
+        nextWorkerBehavior = WorkerBehavior.Instant
+
+        // earlierClock -- BEFORE the routine's window opens, so this is Upcoming, not ActiveNow.
+        val realScheduler = WorkManagerRoutineScheduler(context, earlierClock, zoneProvider)
+        val realReconciler = RoutineScheduleReconciler(FakeRoutineRepository(listOf(routine)), realScheduler, RecordingWidgetUpdater())
+        val pendingStore = InMemoryRecoveryPendingStateStore(initiallyPending = false)
+        val coordinator = buildCoordinator(
+            repository = FakeRoutineRepository(listOf(routine)),
+            scheduler = realScheduler,
+            pendingStore = pendingStore,
+            available = true,
+            coordinatorClock = earlierClock,
+            routineScheduleReconciler = realReconciler,
+        )
+
+        coordinator.onTimeZoneChanged()
+
+        val info = workInfosFor(routine.id).single { it.state == WorkInfo.State.ENQUEUED }
+        // A genuine future delay, comfortably beyond a rounding/clock-skew margin -- not a
+        // zero-delay ActiveNow-style enqueue, which is what a bug collapsing this into the
+        // isActivationRunning-guarded path (or miscomputing the occurrence) would produce.
+        assertTrue(
+            "expected a real future delay, not a zero-delay reschedule",
+            info.nextScheduleTimeMillis > earlierNow.toEpochMilli() + java.time.Duration.ofMinutes(1).toMillis(),
+        )
+    }
+
+    @Test
+    fun `a routine paused for today is scheduled for its next eligible day, not today, by onAppStart`() = runTest {
+        setUpRealWorkManager()
+        nextWorkerBehavior = WorkerBehavior.Instant
+        // `now` (07:30, per `clock`) is INSIDE this routine's 07:00-09:00 window -- if
+        // pausedDate did not survive reconciliation, this would be scheduled as ActiveNow (a
+        // zero delay) instead of skipping to its next eligible day.
+        val pausedRoutine = routine(id = "r1", pausedDate = LocalDate.of(2026, 7, 27)) // today, per `clock`
+        val realScheduler = WorkManagerRoutineScheduler(context, clock, zoneProvider)
+        val pendingStore = InMemoryRecoveryPendingStateStore(initiallyPending = false)
+        val coordinator = buildCoordinator(
+            repository = FakeRoutineRepository(listOf(pausedRoutine)),
+            scheduler = realScheduler,
+            pendingStore = pendingStore,
+            available = true,
+        )
+
+        coordinator.onAppStart()
+
+        val info = workInfosFor(pausedRoutine.id).single { it.state == WorkInfo.State.ENQUEUED }
+        // activeDays = {MONDAY} only (the default routine()) and today (2026-07-27) IS a Monday
+        // -- if today is correctly excluded, the next eligible day is a full week later, not
+        // merely later today.
+        assertTrue(
+            "expected pausedDate to exclude today, scheduling a future day rather than today's " +
+                "already-open window",
+            info.nextScheduleTimeMillis > now.toEpochMilli() + java.time.Duration.ofHours(1).toMillis(),
+        )
     }
 
     // ---- 10 (real-WorkManager counterpart). An out-of-window future schedule is left byte-for-

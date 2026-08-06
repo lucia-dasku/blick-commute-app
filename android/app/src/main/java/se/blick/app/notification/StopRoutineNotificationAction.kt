@@ -15,8 +15,9 @@ import javax.inject.Singleton
  * Live Update spec requires) — kept as its own plain, Hilt-injected class, separate from
  * [StopRoutineNotificationReceiver], so this logic is unit-testable with fakes rather than only
  * reachable through a manifest-registered [android.content.BroadcastReceiver] (see
- * [se.blick.app.scheduling.RoutineScheduleReconciler] for the same split, used by
- * [se.blick.app.scheduling.BootCompletedReceiver]).
+ * [se.blick.app.scheduling.NotificationRecoveryCoordinator] for the same split — a plain
+ * injectable class doing the real work, invoked by `BlickApplication`'s thin
+ * `Intent.ACTION_TIMEZONE_CHANGED` receiver).
  *
  * Stopping today's active window early is given exactly the same effect as the existing
  * "pause for today" control on the routine details screen (`RoutineDetailsViewModel.pauseToday`)

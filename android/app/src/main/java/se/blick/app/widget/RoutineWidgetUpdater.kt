@@ -55,10 +55,13 @@ interface RoutineWidgetUpdater {
 
     /** Called from every routine-lifecycle mutation site that happens OUTSIDE the worker's loop
      * (create/edit save, enable/disable, pause/resume, delete, the notification's own Stop
-     * action), from [se.blick.app.scheduling.RoutineScheduleReconciler.reconcileAll] (covering
-     * process start, device-timezone change, and reboot via
-     * [se.blick.app.scheduling.BootCompletedReceiver]), and from a freshly-placed widget
-     * instance's very first [androidx.glance.appwidget.GlanceAppWidgetReceiver.onUpdate] (see
+     * action), from [se.blick.app.scheduling.NotificationRecoveryCoordinator] (covering app
+     * start, foreground, and notification-availability recovery — which itself also covers
+     * reboot, since `Application.onCreate` always runs before any component executes in a
+     * freshly-started process) and from [se.blick.app.scheduling.RoutineScheduleReconciler.reconcileAll]
+     * (covering device-timezone change, via that same coordinator's own
+     * `onTimeZoneChanged`), and from a freshly-placed widget instance's very first
+     * [androidx.glance.appwidget.GlanceAppWidgetReceiver.onUpdate] (see
      * `BlickRoutineWidgetReceiver`) — re-derives the correct widget state from scratch via
      * [decideReconciledWidgetState], including [RoutineWidgetContent.NotificationsUnavailable]
      * when a window is active but

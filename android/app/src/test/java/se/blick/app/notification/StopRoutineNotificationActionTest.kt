@@ -23,7 +23,8 @@ import java.time.ZoneOffset
  * Plain JVM tests (fakes only, no Robolectric/Android needed) for [StopRoutineNotificationAction]
  * — the effect behind the ongoing notification's Stop action, kept separate from
  * [StopRoutineNotificationReceiver] specifically so it's testable this way (see
- * `RoutineScheduleReconcilerTest` for the same split behind `BootCompletedReceiver`).
+ * `NotificationRecoveryCoordinatorTest` for the same split behind `BlickApplication`'s own
+ * receivers).
  */
 class StopRoutineNotificationActionTest {
 

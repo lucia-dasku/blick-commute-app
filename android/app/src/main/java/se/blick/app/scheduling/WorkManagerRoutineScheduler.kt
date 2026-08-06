@@ -68,9 +68,10 @@ class WorkManagerRoutineScheduler @Inject constructor(
         // created/edited (see RoutineDurationValidator's own doc) -- an old database, a
         // corrupted record, or a future code change could still contain a routine longer than
         // MAX_DAILY_ACTIVE_MINUTES. Every scheduling/reconciliation entry point (save, enable/
-        // disable/pause/resume, RoutineScheduleReconciler, NotificationRecoveryCoordinator,
-        // BootCompletedReceiver, the timezone-change receiver) funnels through this one method,
-        // so checking here covers all of them uniformly. Never silently shortens the routine or
+        // disable/pause/resume, RoutineScheduleReconciler, NotificationRecoveryCoordinator --
+        // which is itself the sole path for app start, foreground, and timezone-change recovery)
+        // funnels through this one method, so checking here covers all of them uniformly. Never
+        // silently shortens the routine or
         // touches Room -- it stays exactly as stored so the user can correct it in the app; only
         // its WorkManager scheduling is refused.
         val durationValidation = RoutineDurationValidator.validateSelf(routine)

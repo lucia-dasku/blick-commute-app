@@ -17,7 +17,6 @@ import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.SupervisorJob
 import kotlinx.coroutines.launch
 import se.blick.app.scheduling.NotificationRecoveryCoordinator
-import se.blick.app.scheduling.RoutineScheduleReconciler
 import javax.inject.Inject
 
 /**
@@ -31,33 +30,31 @@ import javax.inject.Inject
  * initialization is attempted here instead.
  *
  * [NotificationRecoveryCoordinator] (see that class's own doc) is now the SOLE authority for
- * both cold-start reconciliation and notification-availability recovery — [onCreate] calls
- * [NotificationRecoveryCoordinator.onAppStart] once, and the `ProcessLifecycleOwner` `ON_START`
- * observer calls [NotificationRecoveryCoordinator.onForeground] every time the app returns to
- * the foreground. Neither call site launches [RoutineScheduleReconciler.reconcileAll]
- * independently any more — that used to run alongside the foreground trigger with no shared
- * coordination between the two, and the foreground trigger's own unconditional reconciliation
- * was a real regression in its own right (its `ExistingWorkPolicy.REPLACE` could cancel and
- * replace an already-`RUNNING` [se.blick.app.scheduling.RoutineActiveWindowWorker] merely
- * because the user opened the app). Routing both triggers through one coordinator, serialized
- * by its own `Mutex`, is what makes "cold start and the first foreground overlapping" (which
- * genuinely happens — `ON_START` fires once at process start too) safe: whichever call runs
- * second simply observes whatever the first one already left in place rather than racing it.
- *
- * [RoutineScheduleReconciler.reconcileAll] is still used directly, unchanged, by the
- * [Intent.ACTION_TIMEZONE_CHANGED] receiver below — a live device timezone change that an
- * already-enqueued `WorkRequest`'s fixed `initialDelay` cannot pick up on its own (see
- * [RoutineScheduleReconciler]'s own doc) is a distinct trigger from "this process just started"
- * or "notifications became available again", so it is out of [NotificationRecoveryCoordinator]'s
- * scope by design — as is [se.blick.app.scheduling.BootCompletedReceiver], which also still
- * calls [RoutineScheduleReconciler.reconcileAll] directly for the same reason.
+ * cold-start reconciliation, timezone-change reconciliation, AND notification-availability
+ * recovery — [onCreate] calls [NotificationRecoveryCoordinator.onAppStart] once, the
+ * `ProcessLifecycleOwner` `ON_START` observer calls [NotificationRecoveryCoordinator.onForeground]
+ * every time the app returns to the foreground, and the [Intent.ACTION_TIMEZONE_CHANGED] receiver
+ * below calls [NotificationRecoveryCoordinator.onTimeZoneChanged]. No call site here launches
+ * [se.blick.app.scheduling.RoutineScheduleReconciler.reconcileAll] directly any more — that used to run alongside the
+ * foreground trigger with no shared coordination between the two, and the foreground trigger's own
+ * unconditional reconciliation was a real regression in its own right (its
+ * `ExistingWorkPolicy.REPLACE` could cancel and replace an already-`RUNNING`
+ * [se.blick.app.scheduling.RoutineActiveWindowWorker] merely because the user opened the app);
+ * the timezone receiver had the exact same uncoordinated-direct-call problem until it was routed
+ * through the coordinator too. Routing all three triggers through one coordinator, serialized by
+ * its own `Mutex`, is what makes "cold start and the first foreground overlapping" (which
+ * genuinely happens — `ON_START` fires once at process start too) — and a timezone change landing
+ * mid-recovery — safe: whichever call runs second simply observes whatever the first one already
+ * left in place, or (for a genuine timezone change specifically) still correctly replaces it,
+ * rather than racing it uncoordinated. There is deliberately no separate boot-specific receiver
+ * here either any more — see [NotificationRecoveryCoordinator.onAppStart]'s own doc for why a
+ * dedicated `BootCompletedReceiver` turned out to be redundant with, and unsafe alongside, this
+ * same [onCreate] call.
  */
 @HiltAndroidApp
 class BlickApplication : Application(), Configuration.Provider {
 
     @Inject lateinit var hiltWorkerFactory: HiltWorkerFactory
-
-    @Inject lateinit var routineScheduleReconciler: RoutineScheduleReconciler
 
     @Inject lateinit var notificationRecoveryCoordinator: NotificationRecoveryCoordinator
 
@@ -86,7 +83,7 @@ class BlickApplication : Application(), Configuration.Provider {
     private fun registerTimeZoneChangeReceiver() {
         val receiver = object : BroadcastReceiver() {
             override fun onReceive(context: Context, intent: Intent) {
-                applicationScope.launch { routineScheduleReconciler.reconcileAll() }
+                applicationScope.launch { notificationRecoveryCoordinator.onTimeZoneChanged() }
             }
         }
         ContextCompat.registerReceiver(

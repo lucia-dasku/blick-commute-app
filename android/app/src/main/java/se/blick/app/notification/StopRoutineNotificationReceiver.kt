@@ -14,8 +14,8 @@ import javax.inject.Inject
  * Receives the Stop action's broadcast from the ongoing notification (see
  * [RoutineNotificationBuilder]'s Stop action) and hands off to [StopRoutineNotificationAction].
  * Only ever triggered by this app's own explicit [android.app.PendingIntent] — never a system or
- * cross-app broadcast — so this is registered `exported="false"` in the manifest, unlike
- * [se.blick.app.scheduling.BootCompletedReceiver]'s `BOOT_COMPLETED` registration.
+ * cross-app broadcast — so this is registered `exported="false"` in the manifest, unlike a
+ * receiver for a genuine protected system broadcast, which must be exported to receive it at all.
  *
  * `@AndroidEntryPoint` lets this manifest-registered receiver field-inject
  * [StopRoutineNotificationAction] like every other class in this codebase. `goAsync()` plus a

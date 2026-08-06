@@ -32,21 +32,39 @@ interface NotificationRecoveryReporter {
 }
 
 /**
- * The sole authority for startup reconciliation and notification-availability recovery —
- * replaces both `BlickApplication`'s separate cold-start `RoutineScheduleReconciler.reconcileAll`
- * launch and the earlier `ForegroundNotificationRecovery` class. Both call sites
- * ([onAppStart] from `BlickApplication.onCreate`, [onForeground] from its
- * `ProcessLifecycleOwner` `ON_START` observer) now funnel through this one class, serialized by
- * [mutex] so overlapping or rapid-repeat calls (the two triggers genuinely do overlap on cold
- * start — `ON_START` fires once at process start too) can never interleave and schedule the same
- * routine twice: whichever call is second simply observes whatever the first one already left in
- * place (an already-`RUNNING` worker, or an already-cleared [RecoveryPendingStateStore]) and acts
- * accordingly, rather than racing it. [reportUnavailable] — called from entirely separate
- * coroutines ([RoutineActiveWindowWorker]'s own `doWork`, `RoutineDetailsViewModel`'s
- * `viewModelScope`) that never otherwise interact with this class — also serializes through the
- * same [mutex], so a freshly-reported "recovery is owed" signal can never land in the middle of,
- * and be silently discarded by, an in-progress [attemptPendingRecoveryIfNeeded]'s own
- * unconditional clear (see [reportUnavailable]'s own doc for the exact race this closes).
+ * The sole authority for startup reconciliation, timezone-change reconciliation, and
+ * notification-availability recovery — replaces `BlickApplication`'s separate cold-start
+ * `RoutineScheduleReconciler.reconcileAll` launch, its formerly-separate
+ * `Intent.ACTION_TIMEZONE_CHANGED` receiver call, `BootCompletedReceiver`'s own now-removed direct
+ * reconciliation call (see this class's own [onAppStart] doc for why a dedicated boot path turned
+ * out to be redundant with it), and the earlier `ForegroundNotificationRecovery` class. All three
+ * remaining call sites ([onAppStart] from `BlickApplication.onCreate`, [onForeground] from its
+ * `ProcessLifecycleOwner` `ON_START` observer, [onTimeZoneChanged] from its
+ * `Intent.ACTION_TIMEZONE_CHANGED` receiver) now funnel through this one class, serialized by
+ * [mutex] so overlapping or rapid-repeat calls (the first two triggers genuinely do overlap on
+ * cold start — `ON_START` fires once at process start too — and a timezone change could in
+ * principle land mid-recovery) can never interleave and schedule the same routine twice: whichever
+ * call is second simply observes whatever the first one already left in place (an already-`RUNNING`
+ * worker, or an already-cleared [RecoveryPendingStateStore]) and acts accordingly, rather than
+ * racing it. [reportUnavailable] — called from entirely separate coroutines
+ * ([RoutineActiveWindowWorker]'s own `doWork`, `RoutineDetailsViewModel`'s `viewModelScope`) that
+ * never otherwise interact with this class — also serializes through the same [mutex], so a
+ * freshly-reported "recovery is owed" signal can never land in the middle of, and be silently
+ * discarded by, an in-progress [attemptPendingRecoveryIfNeeded]'s own unconditional clear (see
+ * [reportUnavailable]'s own doc for the exact race this closes).
+ *
+ * **Startup/foreground recovery vs. timezone reconciliation are deliberately NOT the same
+ * operation**, even though both now go through this one class for serialization. [onAppStart] and
+ * [onForeground] both respect [RoutineScheduler.isActivationRunning] (see [scheduleIfSafe]) —
+ * correct for them, since nothing about a routine's OWN correctness changed merely because the
+ * process (re)started or came to the foreground; an already-`RUNNING` worker is already exactly
+ * where it should be. A genuine device timezone change is different: the routine's configured
+ * [java.time.LocalTime] start/end must now be reinterpreted against the NEW zone, so
+ * [onTimeZoneChanged] deliberately calls [routineScheduleReconciler]'s own unconditional
+ * `reconcileAll` — which always replaces, even a currently-`RUNNING` worker — rather than
+ * [scheduleIfSafe]'s guarded version. Replacing a running worker here is correct, not merely
+ * tolerated: the replacement immediately re-enters `doWork`, which recomputes its own `windowEnd`
+ * fresh against the current zone, exactly like any other freshly-started run.
  *
  * **Durable pending-recovery, not a compared transition.** [RecoveryPendingStateStore] (see its
  * own doc) is a plain sticky "a recovery attempt is owed" flag, not a last-known-availability
@@ -95,6 +113,7 @@ class NotificationRecoveryCoordinator @Inject constructor(
     private val routineWidgetUpdater: RoutineWidgetUpdater,
     private val notificationAvailabilityChecker: NotificationAvailabilityChecker,
     private val recoveryPendingStore: RecoveryPendingStateStore,
+    private val routineScheduleReconciler: RoutineScheduleReconciler,
     private val clock: Clock,
     private val deviceZoneProvider: DeviceZoneProvider,
 ) : NotificationRecoveryReporter {
@@ -103,7 +122,22 @@ class NotificationRecoveryCoordinator @Inject constructor(
     /** Called once from `BlickApplication.onCreate` — covers reboot, an app update, and
      * ordinary process recreation, exactly like [RoutineScheduleReconciler.reconcileAll] always
      * has (WorkManager itself already persists enqueued work across all of these; this is a
-     * defensive backstop, not the primary scheduling path). */
+     * defensive backstop, not the primary scheduling path).
+     *
+     * This is also, deliberately, the ONLY reconciliation reboot triggers — there is no separate
+     * `BootCompletedReceiver`-style path anymore. `Application.onCreate` always runs before any
+     * component (a `BroadcastReceiver` included) executes in a freshly-started process, so a
+     * `BOOT_COMPLETED` broadcast that starts Blick's process at all (whether via Blick's own
+     * receiver or, as it does today, purely via WorkManager's own bundled boot receiver, which
+     * independently re-establishes its persisted work's system-level scheduling regardless of
+     * anything Blick's own manifest declares) already reaches this exact method, through this
+     * exact [mutex], before anything else in the process runs. A dedicated Blick-specific boot
+     * path added nothing except a second, UNcoordinated caller of
+     * [RoutineScheduleReconciler.reconcileAll] racing this one — that call has no
+     * [RoutineScheduler.isActivationRunning] guard at all (see [onTimeZoneChanged]'s own doc on
+     * why it deliberately doesn't), so it could `REPLACE` (cancelling and restarting) a worker
+     * this method, or a WorkManager-triggered run that started first, had already correctly left
+     * alone. */
     suspend fun onAppStart() {
         mutex.withLock {
             reconcileAllRoutinesUnconditionally()
@@ -117,6 +151,22 @@ class NotificationRecoveryCoordinator @Inject constructor(
         mutex.withLock {
             recordCurrentAvailabilityIfUnavailable()
             attemptPendingRecoveryIfNeeded()
+        }
+    }
+
+    /** Called from `BlickApplication`'s `Intent.ACTION_TIMEZONE_CHANGED` receiver — a live device
+     * timezone change that an already-enqueued `WorkRequest`'s fixed `initialDelay` cannot
+     * retroactively account for (see [RoutineScheduleReconciler]'s own doc). Delegates to
+     * [routineScheduleReconciler]'s own, unchanged `reconcileAll` — deliberately NOT
+     * [reconcileAllRoutinesUnconditionally]/[scheduleIfSafe]'s guarded version used by [onAppStart]
+     * and [attemptPendingRecoveryIfNeeded] — see this class's own doc for why an already-`RUNNING`
+     * worker must still be replaced here, unlike those two callers. Serialized through the same
+     * [mutex] purely so this can never interleave with [onAppStart]/[onForeground]/
+     * [reportUnavailable] and leave either side's own decision racing the other's — it does NOT
+     * change what `reconcileAll` itself does. */
+    suspend fun onTimeZoneChanged() {
+        mutex.withLock {
+            routineScheduleReconciler.reconcileAll()
         }
     }
 

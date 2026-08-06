@@ -13,36 +13,33 @@ private const val LOG_TAG = "RoutineScheduleReconciler"
 
 /**
  * Re-derives and re-enqueues every saved, enabled routine's next active-window activation
- * against the CURRENT clock and device zone. Cheap and idempotent —
- * [RoutineScheduler.scheduleActivation] always replaces rather than duplicates any existing
- * scheduled work for the same routine id — so this is safe to call as often as needed:
- *
- * - Once at process start (see `BlickApplication.onCreate`), covering reboot, an app update,
- *   and ordinary process recreation. WorkManager itself already persists enqueued work across
- *   all of these without help, so this is a defensive backstop, not the primary scheduling
- *   path — saving, editing, enabling, disabling, pausing, or resuming a routine already calls
- *   [RoutineScheduler] directly at the point of that change.
- * - Every time the device's time zone changes while the process stays alive (see
- *   `BlickApplication`'s `Intent.ACTION_TIMEZONE_CHANGED` receiver) — a change that WorkManager's
- *   own already-enqueued `initialDelay` cannot retroactively account for, since that delay was
- *   fixed in wall-clock terms against whichever zone [DeviceZoneProvider] returned the last time
- *   [RoutineScheduler.scheduleActivation] ran for that routine. Re-running this reconciliation
- *   recomputes every routine's next window against the new zone immediately, rather than
- *   leaving it silently wrong until the routine is next edited or the process restarts.
+ * against the CURRENT clock and device zone, UNCONDITIONALLY — including a routine whose worker
+ * is genuinely `RUNNING` right now (see [RoutineScheduler.scheduleActivation]'s own
+ * `ExistingWorkPolicy.REPLACE`). Cheap and idempotent from this class's own point of view — safe
+ * to call as often as needed — but that unconditional replacement is exactly why its only
+ * remaining caller today, [NotificationRecoveryCoordinator.onTimeZoneChanged], invokes it
+ * specifically for a device-timezone change: WorkManager's own already-enqueued `initialDelay`
+ * cannot retroactively account for a live zone change, since that delay was fixed in wall-clock
+ * terms against whichever zone [DeviceZoneProvider] returned the last time
+ * [RoutineScheduler.scheduleActivation] ran for that routine — and the routine's own configured
+ * [java.time.LocalTime] start/end must be reinterpreted against the NEW zone even for a window
+ * that is ActiveNow right now, so replacing a running worker here is correct, not merely
+ * tolerated (see [NotificationRecoveryCoordinator]'s own doc for the full contrast with its
+ * OTHER two callers, [NotificationRecoveryCoordinator.onAppStart]/`onForeground`, which
+ * deliberately do NOT replace an already-running worker, and therefore do not call this class at
+ * all).
  *
  * Also reconciles the home-screen widget (see [RoutineWidgetUpdater.reconcile]) every time this
- * runs — the same three triggers above (process start, timezone change, and reboot via
- * `BootCompletedReceiver`, which also calls this) are exactly the cases where a routine's active
- * window could have started or ended while nothing else was running to keep the widget honest.
+ * runs, for the same reason: a device-timezone change is exactly the kind of event that could
+ * make a routine's active window start or end from one moment to the next with nothing else
+ * running to keep the widget honest.
  *
  * Reading the routine list itself, and [routineScheduler.scheduleActivation] for each one, are
  * both wrapped in their own try/catch (a genuine [CancellationException] always rethrows
  * unconverted, exactly like every other coroutine-cancellation handling in this codebase)
  * rather than letting a Room read failure, a corrupted routine record, or a WorkManager call
- * throwing on some OEM propagate uncaught: up through `BlickApplication.onCreate`'s own
- * unguarded `launch`, that would crash the app on literally every cold start if it ever
- * happened, and — reached via `BootCompletedReceiver` instead — on every subsequent boot too, a
- * true crash loop, for as long as the underlying data problem persisted. Scheduling is
+ * throwing on some OEM propagate uncaught and crash the app every time a timezone-change
+ * broadcast is delivered, for as long as the underlying data problem persisted. Scheduling is
  * per-routine specifically so one bad record can't also silently leave every OTHER routine
  * later in iteration order unscheduled — logged and skipped instead, so the rest of the batch
  * still gets a fair attempt.
@@ -73,9 +70,9 @@ class RoutineScheduleReconciler @Inject constructor(
             }
         }
         // Best-effort: a widget/Glance/DataStore failure here must never make the scheduling
-        // loop above look like it failed too, or crash whichever caller (process start,
-        // timezone-change receiver, BootCompletedReceiver) invoked this -- see
-        // runWidgetUpdateSafely's own doc.
+        // loop above look like it failed too, or crash NotificationRecoveryCoordinator's own
+        // onTimeZoneChanged, the sole caller that invokes this -- see runWidgetUpdateSafely's
+        // own doc.
         runWidgetUpdateSafely { routineWidgetUpdater.reconcile() }
     }
 }

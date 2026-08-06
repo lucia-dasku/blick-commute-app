@@ -20,8 +20,10 @@ import java.time.LocalTime
 
 /**
  * Plain JVM tests (fakes only, no WorkManager/Robolectric needed) for [RoutineScheduleReconciler]
- * — the reconciliation pass [se.blick.app.BlickApplication] runs at process start and again on
- * every `ACTION_TIMEZONE_CHANGED` broadcast (see that class's own doc).
+ * — the reconciliation pass [NotificationRecoveryCoordinator.onTimeZoneChanged] runs on every
+ * `ACTION_TIMEZONE_CHANGED` broadcast (see that class's own doc; process start and foreground
+ * instead go through that same coordinator's own [NotificationRecoveryCoordinator.onAppStart]/
+ * [NotificationRecoveryCoordinator.onForeground], which do not use this reconciler at all).
  */
 class RoutineScheduleReconcilerTest {
 
@@ -67,8 +69,9 @@ class RoutineScheduleReconcilerTest {
     }
 
     /** Records every call — for proving `reconcileAll` also reconciles the widget on every run
-     * (process start, timezone change, and reboot via `BootCompletedReceiver`, all of which call
-     * this one function — see [RoutineScheduleReconciler]'s own doc). */
+     * (invoked, today, only for a device-timezone change, via
+     * `NotificationRecoveryCoordinator.onTimeZoneChanged` — see [RoutineScheduleReconciler]'s own
+     * doc). */
     private class RecordingWidgetUpdater : RoutineWidgetUpdater {
         var reconcileCallCount = 0
         override suspend fun updateWithDepartures(routine: CommuteRoutine, departuresState: LiveDeparturesState, now: Instant) = Unit

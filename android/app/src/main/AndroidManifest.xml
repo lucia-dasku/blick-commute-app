@@ -14,10 +14,14 @@
         required for RoutineActiveWindowWorker's active-window foreground execution (see
         scheduling/RoutineActiveWindowWorker.kt and its `dataSync` service-type declaration
         below) — no other foreground-service type applies to "sync fresh departure data from
-        the Blick backend while a routine's active window is open." RECEIVE_BOOT_COMPLETED is
-        for scheduling/BootCompletedReceiver.kt, a backstop that re-schedules every enabled
-        routine right after a reboot rather than waiting for the app to next be opened.
-        POST_PROMOTED_NOTIFICATIONS (Android 16+) is a normal, non-runtime permission that
+        the Blick backend while a routine's active window is open." No explicit
+        RECEIVE_BOOT_COMPLETED declaration is needed here — WorkManager's own library manifest
+        already contributes it (merged automatically) for its own bundled boot receiver, which
+        re-establishes its persisted work's system-level scheduling after a reboot on its own;
+        see scheduling/NotificationRecoveryCoordinator.kt's own `onAppStart` doc for why a
+        separate Blick-specific boot receiver was removed as redundant with, and unsafe
+        alongside, that path. POST_PROMOTED_NOTIFICATIONS (Android 16+) is a normal, non-runtime
+        permission that
         requests the ongoing routine notification be promoted to a prominent lock-screen Live
         Update / Now Bar surface (see RoutineNotificationBuilder.kt) — declaring it does not
         guarantee promotion (the OS and OEM still decide), so this always coexists with a
@@ -28,7 +32,6 @@
     <uses-permission android:name="android.permission.INTERNET" />
     <uses-permission android:name="android.permission.FOREGROUND_SERVICE" />
     <uses-permission android:name="android.permission.FOREGROUND_SERVICE_DATA_SYNC" />
-    <uses-permission android:name="android.permission.RECEIVE_BOOT_COMPLETED" />
     <uses-permission android:name="android.permission.POST_PROMOTED_NOTIFICATIONS" />
 
     <application
@@ -84,24 +87,10 @@
             tools:node="merge" />
 
         <!--
-            See scheduling/BootCompletedReceiver.kt's own doc — exported="true" is required
-            for the system to deliver this protected broadcast (only the system can ever send
-            ACTION_BOOT_COMPLETED, so this is not a real attack surface despite being exported).
-        -->
-        <receiver
-            android:name=".scheduling.BootCompletedReceiver"
-            android:exported="true"
-            android:enabled="true">
-            <intent-filter>
-                <action android:name="android.intent.action.BOOT_COMPLETED" />
-            </intent-filter>
-        </receiver>
-
-        <!--
             See notification/StopRoutineNotificationReceiver.kt's own doc — only ever triggered
             by this app's own explicit PendingIntent from the ongoing notification's Stop action,
-            never a system or cross-app broadcast, so exported="false" (unlike BootCompletedReceiver
-            above, which must be exported to receive the system's protected BOOT_COMPLETED broadcast).
+            never a system or cross-app broadcast, so exported="false" (contrast a receiver for a
+            genuine protected system broadcast, which must be exported to receive it at all).
         -->
         <receiver
             android:name=".notification.StopRoutineNotificationReceiver"
