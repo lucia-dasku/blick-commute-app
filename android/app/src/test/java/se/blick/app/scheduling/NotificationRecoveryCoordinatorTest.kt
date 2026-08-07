@@ -470,6 +470,103 @@ class NotificationRecoveryCoordinatorTest {
         assertEquals(1, widgetUpdater.reconcileCallCount)
     }
 
+    // ---- Fix: a genuinely successful onAppStart reconciliation satisfies recoveryPending, so a
+    // cold-start onForeground occurring right afterward (recoveryPending left true by an earlier
+    // session) can never redundantly REPLACE a worker onAppStart already correctly ENQUEUED --
+    // scheduleIfSafe's own isActivationRunning guard only ever protects an already-RUNNING
+    // worker, never a merely-ENQUEUED one, so without this fix that immediate second call was
+    // unprotected. ----
+
+    @Test
+    fun `a successful onAppStart reconciliation clears recoveryPending so a later onForeground does not replace the newly scheduled worker`() = runTest {
+        setUpRealWorkManager()
+        val routine = routine()
+        val startedLatch = CountDownLatch(1)
+        val releaseLatch = CountDownLatch(1)
+        nextWorkerBehavior = WorkerBehavior.Blocking(startedLatch, releaseLatch)
+        val realScheduler = WorkManagerRoutineScheduler(context, clock, zoneProvider)
+        // Simulates recoveryPending having already been left true by an earlier session (e.g. a
+        // worker discovered notifications unavailable right before the process died) -- exactly
+        // the state that used to make the very next onForeground() redundantly REPLACE whatever
+        // onAppStart() had ALREADY correctly just scheduled.
+        val pendingStore = InMemoryRecoveryPendingStateStore(initiallyPending = true)
+        val coordinator = buildCoordinator(
+            repository = FakeRoutineRepository(listOf(routine)),
+            scheduler = realScheduler,
+            pendingStore = pendingStore,
+            available = true,
+        )
+
+        coordinator.onAppStart()
+
+        // Whichever state it's reached by now (ENQUEUED, or already RUNNING if the real
+        // background executor happened to pick it up first) -- exactly one non-cancelled
+        // WorkInfo exists, and a genuinely successful reconciliation must satisfy the pending
+        // recovery immediately, before onForeground ever runs.
+        val afterAppStart = workInfosFor(routine.id).single { it.state != WorkInfo.State.CANCELLED }
+        assertEquals(
+            "a fully successful reconciliation (available + every routine scheduled) must clear recoveryPending",
+            false,
+            pendingStore.recoveryPending.first(),
+        )
+
+        coordinator.onForeground()
+
+        val afterForeground = workInfosFor(routine.id).single { it.state != WorkInfo.State.CANCELLED }
+        assertEquals(
+            "onForeground must never replace the WorkRequest onAppStart already correctly scheduled",
+            afterAppStart.id,
+            afterForeground.id,
+        )
+        assertEquals(false, pendingStore.recoveryPending.first())
+
+        releaseLatch.countDown() // let the worker finish so it doesn't leak past this test
+    }
+
+    @Test
+    fun `onAppStart does not clear recoveryPending when reconciliation succeeds but notifications are currently unavailable`() = runTest {
+        val routine = routine()
+        val repository = FakeRoutineRepository(listOf(routine))
+        val scheduler = RecordingRoutineScheduler() // never fails
+        val pendingStore = InMemoryRecoveryPendingStateStore(initiallyPending = true)
+        val coordinator = buildCoordinator(repository, scheduler, pendingStore, available = false)
+
+        coordinator.onAppStart()
+
+        // Reconciliation itself succeeded (every routine scheduled without error) -- but
+        // notifications are unavailable right now, so recovery is not actually satisfied yet.
+        assertEquals(listOf(routine.id), scheduler.scheduledRoutines.map { it.id })
+        assertEquals(true, pendingStore.recoveryPending.first())
+    }
+
+    @Test
+    fun `a failed onAppStart reconciliation leaves recoveryPending set so a later onForeground still retries`() = runTest {
+        val routine = routine()
+        val repository = FakeRoutineRepository(listOf(routine))
+        // Fails the FIRST scheduleActivation call (this routine, the only one, during
+        // onAppStart's own reconciliation) -- proving an incomplete pass must not satisfy
+        // recoveryPending; a later call (onForeground's own retry, once the transient failure
+        // has cleared) succeeds normally.
+        val scheduler = RecordingRoutineScheduler(failNextSchedulesCount = 1)
+        val pendingStore = InMemoryRecoveryPendingStateStore(initiallyPending = true)
+        val coordinator = buildCoordinator(repository, scheduler, pendingStore, available = true)
+
+        coordinator.onAppStart()
+
+        assertTrue(scheduler.scheduledRoutines.isEmpty())
+        assertEquals(
+            "an incomplete reconciliation must never satisfy recoveryPending -- it must stay set " +
+                "for the next foreground/startup check to retry",
+            true,
+            pendingStore.recoveryPending.first(),
+        )
+
+        coordinator.onForeground()
+
+        assertEquals(listOf(routine.id), scheduler.scheduledRoutines.map { it.id })
+        assertEquals(false, pendingStore.recoveryPending.first())
+    }
+
     // ---- Defensive daily-duration-limit re-check (see RoutineDurationValidator): onAppStart's
     // reconciliation must behave correctly when the scheduler it calls silently declines an
     // over-limit routine, exactly like the real WorkManagerRoutineScheduler does. ----

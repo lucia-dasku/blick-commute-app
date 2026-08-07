@@ -352,6 +352,43 @@ class RoutineDetailsViewModelTest {
         override suspend fun isActivationRunning(routineId: String): Boolean = false
     }
 
+    /** Always throws on [scheduleActivation]/[cancelActivation] — for proving a scheduling or
+     * cleanup failure AFTER a successful Room write must never be reported as that action
+     * having failed (persistence and scheduling are two different results — see
+     * toggleEnabled/pauseToday/resumeToday/deleteRoutine's own class docs). [throwCancellation]
+     * simulates a genuine coroutine cancellation instead of an ordinary failure, to prove it
+     * still propagates unconverted through the now-separate scheduling try/catch. */
+    private class FailingRoutineScheduler(
+        private val throwCancellation: Boolean = false,
+    ) : RoutineScheduler {
+        var scheduleCallCount = 0
+        var cancelCallCount = 0
+        private fun failure(): Throwable = if (throwCancellation) CancellationException("test cancellation") else RuntimeException("boom")
+        override fun scheduleActivation(routine: CommuteRoutine) {
+            scheduleCallCount++
+            throw failure()
+        }
+        override fun cancelActivation(routineId: String) {
+            cancelCallCount++
+            throw failure()
+        }
+        override suspend fun isActivationRunning(routineId: String): Boolean = false
+    }
+
+    /** Fails while [shouldFail] is true, succeeds once flipped off — for proving
+     * [RoutineDetailsViewModel.retryScheduling] succeeds once the underlying failure clears. */
+    private class ToggleableRoutineScheduler(var shouldFail: Boolean) : RoutineScheduler {
+        val scheduledRoutines = mutableListOf<CommuteRoutine>()
+        var scheduleCallCount = 0
+        override fun scheduleActivation(routine: CommuteRoutine) {
+            scheduleCallCount++
+            if (shouldFail) throw RuntimeException("boom")
+            scheduledRoutines += routine
+        }
+        override fun cancelActivation(routineId: String) = Unit
+        override suspend fun isActivationRunning(routineId: String): Boolean = false
+    }
+
     /** Records every call — for proving toggleEnabled/pauseToday/resumeToday/deleteRoutine/
      * reload each reconcile the widget. See the identical fake in `RoutineListViewModelTest`/
      * `RoutineCreateViewModelTest` for why each ViewModel test file keeps its own copy. */
@@ -1248,15 +1285,378 @@ class RoutineDetailsViewModelTest {
         dispatcher.scheduler.advanceUntilIdle()
 
         repository.save(routine.copy(name = "Renamed"))
-        // reload() launches inside viewModelScope with no try/catch of its own -- if the widget
-        // failure below were left unwrapped, it would propagate as an uncaught exception and
-        // fail this whole test (viewModelScope has no default exception handler). The test
-        // passing at all is therefore itself part of the regression proof; the assertion below
+        // reload()'s widget call is wrapped with runWidgetUpdateSafely -- if that wrapping were
+        // ever removed, the failure below would propagate as an uncaught exception and fail
+        // this whole test (viewModelScope has no default exception handler). The test passing
+        // at all is therefore itself part of the regression proof; the assertion below
         // additionally confirms the reload's own real work still completed.
         vm.reload()
         dispatcher.scheduler.advanceUntilIdle()
 
         assertEquals("Renamed", vm.uiState.value.routine?.name)
+    }
+
+    // ---- Persistence vs. scheduling: once a Room write succeeds, a SUBSEQUENT scheduler
+    // failure must never be reported as that action having failed, and the UI must reflect the
+    // persisted truth regardless (see toggleEnabled/pauseToday/resumeToday/deleteRoutine/
+    // reload's own class docs) ----
+
+    @Test
+    fun `toggleEnabled persists and updates the UI even when scheduling the change fails`() = runTest(dispatcher) {
+        val routine = sampleRoutine(enabled = true)
+        val repository = FakeRoutineRepository(routine)
+        val scheduler = FailingRoutineScheduler()
+        val vm = viewModel(routine = routine, routines = repository, scheduler = scheduler)
+        dispatcher.scheduler.advanceUntilIdle()
+
+        vm.toggleEnabled()
+        dispatcher.scheduler.advanceUntilIdle()
+
+        // Room's write is the persisted truth -- the UI must reflect it, and this must NOT be
+        // reported as a failed action, even though scheduleActivation below it threw.
+        assertEquals(listOf(routine.id to false), repository.setEnabledCalls)
+        assertEquals(false, vm.uiState.value.routine?.enabled)
+        assertEquals(false, vm.uiState.value.enabledActionFailed)
+        assertEquals(true, vm.uiState.value.schedulingFailed)
+        assertEquals(false, vm.uiState.value.isTogglingEnabled)
+        assertEquals(1, scheduler.cancelCallCount) // disabling calls cancelActivation, not scheduleActivation
+    }
+
+    @Test
+    fun `pauseToday persists and updates the UI even when scheduling the change fails`() = runTest(dispatcher) {
+        val routine = sampleRoutine()
+        val repository = FakeRoutineRepository(routine)
+        val scheduler = FailingRoutineScheduler()
+        val vm = viewModel(routine = routine, routines = repository, scheduler = scheduler)
+        dispatcher.scheduler.advanceUntilIdle()
+
+        vm.pauseToday()
+        dispatcher.scheduler.advanceUntilIdle()
+
+        val today = LocalDate.now(clock)
+        assertEquals(listOf(routine.id to today), repository.pauseForDateCalls)
+        assertEquals(today, vm.uiState.value.routine?.pausedDate)
+        assertEquals(true, vm.uiState.value.isPausedToday)
+        assertEquals(false, vm.uiState.value.pauseActionFailed)
+        assertEquals(true, vm.uiState.value.schedulingFailed)
+        assertEquals(false, vm.uiState.value.isTogglingPause)
+        assertEquals(1, scheduler.scheduleCallCount)
+    }
+
+    @Test
+    fun `resumeToday persists and updates the UI even when scheduling the change fails`() = runTest(dispatcher) {
+        val routine = sampleRoutine(pausedDate = LocalDate.now(clock))
+        val repository = FakeRoutineRepository(routine)
+        val scheduler = FailingRoutineScheduler()
+        val vm = viewModel(routine = routine, routines = repository, scheduler = scheduler)
+        dispatcher.scheduler.advanceUntilIdle()
+
+        vm.resumeToday()
+        dispatcher.scheduler.advanceUntilIdle()
+
+        assertEquals(listOf(routine.id), repository.clearPauseCalls)
+        assertEquals(null, vm.uiState.value.routine?.pausedDate)
+        assertEquals(false, vm.uiState.value.isPausedToday)
+        assertEquals(false, vm.uiState.value.pauseActionFailed)
+        assertEquals(true, vm.uiState.value.schedulingFailed)
+        assertEquals(false, vm.uiState.value.isTogglingPause)
+        assertEquals(1, scheduler.scheduleCallCount)
+    }
+
+    @Test
+    fun `deleteRoutine deletes and calls onDeleted even when cancelling its scheduled work fails`() = runTest(dispatcher) {
+        val routine = sampleRoutine()
+        val repository = FakeRoutineRepository(routine)
+        val scheduler = FailingRoutineScheduler()
+        val vm = viewModel(routine = routine, routines = repository, scheduler = scheduler)
+        dispatcher.scheduler.advanceUntilIdle()
+
+        var deleted = false
+        vm.deleteRoutine { deleted = true }
+        dispatcher.scheduler.advanceUntilIdle()
+
+        // Room deletion is the persisted truth -- a WorkManager cancellation failure on top of
+        // an already-successful delete must never be reported as "delete failed", and the
+        // caller must still be told to navigate away.
+        assertEquals(listOf(routine.id), repository.deletedIds)
+        assertEquals(true, deleted)
+        assertEquals(false, vm.uiState.value.deleteFailed)
+        // Deliberately not a schedulingFailed-with-retry case: there is no future occurrence
+        // left to retry scheduling for once the routine itself is gone -- see deleteRoutine's
+        // own class doc on relying on the worker's own existence check plus WorkManager's
+        // eventual pruning instead.
+        assertEquals(false, vm.uiState.value.schedulingFailed)
+        assertEquals(false, vm.uiState.value.isDeleting)
+        assertEquals(1, scheduler.cancelCallCount)
+    }
+
+    @Test
+    fun `reload contains an ordinary Room read failure instead of crashing, keeping the previously displayed state`() = runTest(dispatcher) {
+        val routine = sampleRoutine(id = "r1").copy(name = "Original")
+        var shouldFail = false
+        val repository = object : RoutineRepository {
+            private val delegate = FakeRoutineRepository(routine)
+            override fun observeAll(): Flow<List<CommuteRoutine>> = delegate.observeAll()
+            override suspend fun getById(id: String): CommuteRoutine? {
+                if (shouldFail) throw IOException("Room unavailable")
+                return delegate.getById(id)
+            }
+            override suspend fun save(routine: CommuteRoutine) = delegate.save(routine)
+            override suspend fun delete(id: String) = delegate.delete(id)
+            override suspend fun pauseForDate(id: String, date: LocalDate) = delegate.pauseForDate(id, date)
+            override suspend fun clearPause(id: String) = delegate.clearPause(id)
+            override suspend fun setEnabled(id: String, enabled: Boolean) = delegate.setEnabled(id, enabled)
+            override suspend fun hasAnyRoutine(): Boolean = delegate.hasAnyRoutine()
+        }
+        val vm = viewModel(routine = routine, routineId = "r1", routines = repository)
+        dispatcher.scheduler.advanceUntilIdle()
+        assertEquals("Original", vm.uiState.value.routine?.name)
+
+        shouldFail = true
+        vm.reload()
+        dispatcher.scheduler.advanceUntilIdle()
+
+        // Must not crash (proven by this test completing at all -- viewModelScope has no
+        // default exception handler), and the last genuinely valid state must still be shown
+        // rather than being torn down because this reload attempt failed.
+        assertEquals("Original", vm.uiState.value.routine?.name)
+    }
+
+    @Test
+    fun `reload applies the freshly-loaded routine and reconciles the widget even when rescheduling it fails`() = runTest(dispatcher) {
+        val routine = sampleRoutine(id = "r1").copy(name = "Original")
+        val repository = FakeRoutineRepository(routine)
+        val scheduler = FailingRoutineScheduler()
+        val widgetUpdater = FakeRoutineWidgetUpdater()
+        val vm = viewModel(routine = routine, routineId = "r1", routines = repository, scheduler = scheduler, widgetUpdater = widgetUpdater)
+        dispatcher.scheduler.advanceUntilIdle()
+
+        repository.save(routine.copy(name = "Renamed"))
+        vm.reload()
+        dispatcher.scheduler.advanceUntilIdle()
+
+        // The freshly-read Room data is real and already correctly applied -- a scheduling
+        // failure on top of it must not revert that, and the widget reconcile below it must
+        // still be attempted independently.
+        assertEquals("Renamed", vm.uiState.value.routine?.name)
+        assertEquals(1, scheduler.scheduleCallCount)
+        assertEquals(1, widgetUpdater.reconcileCallCount)
+        assertEquals(true, vm.uiState.value.schedulingFailed)
+    }
+
+    // ---- retryScheduling: retries ONLY the scheduler, never repeats the already-successful
+    // Room mutation, using whichever routine is currently persisted ----
+
+    @Test
+    fun `retryScheduling does not repeat the Room mutation`() = runTest(dispatcher) {
+        val routine = sampleRoutine(enabled = true)
+        val repository = FakeRoutineRepository(routine)
+        val scheduler = FailingRoutineScheduler()
+        val vm = viewModel(routine = routine, routines = repository, scheduler = scheduler)
+        dispatcher.scheduler.advanceUntilIdle()
+
+        // Disabling: toggleEnabled's own branch calls cancelActivation directly.
+        vm.toggleEnabled()
+        dispatcher.scheduler.advanceUntilIdle()
+        assertEquals(1, repository.setEnabledCalls.size)
+        assertEquals(1, scheduler.cancelCallCount)
+
+        // retryScheduling always calls scheduleActivation (which itself internally cancels for
+        // a disabled routine -- see WorkManagerRoutineScheduler's own doc), never
+        // cancelActivation directly, and never repository.setEnabled again.
+        vm.retryScheduling()
+        dispatcher.scheduler.advanceUntilIdle()
+
+        assertEquals(1, repository.setEnabledCalls.size)
+        assertEquals(1, scheduler.cancelCallCount)
+        assertEquals(1, scheduler.scheduleCallCount)
+    }
+
+    @Test
+    fun `a successful retryScheduling uses the current persisted routine and clears schedulingFailed`() = runTest(dispatcher) {
+        val routine = sampleRoutine()
+        val repository = FakeRoutineRepository(routine)
+        val scheduler = ToggleableRoutineScheduler(shouldFail = true)
+        val vm = viewModel(routine = routine, routines = repository, scheduler = scheduler)
+        dispatcher.scheduler.advanceUntilIdle()
+
+        vm.pauseToday()
+        dispatcher.scheduler.advanceUntilIdle()
+        assertEquals(true, vm.uiState.value.schedulingFailed)
+        val today = LocalDate.now(clock)
+
+        scheduler.shouldFail = false
+        vm.retryScheduling()
+        dispatcher.scheduler.advanceUntilIdle()
+
+        assertEquals(false, vm.uiState.value.schedulingFailed)
+        assertEquals(false, vm.uiState.value.isRetryingScheduling)
+        // The retry used the CURRENT persisted routine (pausedDate = today, from the earlier
+        // pauseToday() call) -- not a stale or freshly-reconstructed one.
+        assertEquals(listOf(today), scheduler.scheduledRoutines.map { it.pausedDate })
+    }
+
+    @Test
+    fun `retryScheduling is a no-op when the routine has not loaded yet`() = runTest(dispatcher) {
+        val scheduler = FailingRoutineScheduler()
+        val vm = viewModel(routine = null, routineId = "does-not-exist", scheduler = scheduler)
+
+        vm.retryScheduling()
+        dispatcher.scheduler.advanceUntilIdle()
+
+        assertEquals(0, scheduler.scheduleCallCount)
+    }
+
+    @Test
+    fun `calling retryScheduling while a retry is already in flight only schedules once`() = runTest(dispatcher) {
+        val routine = sampleRoutine(enabled = true)
+        val repository = FakeRoutineRepository(routine)
+        val scheduler = FailingRoutineScheduler()
+        val vm = viewModel(routine = routine, routines = repository, scheduler = scheduler)
+        dispatcher.scheduler.advanceUntilIdle()
+        vm.toggleEnabled()
+        dispatcher.scheduler.advanceUntilIdle()
+        assertEquals(1, scheduler.cancelCallCount)
+        assertEquals(0, scheduler.scheduleCallCount)
+
+        vm.retryScheduling()
+        vm.retryScheduling()
+        dispatcher.scheduler.advanceUntilIdle()
+
+        // Exactly 1 scheduleActivation call from the two overlapping retryScheduling() calls,
+        // not 2 -- the second call must see isRetryingScheduling already true and no-op.
+        assertEquals(1, scheduler.scheduleCallCount)
+    }
+
+    @Test
+    fun `a cancellation while retrying scheduling propagates instead of being treated as an ordinary failure`() = runTest(dispatcher) {
+        val routine = sampleRoutine()
+        val repository = FakeRoutineRepository(routine)
+        val widgetUpdater = FakeRoutineWidgetUpdater()
+        val vm = viewModel(
+            routine = routine, routines = repository,
+            scheduler = FailingRoutineScheduler(throwCancellation = true),
+            widgetUpdater = widgetUpdater,
+        )
+        dispatcher.scheduler.advanceUntilIdle()
+        vm.toggleEnabled()
+        dispatcher.scheduler.advanceUntilIdle()
+
+        val widgetCallsBeforeRetry = widgetUpdater.reconcileCallCount
+        vm.retryScheduling()
+        dispatcher.scheduler.advanceUntilIdle()
+
+        // If the CancellationException from scheduleActivation had been wrongly caught as an
+        // ordinary failure instead of rethrown, execution would have fallen through to the
+        // widget reconcile call right after it -- it must not have.
+        assertEquals(widgetCallsBeforeRetry, widgetUpdater.reconcileCallCount)
+    }
+
+    // ---- Coroutine cancellation is preserved across the now-separate persistence/scheduling
+    // try/catch blocks (a genuine CancellationException must always propagate unconverted, never
+    // be treated as an ordinary failure). Each of these makes the distinction OBSERVABLE by
+    // checking whether execution fell through to the step immediately after the cancelled one
+    // (the widget reconcile, or onDeleted) -- which must never happen on a genuine cancellation,
+    // unlike an ordinary caught failure, which always still reaches it. ----
+
+    @Test
+    fun `a cancellation while scheduling toggleEnabled's change propagates instead of being treated as an ordinary failure`() = runTest(dispatcher) {
+        val routine = sampleRoutine(enabled = true)
+        val widgetUpdater = FakeRoutineWidgetUpdater()
+        val vm = viewModel(routine = routine, scheduler = FailingRoutineScheduler(throwCancellation = true), widgetUpdater = widgetUpdater)
+        dispatcher.scheduler.advanceUntilIdle()
+
+        vm.toggleEnabled()
+        dispatcher.scheduler.advanceUntilIdle()
+
+        // The Room write already succeeded and is reflected regardless.
+        assertEquals(false, vm.uiState.value.routine?.enabled)
+        assertEquals(false, vm.uiState.value.enabledActionFailed)
+        // If the CancellationException from cancelActivation had been wrongly caught as an
+        // ordinary failure instead of rethrown, execution would have fallen through to the
+        // widget reconcile call right after it -- it must not have.
+        assertEquals(0, widgetUpdater.reconcileCallCount)
+    }
+
+    @Test
+    fun `a cancellation while cancelling deleteRoutine's scheduled work propagates instead of being treated as an ordinary failure`() = runTest(dispatcher) {
+        val routine = sampleRoutine()
+        val repository = FakeRoutineRepository(routine)
+        val widgetUpdater = FakeRoutineWidgetUpdater()
+        val vm = viewModel(
+            routine = routine, routines = repository,
+            scheduler = FailingRoutineScheduler(throwCancellation = true),
+            widgetUpdater = widgetUpdater,
+        )
+        dispatcher.scheduler.advanceUntilIdle()
+
+        var deleted = false
+        vm.deleteRoutine { deleted = true }
+        dispatcher.scheduler.advanceUntilIdle()
+
+        // Room deletion already succeeded regardless.
+        assertEquals(listOf(routine.id), repository.deletedIds)
+        // If the CancellationException from cancelActivation had been wrongly caught as an
+        // ordinary failure instead of rethrown, execution would have fallen through to
+        // routineNotifier.remove(), the widget reconcile, and onDeleted() -- none of that must
+        // have happened; the whole coroutine ends cancelled at that point instead.
+        assertEquals(false, deleted)
+        assertEquals(false, vm.uiState.value.deleteFailed)
+        assertEquals(0, widgetUpdater.reconcileCallCount)
+    }
+
+    @Test
+    fun `a cancellation while rescheduling in reload propagates instead of being treated as an ordinary failure`() = runTest(dispatcher) {
+        val routine = sampleRoutine(id = "r1")
+        val repository = FakeRoutineRepository(routine)
+        val widgetUpdater = FakeRoutineWidgetUpdater()
+        val vm = viewModel(
+            routine = routine, routineId = "r1", routines = repository,
+            scheduler = FailingRoutineScheduler(throwCancellation = true),
+            widgetUpdater = widgetUpdater,
+        )
+        dispatcher.scheduler.advanceUntilIdle()
+
+        vm.reload()
+        dispatcher.scheduler.advanceUntilIdle()
+
+        // If the CancellationException from scheduleActivation had been wrongly caught by the
+        // generic `catch (e: Exception)` instead of being rethrown, execution would have fallen
+        // through to the widget reconcile call right after it -- it must not have.
+        assertEquals(0, widgetUpdater.reconcileCallCount)
+    }
+
+    @Test
+    fun `a cancellation while reading the routine in reload propagates instead of being treated as an ordinary failure`() = runTest(dispatcher) {
+        val routine = sampleRoutine(id = "r1")
+        var shouldCancel = false
+        val repository = object : RoutineRepository {
+            private val delegate = FakeRoutineRepository(routine)
+            override fun observeAll(): Flow<List<CommuteRoutine>> = delegate.observeAll()
+            override suspend fun getById(id: String): CommuteRoutine? {
+                if (shouldCancel) throw CancellationException("test cancellation")
+                return delegate.getById(id)
+            }
+            override suspend fun save(routine: CommuteRoutine) = delegate.save(routine)
+            override suspend fun delete(id: String) = delegate.delete(id)
+            override suspend fun pauseForDate(id: String, date: LocalDate) = delegate.pauseForDate(id, date)
+            override suspend fun clearPause(id: String) = delegate.clearPause(id)
+            override suspend fun setEnabled(id: String, enabled: Boolean) = delegate.setEnabled(id, enabled)
+            override suspend fun hasAnyRoutine(): Boolean = delegate.hasAnyRoutine()
+        }
+        val widgetUpdater = FakeRoutineWidgetUpdater()
+        val vm = viewModel(routine = routine, routineId = "r1", routines = repository, widgetUpdater = widgetUpdater)
+        dispatcher.scheduler.advanceUntilIdle()
+        assertEquals(0, widgetUpdater.reconcileCallCount) // nothing from init's own load -- reload() is what's under test
+
+        shouldCancel = true
+        vm.reload()
+        dispatcher.scheduler.advanceUntilIdle()
+
+        // If the CancellationException from getById had been wrongly caught by the generic
+        // `catch (e: Exception)` instead of being rethrown, execution would eventually have
+        // reached the widget reconcile call further down -- it must not have.
+        assertEquals(0, widgetUpdater.reconcileCallCount)
     }
 
     // ---- Stale-snapshot identity regression (edit to a new site/line/direction/mode must

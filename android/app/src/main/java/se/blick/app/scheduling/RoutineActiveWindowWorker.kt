@@ -218,16 +218,32 @@ internal fun effectiveHardCapMinutes(routine: CommuteRoutine, windowStart: Zoned
  * cancelling outright. Any other unexpected exception (a failure entering foreground execution,
  * or anything else unhandled mid-loop) is caught, treated as a normal end of this run, and still
  * proceeds to clean up the notification and reschedule the next eligible occurrence — the same
- * as a normal window-end completion. [routineNotifier.remove] runs in a `finally` once
- * foreground execution actually started, whichever of these paths is taken — but ONLY if this
- * run is still the recorded content owner at that point (see [claimContentOwnership] and
- * [se.blick.app.data.repository.RoutineWorkOwnershipRepository]'s own doc): a cancelled run
- * that has since been superseded by a replacement (e.g. editing this active routine, which
- * cancels this worker and immediately starts a new one for the same routine id) must never let
- * its own cleanup clear content the replacement has already posted. This is deliberately NOT
- * "skip cleanup on every cancellation" — a cancelled run that is STILL the recorded owner
- * (nothing has actually replaced it) cleans up exactly as before; only genuine ownership loss
- * suppresses it, so content is never left stale merely because a run happened to be cancelled.
+ * as a normal window-end completion. [routineNotifier.remove] runs in a `finally`, whichever of
+ * these paths is taken — but ONLY if this run is still the recorded content owner at that point
+ * (see [claimContentOwnership] and [se.blick.app.data.repository.RoutineWorkOwnershipRepository]'s
+ * own doc): a cancelled run that has since been superseded by a replacement (e.g. editing this
+ * active routine, which cancels this worker and immediately starts a new one for the same
+ * routine id) must never let its own cleanup clear content the replacement has already posted.
+ * This is deliberately NOT "skip cleanup on every cancellation" — a cancelled run that is STILL
+ * the recorded owner (nothing has actually replaced it) cleans up exactly as before; only genuine
+ * ownership loss suppresses it, so content is never left stale merely because a run happened to
+ * be cancelled.
+ *
+ * **Ownership is claimed BEFORE [setForeground], not after.** [claimContentOwnership] runs, and
+ * must succeed, before this worker posts anything at all — reversing that order (claim only
+ * once content has already been posted) leaves a window where a REPLACEMENT run's freshly-posted
+ * notification is on screen but the ownership record still names the OLD run, so the old run's
+ * own `finally` (checking [se.blick.app.data.repository.RoutineWorkOwnershipRepository.isOwner])
+ * would wrongly see itself as still the owner and delete the replacement's content out from under
+ * it. Claiming first closes that window: by the time any content exists, the ownership record
+ * already names whichever run posted it. A failed claim is treated as a required precondition,
+ * not a best-effort step — this run refuses to enter foreground execution at all rather than post
+ * content it cannot prove it owns (see [claimContentOwnership]'s own doc). Once ownership is
+ * claimed, the `finally` block's cleanup runs unconditionally (gated only by
+ * [se.blick.app.data.repository.RoutineWorkOwnershipRepository.isOwner], never by whether
+ * [setForeground] itself went on to succeed) — so if [setForeground] throws right after a
+ * successful claim, this run still safely reconciles whatever content exists via the exact same
+ * ownership-aware mechanism, rather than a separate path.
  *
  * Also durably records a pending notification-recovery attempt (see
  * [NotificationRecoveryCoordinator]'s own doc) the moment this worker itself discovers
@@ -401,7 +417,19 @@ class RoutineActiveWindowWorker @AssistedInject constructor(
             return Result.success()
         }
 
-        var enteredForeground = false
+        // Ownership is claimed BEFORE any content is posted -- not after -- so an old worker's
+        // own `finally` (checking isOwner below) can never observe itself as "still the owner"
+        // during the window where this run has already posted a replacement notification but
+        // not yet recorded that fact. Required to proceed, not best-effort: if this fails, this
+        // run has no confirmed right to the content it would otherwise post, so it refuses to
+        // enter foreground execution at all, exactly like the runtime-state read/write failures
+        // above -- see claimContentOwnership's own doc.
+        if (!claimContentOwnership(routineId)) {
+            rescheduleSkippingToday(routineId)
+            runWidgetUpdateSafely { routineWidgetUpdater.reconcile() }
+            return Result.success()
+        }
+
         var notificationsBecameUnavailable = false
         var handledFailure = false
         var hitHardRuntimeCap = false
@@ -415,8 +443,6 @@ class RoutineActiveWindowWorker @AssistedInject constructor(
 
         try {
             setForeground(createForegroundInfo(routine))
-            enteredForeground = true
-            claimContentOwnership(routineId)
 
             while (true) {
                 val current = routineRepository.getById(routineId) ?: break
@@ -548,47 +574,45 @@ class RoutineActiveWindowWorker @AssistedInject constructor(
             // failure is unrelated to window timing) -- see rescheduleSkippingToday's own doc.
             handledFailure = true
         } finally {
-            if (enteredForeground) {
-                // Ownership may have been superseded by a replacement run (e.g. editing this
-                // active routine cancelled this worker and immediately started a new one) --
-                // only clean up if THIS run is still the recorded owner of the content it
-                // posted, so a cancelled/replaced run can never clobber a newer run's own
-                // notification/widget content. The check itself must run even while this
-                // coroutine is being cancelled (that's precisely the case it exists to guard),
-                // so it's wrapped in NonCancellable; on any unexpected failure to even determine
-                // ownership, this fails CLOSED (skips cleanup) rather than risking a clear
-                // against unknown ownership -- see this worker's own class doc.
-                val stillOwnsContent = withContext(NonCancellable) {
-                    try {
-                        routineWorkOwnershipRepository.isOwner(routineId, id.toString())
-                    } catch (e: CancellationException) {
-                        throw e
-                    } catch (e: Exception) {
-                        Log.w(LOG_TAG, "Failed to determine content ownership for routine $routineId; skipping cleanup to be safe", e)
-                        false
-                    }
+            // Ownership was already unconditionally claimed above, before setForeground was
+            // even attempted -- so this cleanup always runs, whether the loop ran to completion,
+            // broke early, or setForeground() itself threw before ever posting anything (see
+            // this worker's own class doc on "if ownership succeeds but setForeground
+            // subsequently fails, safely clean/reconcile that failed ownership/content state
+            // using the existing mechanism" -- this IS that existing mechanism, not a separate
+            // one). Ownership may still have been superseded by a REPLACEMENT run in the
+            // meantime (e.g. editing this active routine cancelled this worker and immediately
+            // started a new one, which claimed ownership for itself) -- only clean up if THIS
+            // run is still the recorded owner of the content, so a cancelled/replaced run can
+            // never clobber a newer run's own notification/widget content. The check itself must
+            // run even while this coroutine is being cancelled (that's precisely the case it
+            // exists to guard), so it's wrapped in NonCancellable; on any unexpected failure to
+            // even determine ownership, this fails CLOSED (skips cleanup) rather than risking a
+            // clear against unknown ownership -- see this worker's own class doc.
+            val stillOwnsContent = withContext(NonCancellable) {
+                try {
+                    routineWorkOwnershipRepository.isOwner(routineId, id.toString())
+                } catch (e: CancellationException) {
+                    throw e
+                } catch (e: Exception) {
+                    Log.w(LOG_TAG, "Failed to determine content ownership for routine $routineId; skipping cleanup to be safe", e)
+                    false
                 }
-                if (stillOwnsContent) {
-                    routineNotifier.remove()
-                    if (notificationsBecameUnavailable) {
-                        // The window is still genuinely open -- represent that honestly instead of
-                        // clearing to "No active commute." (see the pre-loop check's own comment).
-                        // Best-effort: a widget failure inside a `finally` must never replace an
-                        // in-flight CancellationException or exception being propagated out of this
-                        // block -- runWidgetUpdateSafely still rethrows a real CancellationException
-                        // unconverted, but swallows anything else so it can never mask whatever this
-                        // `finally` was already unwinding.
-                        runWidgetUpdateSafely { routineWidgetUpdater.showNotificationsUnavailable(lastKnownRoutine) }
-                    } else {
-                        runWidgetUpdateSafely { routineWidgetUpdater.clear() }
-                    }
+            }
+            if (stillOwnsContent) {
+                routineNotifier.remove()
+                if (notificationsBecameUnavailable) {
+                    // The window is still genuinely open -- represent that honestly instead of
+                    // clearing to "No active commute." (see the pre-loop check's own comment).
+                    // Best-effort: a widget failure inside a `finally` must never replace an
+                    // in-flight CancellationException or exception being propagated out of this
+                    // block -- runWidgetUpdateSafely still rethrows a real CancellationException
+                    // unconverted, but swallows anything else so it can never mask whatever this
+                    // `finally` was already unwinding.
+                    runWidgetUpdateSafely { routineWidgetUpdater.showNotificationsUnavailable(lastKnownRoutine) }
+                } else {
+                    runWidgetUpdateSafely { routineWidgetUpdater.clear() }
                 }
-            } else {
-                // setForeground() itself threw before the loop -- and before this worker ever
-                // posted anything for the widget -- so there is nothing to "clear"; reconcile
-                // instead so the widget doesn't keep showing whatever it displayed before this
-                // run started (e.g. a stale Loading from an earlier attempt).
-                runWidgetUpdateSafely { routineWidgetUpdater.reconcile() }
             }
         }
 
@@ -675,18 +699,23 @@ class RoutineActiveWindowWorker @AssistedInject constructor(
 
     /** Claims this run as the current content owner for [routineId] — see
      * `data/local/room/RoutineWorkOwnershipEntity.kt`'s own doc for exactly what this protects
-     * against. Called once, as early as possible after entering foreground execution (right
-     * after posting the very first, "Loading" notification). Best-effort: if this write fails,
-     * the run still proceeds normally rather than aborting over ownership bookkeeping alone —
-     * see this worker's own class doc on why "always clean up" is not the fallback either way,
-     * regardless of whether claiming itself succeeded. */
-    private suspend fun claimContentOwnership(routineId: String) {
-        try {
+     * against. Called once, as early as possible — BEFORE [setForeground]/any content is posted,
+     * not after: claiming first is what guarantees an old run's own `finally` (which checks
+     * [RoutineWorkOwnershipRepository.isOwner]) can never observe itself as "still the owner"
+     * while this run's replacement content is on screen but not yet recorded as such. Required,
+     * not best-effort: unlike most other cleanup/bookkeeping calls in this worker, a FAILED claim
+     * here means this run has no confirmed right to the content it's about to post, so
+     * [doWork] refuses to proceed to [setForeground] at all when this returns `false` — exactly
+     * like the runtime-state read/write failures earlier in [doWork]. */
+    private suspend fun claimContentOwnership(routineId: String): Boolean {
+        return try {
             routineWorkOwnershipRepository.claim(routineId, id.toString())
+            true
         } catch (e: CancellationException) {
             throw e
         } catch (e: Exception) {
-            Log.w(LOG_TAG, "Failed to claim content ownership for routine $routineId", e)
+            Log.w(LOG_TAG, "Failed to claim content ownership for routine $routineId; refusing to enter foreground execution", e)
+            false
         }
     }
 

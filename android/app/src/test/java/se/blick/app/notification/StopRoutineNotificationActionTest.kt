@@ -1,8 +1,10 @@
 package se.blick.app.notification
 
+import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.test.runTest
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertNull
+import org.junit.Assert.assertTrue
 import org.junit.Test
 import se.blick.app.data.repository.RoutineRepository
 import se.blick.app.domain.model.CommuteRoutine
@@ -65,6 +67,46 @@ class StopRoutineNotificationActionTest {
         }
         override fun cancelActivation(routineId: String) = Unit
         override suspend fun isActivationRunning(routineId: String): Boolean = false
+    }
+
+    /** Always throws [error] from [scheduleActivation] — for proving a scheduling failure AFTER
+     * a successful pause must never prevent the notification from being removed (persistence
+     * and scheduling are two different results — see [StopRoutineNotificationAction]'s own
+     * class doc). */
+    private class FailingScheduler(private val error: Throwable) : RoutineScheduler {
+        var scheduleCallCount = 0
+        override fun scheduleActivation(routine: CommuteRoutine) {
+            scheduleCallCount++
+            throw error
+        }
+        override fun cancelActivation(routineId: String) = Unit
+        override suspend fun isActivationRunning(routineId: String): Boolean = false
+    }
+
+    /** Configurable per-method failure — for proving a [getById]/[pauseForDate] failure must
+     * never let [stop] pretend the routine was paused, and must never remove a notification
+     * that may still correctly represent an active window. */
+    private class ConfigurableFailingRoutineRepository(
+        private var routine: CommuteRoutine?,
+        private val failGetById: Throwable? = null,
+        private val failPauseForDate: Throwable? = null,
+    ) : RoutineRepository {
+        var pauseForDateCallCount = 0
+        override fun observeAll() = throw NotImplementedError()
+        override suspend fun getById(id: String): CommuteRoutine? {
+            failGetById?.let { throw it }
+            return routine?.takeIf { it.id == id }
+        }
+        override suspend fun save(routine: CommuteRoutine) = throw NotImplementedError()
+        override suspend fun delete(id: String) = throw NotImplementedError()
+        override suspend fun pauseForDate(id: String, date: LocalDate) {
+            pauseForDateCallCount++
+            failPauseForDate?.let { throw it }
+            routine = routine?.copy(pausedDate = date)
+        }
+        override suspend fun clearPause(id: String) = throw NotImplementedError()
+        override suspend fun setEnabled(id: String, enabled: Boolean) = throw NotImplementedError()
+        override suspend fun hasAnyRoutine(): Boolean = routine != null
     }
 
     private class RecordingNotifier : RoutineNotifier {
@@ -155,5 +197,115 @@ class StopRoutineNotificationActionTest {
         assertEquals("r1" to LocalDate.of(2026, 8, 1), repository.lastPaused)
         assertEquals(listOf(LocalDate.of(2026, 8, 1)), scheduler.scheduled.map { it.pausedDate })
         assertEquals(1, notifier.removeCallCount)
+    }
+
+    // ---- Persistence vs. scheduling: once the pause succeeds, the notification is removed
+    // regardless of whether the follow-up reschedule succeeds; a failure to even pause must
+    // never remove a notification that may still correctly represent an active window ----
+
+    @Test
+    fun `stop still removes the notification and leaves the routine paused when rescheduling throws`() = runTest {
+        val repository = FakeRoutineRepository(routine())
+        val scheduler = FailingScheduler(RuntimeException("scheduling failed"))
+        val notifier = RecordingNotifier()
+        val widgetUpdater = RecordingWidgetUpdater()
+
+        // If the scheduling failure below were left unwrapped, stop() would throw and none of
+        // the assertions below would even run.
+        StopRoutineNotificationAction(repository, scheduler, notifier, widgetUpdater, clock, stockholmZone).stop("r1")
+
+        // The pause already genuinely succeeded in Room -- the notification must still be
+        // removed even though the reschedule attempt on top of it failed.
+        assertEquals("r1" to LocalDate.of(2026, 8, 1), repository.lastPaused)
+        assertEquals(1, scheduler.scheduleCallCount)
+        assertEquals(1, notifier.removeCallCount)
+        assertEquals(1, widgetUpdater.reconcileCallCount)
+    }
+
+    @Test
+    fun `stop does not remove the notification when pauseForDate itself fails`() = runTest {
+        val repository = ConfigurableFailingRoutineRepository(routine(), failPauseForDate = RuntimeException("Room unavailable"))
+        val scheduler = RecordingScheduler()
+        val notifier = RecordingNotifier()
+        val widgetUpdater = RecordingWidgetUpdater()
+
+        StopRoutineNotificationAction(repository, scheduler, notifier, widgetUpdater, clock, stockholmZone).stop("r1")
+
+        // The pause did NOT happen -- stop() must not pretend it did, and must not remove a
+        // notification that may still correctly represent an active window.
+        assertEquals(1, repository.pauseForDateCallCount)
+        assertEquals(emptyList<CommuteRoutine>(), scheduler.scheduled)
+        assertEquals(0, notifier.removeCallCount)
+        assertEquals(0, widgetUpdater.reconcileCallCount)
+    }
+
+    @Test
+    fun `stop does not remove the notification when reading the routine fails`() = runTest {
+        val repository = ConfigurableFailingRoutineRepository(routine(), failGetById = RuntimeException("Room unavailable"))
+        val scheduler = RecordingScheduler()
+        val notifier = RecordingNotifier()
+        val widgetUpdater = RecordingWidgetUpdater()
+
+        StopRoutineNotificationAction(repository, scheduler, notifier, widgetUpdater, clock, stockholmZone).stop("r1")
+
+        assertEquals(0, repository.pauseForDateCallCount)
+        assertEquals(0, notifier.removeCallCount)
+        assertEquals(0, widgetUpdater.reconcileCallCount)
+    }
+
+    // ---- Coroutine cancellation is preserved at every step (a genuine CancellationException
+    // must always propagate unconverted, never be treated as an ordinary failure) ----
+
+    @Test
+    fun `a cancellation while reading the routine propagates instead of being treated as an ordinary failure`() = runTest {
+        val repository = ConfigurableFailingRoutineRepository(routine(), failGetById = CancellationException("test cancellation"))
+        val notifier = RecordingNotifier()
+
+        var caught: CancellationException? = null
+        try {
+            StopRoutineNotificationAction(repository, RecordingScheduler(), notifier, RecordingWidgetUpdater(), clock, stockholmZone).stop("r1")
+        } catch (e: CancellationException) {
+            caught = e
+        }
+
+        assertTrue("expected stop() to rethrow a CancellationException, but it was swallowed", caught != null)
+        assertEquals(0, notifier.removeCallCount)
+    }
+
+    @Test
+    fun `a cancellation while pausing the routine propagates instead of being treated as an ordinary failure`() = runTest {
+        val repository = ConfigurableFailingRoutineRepository(routine(), failPauseForDate = CancellationException("test cancellation"))
+        val notifier = RecordingNotifier()
+
+        var caught: CancellationException? = null
+        try {
+            StopRoutineNotificationAction(repository, RecordingScheduler(), notifier, RecordingWidgetUpdater(), clock, stockholmZone).stop("r1")
+        } catch (e: CancellationException) {
+            caught = e
+        }
+
+        assertTrue("expected stop() to rethrow a CancellationException, but it was swallowed", caught != null)
+        assertEquals(0, notifier.removeCallCount)
+    }
+
+    @Test
+    fun `a cancellation while rescheduling propagates instead of being treated as an ordinary failure`() = runTest {
+        val repository = FakeRoutineRepository(routine())
+        val scheduler = FailingScheduler(CancellationException("test cancellation"))
+        val notifier = RecordingNotifier()
+
+        var caught: CancellationException? = null
+        try {
+            StopRoutineNotificationAction(repository, scheduler, notifier, RecordingWidgetUpdater(), clock, stockholmZone).stop("r1")
+        } catch (e: CancellationException) {
+            caught = e
+        }
+
+        assertTrue("expected stop() to rethrow a CancellationException, but it was swallowed", caught != null)
+        // The pause itself genuinely succeeded in Room -- only the propagated cancellation
+        // (correctly, since a genuine cancellation tears down the whole operation) is why
+        // remove() was never reached, not a bug that skips it under ordinary circumstances.
+        assertEquals("r1" to LocalDate.of(2026, 8, 1), repository.lastPaused)
+        assertEquals(0, notifier.removeCallCount)
     }
 }

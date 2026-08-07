@@ -165,6 +165,9 @@ fun RoutineDetailsScreen(
                 isDeleting = uiState.isDeleting,
                 deleteFailed = uiState.deleteFailed,
                 onRequestDelete = { showDeleteConfirmation = true },
+                schedulingFailed = uiState.schedulingFailed,
+                isRetryingScheduling = uiState.isRetryingScheduling,
+                onRetryScheduling = viewModel::retryScheduling,
                 onShowDebugNotification = viewModel::showDebugTestNotification,
                 onRemoveDebugNotification = viewModel::removeDebugTestNotification,
                 isLiveUpdatePromotable = viewModel::isLiveUpdatePromotable,
@@ -231,6 +234,9 @@ internal fun RoutineDetailsContent(
     isDeleting: Boolean,
     deleteFailed: Boolean,
     onRequestDelete: () -> Unit,
+    schedulingFailed: Boolean,
+    isRetryingScheduling: Boolean,
+    onRetryScheduling: () -> Unit,
     onShowDebugNotification: () -> NotificationPostResult?,
     onRemoveDebugNotification: () -> Unit,
     isLiveUpdatePromotable: () -> Boolean,
@@ -321,6 +327,9 @@ internal fun RoutineDetailsContent(
             isDeleting = isDeleting,
             deleteFailed = deleteFailed,
             onRequestDelete = onRequestDelete,
+            schedulingFailed = schedulingFailed,
+            isRetryingScheduling = isRetryingScheduling,
+            onRetryScheduling = onRetryScheduling,
         )
 
         // Debug-only manual notification trigger (Part 6 of the ongoing-notification
@@ -468,6 +477,9 @@ private fun RoutineActionsSection(
     isDeleting: Boolean,
     deleteFailed: Boolean,
     onRequestDelete: () -> Unit,
+    schedulingFailed: Boolean,
+    isRetryingScheduling: Boolean,
+    onRetryScheduling: () -> Unit,
 ) {
     // Enabling a routine is exactly the "appropriate user-driven point" the product doc asks
     // for to request POST_NOTIFICATIONS (see rememberNotificationPermissionGate's own doc) --
@@ -477,6 +489,28 @@ private fun RoutineActionsSection(
     Column {
         Text(stringResource(R.string.routine_details_actions_heading), style = MaterialTheme.typography.titleMedium)
         Spacer(Modifier.height(8.dp))
+
+        // A shared signal across enable/disable, pause/resume, and reload -- see
+        // RoutineDetailsUiState.schedulingFailed's own doc on why this is deliberately separate
+        // from enabledActionFailed/pauseActionFailed (which only ever mean the Room write
+        // itself failed): the persisted change above is already correct either way, only its
+        // WorkManager scheduling needs a retry.
+        if (schedulingFailed) {
+            Text(
+                stringResource(R.string.routine_details_scheduling_failed),
+                color = MaterialTheme.colorScheme.error,
+                style = MaterialTheme.typography.bodySmall,
+            )
+            Spacer(Modifier.height(4.dp))
+            OutlinedButton(
+                onClick = onRetryScheduling,
+                enabled = !isRetryingScheduling,
+                modifier = Modifier.fillMaxWidth(),
+            ) {
+                Text(stringResource(R.string.action_retry))
+            }
+            Spacer(Modifier.height(8.dp))
+        }
 
         if (routine.enabled) {
             NotificationStatusRow(notificationAvailability)

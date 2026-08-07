@@ -84,6 +84,16 @@ data class RoutineDetailsUiState(
     val pauseActionFailed: Boolean = false,
     val isDeleting: Boolean = false,
     val deleteFailed: Boolean = false,
+    /** True once a Room mutation ([RoutineDetailsViewModel.toggleEnabled]/
+     * [RoutineDetailsViewModel.pauseToday]/[RoutineDetailsViewModel.resumeToday]/
+     * [RoutineDetailsViewModel.reload]) has genuinely succeeded but the immediately-following
+     * [RoutineScheduler] call failed — see [RoutineDetailsViewModel.retryScheduling]'s own doc.
+     * Deliberately NOT the same signal as [enabledActionFailed]/[pauseActionFailed]: those only
+     * ever fire when the ROOM write itself failed, never for a downstream scheduling failure on
+     * top of an already-successful one. */
+    val schedulingFailed: Boolean = false,
+    /** Guards [RoutineDetailsViewModel.retryScheduling] against an overlapping second tap. */
+    val isRetryingScheduling: Boolean = false,
     /** Mirrors `AppSettingsDataStore.hasSeenNotificationRationale` — see
      * [se.blick.app.ui.screens.routinecreate.RoutineCreateUiState]'s identical field for why
      * this exists. */
@@ -337,49 +347,88 @@ class RoutineDetailsViewModel @Inject constructor(
      * a fresh departures fetch is triggered for the new configuration — reusing
      * [loadDepartures]'s existing request-generation-token guard, so a slow, now-stale fetch
      * for the OLD configuration can never overwrite the new one.
+     *
+     * The whole body is wrapped in a try/catch (a genuine [CancellationException] always
+     * rethrown unconverted) so an ordinary Room/cache failure — [routineRepository.getById]
+     * itself, or [clearExpiredPauseIfNeeded]'s own write — can never escape uncaught into
+     * `viewModelScope`, which has no default exception handler on Android: before this, such a
+     * failure would have crashed the whole screen instead of merely leaving it showing
+     * whatever was already correctly displayed. Nothing already applied to [_uiState] is ever
+     * rolled back on a later failure — the freshly-read [fresh] routine is real, Room-confirmed
+     * data the moment it's applied, so a failure in the scheduling call further below must not
+     * un-display it either (see that call's own, separate try/catch — the same persistence-vs-
+     * scheduling split [toggleEnabled]/[pauseToday]/[deleteRoutine] all use).
      */
     fun reload() {
         if (_uiState.value.isRoutineLoading) return
         viewModelScope.launch {
-            val loaded = routineRepository.getById(routineId) ?: return@launch
-            val fresh = clearExpiredPauseIfNeeded(loaded)
-            val previous = _uiState.value.routine
-            val departureConfigChanged = previous == null || previous.departureIdentity() != fresh.departureIdentity()
-            _uiState.update {
-                it.copy(
-                    routine = fresh,
-                    isPausedToday = fresh.pausedDate == today(),
-                )
+            try {
+                val loaded = routineRepository.getById(routineId) ?: return@launch
+                val fresh = clearExpiredPauseIfNeeded(loaded)
+                val previous = _uiState.value.routine
+                val departureConfigChanged = previous == null || previous.departureIdentity() != fresh.departureIdentity()
+                _uiState.update {
+                    it.copy(
+                        routine = fresh,
+                        isPausedToday = fresh.pausedDate == today(),
+                        schedulingFailed = false,
+                    )
+                }
+                if (departureConfigChanged) {
+                    // The persisted snapshot (if any) belongs to the OLD identity and must never
+                    // be offered as a stale fallback for the new one — loadDepartures's own
+                    // identity check already prevents this (see StaleSnapshotRepository.get's own
+                    // doc), but clearing it here too makes the invariant explicit rather than
+                    // relying on that check alone, and prevents it from lingering for no purpose.
+                    staleSnapshotRepository.clear(routineId)
+                    loadDepartures(fresh, RefreshTrigger.INITIAL)
+                    loadDisruptions(fresh, isInitial = true)
+                }
+                try {
+                    // The edit may also have changed enabled/schedule/pause fields, which
+                    // affects when this routine's active window should next run -- always
+                    // recompute, not only when the departure-relevant identity changed. Its own
+                    // try/catch, separate from the Room read/write above: a scheduling failure
+                    // here is a secondary side effect of an already-successful reload, not a
+                    // reason to let the exception propagate and lose the state already applied
+                    // above -- NotificationRecoveryCoordinator's own onAppStart unconditionally
+                    // reconciles every enabled routine's scheduling on the next app start
+                    // regardless.
+                    routineScheduler.scheduleActivation(fresh)
+                } catch (e: CancellationException) {
+                    throw e
+                } catch (e: Exception) {
+                    Log.e(LOG_TAG, "Routine $routineId reloaded but rescheduling its activation failed", e)
+                    _uiState.update { it.copy(schedulingFailed = true) }
+                }
+                // Best-effort -- without runWidgetUpdateSafely, a widget/Glance/DataStore
+                // failure here would otherwise be caught by the outer catch below and merely
+                // logged, which is harmless either way, but this keeps the widget attempt
+                // independent of whatever the scheduling call above did (see runWidgetUpdateSafely's
+                // own doc).
+                runWidgetUpdateSafely { routineWidgetUpdater.reconcile() }
+            } catch (e: CancellationException) {
+                throw e
+            } catch (e: Exception) {
+                Log.e(LOG_TAG, "Failed to reload routine $routineId; keeping the previously displayed state", e)
             }
-            if (departureConfigChanged) {
-                // The persisted snapshot (if any) belongs to the OLD identity and must never
-                // be offered as a stale fallback for the new one — loadDepartures's own
-                // identity check already prevents this (see StaleSnapshotRepository.get's own
-                // doc), but clearing it here too makes the invariant explicit rather than
-                // relying on that check alone, and prevents it from lingering for no purpose.
-                staleSnapshotRepository.clear(routineId)
-                loadDepartures(fresh, RefreshTrigger.INITIAL)
-                loadDisruptions(fresh, isInitial = true)
-            }
-            // The edit may also have changed enabled/schedule/pause fields, which affects
-            // when this routine's active window should next run — always recompute, not only
-            // when the departure-relevant identity changed.
-            routineScheduler.scheduleActivation(fresh)
-            // Best-effort -- this whole reload() coroutine has no try/catch of its own
-            // (nothing above it can meaningfully "fail" from the user's perspective), so an
-            // uncaught widget/Glance/DataStore failure here would otherwise crash the app via
-            // viewModelScope's lack of a default exception handler (see runWidgetUpdateSafely's
-            // own doc).
-            runWidgetUpdateSafely { routineWidgetUpdater.reconcile() }
         }
     }
 
     /**
      * Toggles [CommuteRoutine.enabled] only — never touches `pausedDate` or any other field
-     * (see [RoutineRepository.setEnabled]'s doc). Guarded against overlapping taps; on
-     * failure the local [RoutineDetailsUiState.routine] is left exactly as it was (the write
-     * never happened), paired with a friendly, retryable [RoutineDetailsUiState.enabledActionFailed].
-     */
+     * (see [RoutineRepository.setEnabled]'s doc). Guarded against overlapping taps; on a Room
+     * write failure the local [RoutineDetailsUiState.routine] is left exactly as it was (the
+     * write never happened), paired with a friendly, retryable
+     * [RoutineDetailsUiState.enabledActionFailed].
+     *
+     * **Persistence succeeding and scheduling succeeding are two different results.** Once
+     * [RoutineRepository.setEnabled] accepts the write, [newEnabled] IS the persisted truth —
+     * [RoutineDetailsUiState.routine] is updated to reflect it immediately, before
+     * [routineScheduler] is even called, so a SUBSEQUENT [RoutineScheduler.scheduleActivation]/
+     * [RoutineScheduler.cancelActivation] failure (its own, separate try/catch below) can never
+     * leave the UI showing the pre-toggle state, or report [RoutineDetailsUiState.enabledActionFailed]
+     * for a write that actually succeeded. */
     fun toggleEnabled() {
         val state = _uiState.value
         val routine = state.routine ?: return
@@ -389,35 +438,43 @@ class RoutineDetailsViewModel @Inject constructor(
         viewModelScope.launch {
             try {
                 routineRepository.setEnabled(routine.id, newEnabled)
-                val updated = routine.copy(enabled = newEnabled)
-                if (newEnabled) {
-                    routineScheduler.scheduleActivation(updated)
-                } else {
-                    routineScheduler.cancelActivation(updated.id)
-                }
-                _uiState.update {
-                    it.copy(isTogglingEnabled = false, routine = it.routine?.copy(enabled = newEnabled))
-                }
-                // Best-effort, and deliberately AFTER the success state above is already
-                // applied -- without runWidgetUpdateSafely, a widget/Glance/DataStore failure
-                // here would fall into the `catch (e: Exception)` below and overwrite that
-                // already-correct success state with enabledActionFailed = true, even though
-                // setEnabled/scheduleActivation genuinely already succeeded (see
-                // runWidgetUpdateSafely's own doc).
-                runWidgetUpdateSafely { routineWidgetUpdater.reconcile() }
             } catch (e: CancellationException) {
                 _uiState.update { it.copy(isTogglingEnabled = false) }
                 throw e
             } catch (e: Exception) {
                 Log.e(LOG_TAG, "Failed to toggle enabled for routine ${routine.id}", e)
                 _uiState.update { it.copy(isTogglingEnabled = false, enabledActionFailed = true) }
+                return@launch
             }
+            val updated = routine.copy(enabled = newEnabled)
+            _uiState.update {
+                it.copy(isTogglingEnabled = false, routine = it.routine?.copy(enabled = newEnabled), schedulingFailed = false)
+            }
+            try {
+                if (newEnabled) {
+                    routineScheduler.scheduleActivation(updated)
+                } else {
+                    routineScheduler.cancelActivation(updated.id)
+                }
+            } catch (e: CancellationException) {
+                throw e
+            } catch (e: Exception) {
+                Log.e(LOG_TAG, "Routine ${routine.id} enabled=$newEnabled was saved but (re)scheduling it failed", e)
+                _uiState.update { it.copy(schedulingFailed = true) }
+            }
+            // Best-effort -- see runWidgetUpdateSafely's own doc.
+            runWidgetUpdateSafely { routineWidgetUpdater.reconcile() }
         }
     }
 
     /** Sets `pausedDate` to today (see [RoutineRepository.pauseForDate]) — independent of
      * [CommuteRoutine.enabled], never toggles it. Guarded against overlapping taps with
-     * [resumeToday] (they're mutually exclusive actions on the same field). */
+     * [resumeToday] (they're mutually exclusive actions on the same field). Persistence and
+     * scheduling are two different results — see [toggleEnabled]'s identical reasoning: once
+     * the Room write succeeds, [RoutineDetailsUiState.isPausedToday]/`routine` reflect it
+     * immediately, before [routineScheduler] is even called, so a subsequent scheduling
+     * failure (its own try/catch) can never revert the UI or report
+     * [RoutineDetailsUiState.pauseActionFailed] for a write that actually succeeded. */
     fun pauseToday() {
         val state = _uiState.value
         val routine = state.routine ?: return
@@ -427,27 +484,35 @@ class RoutineDetailsViewModel @Inject constructor(
         viewModelScope.launch {
             try {
                 routineRepository.pauseForDate(routine.id, today)
-                // Recompute the next eligible activation excluding today -- see
-                // NextOccurrenceCalculator's excludedDate parameter.
-                routineScheduler.scheduleActivation(routine.copy(pausedDate = today))
-                _uiState.update {
-                    it.copy(isTogglingPause = false, isPausedToday = true, routine = it.routine?.copy(pausedDate = today))
-                }
-                // Best-effort, deliberately after the success state above -- see toggleEnabled's
-                // identical comment and runWidgetUpdateSafely's own doc.
-                runWidgetUpdateSafely { routineWidgetUpdater.reconcile() }
             } catch (e: CancellationException) {
                 _uiState.update { it.copy(isTogglingPause = false) }
                 throw e
             } catch (e: Exception) {
                 Log.e(LOG_TAG, "Failed to pause routine ${routine.id} for today", e)
                 _uiState.update { it.copy(isTogglingPause = false, pauseActionFailed = true) }
+                return@launch
             }
+            _uiState.update {
+                it.copy(isTogglingPause = false, isPausedToday = true, routine = it.routine?.copy(pausedDate = today), schedulingFailed = false)
+            }
+            try {
+                // Recompute the next eligible activation excluding today -- see
+                // NextOccurrenceCalculator's excludedDate parameter.
+                routineScheduler.scheduleActivation(routine.copy(pausedDate = today))
+            } catch (e: CancellationException) {
+                throw e
+            } catch (e: Exception) {
+                Log.e(LOG_TAG, "Routine ${routine.id} was paused for today but rescheduling it failed", e)
+                _uiState.update { it.copy(schedulingFailed = true) }
+            }
+            // Best-effort -- see runWidgetUpdateSafely's own doc.
+            runWidgetUpdateSafely { routineWidgetUpdater.reconcile() }
         }
     }
 
     /** Clears `pausedDate` (see [RoutineRepository.clearPause]) — independent of
-     * [CommuteRoutine.enabled], never toggles it. */
+     * [CommuteRoutine.enabled], never toggles it. Persistence and scheduling are two different
+     * results — see [toggleEnabled]'s identical reasoning. */
     fun resumeToday() {
         val state = _uiState.value
         val routine = state.routine ?: return
@@ -456,20 +521,60 @@ class RoutineDetailsViewModel @Inject constructor(
         viewModelScope.launch {
             try {
                 routineRepository.clearPause(routine.id)
-                routineScheduler.scheduleActivation(routine.copy(pausedDate = null))
-                _uiState.update {
-                    it.copy(isTogglingPause = false, isPausedToday = false, routine = it.routine?.copy(pausedDate = null))
-                }
-                // Best-effort, deliberately after the success state above -- see toggleEnabled's
-                // identical comment and runWidgetUpdateSafely's own doc.
-                runWidgetUpdateSafely { routineWidgetUpdater.reconcile() }
             } catch (e: CancellationException) {
                 _uiState.update { it.copy(isTogglingPause = false) }
                 throw e
             } catch (e: Exception) {
                 Log.e(LOG_TAG, "Failed to resume routine ${routine.id}", e)
                 _uiState.update { it.copy(isTogglingPause = false, pauseActionFailed = true) }
+                return@launch
             }
+            _uiState.update {
+                it.copy(isTogglingPause = false, isPausedToday = false, routine = it.routine?.copy(pausedDate = null), schedulingFailed = false)
+            }
+            try {
+                routineScheduler.scheduleActivation(routine.copy(pausedDate = null))
+            } catch (e: CancellationException) {
+                throw e
+            } catch (e: Exception) {
+                Log.e(LOG_TAG, "Routine ${routine.id} was resumed but rescheduling it failed", e)
+                _uiState.update { it.copy(schedulingFailed = true) }
+            }
+            // Best-effort -- see runWidgetUpdateSafely's own doc.
+            runWidgetUpdateSafely { routineWidgetUpdater.reconcile() }
+        }
+    }
+
+    /**
+     * Retries ONLY the scheduling side for the CURRENT persisted [RoutineDetailsUiState.routine]
+     * — never repeats [toggleEnabled]/[pauseToday]/[resumeToday]'s own Room write, which has
+     * already genuinely succeeded by the time [RoutineDetailsUiState.schedulingFailed] is ever
+     * set (see those methods' own docs). Deliberately calls
+     * [RoutineScheduler.scheduleActivation] unconditionally, never [RoutineScheduler.cancelActivation]
+     * directly: [WorkManagerRoutineScheduler][se.blick.app.scheduling.WorkManagerRoutineScheduler]'s
+     * own `scheduleActivation` already cancels any scheduled work for a disabled routine
+     * internally, so this one call is correct for every persisted state
+     * ([CommuteRoutine.enabled] true or false, paused or not) without this method needing to
+     * duplicate that branching itself. A no-op if the routine hasn't loaded or a retry is
+     * already in flight. */
+    fun retryScheduling() {
+        val state = _uiState.value
+        val routine = state.routine ?: return
+        if (state.isRetryingScheduling) return
+        _uiState.update { it.copy(isRetryingScheduling = true) }
+        viewModelScope.launch {
+            try {
+                routineScheduler.scheduleActivation(routine)
+            } catch (e: CancellationException) {
+                _uiState.update { it.copy(isRetryingScheduling = false) }
+                throw e
+            } catch (e: Exception) {
+                Log.e(LOG_TAG, "Retry scheduling failed for routine ${routine.id}", e)
+                _uiState.update { it.copy(isRetryingScheduling = false) }
+                return@launch
+            }
+            _uiState.update { it.copy(isRetryingScheduling = false, schedulingFailed = false) }
+            runWidgetUpdateSafely { routineWidgetUpdater.reconcile() }
         }
     }
 
@@ -478,8 +583,26 @@ class RoutineDetailsViewModel @Inject constructor(
      * [se.blick.app.ui.screens.routinedetails.RoutineDetailsScreen]) — this is only called
      * once the user has actually confirmed. Guarded against a repeated confirm tap firing a
      * second delete while the first is still in flight. [onDeleted] is only invoked after
-     * the repository call actually succeeds, so the caller can navigate back to the list;
-     * on failure the screen stays put with a friendly, retryable [RoutineDetailsUiState.deleteFailed].
+     * [RoutineRepository.delete] actually succeeds, so the caller can navigate back to the
+     * list; a Room failure THERE keeps the screen on the routine with a friendly, retryable
+     * [RoutineDetailsUiState.deleteFailed].
+     *
+     * **Persistence succeeding and cleanup succeeding are two different results.** Once Room
+     * deletion succeeds, the routine IS deleted — a SUBSEQUENT [RoutineScheduler.cancelActivation]
+     * failure (its own, separate try/catch below) must never be reported as
+     * [RoutineDetailsUiState.deleteFailed], and [onDeleted] still runs so the caller navigates
+     * away as normal: re-deleting (or re-inserting) the Room row is never attempted merely
+     * because a cleanup step failed. [routineNotifier.remove] is unconditional and never
+     * throws (see that interface's own doc), so it needs no try/catch of its own.
+     *
+     * Deliberately does NOT set [RoutineDetailsUiState.schedulingFailed]: unlike
+     * [toggleEnabled]/[pauseToday]/[resumeToday]/[reload], there is no future occurrence left to
+     * retry scheduling FOR once the routine itself is gone — [RoutineScheduler.cancelActivation]
+     * is a best-effort cleanup of now-stale work, not something a user action can meaningfully
+     * retry. Existing safety nets already cover a failed cancellation: any stale WorkManager
+     * request left behind fires at most once, and [se.blick.app.scheduling.RoutineActiveWindowWorker]'s
+     * own `doWork` already re-reads the routine first and safely no-ops (never reschedules)
+     * once it finds nothing there.
      */
     fun deleteRoutine(onDeleted: () -> Unit) {
         val state = _uiState.value
@@ -489,23 +612,26 @@ class RoutineDetailsViewModel @Inject constructor(
         viewModelScope.launch {
             try {
                 routineRepository.delete(routine.id)
-                routineScheduler.cancelActivation(routine.id)
-                routineNotifier.remove()
-                // Best-effort, deliberately BEFORE the success state/onDeleted() below -- without
-                // runWidgetUpdateSafely, a widget/Glance/DataStore failure here would fall into
-                // the `catch (e: Exception)` below, report deleteFailed = true, and never call
-                // onDeleted(), even though the routine was already genuinely deleted (see
-                // runWidgetUpdateSafely's own doc and toggleEnabled's identical comment).
-                runWidgetUpdateSafely { routineWidgetUpdater.reconcile() }
-                _uiState.update { it.copy(isDeleting = false) }
-                onDeleted()
             } catch (e: CancellationException) {
                 _uiState.update { it.copy(isDeleting = false) }
                 throw e
             } catch (e: Exception) {
                 Log.e(LOG_TAG, "Failed to delete routine ${routine.id}", e)
                 _uiState.update { it.copy(isDeleting = false, deleteFailed = true) }
+                return@launch
             }
+            _uiState.update { it.copy(isDeleting = false) }
+            try {
+                routineScheduler.cancelActivation(routine.id)
+            } catch (e: CancellationException) {
+                throw e
+            } catch (e: Exception) {
+                Log.e(LOG_TAG, "Routine ${routine.id} was deleted but cancelling its scheduled work failed", e)
+            }
+            routineNotifier.remove()
+            // Best-effort -- see runWidgetUpdateSafely's own doc.
+            runWidgetUpdateSafely { routineWidgetUpdater.reconcile() }
+            onDeleted()
         }
     }
 

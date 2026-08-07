@@ -158,6 +158,12 @@ fun RoutineCreateScreen(
                                 onEndTimeChanged = viewModel::setEndTime,
                                 onNameChanged = viewModel::setName,
                                 onSave = { notifyGate { viewModel.save(onDone) } },
+                                // Retries only the WorkManager side for the already-saved routine
+                                // -- never re-wrapped in notifyGate, which is specifically about
+                                // the one-time POST_NOTIFICATIONS rationale for a fresh save, not
+                                // this secondary scheduling retry (see RoutineCreateViewModel.save's
+                                // own doc).
+                                onRetryScheduling = { viewModel.retryScheduling(onDone) },
                             )
                         }
                     }
@@ -322,6 +328,7 @@ private fun ScheduleStep(
     onEndTimeChanged: (LocalTime) -> Unit,
     onNameChanged: (String) -> Unit,
     onSave: () -> Unit,
+    onRetryScheduling: () -> Unit,
 ) {
     var editingField by remember { mutableStateOf<TimeField?>(null) }
     // Read via LocalLocale (a Compose-observable CompositionLocal) rather than
@@ -388,6 +395,26 @@ private fun ScheduleStep(
         Spacer(Modifier.height(24.dp))
         Button(onClick = onSave, enabled = uiState.canSave, modifier = Modifier.fillMaxWidth()) {
             Text(stringResource(if (uiState.saveFailed) R.string.routine_create_retry else R.string.routine_create_save))
+        }
+
+        // The routine itself is already saved at this point (schedulingFailed and saveFailed
+        // are mutually exclusive in practice) -- a dedicated retry, separate from the Save
+        // button above, which targets only the WorkManager side and never repeats the write.
+        if (uiState.schedulingFailed) {
+            Spacer(Modifier.height(8.dp))
+            Text(
+                stringResource(R.string.routine_create_scheduling_error),
+                color = MaterialTheme.colorScheme.error,
+                style = MaterialTheme.typography.bodySmall,
+            )
+            Spacer(Modifier.height(8.dp))
+            Button(
+                onClick = onRetryScheduling,
+                enabled = !uiState.isRetryingScheduling,
+                modifier = Modifier.fillMaxWidth(),
+            ) {
+                Text(stringResource(R.string.action_retry))
+            }
         }
     }
 

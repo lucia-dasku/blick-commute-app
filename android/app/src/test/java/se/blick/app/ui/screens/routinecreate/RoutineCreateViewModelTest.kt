@@ -7,6 +7,7 @@ import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.ExperimentalCoroutinesApi
 import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.MutableStateFlow
+import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.test.StandardTestDispatcher
 import kotlinx.coroutines.test.resetMain
 import kotlinx.coroutines.test.runTest
@@ -256,6 +257,40 @@ class RoutineCreateViewModelTest {
         override fun cancelActivation(routineId: String) {
             cancelledRoutineIds += routineId
         }
+        override suspend fun isActivationRunning(routineId: String): Boolean = false
+    }
+
+    /** Always throws on [scheduleActivation] — for proving a scheduling failure AFTER a
+     * successful Room save must never be reported as a save failure (persistence and
+     * scheduling are two different results — see [RoutineCreateViewModel.save]'s own doc).
+     * [throwCancellation] simulates a genuine coroutine cancellation instead of an ordinary
+     * failure, to prove it still propagates unconverted through [RoutineCreateViewModel.save]/
+     * [RoutineCreateViewModel.retryScheduling]'s own scheduling try/catch. */
+    private class FailingRoutineScheduler(
+        private val throwCancellation: Boolean = false,
+    ) : RoutineScheduler {
+        var scheduleCallCount = 0
+        override fun scheduleActivation(routine: CommuteRoutine) {
+            scheduleCallCount++
+            if (throwCancellation) throw CancellationException("test cancellation")
+            throw RuntimeException("scheduling failed")
+        }
+        override fun cancelActivation(routineId: String) = Unit
+        override suspend fun isActivationRunning(routineId: String): Boolean = false
+    }
+
+    /** Fails while [shouldFail] is true, succeeds once flipped off — for proving
+     * [RoutineCreateViewModel.retryScheduling] succeeds once the underlying failure clears.
+     * Mirrors [ToggleableRoutineRepository]'s identical pattern for Room saves. */
+    private class ToggleableRoutineScheduler(var shouldFail: Boolean) : RoutineScheduler {
+        val scheduledRoutines = mutableListOf<CommuteRoutine>()
+        var scheduleCallCount = 0
+        override fun scheduleActivation(routine: CommuteRoutine) {
+            scheduleCallCount++
+            if (shouldFail) throw RuntimeException("boom")
+            scheduledRoutines += routine
+        }
+        override fun cancelActivation(routineId: String) = Unit
         override suspend fun isActivationRunning(routineId: String): Boolean = false
     }
 
@@ -815,6 +850,154 @@ class RoutineCreateViewModelTest {
         assertFalse(saved)
         assertFalse(vm.uiState.value.saveFailed)
         assertFalse(vm.uiState.value.isSaving)
+    }
+
+    // ---- Persistence vs. scheduling: a scheduling failure after a successful Room save must
+    // never be reported as a save failure, and a retry must never insert a second routine ----
+
+    @Test
+    fun `a scheduling failure after a successful Room save sets schedulingFailed, not saveFailed, and does not call onSaved yet`() = runTest(dispatcher) {
+        val routines = FakeRoutineRepository()
+        val scheduler = FailingRoutineScheduler()
+        val vm = viewModel(routines = routines, scheduler = scheduler)
+        vm.advanceToSaveReady()
+
+        var saved = false
+        vm.save { saved = true }
+        dispatcher.scheduler.advanceUntilIdle()
+
+        // The routine really is saved (exactly one row), but onSaved() must NOT run yet -- the
+        // whole point of schedulingFailed is that the screen stays put with a visible, reachable
+        // retry action instead of navigating away the instant it appears (see
+        // RoutineCreateViewModel.save's own doc).
+        assertFalse(saved)
+        assertEquals(1, routines.saved.size)
+        assertEquals(false, vm.uiState.value.saveFailed)
+        assertEquals(true, vm.uiState.value.schedulingFailed)
+        assertEquals(false, vm.uiState.value.isSaving)
+        assertEquals(1, scheduler.scheduleCallCount)
+    }
+
+    @Test
+    fun `retryScheduling does not call Room save again`() = runTest(dispatcher) {
+        val routines = FakeRoutineRepository()
+        val scheduler = FailingRoutineScheduler()
+        val vm = viewModel(routines = routines, scheduler = scheduler)
+        vm.advanceToSaveReady()
+
+        vm.save {}
+        dispatcher.scheduler.advanceUntilIdle()
+        assertEquals(1, routines.saved.size)
+
+        vm.retryScheduling {}
+        dispatcher.scheduler.advanceUntilIdle()
+
+        // Still exactly one Room write, ever -- retryScheduling must never touch
+        // routineRepository.save(), only routineScheduler.scheduleActivation().
+        assertEquals(1, routines.saved.size)
+        assertEquals(2, scheduler.scheduleCallCount)
+    }
+
+    @Test
+    fun `retryScheduling reuses the already-saved routine's id, and a successful retry clears schedulingFailed and calls onScheduled`() = runTest(dispatcher) {
+        val routines = FakeRoutineRepository()
+        val scheduler = ToggleableRoutineScheduler(shouldFail = true)
+        val vm = viewModel(routines = routines, scheduler = scheduler)
+        vm.advanceToSaveReady()
+
+        vm.save {}
+        dispatcher.scheduler.advanceUntilIdle()
+        val savedId = routines.saved.single().id
+        assertEquals(true, vm.uiState.value.schedulingFailed)
+
+        scheduler.shouldFail = false
+        var scheduled = false
+        vm.retryScheduling { scheduled = true }
+        dispatcher.scheduler.advanceUntilIdle()
+
+        assertEquals(true, scheduled)
+        assertEquals(false, vm.uiState.value.schedulingFailed)
+        assertEquals(false, vm.uiState.value.isRetryingScheduling)
+        // The retry's own scheduleActivation call used the SAME routine/id that was already
+        // saved -- not a freshly rebuilt one with a new UUID.
+        assertEquals(listOf(savedId), scheduler.scheduledRoutines.map { it.id })
+        assertEquals(1, routines.saved.size)
+    }
+
+    @Test
+    fun `retryScheduling is a no-op when nothing has been saved yet`() = runTest(dispatcher) {
+        val scheduler = FailingRoutineScheduler()
+        val vm = viewModel(scheduler = scheduler)
+
+        vm.retryScheduling {}
+        dispatcher.scheduler.advanceUntilIdle()
+
+        assertEquals(0, scheduler.scheduleCallCount)
+    }
+
+    @Test
+    fun `calling retryScheduling while a retry is already in flight only schedules once`() = runTest(dispatcher) {
+        val routines = FakeRoutineRepository()
+        val scheduler = FailingRoutineScheduler()
+        val vm = viewModel(routines = routines, scheduler = scheduler)
+        vm.advanceToSaveReady()
+        vm.save {}
+        dispatcher.scheduler.advanceUntilIdle()
+        assertEquals(1, scheduler.scheduleCallCount)
+
+        vm.retryScheduling {}
+        vm.retryScheduling {}
+        dispatcher.scheduler.advanceUntilIdle()
+
+        // 1 from the initial save() attempt + exactly 1 more from the two overlapping
+        // retryScheduling() calls, not 2 more.
+        assertEquals(2, scheduler.scheduleCallCount)
+    }
+
+    @Test
+    fun `a cancellation while retrying scheduling propagates instead of being treated as an ordinary failure`() = runTest(dispatcher) {
+        val widgetUpdater = FakeRoutineWidgetUpdater()
+        // scheduleActivation throws a genuine CancellationException both on the initial save()
+        // attempt (populating originalRoutine/schedulingFailed) and on the retry itself.
+        val vm = viewModel(
+            routines = FakeRoutineRepository(),
+            scheduler = FailingRoutineScheduler(throwCancellation = true),
+            widgetUpdater = widgetUpdater,
+        )
+        vm.advanceToSaveReady()
+        vm.save {}
+        dispatcher.scheduler.advanceUntilIdle()
+
+        val widgetCallsBeforeRetry = widgetUpdater.reconcileCallCount
+        vm.retryScheduling {}
+        dispatcher.scheduler.advanceUntilIdle()
+
+        // If the CancellationException from scheduleActivation had been wrongly caught as an
+        // ordinary failure instead of rethrown, execution would have fallen through to the
+        // widget reconcile call right after it -- it must not have.
+        assertEquals(widgetCallsBeforeRetry, widgetUpdater.reconcileCallCount)
+    }
+
+    @Test
+    fun `retrying save after a scheduling failure reuses the same routine id instead of creating a second routine`() = runTest(dispatcher) {
+        val routines = FakeRoutineRepository()
+        val scheduler = FailingRoutineScheduler()
+        val vm = viewModel(routines = routines, scheduler = scheduler)
+        vm.advanceToSaveReady()
+
+        vm.save {}
+        dispatcher.scheduler.advanceUntilIdle()
+        val firstId = routines.saved.single().id
+
+        // Retrying (e.g. the user tapping Save again) must reuse the SAME id -- not generate a
+        // fresh UUID and insert a second routine -- even though the scheduler is still failing
+        // every time.
+        vm.save {}
+        dispatcher.scheduler.advanceUntilIdle()
+
+        assertEquals(2, scheduler.scheduleCallCount)
+        assertEquals("both save() calls must have used the same routine id", setOf(firstId), routines.saved.map { it.id }.toSet())
+        assertEquals("only one routine may actually be stored", 1, routines.observeAll().first().size)
     }
 
     @Test

@@ -10,6 +10,7 @@ import androidx.work.workDataOf
 import io.mockk.every
 import io.mockk.mockk
 import kotlinx.coroutines.CancellationException
+import kotlinx.coroutines.CompletableDeferred
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.test.currentTime
@@ -1875,13 +1876,14 @@ class RoutineActiveWindowWorkerTest {
     // ---- Handled terminal failures still clean up and reschedule (Fix 2) ----
 
     @Test
-    fun `a failure building the foreground notification is handled -- no loop, no crash, still reschedules, reconciles the widget`() = runTest {
+    fun `a failure building the foreground notification after a successful ownership claim is handled -- no loop, no crash, still reschedules, ownership-aware cleanup runs`() = runTest {
         val clock = TickingClock(Instant.parse("2026-07-27T05:00:00Z"), zone)
         val routine = routine()
         val repository = ScriptedRoutineRepository(clock) { routine }
         val notifier = RecordingNotifier()
         val scheduler = RecordingScheduler()
         val widgetUpdater = RecordingWidgetUpdater()
+        val ownershipRepository = FakeRoutineWorkOwnershipRepository()
         val failingBuilder = mockk<RoutineNotificationBuilder>()
         every { failingBuilder.build(any()) } throws RuntimeException("boom during foreground setup")
 
@@ -1894,20 +1896,25 @@ class RoutineActiveWindowWorkerTest {
             clock,
             notificationBuilder = failingBuilder,
             widgetUpdater = widgetUpdater,
+            routineWorkOwnershipRepository = ownershipRepository,
         )
         val result = worker.doWork()
 
         assertTrue(result is ListenableWorker.Result.Success)
         assertTrue(notifier.shown.isEmpty())
-        // The failure happened before setForeground was ever reached -- enteredForeground
-        // stayed false, so remove() (finally-guarded by that flag) never ran.
-        assertEquals(0, notifier.removeCallCount)
+        // Ownership is claimed BEFORE setForeground is ever attempted -- this run claimed it
+        // successfully even though building the foreground notification (part of the very next
+        // statement) then failed. See the class doc's "if ownership succeeds but setForeground
+        // subsequently fails, safely clean/reconcile" paragraph -- this is exactly that case.
+        assertEquals(listOf(routine.id to worker.id.toString()), ownershipRepository.claimedIds)
+        // Since ownership was already claimed, the `finally` block's cleanup is no longer gated
+        // on setForeground having succeeded -- it runs unconditionally (subject only to the
+        // ownership check, which reports true here, the default), removing whatever content may
+        // exist and clearing the widget, exactly like any other handled-failure exit.
+        assertEquals(1, notifier.removeCallCount)
         assertEquals(1, scheduler.scheduledRoutines.size)
-        // enteredForeground being false takes the finally's `else` branch: this run never
-        // posted anything for the widget to clear, so it reconciles instead, so the widget
-        // doesn't keep showing stale content from before this run started.
-        assertEquals(1, widgetUpdater.reconcileCallCount)
-        assertEquals(0, widgetUpdater.clearCallCount)
+        assertEquals(0, widgetUpdater.reconcileCallCount)
+        assertEquals(1, widgetUpdater.clearCallCount)
         assertNoZeroDelayReschedule(scheduler, clock)
     }
 
@@ -2361,7 +2368,7 @@ class RoutineActiveWindowWorkerTest {
     // cancelled/replaced run can never clobber a newer run's own content) ----
 
     @Test
-    fun `this run claims content ownership under its own WorkManager id once foreground execution begins`() = runTest {
+    fun `this run claims content ownership under its own WorkManager id before foreground execution begins`() = runTest {
         val clock = TickingClock(Instant.parse("2026-07-27T05:00:00Z"), zone)
         val routine = routine()
         val repository = ScriptedRoutineRepository(clock) { routine }
@@ -2453,5 +2460,104 @@ class RoutineActiveWindowWorkerTest {
         // Rescheduling is unaffected by ownership -- this run still reschedules the next
         // eligible occurrence regardless of whether it owned the content it posted.
         assertEquals(1, scheduler.scheduledRoutines.size)
+    }
+
+    // ---- Deterministic regression for the actual claim-before-setForeground handoff race:
+    // claim() now happens BEFORE setForeground()/any content is posted, so a concurrently-
+    // finishing old run can never observe itself as owner during the window where a replacement
+    // has already claimed but not yet published anything of its own. ----
+
+    /** A real (in-memory, stateful) ownership store shared between two concurrently-driven
+     * worker runs -- unlike [FakeRoutineWorkOwnershipRepository]'s fixed [isOwnerResult],
+     * [isOwner] here reflects whichever run's [claim] landed most recently, exactly like the
+     * real [se.blick.app.data.repository.RoomRoutineWorkOwnershipRepository]. The SECOND-EVER
+     * [claim] call specifically writes its new owner FIRST, then suspends on [gate] before
+     * returning -- so a test can observe ownership having genuinely transferred to the
+     * replacement run while that SAME run is still blocked, before it can post any content of
+     * its own (the first claim call, from the already-running "owns content" run, is never
+     * gated, so it can finish claiming and posting before the test starts the replacement). */
+    private class SecondClaimGatedOwnershipRepository(
+        private val gate: CompletableDeferred<Unit>,
+    ) : RoutineWorkOwnershipRepository {
+        private var currentOwner: String? = null
+        private var claimCount = 0
+        override suspend fun claim(routineId: String, workId: String) {
+            claimCount++
+            currentOwner = workId
+            if (claimCount == 2) gate.await()
+        }
+        override suspend fun isOwner(routineId: String, workId: String): Boolean = currentOwner == workId
+    }
+
+    @Test
+    fun `an old worker mid-loop cannot clear shared content once a replacement has claimed ownership, even before the replacement has posted anything of its own`() = runTest {
+        val clock = TickingClock(Instant.parse("2026-07-27T05:00:00Z"), zone)
+        val routine = routine()
+        // SHARED between both runs -- this is the "notification/widget content" the race is
+        // about: whichever run's cleanup fires must never clear content actually owned by the
+        // other.
+        val notifier = RecordingNotifier()
+        val widgetUpdater = RecordingWidgetUpdater()
+        val scheduler = RecordingScheduler()
+        val departures = FakeDepartureRepository { DeparturesResult(clock.instant(), 9145, listOf(sampleDeparture())) }
+        val gate = CompletableDeferred<Unit>()
+        val sharedOwnership = SecondClaimGatedOwnershipRepository(gate)
+
+        // A -- already running: claims ownership (the ungated first claim), posts its first
+        // tick's content, then sits in its 30s inter-tick delay. This is "A owns content."
+        // advanceSecondsPerCall = 0 -- A's window must never close on its own; only the
+        // explicit cancellation below ends this run.
+        val repositoryA = ScriptedRoutineRepository(clock, advanceSecondsPerCall = 0) { routine }
+        val workerA = buildWorker(
+            routine.id,
+            repositoryA,
+            GetLiveDeparturesUseCase(departures, clock),
+            notifier,
+            scheduler,
+            clock,
+            widgetUpdater = widgetUpdater,
+            routineWorkOwnershipRepository = sharedOwnership,
+        )
+        val jobA = launch { workerA.doWork() }
+        runCurrent() // A claims, posts its first tick, and suspends in delay(30s)
+        assertEquals(1, notifier.shown.size)
+
+        // B -- a replacement starting now (e.g. this routine was just edited elsewhere, which
+        // cancels A's unique work and immediately enqueues a fresh one for it). B's claim() is
+        // the SECOND ever, so it writes ownership := B and then suspends -- "B claims
+        // ownership, pause B before foreground content is published."
+        val repositoryB = ScriptedRoutineRepository(clock, advanceSecondsPerCall = 0) { routine }
+        val workerB = buildWorker(
+            routine.id,
+            repositoryB,
+            GetLiveDeparturesUseCase(departures, clock),
+            notifier,
+            scheduler,
+            clock,
+            widgetUpdater = widgetUpdater,
+            routineWorkOwnershipRepository = sharedOwnership,
+        )
+        val jobB = launch { workerB.doWork() }
+        runCurrent() // B claims (ownership now names B) and suspends on the gate, before setForeground
+
+        // A finishes/cancels now -- exactly the moment the real race window used to be
+        // exploitable: ownership already names B, but B has not yet posted anything of its own.
+        jobA.cancel()
+        jobA.join()
+
+        // A's own `finally` must NOT have cleared the shared content: it is no longer the
+        // recorded owner, even though B itself is still paused and has posted nothing yet.
+        assertEquals("A must not have removed the shared notification", 0, notifier.removeCallCount)
+        assertEquals("A must not have cleared the shared widget content", 0, widgetUpdater.clearCallCount)
+        assertEquals("A's own earlier post must still be the only thing shown so far", 1, notifier.shown.size)
+
+        // B continues -- its claim() call finally returns, and it goes on to post its own content.
+        gate.complete(Unit)
+        runCurrent()
+
+        assertEquals("B's content must have been posted once released", 2, notifier.shown.size)
+
+        jobB.cancel()
+        jobB.join()
     }
 }

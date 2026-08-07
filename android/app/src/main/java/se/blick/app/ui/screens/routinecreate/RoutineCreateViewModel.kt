@@ -82,6 +82,16 @@ data class RoutineCreateUiState(
     val name: String = "",
     val isSaving: Boolean = false,
     val saveFailed: Boolean = false,
+    /** True once [RoutineRepository.save] has genuinely succeeded but the immediately-following
+     * [RoutineScheduler.scheduleActivation] call failed — see [RoutineCreateViewModel.save]'s own
+     * doc on why this is deliberately NOT the same signal as [saveFailed]: the routine IS saved,
+     * only its notification scheduling needs a retry (see [RoutineCreateViewModel.retryScheduling]).
+     * Mutually exclusive with [saveFailed] in practice — a genuine Room failure never reaches the
+     * scheduling call at all. */
+    val schedulingFailed: Boolean = false,
+    /** Guards [RoutineCreateViewModel.retryScheduling] against an overlapping second tap, exactly
+     * like [isSaving] guards [RoutineCreateViewModel.save]. */
+    val isRetryingScheduling: Boolean = false,
     /** True when the most recent [RoutineCreateViewModel.save] attempt was blocked because this
      * routine, combined with every other enabled routine active on one of its days, would
      * exceed [se.blick.app.domain.usecase.MAX_DAILY_ACTIVE_MINUTES] — see
@@ -452,17 +462,38 @@ class RoutineCreateViewModel @Inject constructor(
      * Persists the routine. Re-entrant-safe (an already-in-flight save is a no-op, not a
      * second concurrent write) and never leaves [RoutineCreateUiState.isSaving] stuck on
      * `true` — success, failure, and cancellation all reset it. [onSaved] is only called
-     * after the repository call actually completes successfully; a failure surfaces
-     * [RoutineCreateUiState.saveFailed] instead (see [save]'s own caller for the retry
-     * action, which is just calling [save] again — rebuilding the same [CommuteRoutine]
-     * from current state is naturally idempotent-enough to retry).
+     * after [routineRepository] actually accepts the write; a failure THERE (Room, or the
+     * duration validation before it) surfaces [RoutineCreateUiState.saveFailed] instead (see
+     * [save]'s own caller for the retry action, which is just calling [save] again —
+     * rebuilding the same [CommuteRoutine] from current state is naturally idempotent-enough
+     * to retry).
      *
-     * In edit mode this reuses [originalRoutine]'s `id`/`enabled`/`pausedDate` so the
-     * underlying repository upsert-by-id replaces the same row rather than inserting a
-     * second routine, and so editing never silently resets whether the routine is
-     * enabled/paused. In create mode, [RoutineCreateUiState.oneRoutineLimitReached] blocks
-     * saving outright (defence in depth alongside [RoutineCreateUiState.canSave] and the
-     * list screen's own guard — see the class doc on [editingRoutineId]).
+     * **Persistence succeeding and scheduling succeeding are two different results.** Once
+     * [routineRepository.save] accepts the write, this routine IS saved — a SUBSEQUENT
+     * [routineScheduler.scheduleActivation] failure (its own, separate try/catch below) must
+     * never retroactively surface [RoutineCreateUiState.saveFailed] for data that is already
+     * durably stored. [originalRoutine] is set to [toSave] the moment the Room write succeeds
+     * — in CREATE mode this is what stops a later [retryScheduling] (or an ordinary [save]
+     * retry after nothing worse than a scheduling failure) from generating a brand new
+     * [java.util.UUID] and inserting a second row: the next call's `existing?.id` is now this
+     * same id, exactly like edit mode has always reused it.
+     *
+     * A scheduling failure here does NOT call [onSaved] — [RoutineCreateUiState.schedulingFailed]
+     * is set instead, so the screen stays put and offers [retryScheduling], which targets only
+     * the already-saved [toSave] (never [routineRepository.save] again). [onSaved] still runs
+     * once scheduling succeeds, whether that's on this first attempt or after a [retryScheduling]
+     * call. If the user navigates away without retrying,
+     * [se.blick.app.scheduling.NotificationRecoveryCoordinator]'s own `onAppStart` remains the
+     * fallback — it unconditionally reconciles every enabled routine's scheduling on the next
+     * app start regardless of whether this call's own attempt succeeded.
+     *
+     * In edit mode [originalRoutine] already reuses its own `id`/`enabled`/`pausedDate` from
+     * the start (see [loadExistingRoutine]) so the underlying repository upsert-by-id replaces
+     * the same row rather than inserting a second routine, and so editing never silently resets
+     * whether the routine is enabled/paused. In create mode,
+     * [RoutineCreateUiState.oneRoutineLimitReached] blocks saving outright (defence in depth
+     * alongside [RoutineCreateUiState.canSave] and the list screen's own guard — see the class
+     * doc on [editingRoutineId]).
      *
      * Also re-validates [toSave]'s active-window duration against every other currently
      * enabled routine via [RoutineDurationValidator] — see [RoutineCreateUiState.durationLimitExceeded]
@@ -515,18 +546,47 @@ class RoutineCreateViewModel @Inject constructor(
                 }
 
                 routineRepository.save(toSave)
+                // Once Room accepts the write, this routine IS saved -- persistence and
+                // scheduling are two different results (see the class doc below), so nothing
+                // past this point may cause a later save() retry to insert a second routine
+                // with a fresh UUID. Recording toSave as originalRoutine (already the exact
+                // mechanism edit mode uses to keep reusing the same id) makes create mode do
+                // the same from here on: id/enabled/pausedDate above become `existing`'s next
+                // time, whether the very next call is a genuine retry or an ordinary re-save.
+                originalRoutine = toSave
+                _uiState.update { it.copy(isSaving = false, saveFailed = false, schedulingFailed = false) }
+
                 // Schedules (or, for an edit, replaces) this routine's next active-window
                 // activation — see RoutineScheduler.scheduleActivation's own doc on why this
                 // is safe to call unconditionally here even for a disabled routine (it cancels
-                // any existing scheduled work instead).
-                routineScheduler.scheduleActivation(toSave)
-                // Best-effort, deliberately BEFORE the success state/onSaved() below -- without
-                // runWidgetUpdateSafely, a widget/Glance/DataStore failure here would fall into
-                // the `catch (e: Exception)` below, report saveFailed = true, and never call
-                // onSaved(), even though the routine was already genuinely saved (see
-                // runWidgetUpdateSafely's own doc).
+                // any existing scheduled work instead). Deliberately its OWN try/catch, separate
+                // from the Room write above: scheduling is a secondary side effect of an already-
+                // successful save, so its failure must never retroactively make this look like a
+                // save failure -- see the class doc on why this instead surfaces schedulingFailed
+                // and keeps the user on this screen with a retry action, rather than silently
+                // relying only on the next app start to notice.
+                try {
+                    routineScheduler.scheduleActivation(toSave)
+                } catch (e: CancellationException) {
+                    throw e
+                } catch (e: Exception) {
+                    Log.e(LOG_TAG, "Routine ${toSave.id} was saved but scheduling its activation failed", e)
+                    _uiState.update { it.copy(schedulingFailed = true) }
+                    // Best-effort widget attempt even though scheduling failed -- the routine's
+                    // enabled/paused state (which the widget also reflects) is still genuinely
+                    // correct, only its WorkManager activation needs a retry (see
+                    // runWidgetUpdateSafely's own doc).
+                    runWidgetUpdateSafely { routineWidgetUpdater.reconcile() }
+                    // Deliberately does NOT call onSaved() here -- the screen stays put so the
+                    // schedulingFailed message/retry action above is actually reachable, rather
+                    // than navigating away and making it unreachable the instant it appears.
+                    return@launch
+                }
+                // Best-effort, deliberately BEFORE onSaved() below -- without runWidgetUpdateSafely,
+                // a widget/Glance/DataStore failure here would fall into the `catch (e: Exception)`
+                // below, report saveFailed = true, and never call onSaved(), even though the
+                // routine was already genuinely saved (see runWidgetUpdateSafely's own doc).
                 runWidgetUpdateSafely { routineWidgetUpdater.reconcile() }
-                _uiState.update { it.copy(isSaving = false, saveFailed = false) }
                 onSaved()
             } catch (e: CancellationException) {
                 _uiState.update { it.copy(isSaving = false) }
@@ -535,6 +595,40 @@ class RoutineCreateViewModel @Inject constructor(
                 Log.e(LOG_TAG, "Failed to save routine", e)
                 _uiState.update { it.copy(isSaving = false, saveFailed = true) }
             }
+        }
+    }
+
+    /**
+     * Retries ONLY [routineScheduler.scheduleActivation] for the already-saved [originalRoutine]
+     * — never [routineRepository.save] again, and never generates a new
+     * [java.util.UUID][CommuteRoutine.id] — see [save]'s own doc on why a scheduling failure
+     * leaves [RoutineCreateUiState.schedulingFailed] set rather than [RoutineCreateUiState.saveFailed].
+     * A no-op if [save] never actually succeeded yet (nothing to retry scheduling for) or a retry
+     * is already in flight. On success, clears [RoutineCreateUiState.schedulingFailed] and calls
+     * [onScheduled] — the same navigate-away effect [save]'s own [onSaved] would have had, had
+     * scheduling succeeded the first time — so the create/edit flow still completes normally once
+     * the routine is both saved AND correctly scheduled. On another failure, the message/retry
+     * action simply remain visible for another attempt; [se.blick.app.scheduling.NotificationRecoveryCoordinator]'s
+     * own `onAppStart` is still the eventual fallback if the user leaves without retrying again.
+     */
+    fun retryScheduling(onScheduled: () -> Unit) {
+        val routine = originalRoutine ?: return
+        if (_uiState.value.isRetryingScheduling) return
+        _uiState.update { it.copy(isRetryingScheduling = true) }
+        viewModelScope.launch {
+            try {
+                routineScheduler.scheduleActivation(routine)
+            } catch (e: CancellationException) {
+                _uiState.update { it.copy(isRetryingScheduling = false) }
+                throw e
+            } catch (e: Exception) {
+                Log.e(LOG_TAG, "Retry scheduling failed for routine ${routine.id}", e)
+                _uiState.update { it.copy(isRetryingScheduling = false) }
+                return@launch
+            }
+            _uiState.update { it.copy(isRetryingScheduling = false, schedulingFailed = false) }
+            runWidgetUpdateSafely { routineWidgetUpdater.reconcile() }
+            onScheduled()
         }
     }
 }

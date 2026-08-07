@@ -137,11 +137,35 @@ class NotificationRecoveryCoordinator @Inject constructor(
      * [RoutineScheduler.isActivationRunning] guard at all (see [onTimeZoneChanged]'s own doc on
      * why it deliberately doesn't), so it could `REPLACE` (cancelling and restarting) a worker
      * this method, or a WorkManager-triggered run that started first, had already correctly left
-     * alone. */
+     * alone.
+     *
+     * **A genuinely successful reconciliation here satisfies [RecoveryPendingStateStore] too.**
+     * If [recoveryPendingStore] was already left `true` by an earlier session (e.g. a worker's
+     * own [se.blick.app.scheduling.RoutineActiveWindowWorker] discovered notifications
+     * unavailable right before the process died), this reconciliation already just did
+     * everything [attemptPendingRecoveryIfNeeded] would otherwise redo on the very next
+     * [onForeground] — reconciling every enabled routine (not merely the narrower `ActiveNow`
+     * subset that recovery itself is scoped to) and, via [scheduleIfSafe], never touching an
+     * already-`RUNNING` worker. Without clearing the flag here, that next [onForeground] would
+     * see `recoveryPending` still `true` and redundantly call [scheduleIfSafe] again for every
+     * `ActiveNow` routine — including one this very call just enqueued (`ENQUEUED`, not yet
+     * `RUNNING`, since WorkManager hasn't picked it up yet), which [scheduleIfSafe]'s
+     * `isActivationRunning` guard does NOT protect (it only ever skips a worker that is already
+     * genuinely `RUNNING`), so the redundant call would needlessly `REPLACE` it with an
+     * equivalent new [androidx.work.WorkRequest] moments after this one already scheduled it
+     * correctly. Only cleared when reconciliation was genuinely complete (every routine's
+     * [se.blick.app.scheduling.RoutineScheduler.scheduleActivation] call succeeded, and the
+     * routine list itself was read successfully — see [reconcileAllRoutinesUnconditionally]'s
+     * own return value) AND notifications are currently available — otherwise the flag is left
+     * exactly as it was, so [onForeground]'s own [attemptPendingRecoveryIfNeeded] still retries
+     * later exactly as before. */
     suspend fun onAppStart() {
         mutex.withLock {
-            reconcileAllRoutinesUnconditionally()
+            val reconciledSuccessfully = reconcileAllRoutinesUnconditionally()
             recordCurrentAvailabilityIfUnavailable()
+            if (reconciledSuccessfully && notificationAvailabilityChecker.check() == NotificationAvailability.Available) {
+                clearRecoveryPendingSafely()
+            }
         }
     }
 
@@ -209,21 +233,47 @@ class NotificationRecoveryCoordinator @Inject constructor(
         }
     }
 
+    /** The [onAppStart] counterpart to [markRecoveryPendingSafely] — same fail-open shape
+     * (log and leave the durable flag exactly as it was on failure) so a
+     * [RecoveryPendingStateStore] write failure here can never crash [onAppStart], and can
+     * never be mistaken for "recovery genuinely satisfied": if this throws, `recoveryPending`
+     * simply stays whatever it already was, so [onForeground]'s own retry is unaffected. */
+    private suspend fun clearRecoveryPendingSafely() {
+        try {
+            recoveryPendingStore.clearRecoveryPending()
+        } catch (e: CancellationException) {
+            throw e
+        } catch (e: Exception) {
+            Log.w(LOG_TAG, "Failed to durably clear a satisfied pending notification recovery; a future check will retry it redundantly", e)
+        }
+    }
+
     /** Reading the routine list itself, and reconciling each one, are both wrapped in their own
      * try/catch (a genuine [CancellationException] always rethrows unconverted) so a Room read
      * failure, a corrupted routine record, or a WorkManager call throwing on some OEM can't
      * propagate uncaught up through [onAppStart] to crash the app on cold start, and can't abort
      * the `forEach` and silently leave every routine after the failing one in iteration order
      * unreconciled too. Mirrors [attemptPendingRecoveryIfNeeded]'s own catch around the
-     * equivalent calls, which this function's own lack of one (before this) did not. */
-    private suspend fun reconcileAllRoutinesUnconditionally() {
+     * equivalent calls, which this function's own lack of one (before this) did not.
+     *
+     * Returns whether every routine was genuinely reconciled — `false` if the routine list
+     * itself failed to read, or if any individual routine's [scheduleIfSafe] call failed — so
+     * [onAppStart] can tell a genuinely complete pass from a partial one before deciding whether
+     * satisfying [RecoveryPendingStateStore]'s pending flag is warranted. A routine's own widget
+     * reconciliation failure below (wrapped in [runWidgetUpdateSafely]) deliberately does NOT
+     * affect this return value — the widget is a best-effort, secondary concern, unconditionally
+     * attempted either way, exactly like [attemptPendingRecoveryIfNeeded]'s own widget call
+     * unconditionally precedes its `clearRecoveryPending()`. */
+    private suspend fun reconcileAllRoutinesUnconditionally(): Boolean {
         val now = zonedNow()
+        var allSucceeded = true
         val routines = try {
             routineRepository.observeAll().first()
         } catch (e: CancellationException) {
             throw e
         } catch (e: Exception) {
             Log.w(LOG_TAG, "Failed to read the routine list at startup; reconciling nothing this pass", e)
+            allSucceeded = false
             emptyList()
         }
         routines.forEach { routine ->
@@ -235,9 +285,11 @@ class NotificationRecoveryCoordinator @Inject constructor(
                 throw e
             } catch (e: Exception) {
                 Log.w(LOG_TAG, "Failed to reconcile routine ${routine.id} at startup; continuing with the rest", e)
+                allSucceeded = false
             }
         }
         runWidgetUpdateSafely { routineWidgetUpdater.reconcile() }
+        return allSucceeded
     }
 
     /** Only ever acts when [RecoveryPendingStateStore.recoveryPending] is currently `true` AND

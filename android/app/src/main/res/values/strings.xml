@@ -11,6 +11,9 @@
 
     <string name="routine_create_title">New routine</string>
     <string name="action_back">Back</string>
+    <!-- Shared across the create and details screens for a scheduling-only retry — see
+         RoutineCreateViewModel.retryScheduling/RoutineDetailsViewModel.retryScheduling's own docs. -->
+    <string name="action_retry">Try again</string>
 
     <string name="routine_details_title">Routine details</string>
     <string name="routine_details_mode_label">Transport mode</string>
@@ -57,6 +60,9 @@
     <string name="routine_details_pause_action_failed">Couldn\'t update the pause. Try again.</string>
     <string name="routine_details_delete_action">Delete routine</string>
     <string name="routine_details_delete_action_failed">Couldn\'t delete the routine. Try again.</string>
+    <!-- Shown after enable/disable/pause/resume already succeeded in Room but the follow-up
+         WorkManager scheduling failed — see RoutineDetailsUiState's own doc on schedulingFailed. -->
+    <string name="routine_details_scheduling_failed">Saved, but notification setup failed. Try again.</string>
     <string name="routine_details_delete_dialog_title">Delete routine?</string>
     <string name="routine_details_delete_dialog_body">This will permanently delete \"%1$s\" (%2$s). This can\'t be undone.</string>
     <string name="routine_details_delete_dialog_confirm">Delete</string>
@@ -100,6 +106,10 @@
     <string name="routine_create_error_duration_limit">Your active commute window can be up to 5 hours.</string>
     <string name="routine_create_save">Save routine</string>
     <string name="routine_create_save_error">Couldn\'t save your routine. Check your connection and try again.</string>
+    <!-- Room already succeeded here — deliberately distinct from routine_create_save_error,
+         which is only ever shown when the write itself failed (see RoutineCreateUiState's own
+         doc on schedulingFailed vs. saveFailed). -->
+    <string name="routine_create_scheduling_error">Routine saved, but notification setup failed. Try again.</string>
     <string name="routine_create_existing_not_found">This routine could not be found. It may have already been deleted.</string>
     <string name="routine_create_limit_reached">You can only have one routine during this beta. Delete your existing routine before creating a new one.</string>
 
