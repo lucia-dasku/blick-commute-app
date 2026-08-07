@@ -281,20 +281,71 @@ class RoutineActiveWindowWorkerTest {
         }
     }
 
-    /** Advances the shared [clock] by [advanceMs] (simulating real wall-clock time spent
-     * awaiting this fetch, exactly like [ScriptedRoutineRepository]'s own per-call advance)
-     * before returning [result] -- used to prove elapsed disruption-fetch time is subtracted
-     * from the tick's subsequent delay rather than added on top of it. */
+    /** Advances the shared [clock] (simulating real wall-clock time spent awaiting this fetch,
+     * exactly like [ScriptedRoutineRepository]'s own per-call advance) AND [elapsedRealtime]
+     * (the monotonic measurement the loop's own end-of-tick delay is computed against -- see
+     * [RoutineActiveWindowWorker]'s own `tickStartElapsedRealtimeMillis` comment) by [delayMs]
+     * before returning [result] -- used to prove BOTH that elapsed disruption-fetch time is
+     * subtracted from the tick's subsequent delay rather than added on top of it, AND that a
+     * slow disruption fetch pushes `now` forward for the second, disruption-aware render that
+     * follows it. */
     private class SlowClockAdvancingDisruptionRepository(
         private val clock: TickingClock,
+        private val elapsedRealtime: FakeElapsedRealtimeProvider,
         private val delayMs: Long,
         private val result: () -> List<Disruption> = { emptyList() },
     ) : DisruptionRepository {
         override suspend fun getDisruptions(siteId: Long, lineId: Long?, transportMode: TransportMode?): List<Disruption> {
             delay(delayMs)
             clock.instant = clock.instant.plusMillis(delayMs)
+            elapsedRealtime.millis += delayMs
             return result()
         }
+    }
+
+    /** Advances the shared [elapsedRealtime] (and genuinely suspends, via a real [delay], so
+     * [kotlinx.coroutines.test.TestScope.currentTime] reflects it too) by [delayMs] before
+     * returning [result] -- simulates real device time elapsing during the departures fetch
+     * itself. Used to prove the tick's end-of-loop delay is computed against the WHOLE tick's
+     * elapsed time (this fetch included), not just the disruptions fetch. */
+    private class SlowElapsedRealtimeAdvancingDepartureRepository(
+        private val elapsedRealtime: FakeElapsedRealtimeProvider,
+        private val delayMs: Long,
+        private val result: () -> DeparturesResult,
+    ) : DepartureRepository {
+        override suspend fun getDepartures(siteId: Long, forecastMinutes: Int?): DeparturesResult {
+            delay(delayMs)
+            elapsedRealtime.millis += delayMs
+            return result()
+        }
+    }
+
+    /** Advances the shared [elapsedRealtime] (and genuinely suspends) by [delayMs] on every
+     * [updateWithDepartures] call before recording it -- simulates real device time spent on
+     * non-network tick work (widget rendering, standing in for "cache/render/processing" more
+     * broadly), to prove the whole-tick elapsed-time measurement isn't limited to network
+     * fetches specifically. */
+    private class SlowElapsedRealtimeAdvancingWidgetUpdater(
+        private val elapsedRealtime: FakeElapsedRealtimeProvider,
+        private val delayMs: Long,
+    ) : RoutineWidgetUpdater {
+        var updateCallCount = 0
+        override suspend fun updateWithDepartures(routine: CommuteRoutine, departuresState: LiveDeparturesState, now: Instant) {
+            updateWithDepartures(routine, departuresState, now, disruption = null)
+        }
+        override suspend fun updateWithDepartures(
+            routine: CommuteRoutine,
+            departuresState: LiveDeparturesState,
+            now: Instant,
+            disruption: Disruption?,
+        ) {
+            updateCallCount++
+            delay(delayMs)
+            elapsedRealtime.millis += delayMs
+        }
+        override suspend fun clear() = Unit
+        override suspend fun reconcile() = Unit
+        override suspend fun showNotificationsUnavailable(routine: CommuteRoutine) = Unit
     }
 
     /** Records every posted model and every remove() call; can also be scripted to throw on a
@@ -2340,10 +2391,11 @@ class RoutineActiveWindowWorkerTest {
         val repository = ScriptedRoutineRepository(clock) { routine }
         val notifier = RecordingNotifier()
         val departures = FakeDepartureRepository { DeparturesResult(clock.instant(), 9145, listOf(sampleDeparture())) }
+        val elapsedRealtime = FakeElapsedRealtimeProvider()
         // Well under DISRUPTIONS_FETCH_TIMEOUT_MS (5s), so this always resolves rather than
         // timing out -- but still genuinely slow enough to matter if its elapsed time were
         // simply added on top of ACTIVE_WINDOW_REFRESH_INTERVAL_MS instead of subtracted from it.
-        val disruptions = SlowClockAdvancingDisruptionRepository(clock, delayMs = 3_000L)
+        val disruptions = SlowClockAdvancingDisruptionRepository(clock, elapsedRealtime, delayMs = 3_000L)
 
         val worker = buildWorker(
             routine.id,
@@ -2353,6 +2405,7 @@ class RoutineActiveWindowWorkerTest {
             RecordingScheduler(),
             clock,
             getDisruptions = GetDisruptionsUseCase(disruptions),
+            elapsedRealtimeProvider = elapsedRealtime,
         )
         worker.doWork()
 
@@ -2362,6 +2415,234 @@ class RoutineActiveWindowWorkerTest {
         // time (3s fetch + 27s delay, twice) lands exactly on 2 * ACTIVE_WINDOW_REFRESH_INTERVAL_MS.
         assertEquals(2, notifier.shown.size)
         assertEquals(2 * ACTIVE_WINDOW_REFRESH_INTERVAL_MS, currentTime)
+    }
+
+    // ---- Requirement: the ~30s cadence measures the WHOLE tick -- the routine re-read,
+    // departures fetch, caching, notification/widget rendering, and the disruptions fetch --
+    // not just the disruptions fetch alone (Fix: tickStartElapsedRealtimeMillis captured before
+    // any of a tick's own work; the end-of-tick delay is computed against
+    // elapsedRealtimeProvider, never wall-clock time) ----
+
+    @Test
+    fun `a tick that takes 0ms delays for approximately the full 30 seconds`() = runTest {
+        val clock = TickingClock(Instant.parse("2026-07-27T05:00:00Z"), zone) // 07:00 local
+        val routine = routine()
+        // Exactly one tick: the pre-loop getById (call 0) and the loop's own first getById
+        // (call 1) both return the routine; the loop's SECOND getById (call 2) returns null,
+        // ending the loop right after tick 1 completes -- so currentTime after doWork() reflects
+        // exactly one tick's own delay, not two ticks' worth.
+        val repository = ScriptedRoutineRepository(clock) { callIndex -> if (callIndex < 2) routine else null }
+        val departures = FakeDepartureRepository { DeparturesResult(clock.instant(), 9145, listOf(sampleDeparture())) }
+
+        val worker = buildWorker(
+            routine.id,
+            repository,
+            GetLiveDeparturesUseCase(departures, clock),
+            RecordingNotifier(),
+            RecordingScheduler(),
+            clock,
+        )
+        worker.doWork()
+
+        // A plain FakeDepartureRepository never touches elapsedRealtimeProvider, and nothing
+        // else in this tick does either -- the whole tick's own measured elapsed time is 0ms, so
+        // the delay that follows it should be the full interval.
+        assertEquals(ACTIVE_WINDOW_REFRESH_INTERVAL_MS, currentTime)
+    }
+
+    @Test
+    fun `a tick that takes 10 seconds delays for approximately the remaining 20 seconds`() = runTest {
+        val clock = TickingClock(Instant.parse("2026-07-27T05:00:00Z"), zone)
+        val routine = routine()
+        val repository = ScriptedRoutineRepository(clock) { callIndex -> if (callIndex < 2) routine else null }
+        val elapsedRealtime = FakeElapsedRealtimeProvider()
+        val departures = SlowElapsedRealtimeAdvancingDepartureRepository(elapsedRealtime, delayMs = 10_000L) {
+            DeparturesResult(clock.instant(), 9145, listOf(sampleDeparture()))
+        }
+
+        val worker = buildWorker(
+            routine.id,
+            repository,
+            GetLiveDeparturesUseCase(departures, clock),
+            RecordingNotifier(),
+            RecordingScheduler(),
+            clock,
+            elapsedRealtimeProvider = elapsedRealtime,
+        )
+        worker.doWork()
+
+        // 10s (the fetch's own real delay) + 20s (the computed remaining delay) = 30s total.
+        assertEquals(ACTIVE_WINDOW_REFRESH_INTERVAL_MS, currentTime)
+    }
+
+    @Test
+    fun `a tick that takes 29 seconds delays for approximately the remaining 1 second`() = runTest {
+        val clock = TickingClock(Instant.parse("2026-07-27T05:00:00Z"), zone)
+        val routine = routine()
+        val repository = ScriptedRoutineRepository(clock) { callIndex -> if (callIndex < 2) routine else null }
+        val elapsedRealtime = FakeElapsedRealtimeProvider()
+        val departures = SlowElapsedRealtimeAdvancingDepartureRepository(elapsedRealtime, delayMs = 29_000L) {
+            DeparturesResult(clock.instant(), 9145, listOf(sampleDeparture()))
+        }
+
+        val worker = buildWorker(
+            routine.id,
+            repository,
+            GetLiveDeparturesUseCase(departures, clock),
+            RecordingNotifier(),
+            RecordingScheduler(),
+            clock,
+            elapsedRealtimeProvider = elapsedRealtime,
+        )
+        worker.doWork()
+
+        // 29s (the fetch's own real delay) + 1s (the computed remaining delay) = 30s total.
+        assertEquals(ACTIVE_WINDOW_REFRESH_INTERVAL_MS, currentTime)
+    }
+
+    @Test
+    fun `a tick that takes at least 30 seconds adds no extra interval delay`() = runTest {
+        val clock = TickingClock(Instant.parse("2026-07-27T05:00:00Z"), zone)
+        val routine = routine()
+        val repository = ScriptedRoutineRepository(clock) { callIndex -> if (callIndex < 2) routine else null }
+        val elapsedRealtime = FakeElapsedRealtimeProvider()
+        // Comfortably >= ACTIVE_WINDOW_REFRESH_INTERVAL_MS on its own.
+        val tickDurationMs = 35_000L
+        val departures = SlowElapsedRealtimeAdvancingDepartureRepository(elapsedRealtime, delayMs = tickDurationMs) {
+            DeparturesResult(clock.instant(), 9145, listOf(sampleDeparture()))
+        }
+
+        val worker = buildWorker(
+            routine.id,
+            repository,
+            GetLiveDeparturesUseCase(departures, clock),
+            RecordingNotifier(),
+            RecordingScheduler(),
+            clock,
+            elapsedRealtimeProvider = elapsedRealtime,
+        )
+        worker.doWork()
+
+        // No extra delay tacked on top -- total virtual time elapsed is exactly the tick's own
+        // duration (coerceAtLeast(0L) keeps the computed delay itself at zero, not negative),
+        // not tickDurationMs + ACTIVE_WINDOW_REFRESH_INTERVAL_MS.
+        assertEquals(tickDurationMs, currentTime)
+    }
+
+    @Test
+    fun `time spent rendering the widget update also counts toward the tick's measured elapsed time`() = runTest {
+        // Proves the whole-tick measurement isn't limited to network fetches -- any of a tick's
+        // own suspending work (widget/Glance rendering here, standing in for "cache/render/
+        // processing" more broadly) counts too, through the same ElapsedRealtimeProvider seam.
+        val clock = TickingClock(Instant.parse("2026-07-27T05:00:00Z"), zone)
+        val routine = routine()
+        val repository = ScriptedRoutineRepository(clock) { callIndex -> if (callIndex < 2) routine else null }
+        val elapsedRealtime = FakeElapsedRealtimeProvider()
+        val departures = FakeDepartureRepository { DeparturesResult(clock.instant(), 9145, listOf(sampleDeparture())) }
+        val widgetUpdater = SlowElapsedRealtimeAdvancingWidgetUpdater(elapsedRealtime, delayMs = 12_000L)
+
+        val worker = buildWorker(
+            routine.id,
+            repository,
+            GetLiveDeparturesUseCase(departures, clock),
+            RecordingNotifier(),
+            RecordingScheduler(),
+            clock,
+            widgetUpdater = widgetUpdater,
+            elapsedRealtimeProvider = elapsedRealtime,
+        )
+        worker.doWork()
+
+        assertEquals(1, widgetUpdater.updateCallCount)
+        // 12s (widget rendering) + 18s (the computed remaining delay) = 30s total.
+        assertEquals(ACTIVE_WINDOW_REFRESH_INTERVAL_MS, currentTime)
+    }
+
+    // ---- Regression: the disruption-aware second render must use a FRESH clock reading, not
+    // the `now` captured before the disruptions fetch even started (Fix: a new clock.instant()
+    // is captured immediately before building/rendering that second update) ----
+
+    @Test
+    fun `the disruption-aware second render recomputes the countdown from a fresh clock reading, not the stale pre-fetch one`() = runTest {
+        val clock = TickingClock(Instant.parse("2026-07-27T05:00:00Z"), zone) // 07:00 local
+        val routine = routine()
+        val repository = ScriptedRoutineRepository(clock) { callIndex -> if (callIndex < 2) routine else null }
+        val notifier = RecordingNotifier()
+        val elapsedRealtime = FakeElapsedRealtimeProvider()
+        // Tick 1's own `now` lands at 05:01:00Z (see the class doc's worked example). This
+        // departure is 182s away at that instant -- (182 + 59) / 60 = 4 minutes remaining.
+        val departure = sampleDeparture().copy(scheduledTime = Instant.parse("2026-07-27T05:04:02Z"))
+        val departures = FakeDepartureRepository { DeparturesResult(clock.instant(), 9145, listOf(departure)) }
+        // Well under DISRUPTIONS_FETCH_TIMEOUT_MS (5s), so this resolves rather than timing out;
+        // returns a genuinely new disruption so the second, disruption-aware render actually
+        // fires. Advances the clock by 3s -- enough to cross the 3-minute countdown boundary
+        // (182s - 3s = 179s -- (179 + 59) / 60 = 3 minutes remaining) but nowhere near the 5s
+        // disruptions timeout.
+        val disruptions = SlowClockAdvancingDisruptionRepository(clock, elapsedRealtime, delayMs = 3_000L) { listOf(sampleDisruption()) }
+
+        val worker = buildWorker(
+            routine.id,
+            repository,
+            GetLiveDeparturesUseCase(departures, clock),
+            notifier,
+            RecordingScheduler(),
+            clock,
+            getDisruptions = GetDisruptionsUseCase(disruptions),
+            elapsedRealtimeProvider = elapsedRealtime,
+        )
+        worker.doWork()
+
+        assertEquals(2, notifier.shown.size)
+        val firstMinutesRemaining = (notifier.shown[0].content as RoutineNotificationContent.Live).departures.single().minutesRemaining
+        val secondMinutesRemaining = (notifier.shown[1].content as RoutineNotificationContent.Live).departures.single().minutesRemaining
+        assertEquals(4L, firstMinutesRemaining)
+        // Without the fix, the second render would reuse the SAME stale `now` as the first,
+        // showing 4 minutes remaining again despite the disruptions fetch having genuinely taken
+        // 3 real seconds in between.
+        assertEquals(3L, secondMinutesRemaining)
+    }
+
+    // ---- Requirement: a departures-fetch timeout (an OkHttp whole-call-timeout-shaped
+    // IOException) follows the existing failure/stale-data path, without killing the active
+    // window early -- see NetworkModule.CALL_TIMEOUT_MS's own doc for the timeout itself ----
+
+    @Test
+    fun `a departures fetch that fails with a timeout-shaped IOException preserves stale data without ending the window early`() = runTest {
+        val clock = TickingClock(Instant.parse("2026-07-27T05:00:00Z"), zone)
+        val routine = routine()
+        val repository = ScriptedRoutineRepository(clock) { routine }
+        val notifier = RecordingNotifier()
+        var callCount = 0
+        val departures = object : DepartureRepository {
+            override suspend fun getDepartures(siteId: Long, forecastMinutes: Int?): DeparturesResult {
+                callCount++
+                if (callCount == 1) return DeparturesResult(clock.instant(), 9145, listOf(sampleDeparture()))
+                // The exact exception type OkHttp's own call timeout throws -- a plain
+                // IOException("network down") elsewhere in this file already proves the general
+                // failure/stale-data path, but this specifically proves a TIMEOUT (not just any
+                // I/O failure) is caught by that same existing path, since InterruptedIOException
+                // is itself an IOException subtype.
+                throw java.io.InterruptedIOException("timeout")
+            }
+        }
+
+        val worker = buildWorker(
+            routine.id,
+            repository,
+            GetLiveDeparturesUseCase(departures, clock),
+            notifier,
+            RecordingScheduler(),
+            clock,
+        )
+        worker.doWork()
+
+        assertEquals(2, notifier.shown.size)
+        assertTrue(notifier.shown[0].content is RoutineNotificationContent.Live)
+        // Falls back to the previous successful snapshot as Stale, exactly like any other
+        // connectivity-shaped failure -- the timeout does not end the active window early (the
+        // loop still ran its normal two ticks) and does not surface as Unavailable/a crash.
+        assertTrue(notifier.shown[1].content is RoutineNotificationContent.Stale)
+        assertEquals(1, notifier.removeCallCount)
     }
 
     // ---- Content ownership (Fix: generation/ownership tracking gates `finally` cleanup, so a

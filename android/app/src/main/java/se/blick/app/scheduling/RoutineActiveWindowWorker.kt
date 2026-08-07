@@ -445,6 +445,16 @@ class RoutineActiveWindowWorker @AssistedInject constructor(
             setForeground(createForegroundInfo(routine))
 
             while (true) {
+                // Captured before ANY of this tick's own work -- the routine re-read below, the
+                // departures fetch, caching, notification/widget rendering, and the disruptions
+                // fetch further down -- so the delay computed at the bottom of this loop reflects
+                // the WHOLE tick's real elapsed time, not just one piece of it (see this loop's
+                // own comment at that delay call). Monotonic (SystemClock.elapsedRealtime-backed,
+                // see ElapsedRealtimeProvider's own doc), never clock/Instant: wall-clock time can
+                // jump forward or backward at any moment (user changes, NTP sync) without
+                // reflecting how much real device time this tick's own work actually took.
+                val tickStartElapsedRealtimeMillis = elapsedRealtimeProvider.elapsedRealtimeMillis()
+
                 val current = routineRepository.getById(routineId) ?: break
                 lastKnownRoutine = current
                 if (!current.enabled) break
@@ -529,7 +539,6 @@ class RoutineActiveWindowWorker @AssistedInject constructor(
                 // on the other hand, DOES clear it, since that is a genuine, positive
                 // confirmation that nothing is currently affecting this routine, not merely an
                 // absence of information.
-                val disruptionFetchStart = clock.instant()
                 when (val disruptionResult = withTimeoutOrNull(DISRUPTIONS_FETCH_TIMEOUT_MS) { getDisruptions(current).last() }) {
                     is DisruptionsState.Loaded -> lastKnownDisruption = disruptionResult.disruptions.firstOrNull()
                     is DisruptionsState.NoDisruptions -> lastKnownDisruption = null
@@ -541,21 +550,32 @@ class RoutineActiveWindowWorker @AssistedInject constructor(
                 // is a silent, stable-id update either way (setOnlyAlertOnce -- see
                 // RoutineNotificationBuilder), so this never re-alerts the user.
                 if (lastKnownDisruption != disruptionAtPost) {
-                    routineNotifier.showOrUpdate(RoutineNotificationMapper.map(current, departuresState, now, lastKnownDisruption))
+                    // Freshly captured here, not the `now` used for the first render above -- the
+                    // disruptions fetch just awaited (up to DISRUPTIONS_FETCH_TIMEOUT_MS) may have
+                    // taken real time, and this second render's own departure countdown must
+                    // reflect the instant it is actually built at, not a timestamp from before
+                    // that fetch even started.
+                    val nowAfterDisruptionFetch = clock.instant()
+                    routineNotifier.showOrUpdate(RoutineNotificationMapper.map(current, departuresState, nowAfterDisruptionFetch, lastKnownDisruption))
                     // Mirrors the notification's own second, disruption-aware update above --
                     // same tick, same already-fetched departuresState, no separate widget fetch
                     // or timer.
-                    runWidgetUpdateSafely { routineWidgetUpdater.updateWithDepartures(current, departuresState, now, lastKnownDisruption) }
+                    runWidgetUpdateSafely { routineWidgetUpdater.updateWithDepartures(current, departuresState, nowAfterDisruptionFetch, lastKnownDisruption) }
                 }
 
-                // Subtracts however long the disruptions fetch just above actually took (bounded
-                // by DISRUPTIONS_FETCH_TIMEOUT_MS, but a slow-yet-successful fetch can still
-                // consume most of that) from this tick's own delay, rather than adding it on top
-                // -- without this, a slow-but-not-timed-out fetch drifted total tick spacing up
-                // to DISRUPTIONS_FETCH_TIMEOUT_MS beyond ACTIVE_WINDOW_REFRESH_INTERVAL_MS (up to
-                // ~35s instead of 30s) on every tick where the fetch was slow.
-                val disruptionFetchElapsedMs = Duration.between(disruptionFetchStart, clock.instant()).toMillis().coerceAtLeast(0L)
-                delay((ACTIVE_WINDOW_REFRESH_INTERVAL_MS - disruptionFetchElapsedMs).coerceAtLeast(0L))
+                // Subtracts however long this WHOLE tick actually took -- the routine re-read,
+                // the departures fetch, caching, notification/widget rendering, and the
+                // disruptions fetch above, not just the disruptions fetch alone -- from this
+                // tick's own delay, rather than adding a flat ACTIVE_WINDOW_REFRESH_INTERVAL_MS
+                // on top of however long that real work took. Without this, a slow departures
+                // fetch (or slow rendering, or a slow-but-not-timed-out disruptions fetch, or any
+                // combination) drifted total tick spacing to that work's own duration PLUS the
+                // full 30s, rather than the intended ~30s from the start of one tick to the start
+                // of the next (see ACTIVE_WINDOW_REFRESH_INTERVAL_MS's own doc). A tick whose own
+                // work alone already consumed the full interval or more (coerceAtLeast(0L)) adds
+                // no extra delay at all, rather than a negative one.
+                val tickElapsedMs = (elapsedRealtimeProvider.elapsedRealtimeMillis() - tickStartElapsedRealtimeMillis).coerceAtLeast(0L)
+                delay((ACTIVE_WINDOW_REFRESH_INTERVAL_MS - tickElapsedMs).coerceAtLeast(0L))
             }
         } catch (e: CancellationException) {
             // A real coroutine cancellation (this worker's own work was replaced or cancelled
