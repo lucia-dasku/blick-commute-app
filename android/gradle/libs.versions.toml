@@ -54,13 +54,51 @@ datastore = "1.1.2"
 kotlinxSerialization = "1.7.3"
 kotlinxCoroutines = "1.9.0"
 retrofit = "2.11.0"
-# Not individually re-verified against the registry at the time this was added (2026-07-30,
-# active-window scheduling milestone) -- the same caveat as the "Not individually
-# re-verified" block above applies. WorkManager 2.9.1 and Hilt's own WorkManager extension
-# (hilt-work, matched to the same 2.59.2 Hilt version pinned above via its own artifact
-# version) are both well-established stable releases; confirm no newer patch is available
-# during the next real Gradle sync.
-work = "2.9.1"
+# Bumped 2026-08-07 from 2.9.1 to 2.11.1 (NOT the latest stable, 2.11.2 -- see below).
+# 2.11.0 raised WorkManager's own minSdk from 21 to 23 -- comfortably below this app's minSdk
+# 26 (see the app module's own build.gradle.kts), so no conflict. None of the APIs this
+# codebase actually uses (OneTimeWorkRequestBuilder, ExistingWorkPolicy.REPLACE,
+# enqueueUniqueWork/cancelUniqueWork/getWorkInfosForUniqueWork, TestListenableWorkerBuilder,
+# WorkManagerTestInitHelper) were deprecated or changed across this range -- the new APIs
+# added along the way (Flow-based getWorkInfosFlow, getStopReason,
+# ExistingPeriodicWorkPolicy.UPDATE) are all periodic-work- or LiveData-migration-focused,
+# neither of which this codebase uses (see WorkManagerRoutineScheduler's own doc on why there
+# is deliberately no PeriodicWorkRequest anywhere). 2.10.0-alpha03 specifically fixed
+# "foreground workers timing out on API 34-35" -- directly relevant to
+# RoutineActiveWindowWorker's own long-running foreground execution on this app's targetSdk
+# 36. hilt-work below is left unbumped: androidx.hilt 1.2.0's WorkManager integration surface
+# (HiltWorker/HiltWorkerFactory) has no version-specific coupling to the work-runtime release
+# actually in use, and the build was verified to still resolve/compile/test cleanly against
+# it unchanged.
+#
+# 2.11.2 is deliberately NOT used: on a real device, it broke 38 of the 56
+# `connectedDebugAndroidTest` instrumented tests (every Compose-hosted screen test; the two
+# Room/DAO-only test files were unaffected) with `IllegalStateException: No compose
+# hierarchies found in the app` -- the host Activity launches and draws a frame
+# (confirmed via logcat's `reportNextDraw`) but Compose's test-hierarchy registration then
+# times out after a consistent ~4.2s on every single affected test, so this is a test-harness
+# synchronization failure, not an app crash (no FATAL EXCEPTION anywhere in logcat) and not
+# WorkManager's own scheduling machinery running slow (zero "WM-"-tagged log lines from
+# Blick's own process the whole run). Confirmed via a clean before/after A/B run (2.9.1: 56/56
+# pass; 2.11.2: 38/56 fail, reproduced twice) that this is a genuine regression from the
+# version bump, not pre-existing device/environment flakiness, and via bisection across every
+# intermediate stable release (2.10.0: 56/56 pass; 2.11.0: 56/56 pass; 2.11.1: 56/56 pass;
+# 2.11.2: 38/56 fail) that it is isolated to the single 2.11.1 -> 2.11.2 patch bump. Ruled out
+# as causes: manifest merging (androidx.work.WorkManagerInitializer is still correctly
+# REJECTED at 2.11.2 per the real manifest-merger-debug-report.txt), an on-demand
+# Configuration.Provider initialization race (switching BlickApplication.onCreate to an
+# explicit synchronous WorkManager.initialize() call first did not change the failure count),
+# and a transitive dependency conflict (androidx.startup:startup-runtime and
+# androidx.tracing:tracing resolve to the exact same versions at 2.9.1 and 2.11.2). The
+# leading remaining suspect, not yet confirmed: 2.11.2's own changelog lists "Handle security
+# exception in NetworkStateTracker" as a bug fix -- WorkManager's network-constraint tracker,
+# plausible given Blick declares no ACCESS_NETWORK_STATE permission and instrumented test
+# processes are a known source of ConnectivityManager SecurityExceptions on some devices/OS
+# versions -- but no direct evidence (logcat has no NetworkStateTracker/SecurityException/
+# ConnectivityManager line from Blick's own process) confirmed this before the investigation
+# was stopped in favor of just staying on the last known-good patch, 2.11.1. Re-attempt 2.11.2
+# (or whatever is newest by then) on a future pass, with this comment as the starting context.
+work = "2.11.1"
 hiltWork = "1.2.0"
 
 # Home-screen widget milestone. 1.1.1 is the latest STABLE release per Google's Maven
