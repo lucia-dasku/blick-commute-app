@@ -18,16 +18,11 @@ import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.verticalScroll
-import androidx.compose.material.icons.Icons
-import androidx.compose.material.icons.automirrored.filled.ArrowBack
 import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.Button
 import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.FilterChip
-import androidx.compose.material3.Icon
-import androidx.compose.material3.IconButton
-import androidx.compose.material3.LinearProgressIndicator
 import androidx.compose.material3.ListItem
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.OutlinedTextField
@@ -35,7 +30,6 @@ import androidx.compose.material3.Scaffold
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
 import androidx.compose.material3.TimePicker
-import androidx.compose.material3.TopAppBar
 import androidx.compose.material3.rememberTimePickerState
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.getValue
@@ -54,6 +48,8 @@ import se.blick.app.R
 import se.blick.app.data.repository.DirectionOption
 import se.blick.app.domain.model.Site
 import se.blick.app.domain.model.TransportMode
+import se.blick.app.ui.components.BlickTopBar
+import se.blick.app.ui.components.BlickWizardHeader
 import se.blick.app.ui.components.LineBadge
 import se.blick.app.ui.notification.rememberNotificationPermissionGate
 import java.time.DayOfWeek
@@ -92,14 +88,17 @@ fun RoutineCreateScreen(
 
     Scaffold(
         topBar = {
-            TopAppBar(
-                title = { Text(if (isBlocked) stringResource(R.string.routine_create_title) else stepTitle(uiState.step)) },
-                navigationIcon = {
-                    IconButton(onClick = handleBack) {
-                        Icon(Icons.AutoMirrored.Filled.ArrowBack, contentDescription = stringResource(R.string.action_back))
-                    }
-                },
-            )
+            if (isBlocked) {
+                BlickTopBar(title = stringResource(R.string.routine_create_title), onBack = handleBack)
+            } else {
+                BlickWizardHeader(
+                    title = stepTitle(uiState.step),
+                    stepNumber = uiState.step.ordinal + 1,
+                    totalSteps = 4,
+                    progress = (uiState.step.ordinal + 1) / 4f,
+                    onBack = handleBack,
+                )
+            }
         },
     ) { padding ->
         when {
@@ -119,11 +118,6 @@ fun RoutineCreateScreen(
                 )
             }
             else -> Column(Modifier.fillMaxSize().padding(padding).padding(16.dp)) {
-                LinearProgressIndicator(
-                    progress = { (uiState.step.ordinal + 1) / 4f },
-                    modifier = Modifier.fillMaxWidth(),
-                )
-                Spacer(Modifier.height(16.dp))
                 Box(Modifier.weight(1f).fillMaxWidth()) {
                     when (uiState.step) {
                         RoutineCreateStep.STOP -> StopStep(

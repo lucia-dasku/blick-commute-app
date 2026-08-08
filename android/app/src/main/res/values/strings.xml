@@ -92,10 +92,14 @@
     <string name="routine_details_live_update_not_enabled_hint">This notification isn\'t currently eligible for the prominent lock-screen Live Update surface (Android 16+ only) — it\'ll still show as a regular ongoing notification.</string>
     <string name="routine_details_live_update_settings_action">Open Live Update settings</string>
 
-    <string name="routine_create_step_stop">Step 1 of 4 — Choose a stop</string>
-    <string name="routine_create_step_mode">Step 2 of 4 — Choose a transport mode</string>
-    <string name="routine_create_step_direction">Step 3 of 4 — Choose a line and direction</string>
-    <string name="routine_create_step_schedule">Step 4 of 4 — Days &amp; time</string>
+    <!-- Page title only — the step number/count is a separate string (routine_create_step_label
+         below), rendered as its own muted secondary line by BlickWizardHeader rather than
+         combined into one sentence here (see the routine-creation header redesign). -->
+    <string name="routine_create_step_stop">Choose a stop</string>
+    <string name="routine_create_step_mode">Choose a transport mode</string>
+    <string name="routine_create_step_direction">Choose a line and direction</string>
+    <string name="routine_create_step_schedule">Days &amp; time</string>
+    <string name="routine_create_step_label">Step %1$d of %2$d</string>
 
     <string name="routine_create_stop_search_label">Search for a stop</string>
     <string name="routine_create_no_results">No stops found.</string>

@@ -22,7 +22,6 @@ import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Scaffold
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
-import androidx.compose.material3.TopAppBar
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
@@ -37,6 +36,7 @@ import androidx.hilt.navigation.compose.hiltViewModel
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import se.blick.app.R
 import se.blick.app.domain.model.CommuteRoutine
+import se.blick.app.ui.components.BlickTopBar
 import se.blick.app.ui.components.LineBadge
 
 /** Extra bottom padding reserved for the last list row so the always-visible FAB (see
@@ -95,8 +95,8 @@ fun RoutineListContent(
 
     Scaffold(
         topBar = {
-            TopAppBar(
-                title = { Text(stringResource(R.string.routine_list_title)) },
+            BlickTopBar(
+                title = stringResource(R.string.routine_list_title),
                 actions = {
                     IconButton(onClick = onOpenAbout) {
                         Icon(Icons.Filled.Info, contentDescription = stringResource(R.string.about_action))

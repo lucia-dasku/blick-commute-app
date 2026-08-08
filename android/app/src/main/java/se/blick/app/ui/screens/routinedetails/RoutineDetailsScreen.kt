@@ -27,7 +27,6 @@ import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
-import androidx.compose.material.icons.automirrored.filled.ArrowBack
 import androidx.compose.material.icons.filled.KeyboardArrowDown
 import androidx.compose.material.icons.filled.KeyboardArrowUp
 import androidx.compose.material3.AlertDialog
@@ -45,7 +44,6 @@ import androidx.compose.material3.Scaffold
 import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
-import androidx.compose.material3.TopAppBar
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
@@ -75,6 +73,7 @@ import se.blick.app.domain.usecase.PreparedDeparture
 import se.blick.app.domain.model.TransportMode
 import se.blick.app.notification.NotificationAvailability
 import se.blick.app.notification.NotificationPostResult
+import se.blick.app.ui.components.BlickTopBar
 import se.blick.app.ui.components.LineBadge
 import se.blick.app.ui.notification.notificationSettingsIntent
 import se.blick.app.ui.notification.promotedNotificationSettingsIntent
@@ -129,14 +128,7 @@ fun RoutineDetailsScreen(
 
     Scaffold(
         topBar = {
-            TopAppBar(
-                title = { Text(stringResource(R.string.routine_details_title)) },
-                navigationIcon = {
-                    IconButton(onClick = onBack) {
-                        Icon(Icons.AutoMirrored.Filled.ArrowBack, contentDescription = stringResource(R.string.action_back))
-                    }
-                },
-            )
+            BlickTopBar(title = stringResource(R.string.routine_details_title), onBack = onBack)
         },
     ) { padding ->
         val routine = uiState.routine
