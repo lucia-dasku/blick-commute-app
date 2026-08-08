@@ -38,7 +38,6 @@ import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
-import androidx.compose.ui.platform.LocalLocale
 import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.unit.dp
@@ -48,6 +47,7 @@ import se.blick.app.R
 import se.blick.app.data.repository.DirectionOption
 import se.blick.app.domain.model.Site
 import se.blick.app.domain.model.TransportMode
+import se.blick.app.locale.currentBlickLocale
 import se.blick.app.ui.components.BlickTopBar
 import se.blick.app.ui.components.BlickWizardHeader
 import se.blick.app.ui.components.LineBadge
@@ -325,10 +325,11 @@ private fun ScheduleStep(
     onRetryScheduling: () -> Unit,
 ) {
     var editingField by remember { mutableStateOf<TimeField?>(null) }
-    // Read via LocalLocale (a Compose-observable CompositionLocal) rather than
-    // Locale.getDefault(), which does not recompose when the user changes the system
-    // locale (see lint id "NonObservableLocale").
-    val locale = LocalLocale.current.platformLocale
+    // currentBlickLocale() reads Compose-observable CompositionLocal state internally (not
+    // Locale.getDefault(), which does not recompose when the user changes the system locale --
+    // see lint id "NonObservableLocale") and normalizes it to Blick's effective English/Svenska
+    // presentation locale -- see that function's own doc.
+    val locale = currentBlickLocale()
 
     Column(Modifier.fillMaxSize().verticalScroll(rememberScrollState())) {
         Text(stringResource(R.string.routine_create_days_label), style = MaterialTheme.typography.labelLarge)

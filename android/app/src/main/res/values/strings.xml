@@ -1,6 +1,8 @@
 <?xml version="1.0" encoding="utf-8"?>
 <resources>
-    <string name="app_name">Blick</string>
+    <!-- The brand name, never translated — see values-sv/strings.xml's own comment on why it
+         is deliberately not overridden there. -->
+    <string name="app_name" translatable="false">Blick</string>
 
     <string name="routine_list_title">Your commute routines</string>
     <string name="routine_list_empty">No routines yet. Add one to see departures automatically.</string>
@@ -142,13 +144,24 @@
     <!-- Required attribution, see docs/api-contract.md §8 (Licensing and attribution). -->
     <string name="attribution_text">Based on information from Trafiklab.se. Departure and disruption information may be delayed or inaccurate.</string>
 
-    <!-- About screen (see ui/screens/about/AboutScreen.kt) — the one place attribution_text
-         above is actually shown to the user, plus a link to Trafiklab.se ("when practicable",
-         see docs/api-contract.md §8), reachable from the routine list's top app bar. Also the
-         one place the privacy policy is shown — see docs/api-contract.md §8's own note that
-         this project has no separate hosted privacy-policy page. -->
-    <string name="about_action">About Blick</string>
-    <string name="about_title">About</string>
+    <!-- Settings/About screen (see ui/screens/about/AboutScreen.kt) — Blick's own language
+         picker, reachable from the routine list's top app bar, plus the one place
+         attribution_text above is actually shown to the user, a link to Trafiklab.se ("when
+         practicable", see docs/api-contract.md §8), and the one place the privacy policy is
+         shown — see docs/api-contract.md §8's own note that this project has no separate
+         hosted privacy-policy page. about_action/about_title deliberately keep their original
+         resource names even though the screen now covers more than "about" — same convention
+         as routine_details_title's own doc: renaming an internal id has no user-facing benefit. -->
+    <string name="about_action">Settings</string>
+    <string name="about_title">Settings</string>
+    <!-- Blick's own two explicit language choices — always spelled in their own language
+         regardless of which one is currently active (a settings_language_option_swedish value
+         of "Svenska" must never become "Swedish" just because English is currently selected, or
+         vice versa) — see AboutScreen.kt's own LanguageSection doc. Deliberately NOT overridden
+         in values-sv/strings.xml: both must stay identical in every locale. -->
+    <string name="settings_language_label">Language</string>
+    <string name="settings_language_option_english" translatable="false">English</string>
+    <string name="settings_language_option_swedish" translatable="false">Svenska</string>
     <string name="about_tagline">Blick shows upcoming departures and disruptions for your saved commute.</string>
     <string name="about_version_label">Version %1$s (build %2$d)</string>
     <string name="about_section_data_attribution">Data and attribution</string>
@@ -185,7 +198,7 @@
     <!-- The following departure's own countdown, shown only when a second departure exists —
          e.g. "Next 18 min". A cancelled following departure shows
          notification_next_departure_cancelled instead. -->
-    <string name="notification_next_departure_format">Next %1$d min</string>
+    <string name="notification_next_departure_format">Next in %1$d min</string>
     <string name="notification_next_departure_cancelled">Next · Cancelled</string>
     <string name="notification_loading">Updating departures…</string>
     <string name="notification_last_checked_format">Last checked %1$s</string>
@@ -240,10 +253,11 @@
          widget's only data source cannot run, so it says so rather than staying on "Updating
          departures…" indefinitely. -->
     <string name="widget_notifications_unavailable">Turn on notifications to see live departures here.</string>
-    <!-- "Design 1" layout: the big next-departure countdown ("6 min"), and the label in front
-         of the smaller following-departure countdown ("Next  16 min"). -->
+    <!-- "Design 1" layout: the big next-departure countdown ("6 min"), and the smaller
+         following-departure line, which is its own combined label+countdown string rather than
+         two resources concatenated at render time ("Next in 16 min"). -->
     <string name="widget_countdown_minutes_format">%1$d min</string>
-    <string name="widget_next_departure_label">Next</string>
+    <string name="widget_next_departure_format">Next in %1$d min</string>
     <!-- A short, always-visible header marker for RoutineWidgetContent.Stale — shown
          regardless of compact/full layout or whether any stale departure is still upcoming, see
          StaleIndicator's own doc for why this is the one guaranteed place a stale-data warning

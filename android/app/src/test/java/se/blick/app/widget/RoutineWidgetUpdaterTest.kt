@@ -1,17 +1,29 @@
 package se.blick.app.widget
 
+import android.content.Context
+import io.mockk.coVerify
+import io.mockk.mockk
 import kotlinx.coroutines.test.runTest
 import org.junit.Assert.assertEquals
 import org.junit.Test
+import org.junit.runner.RunWith
+import org.robolectric.RobolectricTestRunner
+import org.robolectric.RuntimeEnvironment
+import org.robolectric.annotation.Config
+import se.blick.app.data.repository.RoutineRepository
 import se.blick.app.domain.model.CommuteRoutine
 import se.blick.app.domain.model.Disruption
 import se.blick.app.domain.model.DisruptionMessage
 import se.blick.app.domain.model.DisruptionPriority
 import se.blick.app.domain.model.TransportMode
 import se.blick.app.domain.usecase.LiveDeparturesState
+import se.blick.app.notification.NotificationAvailabilityChecker
+import se.blick.app.scheduling.DeviceZoneProvider
+import java.time.Clock
 import java.time.DayOfWeek
 import java.time.Instant
 import java.time.LocalTime
+import java.time.ZoneId
 
 /**
  * Tests [RoutineWidgetUpdater]'s own default implementation of the four-argument
@@ -77,4 +89,48 @@ class RoutineWidgetUpdaterTest {
 
             assertEquals(routine, fake.lastRoutine)
         }
+}
+
+/**
+ * [GlanceRoutineWidgetUpdater.refreshPresentation] must never re-derive or change what an
+ * active widget is showing -- see that method's own doc and [RoutineWidgetUpdater.refreshPresentation]'s
+ * interface doc on why a language-only switch must not risk the same
+ * [RoutineWidgetContent.Loading]/[RoutineWidgetUiState.NoActiveCommute] regression [reconcile]
+ * can cause. Asserted here at the one point that's actually verifiable without a full
+ * Glance/AppWidgetManager render pipeline (which no test in this codebase sets up for
+ * [GlanceRoutineWidgetUpdater] specifically): [refreshPresentation] must never even READ
+ * [RoutineRepository]/[NotificationAvailabilityChecker], which [reconcile] always does to
+ * re-derive state -- if it never reads them, it cannot have used them to compute anything new.
+ */
+@RunWith(RobolectricTestRunner::class)
+@Config(sdk = [34], application = android.app.Application::class)
+class GlanceRoutineWidgetUpdaterRefreshPresentationTest {
+
+    private val context: Context = RuntimeEnvironment.getApplication()
+    private val routineRepository = mockk<RoutineRepository>()
+    private val notificationAvailabilityChecker = mockk<NotificationAvailabilityChecker>()
+    private val deviceZoneProvider = DeviceZoneProvider { ZoneId.of("UTC") }
+    private val updater = GlanceRoutineWidgetUpdater(
+        context = context,
+        routineRepository = routineRepository,
+        notificationAvailabilityChecker = notificationAvailabilityChecker,
+        clock = Clock.systemUTC(),
+        deviceZoneProvider = deviceZoneProvider,
+    )
+
+    @Test
+    fun `refreshPresentation never queries the routine repository or notification availability`() = runTest {
+        updater.refreshPresentation()
+
+        coVerify(exactly = 0) { routineRepository.observeAll() }
+        coVerify(exactly = 0) { notificationAvailabilityChecker.check() }
+    }
+
+    @Test
+    fun `refreshPresentation with no placed widget instances completes without throwing`() = runTest {
+        // No GlanceAppWidgetManager setup/placed instance anywhere in this test -- proves this
+        // is safe to call unconditionally (e.g. right after a language switch) even when Blick
+        // has no home-screen widget placed at all.
+        updater.refreshPresentation()
+    }
 }

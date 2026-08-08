@@ -55,7 +55,6 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.LocalLifecycleOwner
-import androidx.compose.ui.platform.LocalLocale
 import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.unit.dp
 import androidx.core.content.ContextCompat
@@ -71,6 +70,7 @@ import se.blick.app.domain.usecase.DisruptionsState
 import se.blick.app.domain.usecase.LiveDeparturesState
 import se.blick.app.domain.usecase.PreparedDeparture
 import se.blick.app.domain.model.TransportMode
+import se.blick.app.locale.currentBlickLocale
 import se.blick.app.notification.NotificationAvailability
 import se.blick.app.notification.NotificationPostResult
 import se.blick.app.ui.components.BlickTopBar
@@ -241,7 +241,9 @@ internal fun RoutineDetailsContent(
     onRemoveDebugNotification: () -> Unit,
     isLiveUpdatePromotable: () -> Boolean,
 ) {
-    val locale = LocalLocale.current.platformLocale
+    // currentBlickLocale() reacts to language/configuration changes and normalizes them to
+    // Blick's effective English/Svenska presentation locale -- see that function's own doc.
+    val locale = currentBlickLocale()
 
     Column(modifier.verticalScroll(rememberScrollState()).padding(16.dp)) {
         // Shown first, above everything else including the routine's own name -- a relevant

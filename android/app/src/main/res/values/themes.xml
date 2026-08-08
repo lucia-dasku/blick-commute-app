@@ -2,6 +2,11 @@
 <resources>
     <!-- Base theme is applied by Compose's MaterialTheme (see ui/theme/Theme.kt); this
          entry only satisfies the manifest's android:theme reference before Compose
-         content is set, avoiding a flash of an unstyled system default theme. -->
-    <style name="Theme.Blick" parent="android:Theme.Material.Light.NoActionBar" />
+         content is set, avoiding a flash of an unstyled system default theme.
+         AppCompat-descended (rather than the framework's android:Theme.Material.Light) only
+         because MainActivity now extends AppCompatActivity, which throws unless its theme is
+         a Theme.AppCompat (or descendant) — see MainActivity's own doc on why. Still
+         NoActionBar, still no XML ActionBar and no visible styling change: Compose's
+         BlickTheme is still the only thing that actually paints this app's UI. -->
+    <style name="Theme.Blick" parent="Theme.AppCompat.DayNight.NoActionBar" />
 </resources>

@@ -334,8 +334,92 @@ class RoutineNotificationBuilderTest {
         )
         val lines = bigTextLines(notification)
         assertTrue(lines.any { it.contains("6") })
-        val expectedTimeText = formatDepartureTime(lastCheckedAt, Locale.getDefault())
+        // No explicit app locale is set anywhere in this test class -- see the dedicated
+        // app-locale-vs-system-locale coverage below for the case where one is -- so this
+        // matches RoutineNotificationBuilder's own fallback: whatever locale this SAME context
+        // already resolves resources with, not necessarily Locale.getDefault() (see
+        // se.blick.app.locale.withAppLocale's own doc on why those two are not always the same).
+        val expectedTimeText = formatDepartureTime(lastCheckedAt, context.resources.configuration.locales[0])
         assertTrue(lines.any { it.contains(expectedTimeText) })
+    }
+
+    // ---- Blick's own selected app locale, not the device/system one (see
+    // se.blick.app.locale.withAppLocale's own doc) ----
+    //
+    // No test here calls AppCompatDelegate.setApplicationLocales() directly and expects
+    // builder.build() to reflect it: withAppLocale() now reads the explicit choice via
+    // LocaleManagerCompat.getApplicationLocales(context) (a background-context-safe read, fixing
+    // the bug where a WorkManager-started process with no Activity ever created could not see a
+    // previously-persisted explicit choice) rather than AppCompatDelegate's own
+    // getApplicationLocales(), whose backing storage on API 32 and below is only ever hydrated
+    // from an Activity/delegate's own lifecycle. Calling setApplicationLocales() alone, with no
+    // AppCompatActivity anywhere in this test process, updates only that in-memory field and
+    // never reaches LocaleManagerCompat's view -- confirmed directly from AppCompatDelegateImpl's
+    // own source (see AppLocaleTest's own test of this exact property) and empirically (a
+    // version of this test using exactly that pattern started failing the moment withAppLocale()
+    // switched to LocaleManagerCompat, which is the expected, correct consequence of the fix,
+    // not a regression). Explicit-choice propagation through withAppLocale() is already covered
+    // once, at its source, in AppLocaleTest -- RoutineNotificationBuilder calls that same
+    // function unchanged, so re-deriving the same guarantee here would be redundant coverage,
+    // not missing coverage. The one scenario genuinely out of reach of this unit-test
+    // infrastructure -- a previously-persisted explicit choice surviving an actual process death,
+    // read back by a process that never creates MainActivity -- needs a real-device check; see
+    // this milestone's own final report for that acknowledgment.
+
+    // ---- No explicit Blick choice, unsupported system locale (Lithuanian) -- withAppLocale()
+    // must resolve this the same way ordinary resource fallback already does, not leave
+    // locale-sensitive formatting (the last-checked clock time) on the raw, unsupported system
+    // locale (see se.blick.app.locale.effectiveBlickLocale's own doc). No explicit
+    // setApplicationLocales call anywhere in this test -- this is specifically the
+    // no-explicit-choice case. ----
+
+    @Test
+    @Config(sdk = [26], qualifiers = "lt")
+    fun `no explicit Blick choice on an unsupported Lithuanian system locale resolves English notification text and English-formatted last-checked time`() {
+        // Sanity check that the simulated device/system locale really is the unsupported one.
+        assertEquals("lt", context.resources.configuration.locales[0].language)
+
+        val loadingNotification = builder.build(model(content = RoutineNotificationContent.Loading))
+        assertEquals(
+            "Updating departures…",
+            loadingNotification.extras.getCharSequence(Notification.EXTRA_TEXT).toString(),
+        )
+
+        val lastCheckedAt = now.minusSeconds(600)
+        val staleNotification = builder.build(
+            model(content = RoutineNotificationContent.Stale(listOf(sampleRow(minutesRemaining = 6)), lastCheckedAt)),
+        )
+        val englishTimeText = formatDepartureTime(lastCheckedAt, Locale.forLanguageTag("en"))
+        val lithuanianTimeText = formatDepartureTime(lastCheckedAt, Locale.forLanguageTag("lt"))
+        val lines = bigTextLines(staleNotification)
+        assertTrue("expected the English-formatted last-checked time in: $lines", lines.any { it.contains(englishTimeText) })
+        assertTrue(
+            "expected English and Lithuanian time formatting to actually differ, otherwise this test would not catch a regression",
+            englishTimeText != lithuanianTimeText,
+        )
+    }
+
+    @Test
+    fun `no explicit Blick choice, ordered system locale list Lithuanian-then-Swedish, resolves Swedish notification text`() {
+        // Config.qualifiers cannot express a multi-entry ordered locale list (Robolectric's
+        // qualifier-string parser only accepts a single locale) -- this builds the Configuration
+        // directly via the same public android.os.LocaleList/Context.createConfigurationContext
+        // APIs Android itself uses, independent of any AndroidX/AppCompat internals, and
+        // constructs a second RoutineNotificationBuilder around it (this class's own `builder`
+        // stays on the plain, single-locale `context` every other test relies on).
+        val multiLocaleContext = context.createConfigurationContext(
+            android.content.res.Configuration(context.resources.configuration).apply {
+                setLocales(android.os.LocaleList(Locale.forLanguageTag("lt"), Locale.forLanguageTag("sv")))
+            },
+        )
+        val multiLocaleBuilder = RoutineNotificationBuilder(multiLocaleContext)
+
+        val notification = multiLocaleBuilder.build(model(content = RoutineNotificationContent.Loading))
+
+        assertEquals(
+            "Uppdaterar avgångar…",
+            notification.extras.getCharSequence(Notification.EXTRA_TEXT).toString(),
+        )
     }
 
     // ---- Disruption content: never the real text anywhere, only a fixed indicator ----

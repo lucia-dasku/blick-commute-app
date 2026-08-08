@@ -3,6 +3,7 @@ package se.blick.app.ui.screens.routinedetails
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertTrue
 import org.junit.Test
+import se.blick.app.locale.effectiveBlickLocale
 import java.time.DayOfWeek
 import java.time.Instant
 import java.time.LocalTime
@@ -104,5 +105,86 @@ class RoutineDetailsFormattingTest {
 
         assertTrue(utc.contains("8:15"))
         assertTrue(plusTwo.contains("10:15"))
+    }
+
+    // ---- Swedish (sv) -- these three functions are exactly what Blick's own app-locale
+    // formatting depends on for the routine-creation weekday selector, Routine Details, and
+    // notification "Last checked" text alike (see se.blick.app.locale.withAppLocale's own doc
+    // and RoutineNotificationBuilder.lastCheckedLine) -- no separate Swedish-specific formatting
+    // path exists anywhere; it's this same Locale-parameterized code, just called with a
+    // different Locale. ----
+
+    private val swedish = Locale.forLanguageTag("sv")
+
+    @Test
+    fun `formatActiveDays renders Swedish weekday abbreviations distinct from English, in calendar order`() {
+        val days = setOf(DayOfWeek.FRIDAY, DayOfWeek.MONDAY, DayOfWeek.WEDNESDAY)
+
+        val swedishResult = formatActiveDays(days, swedish, everyDayLabel, weekdaysLabel)
+        val englishResult = format(days)
+
+        // Not pinned to one exact CLDR abbreviation spelling/case (that data can shift between
+        // ICU versions) -- the guarantee this asserts is that Swedish weekday names are actually
+        // used, and still in Monday/Wednesday/Friday calendar order regardless of locale.
+        assertEquals(3, swedishResult.split(", ").size)
+        assertTrue("expected '$swedishResult' to differ from the English '$englishResult'", swedishResult != englishResult)
+    }
+
+    @Test
+    fun `formatActiveDays still renders the every-day and weekdays labels as supplied, independent of locale`() {
+        // everyDayLabel/weekdaysLabel are the caller's own already-localized strings (see this
+        // function's own doc) -- formatActiveDays itself has no locale-specific branching for
+        // these two cases, only for the day-by-day fallback exercised above.
+        assertEquals(everyDayLabel, formatActiveDays(DayOfWeek.values().toSet(), swedish, everyDayLabel, weekdaysLabel))
+    }
+
+    @Test
+    fun `formatTimeRange renders a Swedish 24-hour time range distinct from the English 12-hour one`() {
+        val range = formatTimeRange(LocalTime.of(19, 5), LocalTime.of(21, 0), swedish)
+        val englishRange = formatTimeRange(LocalTime.of(19, 5), LocalTime.of(21, 0), locale)
+
+        // Swedish's standard short time format is 24-hour ("19:05"); Locale.US's is 12-hour
+        // ("7:05 PM") -- this is a real, meaningful difference a Swedish user would notice,
+        // not just a different label for the same value.
+        assertTrue("expected '$range' to contain the 24-hour hour value", range.contains("19"))
+        assertTrue("expected the Swedish and English renderings to differ: '$range' vs '$englishRange'", range != englishRange)
+    }
+
+    @Test
+    fun `formatDepartureTime renders Swedish 24-hour clock time`() {
+        val instant = Instant.parse("2026-07-28T20:15:00Z")
+
+        val swedishTime = formatDepartureTime(instant, swedish, ZoneOffset.UTC)
+
+        assertTrue("expected a 24-hour '20:15' rendering, got '$swedishTime'", swedishTime.contains("20:15"))
+    }
+
+    // ---- Unsupported/ordered system locale list, normalized via effectiveBlickLocale -- what
+    // RoutineCreateScreen/RoutineDetailsScreen actually pass as `locale` is never a raw device
+    // locale but se.blick.app.locale.currentBlickLocale()'s result, which itself wraps
+    // effectiveBlickLocale (see that function's own doc), so with no explicit Blick language
+    // chosen these must render weekday names for whichever of Blick's two languages the rule
+    // actually resolves to, never a raw unsupported system language. ----
+
+    @Test
+    fun `formatActiveDays renders English weekday abbreviations when fed the effective locale for an unsupported Lithuanian system locale`() {
+        val days = setOf(DayOfWeek.FRIDAY, DayOfWeek.MONDAY, DayOfWeek.WEDNESDAY)
+        val effectiveLocale = effectiveBlickLocale(null, listOf(Locale.forLanguageTag("lt")))
+
+        assertEquals("Mon, Wed, Fri", formatActiveDays(days, effectiveLocale, everyDayLabel, weekdaysLabel))
+    }
+
+    @Test
+    fun `formatActiveDays renders Swedish weekday abbreviations when the system locale list is Lithuanian-then-Swedish`() {
+        val days = setOf(DayOfWeek.FRIDAY, DayOfWeek.MONDAY, DayOfWeek.WEDNESDAY)
+        val effectiveLocale = effectiveBlickLocale(null, listOf(Locale.forLanguageTag("lt"), Locale.forLanguageTag("sv")))
+
+        val result = formatActiveDays(days, effectiveLocale, everyDayLabel, weekdaysLabel)
+
+        assertEquals(3, result.split(", ").size)
+        assertTrue(
+            "expected Swedish weekday abbreviations, distinct from the English 'Mon, Wed, Fri'",
+            result != "Mon, Wed, Fri",
+        )
     }
 }

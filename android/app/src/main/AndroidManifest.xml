@@ -56,6 +56,24 @@
         </activity>
 
         <!--
+            Per-app language support (see locale/AppLocale.kt): on Android 13+ the platform's own
+            LocaleManager durably stores Blick's selected app locale, independent of this
+            declaration. Below that, AppCompatDelegate.setApplicationLocales has no OS-level
+            storage to rely on, so this inert (never actually started — android:enabled="false")
+            service is AndroidX's own documented opt-in for automatic SharedPreferences-backed
+            persistence across app restarts/process death on API 26-32 — required for a language
+            choice to survive a cold start, not merely an in-process Activity recreation.
+        -->
+        <service
+            android:name="androidx.appcompat.app.AppLocalesMetadataHolderService"
+            android:enabled="false"
+            android:exported="false">
+            <meta-data
+                android:name="autoStoreLocales"
+                android:value="true" />
+        </service>
+
+        <!--
             BlickApplication implements Configuration.Provider to hand WorkManager a
             HiltWorkerFactory (see BlickApplication.kt's class doc) — this disables
             WorkManager's own default on-demand `androidx.startup` initializer, which would

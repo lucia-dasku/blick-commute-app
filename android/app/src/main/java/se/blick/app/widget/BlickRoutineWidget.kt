@@ -42,6 +42,7 @@ import androidx.glance.text.Text
 import androidx.glance.text.TextStyle
 import androidx.glance.unit.ColorProvider
 import se.blick.app.R
+import se.blick.app.locale.withAppLocale
 
 /**
  * The home-screen widget's [GlanceAppWidget]. Deliberately holds no departure-fetching, timing,
@@ -224,7 +225,13 @@ private val BADGE_TEXT_WHITE = ColorProvider(Color.White)
  * [Scaffold] exactly as before. */
 @Composable
 private fun BlickWidgetContent(state: RoutineWidgetUiState) {
-    val context = LocalContext.current
+    // .withAppLocale() -- this Context flows down into every Blick-owned string lookup below
+    // (ActiveRoutineContent and everything under it already take context as a plain parameter,
+    // see this file's own doc), resolving against Blick's own selected app language rather than
+    // whatever the device's system locale happens to be. SL-derived text in [state] itself
+    // (station/destination/line/disruption headline) is untouched either way -- it was never a
+    // string resource to begin with.
+    val context = LocalContext.current.withAppLocale()
     GlanceTheme {
         when (state) {
             RoutineWidgetUiState.NoActiveCommute -> Scaffold { NoActiveCommuteContent() }
@@ -235,7 +242,7 @@ private fun BlickWidgetContent(state: RoutineWidgetUiState) {
 
 @Composable
 private fun NoActiveCommuteContent() {
-    val context = LocalContext.current
+    val context = LocalContext.current.withAppLocale()
     val tier = sizeTierFor(LocalSize.current.width)
     Column(
         modifier = GlanceModifier.fillMaxSize(),
@@ -399,7 +406,7 @@ private fun DisruptionStrip(headline: String, tier: WidgetSizeTier) {
  * site). */
 @Composable
 private fun StaleIndicator(tier: WidgetSizeTier) {
-    val context = LocalContext.current
+    val context = LocalContext.current.withAppLocale()
     Text(
         text = "  " + context.getString(R.string.widget_stale_indicator),
         maxLines = 1,
@@ -469,9 +476,8 @@ private fun DepartureMainContent(
             // routeText), so a second copy directly below the countdown would just duplicate it.
             following?.let { row ->
                 Spacer(modifier = GlanceModifier.height(10.dp))
-                val nextLabel = context.getString(R.string.widget_next_departure_label)
-                val minutesText = context.getString(R.string.widget_countdown_minutes_format, row.minutesRemaining)
-                Text(text = "$nextLabel  $minutesText", maxLines = 1, style = TextStyle(fontSize = tier.secondarySize, color = onSurfaceVariantColor()))
+                val text = context.getString(R.string.widget_next_departure_format, row.minutesRemaining)
+                Text(text = text, maxLines = 1, style = TextStyle(fontSize = tier.secondarySize, color = onSurfaceVariantColor()))
             }
             Spacer(modifier = GlanceModifier.height(10.dp))
             StatusFooter(context, next, tier)

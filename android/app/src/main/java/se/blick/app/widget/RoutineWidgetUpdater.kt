@@ -80,6 +80,22 @@ interface RoutineWidgetUpdater {
      * silently going back to [RoutineWidgetUiState.NoActiveCommute] as if the window weren't
      * actually open. */
     suspend fun showNotificationsUnavailable(routine: CommuteRoutine)
+
+    /** Redraws every already-placed widget instance using whatever [RoutineWidgetUiState] is
+     * ALREADY persisted for it — no fetch, no state recomputation, and unlike [reconcile], no
+     * risk of dropping an active widget to [RoutineWidgetContent.Loading]/[RoutineWidgetUiState.NoActiveCommute]
+     * (see [reconcile]'s own doc: it re-derives state from scratch, which [decideReconciledWidgetState]
+     * only ever reports as [RoutineWidgetContent.Loading] for a genuinely active window — never
+     * safe to use for a purely presentational refresh). The only reason to call this today is
+     * that Blick's own selected app language changed (see [se.blick.app.locale.withAppLocale]) —
+     * every placed instance should re-render its CURRENT content through freshly resolved string
+     * resources, without touching what that content actually says.
+     *
+     * Defaults to a no-op so every existing [RoutineWidgetUpdater] fake across this codebase's
+     * tests keeps compiling unchanged (the same reasoning as the four-argument
+     * [updateWithDepartures] overload's own default body) — only [GlanceRoutineWidgetUpdater]
+     * overrides this meaningfully. */
+    suspend fun refreshPresentation() {}
 }
 
 private const val WIDGET_UPDATE_LOG_TAG = "RoutineWidgetUpdater"
@@ -153,6 +169,15 @@ class GlanceRoutineWidgetUpdater @Inject constructor(
 
     override suspend fun showNotificationsUnavailable(routine: CommuteRoutine) {
         applyToAllInstances(RoutineWidgetUiState.ActiveRoutine(RoutineWidgetMapper.notificationsUnavailable(routine)))
+    }
+
+    /** Deliberately does NOT go through [applyToAllInstances] — that WRITES a (possibly
+     * different) [RoutineWidgetUiState] into each instance's persisted preferences first; this
+     * only re-triggers [BlickRoutineWidget.provideGlance] for every already-placed instance,
+     * which reads whatever is ALREADY there, completely unchanged, and re-renders it — see this
+     * method's own interface doc. */
+    override suspend fun refreshPresentation() {
+        BlickRoutineWidget().updateAll(context)
     }
 
     private suspend fun applyToAllInstances(state: RoutineWidgetUiState) {

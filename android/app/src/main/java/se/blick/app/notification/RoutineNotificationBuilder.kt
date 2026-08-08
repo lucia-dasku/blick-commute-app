@@ -10,8 +10,8 @@ import androidx.core.app.NotificationCompat
 import dagger.hilt.android.qualifiers.ApplicationContext
 import se.blick.app.MainActivity
 import se.blick.app.R
+import se.blick.app.locale.withAppLocale
 import se.blick.app.ui.screens.routinedetails.formatDepartureTime
-import java.util.Locale
 import javax.inject.Inject
 import javax.inject.Singleton
 
@@ -69,6 +69,12 @@ class RoutineNotificationBuilder @Inject constructor(
     @ApplicationContext private val context: Context,
 ) {
 
+    // Resolved fresh on every access (cheap -- see Context.withAppLocale's own doc) rather than
+    // cached, so a language switch mid-active-window is picked up by this SAME long-lived
+    // singleton's very next build() call, with no need to recreate it.
+    private val localizedContext: Context
+        get() = context.withAppLocale()
+
     fun build(model: RoutineNotificationModel): Notification {
         ensureChannel()
 
@@ -98,11 +104,11 @@ class RoutineNotificationBuilder @Inject constructor(
     /** The one place route/line/destination is shown — see this class's own doc on why the
      * body never repeats it. Rendered bold by the platform's own standard title styling; no
      * markup is applied here. */
-    private fun title(model: RoutineNotificationModel): String = context.getString(
+    private fun title(model: RoutineNotificationModel): String = localizedContext.getString(
         R.string.notification_title_format,
-        model.lineLabel ?: context.getString(R.string.notification_line_fallback),
+        model.lineLabel ?: localizedContext.getString(R.string.notification_line_fallback),
         model.stationName,
-        model.directionLabel ?: context.getString(R.string.notification_direction_fallback),
+        model.directionLabel ?: localizedContext.getString(R.string.notification_direction_fallback),
     )
 
     private fun applyContent(builder: NotificationCompat.Builder, model: RoutineNotificationModel) {
@@ -115,7 +121,7 @@ class RoutineNotificationBuilder @Inject constructor(
         // fully visible, so there is no "expand to reveal" gate to hide the real message behind.
         // The real message is only ever shown by tapping into Routine Details' own Disruptions
         // section, which is exactly what "Tap for details" refers to.
-        val disruptionIndicator = if (hasDisruption) listOf(context.getString(R.string.notification_disruption_available)) else emptyList()
+        val disruptionIndicator = if (hasDisruption) listOf(localizedContext.getString(R.string.notification_disruption_available)) else emptyList()
 
         when (val content = model.content) {
             is RoutineNotificationContent.Live -> {
@@ -129,7 +135,7 @@ class RoutineNotificationBuilder @Inject constructor(
                 // expanded body (see this class's own doc on why the title never repeats, but
                 // a departure's own countdown isn't route/line/destination) without cluttering
                 // the three-line collapsed budget.
-                val staleText = context.getString(R.string.notification_stale_warning)
+                val staleText = localizedContext.getString(R.string.notification_stale_warning)
                 builder.setContentText((listOf(staleText) + disruptionIndicator).joinToString("\n"))
                 val expandedLines = listOf(staleText) + departureLines(content.departures) +
                     listOf(lastCheckedLine(content.lastCheckedAt)) + disruptionIndicator
@@ -137,22 +143,22 @@ class RoutineNotificationBuilder @Inject constructor(
                 shortCriticalText(content.departures)?.let { builder.setShortCriticalText(it) }
             }
             is RoutineNotificationContent.NoUpcomingDepartures -> {
-                val text = context.getString(R.string.notification_no_departures)
+                val text = localizedContext.getString(R.string.notification_no_departures)
                 builder.setContentText((listOf(text) + disruptionIndicator).joinToString("\n"))
                 builder.setStyle(bigTextStyle(listOf(text, lastCheckedLine(content.lastCheckedAt)) + disruptionIndicator))
             }
             is RoutineNotificationContent.Offline -> {
-                val text = context.getString(R.string.notification_offline)
+                val text = localizedContext.getString(R.string.notification_offline)
                 builder.setContentText((listOf(text) + disruptionIndicator).joinToString("\n"))
                 if (hasDisruption) builder.setStyle(bigTextStyle(listOf(text) + disruptionIndicator))
             }
             is RoutineNotificationContent.Unavailable -> {
-                val text = context.getString(R.string.notification_unavailable)
+                val text = localizedContext.getString(R.string.notification_unavailable)
                 builder.setContentText((listOf(text) + disruptionIndicator).joinToString("\n"))
                 if (hasDisruption) builder.setStyle(bigTextStyle(listOf(text) + disruptionIndicator))
             }
             is RoutineNotificationContent.Loading -> {
-                val text = context.getString(R.string.notification_loading)
+                val text = localizedContext.getString(R.string.notification_loading)
                 builder.setContentText((listOf(text) + disruptionIndicator).joinToString("\n"))
                 if (hasDisruption) builder.setStyle(bigTextStyle(listOf(text) + disruptionIndicator))
             }
@@ -175,23 +181,30 @@ class RoutineNotificationBuilder @Inject constructor(
             // Cancellation takes priority over real-time/scheduled status and drops the
             // countdown entirely, matching the existing routine-details-screen convention
             // (departureStatusLabel).
-            context.getString(R.string.routine_details_departure_cancelled)
+            localizedContext.getString(R.string.routine_details_departure_cancelled)
         } else {
-            val statusText = context.getString(
+            val statusText = localizedContext.getString(
                 if (row.isRealTime) R.string.routine_details_departure_live else R.string.routine_details_departure_scheduled,
             )
-            context.getString(R.string.notification_departure_status_format, row.minutesRemaining, statusText)
+            localizedContext.getString(R.string.notification_departure_status_format, row.minutesRemaining, statusText)
         }
 
     private fun nextDepartureLine(row: NotificationDepartureRow): String =
         if (row.isCancelled) {
-            context.getString(R.string.notification_next_departure_cancelled)
+            localizedContext.getString(R.string.notification_next_departure_cancelled)
         } else {
-            context.getString(R.string.notification_next_departure_format, row.minutesRemaining)
+            localizedContext.getString(R.string.notification_next_departure_format, row.minutesRemaining)
         }
 
-    private fun lastCheckedLine(lastCheckedAt: java.time.Instant): String =
-        context.getString(R.string.notification_last_checked_format, formatDepartureTime(lastCheckedAt, Locale.getDefault()))
+    /** [formatDepartureTime]'s own [java.util.Locale] comes from THIS SAME [localizedContext] --
+     * never [java.util.Locale.getDefault], which is the device's locale and can differ from
+     * Blick's own selected one (see [se.blick.app.locale.withAppLocale]'s own doc). Guarantees
+     * the clock-time formatting always agrees with whatever language
+     * [R.string.notification_last_checked_format] itself was just resolved in, on the same call. */
+    private fun lastCheckedLine(lastCheckedAt: java.time.Instant): String {
+        val ctx = localizedContext
+        return ctx.getString(R.string.notification_last_checked_format, formatDepartureTime(lastCheckedAt, ctx.resources.configuration.locales[0]))
+    }
 
     /** [androidx.core.app.NotificationCompat.BigTextStyle] renders the expanded view —
      * [NotificationCompat.InboxStyle] is not one of the styles Android 16's promoted-ongoing
@@ -210,9 +223,9 @@ class RoutineNotificationBuilder @Inject constructor(
     private fun shortCriticalText(departures: List<NotificationDepartureRow>): String? {
         val soonest = departures.firstOrNull() ?: return null
         return if (soonest.isCancelled) {
-            context.getString(R.string.routine_details_departure_cancelled)
+            localizedContext.getString(R.string.routine_details_departure_cancelled)
         } else {
-            context.getString(R.string.routine_details_minutes_remaining, soonest.minutesRemaining)
+            localizedContext.getString(R.string.routine_details_minutes_remaining, soonest.minutesRemaining)
         }
     }
 
@@ -222,7 +235,7 @@ class RoutineNotificationBuilder @Inject constructor(
     private fun stopAction(routineId: String): NotificationCompat.Action =
         NotificationCompat.Action.Builder(
             R.drawable.ic_stat_stop,
-            context.getString(R.string.notification_action_stop),
+            localizedContext.getString(R.string.notification_action_stop),
             stopIntent(routineId),
         ).build()
 
@@ -259,12 +272,12 @@ class RoutineNotificationBuilder @Inject constructor(
         val manager = context.getSystemService(NotificationManager::class.java)
         val channel = NotificationChannel(
             RoutineNotificationIds.CHANNEL_ID,
-            context.getString(R.string.notification_channel_name),
+            localizedContext.getString(R.string.notification_channel_name),
             // A continuously-updating commute notification must never make sound/heads-up
             // pop on every refresh — IMPORTANCE_LOW shows it in the shade without either.
             NotificationManager.IMPORTANCE_LOW,
         ).apply {
-            description = context.getString(R.string.notification_channel_description)
+            description = localizedContext.getString(R.string.notification_channel_description)
         }
         manager.createNotificationChannel(channel)
     }

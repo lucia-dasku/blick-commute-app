@@ -59,6 +59,29 @@ android {
         buildConfig = true
     }
 
+    androidResources {
+        // Per-app language milestone -- auto-derives the generated locale-config resource
+        // (and its android:localeConfig manifest attribute) from the locales this app actually
+        // has resources for (this default values/ set = en, plus values-sv/), so Android 13+'s
+        // own per-app language system picker lists exactly English/Svenska with no hand-authored
+        // res/xml/locales_config.xml to keep in sync by hand.
+        generateLocaleConfig = true
+    }
+
+    bundle {
+        language {
+            // Required companion setting for AppCompatDelegate.setApplicationLocales-based
+            // in-app language switching (see locale/AppLocale.kt) -- confirmed by a real Lint
+            // AppBundleLocaleChanges warning during this milestone. Without this, a Play-
+            // distributed App Bundle install ships resources for only the DEVICE's own
+            // language by default; a user switching Blick's own language to the OTHER one
+            // could pick a language whose resources were never installed at all. Only affects
+            // .aab (Play Store) builds -- a plain assembleDebug/assembleRelease APK already
+            // always includes every locale regardless of this setting.
+            enableSplit = false
+        }
+    }
+
     testOptions {
         unitTests.isIncludeAndroidResources = true
         // Without this, any Android SDK stub called from JVM unit tests (e.g.
@@ -97,6 +120,10 @@ dependencies {
     implementation(libs.androidx.lifecycle.runtime.compose)
     implementation(libs.androidx.lifecycle.process)
     implementation(libs.androidx.activity.compose)
+    // Per-app language support (see locale/AppLocale.kt) -- AppCompatDelegate.setApplicationLocales/
+    // getApplicationLocales, MainActivity extending AppCompatActivity, and the
+    // AppLocalesMetadataHolderService manifest declaration below it all come from this artifact.
+    implementation(libs.androidx.appcompat)
 
     implementation(platform(libs.androidx.compose.bom))
     implementation(libs.androidx.compose.ui)
