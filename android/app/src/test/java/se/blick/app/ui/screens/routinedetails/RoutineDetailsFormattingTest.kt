@@ -18,22 +18,64 @@ import java.util.Locale
 class RoutineDetailsFormattingTest {
 
     private val locale = Locale.US
+    private val everyDayLabel = "Every day"
+    private val weekdaysLabel = "Weekdays"
+
+    private fun format(days: Set<DayOfWeek>) = formatActiveDays(days, locale, everyDayLabel, weekdaysLabel)
 
     @Test
     fun `formatActiveDays renders days in calendar order regardless of set iteration order`() {
         val days = setOf(DayOfWeek.FRIDAY, DayOfWeek.MONDAY, DayOfWeek.WEDNESDAY)
 
-        assertEquals("Mon, Wed, Fri", formatActiveDays(days, locale))
+        assertEquals("Mon, Wed, Fri", format(days))
     }
 
     @Test
     fun `formatActiveDays handles a single day`() {
-        assertEquals("Mon", formatActiveDays(setOf(DayOfWeek.MONDAY), locale))
+        assertEquals("Mon", format(setOf(DayOfWeek.MONDAY)))
     }
 
     @Test
     fun `formatActiveDays handles an empty set`() {
-        assertEquals("", formatActiveDays(emptySet(), locale))
+        assertEquals("", format(emptySet()))
+    }
+
+    @Test
+    fun `formatActiveDays renders all seven days as the every-day label`() {
+        assertEquals(everyDayLabel, format(DayOfWeek.values().toSet()))
+    }
+
+    @Test
+    fun `formatActiveDays renders exactly Monday through Friday as the weekdays label`() {
+        val weekdays = setOf(
+            DayOfWeek.MONDAY, DayOfWeek.TUESDAY, DayOfWeek.WEDNESDAY, DayOfWeek.THURSDAY, DayOfWeek.FRIDAY,
+        )
+
+        assertEquals(weekdaysLabel, format(weekdays))
+    }
+
+    @Test
+    fun `formatActiveDays does not use the weekdays label when a weekend day is also selected`() {
+        // All five weekdays plus Saturday -- six days, not the exact Mon-Fri set, so this must
+        // still fall through to the ordinary day list rather than being mistaken for "Weekdays".
+        val weekdaysPlusSaturday = setOf(
+            DayOfWeek.MONDAY, DayOfWeek.TUESDAY, DayOfWeek.WEDNESDAY, DayOfWeek.THURSDAY, DayOfWeek.FRIDAY,
+            DayOfWeek.SATURDAY,
+        )
+
+        assertEquals("Mon, Tue, Wed, Thu, Fri, Sat", format(weekdaysPlusSaturday))
+    }
+
+    @Test
+    fun `formatActiveDays does not use the weekdays label for fewer than five weekdays`() {
+        val days = setOf(DayOfWeek.MONDAY, DayOfWeek.WEDNESDAY, DayOfWeek.FRIDAY)
+
+        assertEquals("Mon, Wed, Fri", format(days))
+    }
+
+    @Test
+    fun `formatActiveDays renders a weekend-only selection as the ordinary day list, not a special label`() {
+        assertEquals("Sat, Sun", format(setOf(DayOfWeek.SATURDAY, DayOfWeek.SUNDAY)))
     }
 
     @Test

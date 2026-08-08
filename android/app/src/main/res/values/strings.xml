@@ -15,11 +15,21 @@
          RoutineCreateViewModel.retryScheduling/RoutineDetailsViewModel.retryScheduling's own docs. -->
     <string name="action_retry">Try again</string>
 
-    <string name="routine_details_title">Routine details</string>
-    <string name="routine_details_mode_label">Transport mode</string>
+    <!-- routine_details_title is the top app bar's own page title, deliberately short; the
+         body's own section heading below it says the fuller "Routine details" instead, so the
+         two are separate strings even though they used to be the same text. -->
+    <string name="routine_details_title">Routine</string>
+    <string name="routine_details_info_heading">Routine details</string>
+    <string name="routine_details_mode_label">Transport</string>
     <string name="routine_details_line_label">Line</string>
     <string name="routine_details_direction_label">Direction</string>
-    <string name="routine_details_time_label">Time window</string>
+    <string name="routine_details_schedule_label">Schedule</string>
+    <!-- Cleaner labels for the two most common active-day combinations — see
+         RoutineDetailsFormatting.formatActiveDays's own doc for the exact matching rule.
+         Every other combination still renders as the comma-separated day list it always has. -->
+    <string name="routine_details_schedule_every_day">Every day</string>
+    <string name="routine_details_schedule_weekdays">Weekdays</string>
+    <string name="routine_details_time_label">Time</string>
     <string name="routine_details_status_label">Status</string>
     <string name="routine_details_status_enabled">Enabled</string>
     <string name="routine_details_status_disabled">Disabled</string>

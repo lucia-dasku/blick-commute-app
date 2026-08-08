@@ -54,6 +54,7 @@ import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.LocalLifecycleOwner
 import androidx.compose.ui.platform.LocalLocale
@@ -308,22 +309,48 @@ internal fun RoutineDetailsContent(
         HorizontalDivider()
         Spacer(Modifier.height(16.dp))
 
-        // routine.name's own default pattern is "{siteName} → {destination}" (see
-        // RoutineCreateViewModel.selectDirection) -- a separate site-name line here would
-        // just repeat it a second time.
-        Text(routine.name, style = MaterialTheme.typography.headlineSmall)
+        // A fixed section heading rather than routine.name -- the routine's own name/route is
+        // still fully identifiable below via the Direction row's own "{siteName} → {destination}"
+        // value (see that row's own comment), just no longer repeated up here too. A distinct
+        // string from the top app bar's own routine_details_title (which now just says
+        // "Routine") even though both used to share the same "Routine details" text -- and the
+        // same titleMedium size as this screen's other two section headings ("Next departures",
+        // "Manage routine"), rather than the larger headlineSmall inherited from when this line
+        // showed the routine's own name as a prominent heading.
+        Text(stringResource(R.string.routine_details_info_heading), style = MaterialTheme.typography.titleMedium)
 
         Spacer(Modifier.height(12.dp))
         DetailRow(stringResource(R.string.routine_details_mode_label), stringResource(routine.transportMode.detailsLabelResId()))
         routine.lineDesignation?.let { designation ->
             LineDetailRow(stringResource(R.string.routine_details_line_label), designation, routine.transportMode)
         }
+        // "{siteName} → {destination}", the same default pattern routine.name itself is built
+        // from (see RoutineCreateViewModel.selectDirection) -- now the one place on this screen
+        // that spells out the full route, since the heading above no longer does.
         routine.destinationLabel?.let { destination ->
-            DetailRow(stringResource(R.string.routine_details_direction_label), destination)
+            DetailRow(stringResource(R.string.routine_details_direction_label), "${routine.siteName} → $destination")
         }
-        DetailRow(stringResource(R.string.routine_create_days_label), formatActiveDays(routine.activeDays, locale))
+        DetailRow(
+            stringResource(R.string.routine_details_schedule_label),
+            formatActiveDays(
+                routine.activeDays,
+                locale,
+                everyDayLabel = stringResource(R.string.routine_details_schedule_every_day),
+                weekdaysLabel = stringResource(R.string.routine_details_schedule_weekdays),
+            ),
+        )
         DetailRow(stringResource(R.string.routine_details_time_label), formatTimeRange(routine.startTime, routine.endTime, locale))
-        DetailRow(stringResource(R.string.routine_details_status_label), statusLabel(routine, isPausedToday))
+        DetailRow(
+            stringResource(R.string.routine_details_status_label),
+            statusLabel(routine, isPausedToday),
+            // Only Enabled/Disabled get a dot -- Paused today (a third, distinct status) keeps
+            // its existing plain-text-only rendering, unchanged.
+            dotColor = when {
+                isPausedToday -> null
+                routine.enabled -> LINE_BADGE_GREEN
+                else -> MaterialTheme.colorScheme.error
+            },
+        )
 
         Spacer(Modifier.height(20.dp))
         HorizontalDivider()
@@ -761,14 +788,25 @@ private fun LiveUpdatePromotionRow(isLiveUpdatePromotable: Boolean) {
     }
 }
 
+/** [dotColor] is null for every row except Status -- see that call site's own doc on why only
+ * Enabled/Disabled (never Paused today) get one. Same small dot/gap/vertical-centering as the
+ * departure list's own Live indicator (see [DepartureRow]), so both read as the same visual
+ * language for "status" on this screen. */
 @Composable
-private fun DetailRow(label: String, value: String) {
+private fun DetailRow(label: String, value: String, dotColor: Color? = null) {
     Row(
         modifier = Modifier.fillMaxWidth().padding(vertical = 4.dp),
         horizontalArrangement = Arrangement.SpaceBetween,
+        verticalAlignment = Alignment.CenterVertically,
     ) {
         Text(label, style = MaterialTheme.typography.bodyMedium, color = MaterialTheme.colorScheme.secondary)
-        Text(value, style = MaterialTheme.typography.bodyMedium)
+        Row(verticalAlignment = Alignment.CenterVertically) {
+            dotColor?.let { color ->
+                Box(Modifier.size(6.dp).background(color, CircleShape))
+                Spacer(Modifier.width(6.dp))
+            }
+            Text(value, style = MaterialTheme.typography.bodyMedium)
+        }
     }
 }
 

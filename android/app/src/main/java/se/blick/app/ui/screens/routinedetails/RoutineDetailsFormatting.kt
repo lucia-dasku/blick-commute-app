@@ -18,12 +18,23 @@ import java.util.Locale
 /**
  * Renders [days] in calendar order (Monday first) using locale-aware short weekday
  * names, e.g. "Mon, Wed, Fri" — regardless of the order they were originally toggled in
- * during routine creation, since [days] is an unordered [Set].
+ * during routine creation, since [days] is an unordered [Set]. Two common combinations get a
+ * cleaner label instead of the day-by-day list: all seven days renders as [everyDayLabel], and
+ * exactly Monday through Friday — no fewer, no more, never a weekend day mixed in — renders as
+ * [weekdaysLabel]. Every other combination (including "weekdays plus one weekend day", or any
+ * other subset) still falls through to the comma-separated list. Display-only: [days] itself is
+ * never altered by which of the three renderings a given set happens to produce, so this has no
+ * effect on how active days are stored, selected, or scheduled.
  */
-fun formatActiveDays(days: Set<DayOfWeek>, locale: Locale): String =
-    DayOfWeek.values()
-        .filter { it in days }
-        .joinToString(", ") { it.getDisplayName(TextStyle.SHORT, locale) }
+fun formatActiveDays(days: Set<DayOfWeek>, locale: Locale, everyDayLabel: String, weekdaysLabel: String): String = when {
+    days.size == DayOfWeek.values().size -> everyDayLabel
+    days == WEEKDAYS -> weekdaysLabel
+    else -> DayOfWeek.values().filter { it in days }.joinToString(", ") { it.getDisplayName(TextStyle.SHORT, locale) }
+}
+
+private val WEEKDAYS: Set<DayOfWeek> = setOf(
+    DayOfWeek.MONDAY, DayOfWeek.TUESDAY, DayOfWeek.WEDNESDAY, DayOfWeek.THURSDAY, DayOfWeek.FRIDAY,
+)
 
 /** Locale-aware short start–end time range, e.g. "7:00 AM – 9:00 AM". */
 fun formatTimeRange(start: LocalTime, end: LocalTime, locale: Locale): String {
