@@ -10,6 +10,7 @@ import android.content.pm.PackageManager
 import android.os.Build
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.result.contract.ActivityResultContracts
+import androidx.compose.foundation.background
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
@@ -19,8 +20,10 @@ import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
+import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.rememberScrollState
+import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.ArrowBack
@@ -74,6 +77,7 @@ import se.blick.app.ui.components.LineBadge
 import se.blick.app.ui.notification.notificationSettingsIntent
 import se.blick.app.ui.notification.promotedNotificationSettingsIntent
 import se.blick.app.ui.notification.rememberNotificationPermissionGate
+import se.blick.app.widget.LINE_BADGE_GREEN
 
 /**
  * Routine details / live-preview screen: loads one saved routine and shows its next two
@@ -884,11 +888,22 @@ private fun DepartureRow(departure: PreparedDeparture, transportMode: TransportM
                 style = MaterialTheme.typography.bodySmall,
                 color = MaterialTheme.colorScheme.secondary,
             )
-            Text(
-                departureStatusLabel(departure),
-                style = MaterialTheme.typography.bodySmall,
-                color = if (departure.isCancelled) MaterialTheme.colorScheme.tertiary else MaterialTheme.colorScheme.secondary,
-            )
+            Row(verticalAlignment = Alignment.CenterVertically) {
+                // Only the "Live" label gets the dot -- "Cancelled"/"Scheduled" (the other two
+                // departureStatusLabel outcomes) are left exactly as before. Reuses
+                // LINE_BADGE_GREEN, the same green BlickRoutineWidget's own status dot already
+                // uses for this identical real-time/non-cancelled condition, so the two
+                // surfaces agree on what "live" looks like.
+                if (departure.isRealTime && !departure.isCancelled) {
+                    Box(Modifier.size(6.dp).background(LINE_BADGE_GREEN, CircleShape))
+                    Spacer(Modifier.width(6.dp))
+                }
+                Text(
+                    departureStatusLabel(departure),
+                    style = MaterialTheme.typography.bodySmall,
+                    color = if (departure.isCancelled) MaterialTheme.colorScheme.tertiary else MaterialTheme.colorScheme.secondary,
+                )
+            }
         }
     }
 }
