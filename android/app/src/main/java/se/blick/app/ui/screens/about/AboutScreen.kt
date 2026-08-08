@@ -35,14 +35,22 @@ import se.blick.app.R
  * attribution): "the attribution should link to Trafiklab.se where practicable." */
 private const val TRAFIKLAB_URL = "https://www.trafiklab.se/"
 
+/** TODO: not yet configured — replace with the real Blick Labs open-source licences webpage
+ * URL once it exists, then remove this comment. Deliberately an obviously-fake placeholder
+ * (rather than a guessed real-looking domain) so an unreplaced value is easy to spot both by
+ * eye and by search. */
+private const val OPEN_SOURCE_LICENSES_URL = "https://TODO-set-blick-labs-open-source-licences-url.example/"
+
 /**
  * The one place [R.string.attribution_text] and the privacy policy are actually shown to the
  * user (see docs/api-contract.md §9) — reachable from an info action in
  * [se.blick.app.ui.screens.routinelist.RoutineListScreen]'s top app bar. Deliberately simple:
  * a tagline, the app's own version, a "Data and attribution" section (attribution text, a link
- * to Trafiklab.se, and an explicit non-affiliation disclaimer), the full privacy policy, and a
- * centered copyright line — no settings are hosted here yet, despite the name matching the
- * product doc's "About/Settings screen" wording.
+ * to Trafiklab.se, and an explicit non-affiliation disclaimer), the full privacy policy, a
+ * centered copyright line, and finally an "Open-source licences" section linking to the Blick
+ * Labs website (see [OPEN_SOURCE_LICENSES_URL]'s own doc — that URL is still a placeholder) —
+ * no settings are hosted here yet, despite the name matching the product doc's "About/Settings
+ * screen" wording.
  */
 @Composable
 fun AboutScreen(onBack: () -> Unit) {
@@ -125,6 +133,18 @@ fun AboutScreen(onBack: () -> Unit) {
                 textAlign = TextAlign.Center,
                 modifier = Modifier.fillMaxWidth(),
             )
+
+            Spacer(Modifier.height(20.dp))
+            Text(stringResource(R.string.about_section_open_source_licences), style = MaterialTheme.typography.titleMedium)
+            Spacer(Modifier.height(8.dp))
+            Text(stringResource(R.string.about_open_source_licences_body), style = MaterialTheme.typography.bodyMedium)
+            TextButton(
+                onClick = {
+                    context.startActivity(Intent(Intent.ACTION_VIEW, OPEN_SOURCE_LICENSES_URL.toUri()))
+                },
+            ) {
+                Text(stringResource(R.string.about_open_source_licences_action))
+            }
         }
     }
 }

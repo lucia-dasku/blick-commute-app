@@ -147,6 +147,9 @@
     <string name="about_privacy_contact">For privacy questions or deletion requests, contact: contactblicklabs@gmail.com</string>
     <string name="about_privacy_updates">We may update this policy if Blick\'s features or data practices change.</string>
     <string name="about_copyright">© 2026 Blick Labs</string>
+    <string name="about_section_open_source_licences">Open-source licences</string>
+    <string name="about_open_source_licences_body">Blick uses open-source software. Copyright notices and licence terms for third-party software are available on the Blick Labs website.</string>
+    <string name="about_open_source_licences_action">View open-source licences</string>
 
     <!-- Ongoing commute notification (RoutineNotificationBuilder). A quiet, low-importance
          channel — see that class's doc comment for why IMPORTANCE_LOW is used. -->

@@ -1,6 +1,7 @@
 package se.blick.app.ui.screens.about
 
 import androidx.activity.ComponentActivity
+import androidx.compose.ui.test.assertHasClickAction
 import androidx.compose.ui.test.junit4.v2.createAndroidComposeRule
 import androidx.compose.ui.test.onNodeWithContentDescription
 import androidx.compose.ui.test.onNodeWithText
@@ -41,5 +42,30 @@ class AboutScreenTest {
         composeRule.onNodeWithContentDescription(backDescription).performClick()
 
         assertEquals(true, backInvoked)
+    }
+
+    // ---- Open-source licences section (see AboutScreen's own doc on this being the very last
+    // section) ----
+
+    @Test
+    fun showsTheOpenSourceLicencesSectionHeaderAndBody() {
+        composeRule.setContent { AboutScreen(onBack = {}) }
+
+        val header = composeRule.activity.getString(R.string.about_section_open_source_licences)
+        val body = composeRule.activity.getString(R.string.about_open_source_licences_body)
+        composeRule.onNodeWithText(header).assertExists()
+        composeRule.onNodeWithText(body).assertExists()
+    }
+
+    @Test
+    fun showsATappableViewOpenSourceLicencesRow() {
+        composeRule.setContent { AboutScreen(onBack = {}) }
+
+        val action = composeRule.activity.getString(R.string.about_open_source_licences_action)
+        // Existence + clickability only, same as the (also untested-for-navigation)
+        // Trafiklab.se link above -- not performClick()ed here, since that would fire a real
+        // Intent.ACTION_VIEW and hand off to an external browser app rather than staying within
+        // this instrumented test.
+        composeRule.onNodeWithText(action).assertExists().assertHasClickAction()
     }
 }
