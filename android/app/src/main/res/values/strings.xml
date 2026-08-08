@@ -50,6 +50,9 @@
     <string name="routine_details_disruption_collapse">Hide disruption details</string>
 
     <string name="routine_details_actions_heading">Manage routine</string>
+    <string name="routine_details_actions_description">Edit, disable or delete this routine.</string>
+    <string name="routine_details_actions_expand">Show routine management actions</string>
+    <string name="routine_details_actions_collapse">Hide routine management actions</string>
     <string name="routine_details_edit_action">Edit routine</string>
     <string name="routine_details_enable_action">Enable routine</string>
     <string name="routine_details_disable_action">Disable routine</string>

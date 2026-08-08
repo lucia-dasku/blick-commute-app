@@ -2,7 +2,9 @@ package se.blick.app.ui.screens.routinedetails
 
 import androidx.activity.ComponentActivity
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.test.assertCountEquals
 import androidx.compose.ui.test.junit4.v2.createAndroidComposeRule
+import androidx.compose.ui.test.onAllNodesWithText
 import androidx.compose.ui.test.onNodeWithContentDescription
 import androidx.compose.ui.test.onNodeWithText
 import androidx.compose.ui.test.performClick
@@ -98,12 +100,13 @@ class RoutineDetailsScreenTest {
         disruptionsState: DisruptionsState,
         departuresState: LiveDeparturesState = LiveDeparturesState.Offline,
         routine: CommuteRoutine = sampleRoutine(),
+        isPausedToday: Boolean = false,
     ) {
         composeRule.setContent {
             RoutineDetailsContent(
                 modifier = Modifier,
                 routine = routine,
-                isPausedToday = false,
+                isPausedToday = isPausedToday,
                 departuresState = departuresState,
                 isRefreshing = false,
                 disruptionsState = disruptionsState,
@@ -234,5 +237,84 @@ class RoutineDetailsScreenTest {
 
         composeRule.onNodeWithText("18").assertExists()
         composeRule.onNodeWithText(departure.destination!!).assertExists()
+    }
+
+    // ---- Pause/resume today -- now placed directly under the departures list, independent of
+    // the (collapsed-by-default) Manage routine section below it ----
+
+    @Test
+    fun pauseTodayButton_visibleWithoutExpandingManageRoutine() {
+        setContent(DisruptionsState.NoDisruptions, isPausedToday = false)
+
+        val pauseLabel = composeRule.activity.getString(R.string.routine_details_pause_today_action)
+        composeRule.onNodeWithText(pauseLabel).assertExists()
+    }
+
+    @Test
+    fun pauseTodayButton_showsResumeTodayWhenAlreadyPausedToday() {
+        setContent(DisruptionsState.NoDisruptions, isPausedToday = true)
+
+        val resumeLabel = composeRule.activity.getString(R.string.routine_details_resume_today_action)
+        val pauseLabel = composeRule.activity.getString(R.string.routine_details_pause_today_action)
+        composeRule.onNodeWithText(resumeLabel).assertExists()
+        composeRule.onNodeWithText(pauseLabel).assertDoesNotExist()
+    }
+
+    // ---- Manage routine -- collapsed by default, expands on tapping anywhere across the
+    // heading+description header, same collapsed-header/expand-on-tap shape as the disruptions
+    // section above ----
+
+    @Test
+    fun manageRoutineSection_collapsedByDefault_showsOnlyHeadingAndDescription() {
+        setContent(DisruptionsState.NoDisruptions)
+
+        val heading = composeRule.activity.getString(R.string.routine_details_actions_heading)
+        val description = composeRule.activity.getString(R.string.routine_details_actions_description)
+        val editLabel = composeRule.activity.getString(R.string.routine_details_edit_action)
+        val deleteLabel = composeRule.activity.getString(R.string.routine_details_delete_action)
+        composeRule.onNodeWithText(heading).performScrollTo().assertExists()
+        composeRule.onNodeWithText(description).assertExists()
+        composeRule.onNodeWithText(editLabel).assertDoesNotExist()
+        composeRule.onNodeWithText(deleteLabel).assertDoesNotExist()
+    }
+
+    @Test
+    fun manageRoutineSection_tappingTheHeaderExpandsToRevealTheActions() {
+        setContent(DisruptionsState.NoDisruptions)
+
+        val heading = composeRule.activity.getString(R.string.routine_details_actions_heading)
+        composeRule.onNodeWithText(heading).performScrollTo().performClick()
+
+        val editLabel = composeRule.activity.getString(R.string.routine_details_edit_action)
+        val disableLabel = composeRule.activity.getString(R.string.routine_details_disable_action)
+        val deleteLabel = composeRule.activity.getString(R.string.routine_details_delete_action)
+        composeRule.onNodeWithText(editLabel).assertExists()
+        composeRule.onNodeWithText(disableLabel).assertExists()
+        composeRule.onNodeWithText(deleteLabel).assertExists()
+    }
+
+    @Test
+    fun manageRoutineSection_tappingTheHeaderAgainCollapsesItBackToJustHeadingAndDescription() {
+        setContent(DisruptionsState.NoDisruptions)
+
+        val heading = composeRule.activity.getString(R.string.routine_details_actions_heading)
+        composeRule.onNodeWithText(heading).performScrollTo().performClick()
+        composeRule.onNodeWithText(heading).performScrollTo().performClick()
+
+        val editLabel = composeRule.activity.getString(R.string.routine_details_edit_action)
+        composeRule.onNodeWithText(editLabel).assertDoesNotExist()
+    }
+
+    @Test
+    fun manageRoutineSection_pauseTodayIsNotAmongTheRevealedActions() {
+        // Confirms the relocation, not just the addition -- pause/resume must never reappear a
+        // second time inside the expanded Manage routine group now that PauseTodayButton owns it.
+        setContent(DisruptionsState.NoDisruptions)
+
+        val heading = composeRule.activity.getString(R.string.routine_details_actions_heading)
+        composeRule.onNodeWithText(heading).performScrollTo().performClick()
+
+        composeRule.onAllNodesWithText(composeRule.activity.getString(R.string.routine_details_pause_today_action))
+            .assertCountEquals(1)
     }
 }

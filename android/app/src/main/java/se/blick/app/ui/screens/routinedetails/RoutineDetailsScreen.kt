@@ -11,6 +11,7 @@ import android.os.Build
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.foundation.background
+import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
@@ -88,11 +89,13 @@ import se.blick.app.widget.LINE_BADGE_GREEN
  * [NotificationStatusRow]) also re-checks availability every time the screen resumes, e.g.
  * after returning from system notification settings.
  *
- * Also hosts routine management: edit (delegates navigation to [onEdit], the actual editing
- * UI is [se.blick.app.ui.screens.routinecreate.RoutineCreateScreen] reused in edit mode —
- * see [se.blick.app.ui.navigation.BlickNavHost]), enable/disable, pause/resume today, and
- * delete (with an in-screen confirmation dialog; [onDeleted] is only invoked once the
- * repository write actually succeeds).
+ * Also hosts routine management. Pause/resume today ([PauseTodayButton]) sits right under the
+ * departures list, since it directly affects what that list is showing; edit (delegates
+ * navigation to [onEdit], the actual editing UI is
+ * [se.blick.app.ui.screens.routinecreate.RoutineCreateScreen] reused in edit mode — see
+ * [se.blick.app.ui.navigation.BlickNavHost]), enable/disable, and delete (with an in-screen
+ * confirmation dialog; [onDeleted] is only invoked once the repository write actually
+ * succeeds) live inside the collapsed-by-default [RoutineActionsSection] further down instead.
  *
  * In debug builds only, also hosts a manual "Show/update test notification" /
  * "Remove test notification" pair (see [DebugNotificationSection] and
@@ -288,6 +291,19 @@ internal fun RoutineDetailsContent(
 
         DeparturesSection(departuresState, routine.transportMode, locale, onRefresh)
 
+        // Pause/resume today lives here, directly under the departures it affects, rather than
+        // inside the (now collapsible) Manage routine section below -- see PauseTodayButton's
+        // own doc for why this is a top-level composable of its own rather than folded back
+        // into RoutineActionsSection.
+        Spacer(Modifier.height(12.dp))
+        PauseTodayButton(
+            isPausedToday = isPausedToday,
+            isTogglingPause = isTogglingPause,
+            pauseActionFailed = pauseActionFailed,
+            onPauseToday = onPauseToday,
+            onResumeToday = onResumeToday,
+        )
+
         Spacer(Modifier.height(20.dp))
         HorizontalDivider()
         Spacer(Modifier.height(16.dp))
@@ -315,7 +331,6 @@ internal fun RoutineDetailsContent(
 
         RoutineActionsSection(
             routine = routine,
-            isPausedToday = isPausedToday,
             onEdit = onEdit,
             isTogglingEnabled = isTogglingEnabled,
             enabledActionFailed = enabledActionFailed,
@@ -324,10 +339,6 @@ internal fun RoutineDetailsContent(
             notificationAvailability = notificationAvailability,
             isLiveUpdatePromotable = isLiveUpdatePromotable,
             onToggleEnabled = onToggleEnabled,
-            isTogglingPause = isTogglingPause,
-            pauseActionFailed = pauseActionFailed,
-            onPauseToday = onPauseToday,
-            onResumeToday = onResumeToday,
             isDeleting = isDeleting,
             deleteFailed = deleteFailed,
             onRequestDelete = onRequestDelete,
@@ -462,99 +473,22 @@ internal fun NotificationPostResult?.toDebugMessage(context: android.content.Con
     NotificationPostResult.Failed, null -> context.getString(R.string.debug_notification_failed)
 }
 
+/**
+ * "Pause today"/"Resume today" -- its own top-level composable (used directly by
+ * [RoutineDetailsContent], right under the departures it affects) rather than folded back into
+ * [RoutineActionsSection] below, which now only holds the collapsible edit/disable/delete
+ * group. Text/enabled/error-message behaviour is exactly what lived inside
+ * [RoutineActionsSection] before this split -- only its position on screen changed.
+ */
 @Composable
-private fun RoutineActionsSection(
-    routine: CommuteRoutine,
+private fun PauseTodayButton(
     isPausedToday: Boolean,
-    onEdit: () -> Unit,
-    isTogglingEnabled: Boolean,
-    enabledActionFailed: Boolean,
-    hasSeenNotificationRationale: Boolean,
-    onNotificationRationaleSeen: () -> Unit,
-    notificationAvailability: NotificationAvailability,
-    isLiveUpdatePromotable: () -> Boolean,
-    onToggleEnabled: () -> Unit,
     isTogglingPause: Boolean,
     pauseActionFailed: Boolean,
     onPauseToday: () -> Unit,
     onResumeToday: () -> Unit,
-    isDeleting: Boolean,
-    deleteFailed: Boolean,
-    onRequestDelete: () -> Unit,
-    schedulingFailed: Boolean,
-    isRetryingScheduling: Boolean,
-    onRetryScheduling: () -> Unit,
 ) {
-    // Enabling a routine is exactly the "appropriate user-driven point" the product doc asks
-    // for to request POST_NOTIFICATIONS (see rememberNotificationPermissionGate's own doc) --
-    // disabling never needs it, so the gate only wraps the enabling direction below.
-    val notifyGate = rememberNotificationPermissionGate(hasSeenNotificationRationale, onNotificationRationaleSeen)
-
     Column {
-        Text(stringResource(R.string.routine_details_actions_heading), style = MaterialTheme.typography.titleMedium)
-        Spacer(Modifier.height(8.dp))
-
-        // A shared signal across enable/disable, pause/resume, and reload -- see
-        // RoutineDetailsUiState.schedulingFailed's own doc on why this is deliberately separate
-        // from enabledActionFailed/pauseActionFailed (which only ever mean the Room write
-        // itself failed): the persisted change above is already correct either way, only its
-        // WorkManager scheduling needs a retry.
-        if (schedulingFailed) {
-            Text(
-                stringResource(R.string.routine_details_scheduling_failed),
-                color = MaterialTheme.colorScheme.error,
-                style = MaterialTheme.typography.bodySmall,
-            )
-            Spacer(Modifier.height(4.dp))
-            OutlinedButton(
-                onClick = onRetryScheduling,
-                enabled = !isRetryingScheduling,
-                modifier = Modifier.fillMaxWidth(),
-            ) {
-                Text(stringResource(R.string.action_retry))
-            }
-            Spacer(Modifier.height(8.dp))
-        }
-
-        if (routine.enabled) {
-            NotificationStatusRow(notificationAvailability)
-            Spacer(Modifier.height(8.dp))
-            if (notificationAvailability == NotificationAvailability.Available) {
-                LiveUpdatePromotionRow(isLiveUpdatePromotable())
-                Spacer(Modifier.height(8.dp))
-            }
-        }
-
-        OutlinedButton(onClick = onEdit, modifier = Modifier.fillMaxWidth()) {
-            Text(stringResource(R.string.routine_details_edit_action))
-        }
-        Spacer(Modifier.height(8.dp))
-
-        // Never colour-only: the label itself always states the resulting/current state in
-        // words (see the milestone requirement on text scaling + no colour-only status).
-        OutlinedButton(
-            onClick = {
-                if (routine.enabled) onToggleEnabled() else notifyGate { onToggleEnabled() }
-            },
-            enabled = !isTogglingEnabled,
-            modifier = Modifier.fillMaxWidth(),
-        ) {
-            Text(
-                stringResource(
-                    if (routine.enabled) R.string.routine_details_disable_action else R.string.routine_details_enable_action,
-                ),
-            )
-        }
-        if (enabledActionFailed) {
-            Spacer(Modifier.height(4.dp))
-            Text(
-                stringResource(R.string.routine_details_enable_action_failed),
-                color = MaterialTheme.colorScheme.error,
-                style = MaterialTheme.typography.bodySmall,
-            )
-        }
-        Spacer(Modifier.height(8.dp))
-
         OutlinedButton(
             onClick = if (isPausedToday) onResumeToday else onPauseToday,
             enabled = !isTogglingPause,
@@ -574,23 +508,149 @@ private fun RoutineActionsSection(
                 style = MaterialTheme.typography.bodySmall,
             )
         }
-        Spacer(Modifier.height(8.dp))
+    }
+}
 
-        Button(
-            onClick = onRequestDelete,
-            enabled = !isDeleting,
-            colors = ButtonDefaults.buttonColors(containerColor = MaterialTheme.colorScheme.error),
-            modifier = Modifier.fillMaxWidth(),
+/**
+ * Collapsible edit/disable/delete group -- collapsed by default, showing only the heading, a
+ * fixed one-line description, and a chevron (see [routine_details_actions_description][R.string.routine_details_actions_description]);
+ * the whole header row is the tap target, not just the chevron icon, so [expanded] toggles from
+ * a click anywhere across the heading+description block, matching the same
+ * collapsed-header/expand-on-tap shape [DisruptionRow] already uses elsewhere on this screen.
+ * Pause/resume today is deliberately NOT part of this group any more -- see [PauseTodayButton],
+ * now a sibling composable placed directly under the departures list instead.
+ *
+ * Every action inside, once expanded, keeps its exact pre-existing behaviour, confirmation
+ * dialog (delete, handled by the caller via [onRequestDelete]), and styling -- this composable
+ * only changes what's visible before the user taps to expand it, never what any individual
+ * action itself does.
+ */
+@Composable
+private fun RoutineActionsSection(
+    routine: CommuteRoutine,
+    onEdit: () -> Unit,
+    isTogglingEnabled: Boolean,
+    enabledActionFailed: Boolean,
+    hasSeenNotificationRationale: Boolean,
+    onNotificationRationaleSeen: () -> Unit,
+    notificationAvailability: NotificationAvailability,
+    isLiveUpdatePromotable: () -> Boolean,
+    onToggleEnabled: () -> Unit,
+    isDeleting: Boolean,
+    deleteFailed: Boolean,
+    onRequestDelete: () -> Unit,
+    schedulingFailed: Boolean,
+    isRetryingScheduling: Boolean,
+    onRetryScheduling: () -> Unit,
+) {
+    // Enabling a routine is exactly the "appropriate user-driven point" the product doc asks
+    // for to request POST_NOTIFICATIONS (see rememberNotificationPermissionGate's own doc) --
+    // disabling never needs it, so the gate only wraps the enabling direction below.
+    val notifyGate = rememberNotificationPermissionGate(hasSeenNotificationRationale, onNotificationRationaleSeen)
+    var expanded by remember { mutableStateOf(false) }
+
+    Column {
+        Row(
+            modifier = Modifier.fillMaxWidth().clickable { expanded = !expanded },
+            verticalAlignment = Alignment.CenterVertically,
         ) {
-            Text(stringResource(R.string.routine_details_delete_action))
-        }
-        if (deleteFailed) {
-            Spacer(Modifier.height(4.dp))
-            Text(
-                stringResource(R.string.routine_details_delete_action_failed),
-                color = MaterialTheme.colorScheme.error,
-                style = MaterialTheme.typography.bodySmall,
+            Column(Modifier.weight(1f)) {
+                Text(stringResource(R.string.routine_details_actions_heading), style = MaterialTheme.typography.titleMedium)
+                Spacer(Modifier.height(4.dp))
+                Text(
+                    stringResource(R.string.routine_details_actions_description),
+                    style = MaterialTheme.typography.bodySmall,
+                    color = MaterialTheme.colorScheme.secondary,
+                )
+            }
+            Icon(
+                imageVector = if (expanded) Icons.Filled.KeyboardArrowUp else Icons.Filled.KeyboardArrowDown,
+                contentDescription = stringResource(
+                    if (expanded) R.string.routine_details_actions_collapse else R.string.routine_details_actions_expand,
+                ),
             )
+        }
+
+        if (expanded) {
+            Spacer(Modifier.height(12.dp))
+
+            // A shared signal across enable/disable, pause/resume, and reload -- see
+            // RoutineDetailsUiState.schedulingFailed's own doc on why this is deliberately
+            // separate from enabledActionFailed (which only ever means the Room write itself
+            // failed): the persisted change above is already correct either way, only its
+            // WorkManager scheduling needs a retry.
+            if (schedulingFailed) {
+                Text(
+                    stringResource(R.string.routine_details_scheduling_failed),
+                    color = MaterialTheme.colorScheme.error,
+                    style = MaterialTheme.typography.bodySmall,
+                )
+                Spacer(Modifier.height(4.dp))
+                OutlinedButton(
+                    onClick = onRetryScheduling,
+                    enabled = !isRetryingScheduling,
+                    modifier = Modifier.fillMaxWidth(),
+                ) {
+                    Text(stringResource(R.string.action_retry))
+                }
+                Spacer(Modifier.height(8.dp))
+            }
+
+            if (routine.enabled) {
+                NotificationStatusRow(notificationAvailability)
+                Spacer(Modifier.height(8.dp))
+                if (notificationAvailability == NotificationAvailability.Available) {
+                    LiveUpdatePromotionRow(isLiveUpdatePromotable())
+                    Spacer(Modifier.height(8.dp))
+                }
+            }
+
+            OutlinedButton(onClick = onEdit, modifier = Modifier.fillMaxWidth()) {
+                Text(stringResource(R.string.routine_details_edit_action))
+            }
+            Spacer(Modifier.height(8.dp))
+
+            // Never colour-only: the label itself always states the resulting/current state in
+            // words (see the milestone requirement on text scaling + no colour-only status).
+            OutlinedButton(
+                onClick = {
+                    if (routine.enabled) onToggleEnabled() else notifyGate { onToggleEnabled() }
+                },
+                enabled = !isTogglingEnabled,
+                modifier = Modifier.fillMaxWidth(),
+            ) {
+                Text(
+                    stringResource(
+                        if (routine.enabled) R.string.routine_details_disable_action else R.string.routine_details_enable_action,
+                    ),
+                )
+            }
+            if (enabledActionFailed) {
+                Spacer(Modifier.height(4.dp))
+                Text(
+                    stringResource(R.string.routine_details_enable_action_failed),
+                    color = MaterialTheme.colorScheme.error,
+                    style = MaterialTheme.typography.bodySmall,
+                )
+            }
+            Spacer(Modifier.height(8.dp))
+
+            Button(
+                onClick = onRequestDelete,
+                enabled = !isDeleting,
+                colors = ButtonDefaults.buttonColors(containerColor = MaterialTheme.colorScheme.error),
+                modifier = Modifier.fillMaxWidth(),
+            ) {
+                Text(stringResource(R.string.routine_details_delete_action))
+            }
+            if (deleteFailed) {
+                Spacer(Modifier.height(4.dp))
+                Text(
+                    stringResource(R.string.routine_details_delete_action_failed),
+                    color = MaterialTheme.colorScheme.error,
+                    style = MaterialTheme.typography.bodySmall,
+                )
+            }
         }
     }
 }
