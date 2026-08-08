@@ -257,6 +257,40 @@ class RoutineDetailsViewModel @Inject constructor(
     }
 
     /**
+     * Re-reads just [CommuteRoutine.enabled]/[CommuteRoutine.pausedDate] from storage and
+     * applies them to [RoutineDetailsUiState.routine]/[RoutineDetailsUiState.isPausedToday] —
+     * called at the top of every [runAutoRefresh] (i.e. every time this screen becomes active),
+     * mirroring [refreshNotificationAvailability]'s own "never let this go stale across a
+     * reactivation" reasoning.
+     *
+     * Without this, an already-alive instance of this screen (backgrounded rather than
+     * destroyed) never notices a pause/resume written by a path OUTSIDE it — most notably
+     * [se.blick.app.notification.StopRoutineNotificationAction], which pauses the routine for
+     * today directly via [RoutineRepository.pauseForDate] when the ongoing notification's Stop
+     * action is tapped. [toggleEnabled]/[pauseToday]/[resumeToday] already keep this screen's
+     * OWN writes in sync locally; this covers every other writer.
+     *
+     * Deliberately much narrower than [reload]: a mere reactivation is not an edit, so unlike
+     * [reload] this never touches [RoutineDetailsUiState.departures]/[RoutineDetailsUiState.disruptions],
+     * never clears [StaleSnapshotRepository], and never calls [RoutineScheduler] — there is no
+     * new departure identity to reconcile and nothing here should trigger scheduling. A read
+     * failure is silently logged and otherwise ignored, the same best-effort spirit as
+     * [refreshNotificationAvailability]: whatever was already displayed stays displayed rather
+     * than blanking the screen for a transient Room hiccup.
+     */
+    private suspend fun refreshRoutineState() {
+        if (_uiState.value.routine == null) return
+        try {
+            val fresh = routineRepository.getById(routineId) ?: return
+            _uiState.update { it.copy(routine = fresh, isPausedToday = fresh.pausedDate == today()) }
+        } catch (e: CancellationException) {
+            throw e
+        } catch (e: Exception) {
+            Log.w(LOG_TAG, "Failed to refresh routine $routineId's own enabled/paused state on screen reactivation", e)
+        }
+    }
+
+    /**
      * The lifecycle-aware 30-second auto-refresh loop (see the product doc's "Automatic
      * refresh on Routine Details" requirement). Intended to be driven from a
      * `repeatOnLifecycle(STARTED)` block in [RoutineDetailsScreen] — cancelling that block
@@ -279,6 +313,11 @@ class RoutineDetailsViewModel @Inject constructor(
      * [autoRefreshJob]) — a second call while one is already active is a no-op rather than a
      * second concurrent loop, on top of `repeatOnLifecycle`'s own guarantee that only one of
      * its blocks ever runs at a time.
+     *
+     * Also re-checks [notificationAvailability][refreshNotificationAvailability] and the
+     * routine's own [enabled][refreshRoutineState]/paused state on every call, not only
+     * departures/disruptions — see those two methods' own docs for why each needs a
+     * reactivation hook of its own.
      */
     suspend fun runAutoRefresh() {
         if (autoRefreshJob?.isActive == true) return
@@ -286,6 +325,10 @@ class RoutineDetailsViewModel @Inject constructor(
         // re-check notification availability right away so it can never go stale for the
         // screen's whole lifetime (see refreshNotificationAvailability's doc).
         refreshNotificationAvailability()
+        // Same reasoning, for the routine's own enabled/pausedDate -- see refreshRoutineState's
+        // own doc for why this can otherwise go stale on an already-alive instance of this
+        // screen.
+        refreshRoutineState()
         coroutineScope {
             val job = launch {
                 uiState.map { it.routine }.filterNotNull().first()

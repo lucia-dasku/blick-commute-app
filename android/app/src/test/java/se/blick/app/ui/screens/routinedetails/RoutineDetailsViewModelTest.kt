@@ -2009,6 +2009,80 @@ class RoutineDetailsViewModelTest {
         assertEquals(NotificationAvailability.Available, vm.uiState.value.notificationAvailability)
     }
 
+    // ---- The routine's own enabled/paused state refreshes on lifecycle resume, same as
+    // notification availability above -- see RoutineDetailsViewModel.refreshRoutineState's own
+    // doc. Without this, an already-alive instance of this screen never notices a pause written
+    // by StopRoutineNotificationAction (the ongoing notification's Stop action) while the screen
+    // was merely backgrounded, not destroyed.
+
+    @Test
+    fun `a pause written externally while stopped is picked up on resume, without scheduling anything`() =
+        runTest(dispatcher) {
+            val routine = sampleRoutine()
+            val repository = FakeRoutineRepository(routine)
+            val scheduler = FakeRoutineScheduler()
+            val vm = viewModel(routine = routine, routines = repository, scheduler = scheduler)
+            dispatcher.scheduler.advanceUntilIdle()
+            assertFalse(vm.uiState.value.isPausedToday)
+
+            // The screen is "stopped" (no runAutoRefresh loop running) while something OUTSIDE
+            // it pauses the routine -- e.g. StopRoutineNotificationAction.stop(), triggered by
+            // tapping Stop on the ongoing notification.
+            val today = LocalDate.now(clock)
+            repository.pauseForDate(routine.id, today)
+
+            // A lifecycle resume: repeatOnLifecycle(STARTED) calling runAutoRefresh() again.
+            val job = launch { vm.runAutoRefresh() }
+            // runCurrent(), not advanceUntilIdle() -- see `runAutoRefresh's first-ever call...`'s
+            // comment on why advanceUntilIdle() free-runs forever while this loop is active.
+            dispatcher.scheduler.runCurrent()
+
+            assertTrue(vm.uiState.value.isPausedToday)
+            assertEquals(today, vm.uiState.value.routine?.pausedDate)
+            // A mere reactivation is not an edit -- unlike reload(), this must never call the
+            // scheduler (see refreshRoutineState's own doc).
+            assertTrue(scheduler.scheduledRoutines.isEmpty())
+            job.cancel()
+        }
+
+    @Test
+    fun `a resume written externally while stopped is also picked up on resume`() = runTest(dispatcher) {
+        val today = LocalDate.now(clock)
+        val routine = sampleRoutine(pausedDate = today)
+        val repository = FakeRoutineRepository(routine)
+        val vm = viewModel(routine = routine, routines = repository)
+        dispatcher.scheduler.advanceUntilIdle()
+        assertTrue(vm.uiState.value.isPausedToday)
+
+        // Stopped, then something outside this screen resumes the routine.
+        repository.clearPause(routine.id)
+
+        val job = launch { vm.runAutoRefresh() }
+        // runCurrent() -- see `runAutoRefresh's first-ever call...`'s comment.
+        dispatcher.scheduler.runCurrent()
+
+        assertFalse(vm.uiState.value.isPausedToday)
+        assertEquals(null, vm.uiState.value.routine?.pausedDate)
+        job.cancel()
+    }
+
+    @Test
+    fun `an enabled flag changed externally while stopped is also picked up on resume`() = runTest(dispatcher) {
+        val routine = sampleRoutine(enabled = true)
+        val repository = FakeRoutineRepository(routine)
+        val vm = viewModel(routine = routine, routines = repository)
+        dispatcher.scheduler.advanceUntilIdle()
+        assertEquals(true, vm.uiState.value.routine?.enabled)
+
+        repository.setEnabled(routine.id, false)
+
+        val job = launch { vm.runAutoRefresh() }
+        dispatcher.scheduler.runCurrent()
+
+        assertEquals(false, vm.uiState.value.routine?.enabled)
+        job.cancel()
+    }
+
     // ---- Notification-recovery reporting only (RoutineDetailsViewModel is no longer an
     // independent scheduling authority) ----
     //
