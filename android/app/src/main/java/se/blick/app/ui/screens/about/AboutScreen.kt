@@ -35,11 +35,8 @@ import se.blick.app.R
  * attribution): "the attribution should link to Trafiklab.se where practicable." */
 private const val TRAFIKLAB_URL = "https://www.trafiklab.se/"
 
-/** TODO: not yet configured — replace with the real Blick Labs open-source licences webpage
- * URL once it exists, then remove this comment. Deliberately an obviously-fake placeholder
- * (rather than a guessed real-looking domain) so an unreplaced value is easy to spot both by
- * eye and by search. */
-private const val OPEN_SOURCE_LICENSES_URL = "https://TODO-set-blick-labs-open-source-licences-url.example/"
+/** The Blick Labs webpage this screen's "Open-source licences" section links to. */
+private const val OPEN_SOURCE_LICENSES_URL = "https://blick-labs.vercel.app/blick-privacy"
 
 /**
  * The one place [R.string.attribution_text] and the privacy policy are actually shown to the
@@ -47,10 +44,9 @@ private const val OPEN_SOURCE_LICENSES_URL = "https://TODO-set-blick-labs-open-s
  * [se.blick.app.ui.screens.routinelist.RoutineListScreen]'s top app bar. Deliberately simple:
  * a tagline, the app's own version, a "Data and attribution" section (attribution text, a link
  * to Trafiklab.se, and an explicit non-affiliation disclaimer), the full privacy policy, an
- * "Open-source licences" section linking to the Blick Labs website (see
- * [OPEN_SOURCE_LICENSES_URL]'s own doc — that URL is still a placeholder), and finally a
- * centered copyright line as the very last thing on the screen — no settings are hosted here
- * yet, despite the name matching the product doc's "About/Settings screen" wording.
+ * "Open-source licences" section linking to the Blick Labs website ([OPEN_SOURCE_LICENSES_URL]),
+ * and finally a centered copyright line as the very last thing on the screen — no settings are
+ * hosted here yet, despite the name matching the product doc's "About/Settings screen" wording.
  */
 @Composable
 fun AboutScreen(onBack: () -> Unit) {
