@@ -46,11 +46,11 @@ private const val OPEN_SOURCE_LICENSES_URL = "https://TODO-set-blick-labs-open-s
  * user (see docs/api-contract.md §9) — reachable from an info action in
  * [se.blick.app.ui.screens.routinelist.RoutineListScreen]'s top app bar. Deliberately simple:
  * a tagline, the app's own version, a "Data and attribution" section (attribution text, a link
- * to Trafiklab.se, and an explicit non-affiliation disclaimer), the full privacy policy, a
- * centered copyright line, and finally an "Open-source licences" section linking to the Blick
- * Labs website (see [OPEN_SOURCE_LICENSES_URL]'s own doc — that URL is still a placeholder) —
- * no settings are hosted here yet, despite the name matching the product doc's "About/Settings
- * screen" wording.
+ * to Trafiklab.se, and an explicit non-affiliation disclaimer), the full privacy policy, an
+ * "Open-source licences" section linking to the Blick Labs website (see
+ * [OPEN_SOURCE_LICENSES_URL]'s own doc — that URL is still a placeholder), and finally a
+ * centered copyright line as the very last thing on the screen — no settings are hosted here
+ * yet, despite the name matching the product doc's "About/Settings screen" wording.
  */
 @Composable
 fun AboutScreen(onBack: () -> Unit) {
@@ -126,15 +126,6 @@ fun AboutScreen(onBack: () -> Unit) {
             Text(stringResource(R.string.about_privacy_updates), style = MaterialTheme.typography.bodyMedium)
 
             Spacer(Modifier.height(20.dp))
-            Text(
-                stringResource(R.string.about_copyright),
-                style = MaterialTheme.typography.bodySmall,
-                color = MaterialTheme.colorScheme.secondary,
-                textAlign = TextAlign.Center,
-                modifier = Modifier.fillMaxWidth(),
-            )
-
-            Spacer(Modifier.height(20.dp))
             Text(stringResource(R.string.about_section_open_source_licences), style = MaterialTheme.typography.titleMedium)
             Spacer(Modifier.height(8.dp))
             Text(stringResource(R.string.about_open_source_licences_body), style = MaterialTheme.typography.bodyMedium)
@@ -145,6 +136,15 @@ fun AboutScreen(onBack: () -> Unit) {
             ) {
                 Text(stringResource(R.string.about_open_source_licences_action))
             }
+
+            Spacer(Modifier.height(20.dp))
+            Text(
+                stringResource(R.string.about_copyright),
+                style = MaterialTheme.typography.bodySmall,
+                color = MaterialTheme.colorScheme.secondary,
+                textAlign = TextAlign.Center,
+                modifier = Modifier.fillMaxWidth(),
+            )
         }
     }
 }
