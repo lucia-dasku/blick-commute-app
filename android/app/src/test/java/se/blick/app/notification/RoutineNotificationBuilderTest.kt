@@ -19,6 +19,7 @@ import org.robolectric.Shadows.shadowOf
 import org.robolectric.annotation.Config
 import se.blick.app.MainActivity
 import se.blick.app.R
+import se.blick.app.domain.model.DisruptionEffect
 import se.blick.app.ui.screens.routinedetails.formatDepartureTime
 import java.time.Instant
 import java.util.Locale
@@ -53,7 +54,21 @@ class RoutineNotificationBuilderTest {
         content: RoutineNotificationContent = RoutineNotificationContent.Live(listOf(sampleRow())),
         disruptionHeadline: String? = null,
         disruptionDetails: String? = null,
-    ) = RoutineNotificationModel(routineId, stationName, lineLabel, directionLabel, content, disruptionHeadline, disruptionDetails)
+        // Real callers (RoutineNotificationMapper) only ever set headline and effect together --
+        // Disruption.effect defaults to DISRUPTION upstream, never null. Defaulting effect off of
+        // headline here keeps that same pairing for every existing call site below that only
+        // passes disruptionHeadline, without having to touch each one individually.
+        disruptionEffect: DisruptionEffect? = if (disruptionHeadline != null) DisruptionEffect.DISRUPTION else null,
+    ) = RoutineNotificationModel(
+        routineId,
+        stationName,
+        lineLabel,
+        directionLabel,
+        content,
+        disruptionHeadline,
+        disruptionDetails,
+        disruptionEffect,
+    )
 
     private fun sampleRow(
         lineDesignation: String = "14",
@@ -422,15 +437,58 @@ class RoutineNotificationBuilderTest {
         )
     }
 
-    // ---- Disruption content: never the real text anywhere, only a fixed indicator ----
+    @Test
+    fun `no explicit Blick choice, ordered system locale list Lithuanian-then-Swedish, resolves a Swedish classified disruption summary line`() {
+        val multiLocaleContext = context.createConfigurationContext(
+            android.content.res.Configuration(context.resources.configuration).apply {
+                setLocales(android.os.LocaleList(Locale.forLanguageTag("lt"), Locale.forLanguageTag("sv")))
+            },
+        )
+        val multiLocaleBuilder = RoutineNotificationBuilder(multiLocaleContext)
+
+        val notification = multiLocaleBuilder.build(
+            model(disruptionHeadline = "Försenat", disruptionEffect = DisruptionEffect.DELAYS),
+        )
+
+        assertEquals(
+            "⚠️ Förseningar · Tryck för detaljer",
+            notification.extras.getCharSequence(Notification.EXTRA_TEXT).toString().split("\n").last(),
+        )
+    }
+
+    // ---- Disruption content: never the real text anywhere, only a classified summary line ----
     //
     // See RoutineNotificationBuilder's own class doc: verified directly on a real Android 16
     // device that a promoted-ongoing notification's row has no expand_button at all, so
     // whatever BigTextStyle contains is unconditionally shown -- there is no reliable
     // collapsed state to hide a disruption's real header/details behind. Both the collapsed
-    // contentText AND the "expanded" bigText therefore only ever carry the fixed
-    // "Disruption available" indicator; the real message is read by tapping into Routine
-    // Details instead. shortCriticalText and the Stop action are still never touched by it.
+    // contentText AND the "expanded" bigText therefore only ever carry a short classified
+    // summary line (e.g. "⚠️ Delays · Tap for details", derived from the model's own
+    // disruptionEffect -- see backend/src/normalize/classifyDisruptionEffect.ts for how that
+    // effect is derived); the real message is read by tapping into Routine Details instead.
+    // shortCriticalText and the Stop action are still never touched by it.
+
+    /** Mirrors RoutineNotificationBuilder's own private disruptionEffectLabel() mapping, so
+     * tests can assert on the exact rendered line without duplicating string-resource lookups
+     * inline. The "each classified effect renders its own exact summary line in English" test
+     * below additionally pins every effect to a hardcoded literal, so a mistake shared between
+     * this mapping and the production one would still be caught. */
+    private fun disruptionText(effect: DisruptionEffect): String {
+        val label = context.getString(
+            when (effect) {
+                DisruptionEffect.DELAYS -> R.string.notification_disruption_effect_delays
+                DisruptionEffect.NO_SERVICE -> R.string.notification_disruption_effect_no_service
+                DisruptionEffect.REDUCED_SERVICE -> R.string.notification_disruption_effect_reduced_service
+                DisruptionEffect.ROUTE_CHANGE -> R.string.notification_disruption_effect_route_change
+                DisruptionEffect.STOP_CHANGE -> R.string.notification_disruption_effect_stop_change
+                DisruptionEffect.REPLACEMENT_SERVICE -> R.string.notification_disruption_effect_replacement_service
+                DisruptionEffect.STATION_ACCESS -> R.string.notification_disruption_effect_station_access
+                DisruptionEffect.ACCESSIBILITY_ISSUE -> R.string.notification_disruption_effect_accessibility_issue
+                DisruptionEffect.DISRUPTION -> R.string.notification_disruption_effect_disruption
+            },
+        )
+        return context.getString(R.string.notification_disruption_format, label)
+    }
 
     @Test
     fun `no disruption adds no expanded-view line beyond Live's own departure rows`() {
@@ -439,35 +497,60 @@ class RoutineNotificationBuilderTest {
     }
 
     @Test
-    fun `a disruption adds only the fixed indicator after Live's departure rows, never the real headline or details`() {
+    fun `each classified effect renders its own exact summary line in English`() {
+        val cases = mapOf(
+            DisruptionEffect.DELAYS to "⚠️ Delays · Tap for details",
+            DisruptionEffect.NO_SERVICE to "⚠️ No service · Tap for details",
+            DisruptionEffect.REDUCED_SERVICE to "⚠️ Reduced service · Tap for details",
+            DisruptionEffect.ROUTE_CHANGE to "⚠️ Route change · Tap for details",
+            DisruptionEffect.STOP_CHANGE to "⚠️ Stop change · Tap for details",
+            DisruptionEffect.REPLACEMENT_SERVICE to "⚠️ Replacement service · Tap for details",
+            DisruptionEffect.STATION_ACCESS to "⚠️ Station access · Tap for details",
+            DisruptionEffect.ACCESSIBILITY_ISSUE to "⚠️ Accessibility issue · Tap for details",
+            DisruptionEffect.DISRUPTION to "⚠️ Disruption · Tap for details",
+        )
+        cases.forEach { (effect, expected) ->
+            val notification = builder.build(model(disruptionHeadline = "SL message", disruptionEffect = effect))
+            assertEquals("expected $effect to render as: $expected", expected, bigTextLines(notification).last())
+        }
+    }
+
+    @Test
+    fun `a disruption adds only its classified summary line after Live's departure rows, never the real headline or details`() {
         val notification = builder.build(
             model(
                 content = RoutineNotificationContent.Live(listOf(sampleRow())),
                 disruptionHeadline = "Delays on line 14",
                 disruptionDetails = "Expect longer travel times.",
+                disruptionEffect = DisruptionEffect.DELAYS,
             ),
         )
         val lines = bigTextLines(notification)
-        assertEquals(listOf(context.getString(R.string.notification_disruption_available)), lines.drop(1))
+        assertEquals(listOf(disruptionText(DisruptionEffect.DELAYS)), lines.drop(1))
     }
 
     @Test
-    fun `a disruption adds the fixed indicator after Stale's departure and last-checked lines`() {
+    fun `a disruption adds its classified summary line after Stale's departure and last-checked lines`() {
         val notification = builder.build(
             model(
                 content = RoutineNotificationContent.Stale(listOf(sampleRow()), now),
                 disruptionHeadline = "Delays on line 14",
+                disruptionEffect = DisruptionEffect.DELAYS,
             ),
         )
-        assertEquals(context.getString(R.string.notification_disruption_available), bigTextLines(notification).last())
+        assertEquals(disruptionText(DisruptionEffect.DELAYS), bigTextLines(notification).last())
     }
 
     @Test
-    fun `a disruption adds the fixed indicator after NoUpcomingDepartures' last-checked line`() {
+    fun `a disruption adds its classified summary line after NoUpcomingDepartures' last-checked line`() {
         val notification = builder.build(
-            model(content = RoutineNotificationContent.NoUpcomingDepartures(now), disruptionHeadline = "Delays on line 14"),
+            model(
+                content = RoutineNotificationContent.NoUpcomingDepartures(now),
+                disruptionHeadline = "Delays on line 14",
+                disruptionEffect = DisruptionEffect.DELAYS,
+            ),
         )
-        assertEquals(context.getString(R.string.notification_disruption_available), bigTextLines(notification).last())
+        assertEquals(disruptionText(DisruptionEffect.DELAYS), bigTextLines(notification).last())
     }
 
     @Test
@@ -477,35 +560,50 @@ class RoutineNotificationBuilderTest {
     }
 
     @Test
-    fun `a disruption gives Offline an expanded view with its offline message plus the fixed indicator, never the real message`() {
+    fun `a disruption gives Offline an expanded view with its offline message plus its classified summary line, never the real message`() {
         val notification = builder.build(
-            model(content = RoutineNotificationContent.Offline, disruptionHeadline = "Delays on line 14", disruptionDetails = "Details"),
+            model(
+                content = RoutineNotificationContent.Offline,
+                disruptionHeadline = "Delays on line 14",
+                disruptionDetails = "Details",
+                disruptionEffect = DisruptionEffect.DELAYS,
+            ),
         )
         assertEquals(
-            listOf(context.getString(R.string.notification_offline), context.getString(R.string.notification_disruption_available)),
+            listOf(context.getString(R.string.notification_offline), disruptionText(DisruptionEffect.DELAYS)),
             bigTextLines(notification),
         )
     }
 
     @Test
-    fun `a disruption gives Unavailable an expanded view with its unavailable message plus the fixed indicator, never the real message`() {
+    fun `a disruption gives Unavailable an expanded view with its unavailable message plus its classified summary line, never the real message`() {
         val notification = builder.build(
-            model(content = RoutineNotificationContent.Unavailable, disruptionHeadline = "Delays on line 14"),
+            model(
+                content = RoutineNotificationContent.Unavailable,
+                disruptionHeadline = "Delays on line 14",
+                disruptionEffect = DisruptionEffect.DELAYS,
+            ),
         )
         assertEquals(
-            listOf(context.getString(R.string.notification_unavailable), context.getString(R.string.notification_disruption_available)),
+            listOf(context.getString(R.string.notification_unavailable), disruptionText(DisruptionEffect.DELAYS)),
             bigTextLines(notification),
         )
     }
 
     @Test
-    fun `a disruption appends a fixed disruption-available indicator line to the collapsed contentText`() {
+    fun `a disruption appends its classified summary line to the collapsed contentText`() {
         val withoutDisruption = builder.build(model(content = RoutineNotificationContent.Live(listOf(sampleRow()))))
         val withDisruption = builder.build(
-            model(content = RoutineNotificationContent.Live(listOf(sampleRow())), disruptionHeadline = "Delays on line 14"),
+            model(
+                content = RoutineNotificationContent.Live(listOf(sampleRow())),
+                disruptionHeadline = "Delays on line 14",
+                disruptionEffect = DisruptionEffect.DELAYS,
+            ),
         )
-        val indicator = context.getString(R.string.notification_disruption_available)
-        assertEquals(contentText(withoutDisruption) + "\n" + indicator, contentText(withDisruption))
+        assertEquals(
+            contentText(withoutDisruption) + "\n" + disruptionText(DisruptionEffect.DELAYS),
+            contentText(withDisruption),
+        )
     }
 
     @Test
@@ -525,17 +623,21 @@ class RoutineNotificationBuilderTest {
     }
 
     @Test
-    fun `the collapsed contentText keeps the departure information ahead of the disruption indicator`() {
+    fun `the collapsed contentText keeps the departure information ahead of the disruption's classified summary line`() {
         val notification = builder.build(
-            model(content = RoutineNotificationContent.Live(listOf(sampleRow())), disruptionHeadline = "Delays on line 14"),
+            model(
+                content = RoutineNotificationContent.Live(listOf(sampleRow())),
+                disruptionHeadline = "Delays on line 14",
+                disruptionEffect = DisruptionEffect.DELAYS,
+            ),
         )
         val text = contentText(notification)
-        val indicator = context.getString(R.string.notification_disruption_available)
+        val indicator = disruptionText(DisruptionEffect.DELAYS)
         assertTrue("expected departure row to precede the indicator in: $text", text.indexOf(indicator) > 0)
     }
 
     @Test
-    fun `states with no disruption never show the disruption indicator, in every state`() {
+    fun `states with no disruption never show a disruption summary line, in every state`() {
         val states = listOf(
             RoutineNotificationContent.Offline,
             RoutineNotificationContent.Unavailable,
@@ -544,15 +646,17 @@ class RoutineNotificationBuilderTest {
             RoutineNotificationContent.Stale(listOf(sampleRow()), now),
             RoutineNotificationContent.Live(listOf(sampleRow())),
         )
-        val indicator = context.getString(R.string.notification_disruption_available)
         states.forEach { content ->
             val notification = builder.build(model(content = content))
-            assertFalse("expected no indicator for $content", contentText(notification).contains(indicator))
+            // "Tap for details" is the static suffix shared by every one of the 9 rendered
+            // summary lines (see notification_disruption_format) -- a single substring check
+            // catches all of them without listing each DisruptionEffect by hand.
+            assertFalse("expected no summary line for $content", contentText(notification).contains("Tap for details"))
         }
     }
 
     @Test
-    fun `a disruption adds the disruption indicator to the collapsed text in every state`() {
+    fun `a disruption adds its classified summary line to the collapsed text in every state`() {
         val states = listOf(
             RoutineNotificationContent.Offline,
             RoutineNotificationContent.Unavailable,
@@ -561,10 +665,12 @@ class RoutineNotificationBuilderTest {
             RoutineNotificationContent.Stale(listOf(sampleRow()), now),
             RoutineNotificationContent.Live(listOf(sampleRow())),
         )
-        val indicator = context.getString(R.string.notification_disruption_available)
+        val indicator = disruptionText(DisruptionEffect.DELAYS)
         states.forEach { content ->
-            val notification = builder.build(model(content = content, disruptionHeadline = "Delays on line 14"))
-            assertTrue("expected the indicator for $content", contentText(notification).contains(indicator))
+            val notification = builder.build(
+                model(content = content, disruptionHeadline = "Delays on line 14", disruptionEffect = DisruptionEffect.DELAYS),
+            )
+            assertTrue("expected the summary line for $content", contentText(notification).contains(indicator))
         }
     }
 

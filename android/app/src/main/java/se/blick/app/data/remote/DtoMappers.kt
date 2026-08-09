@@ -11,6 +11,7 @@ import se.blick.app.domain.model.Disruption
 import se.blick.app.domain.model.DisruptionAffectedLine
 import se.blick.app.domain.model.DisruptionMessage
 import se.blick.app.domain.model.DisruptionPriority
+import se.blick.app.domain.model.toDisruptionEffect
 import se.blick.app.domain.model.Journey
 import se.blick.app.domain.model.LineRef
 import se.blick.app.domain.model.Site
@@ -78,6 +79,7 @@ fun DisruptionDto.toDomain(): Disruption = Disruption(
         DisruptionAffectedLine(it.id, it.designation, it.transportMode.toTransportMode(), it.name)
     },
     affectedModes = affectedModes.map { it.toTransportMode() },
+    effect = effect.toDisruptionEffect(),
 )
 
 fun DisruptionsResponseDto.toDomain(): List<Disruption> = disruptions.map { it.toDomain() }

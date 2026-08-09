@@ -58,6 +58,18 @@ describe("contract: disruptions", () => {
     }
   });
 
+  it("classifies every fixture entry's effect deterministically, matching what its own message text implies", () => {
+    // The exact classification rules are covered in depth by classifyDisruptionEffect.test.ts;
+    // this only pins the contract-level fact that `effect` is always one of the documented
+    // fixture outcomes, never left unset (DisruptionSchema.parse above already enforces it's a
+    // valid DisruptionEffect at all -- this additionally pins the two real fixture entries to
+    // their specific, previously-verified values so a future classifier change that silently
+    // reclassifies them is caught here too, not only in the classifier's own test file).
+    const [stationAccess, delays] = (deviationsFixture as unknown as RawDeviation[]).map(normalizeDisruption);
+    expect(stationAccess!.effect).toBe("STATION_ACCESS");
+    expect(delays!.effect).toBe("DELAYS");
+  });
+
   it("uses the same site/line id namespace as the departures fixture (verified live, see docs/api-contract.md)", () => {
     const [first] = deviationsFixture as unknown as RawDeviation[];
     const departuresRaw = departuresFixture as unknown as RawDeparturesResponse;

@@ -10,6 +10,7 @@ import androidx.core.app.NotificationCompat
 import dagger.hilt.android.qualifiers.ApplicationContext
 import se.blick.app.MainActivity
 import se.blick.app.R
+import se.blick.app.domain.model.DisruptionEffect
 import se.blick.app.locale.withAppLocale
 import se.blick.app.ui.screens.routinedetails.formatDepartureTime
 import javax.inject.Inject
@@ -53,10 +54,13 @@ import javax.inject.Singleton
  * row has no `expand_button` at all (ordinary notifications in the same shade do), so
  * whatever [bigTextStyle] contains is unconditionally shown, with no collapsed state to expand
  * from. Because of that, a disruption's own real header/details are never placed in
- * [bigTextStyle] at all — only the fixed indicator string, identically in both the collapsed
- * body and the "expanded" one — so the real message can never be shown at a glance regardless
- * of whether this specific notification instance ends up promoted or not. The real message is
- * only ever read by tapping the notification into Routine Details' own Disruptions section.
+ * [bigTextStyle] at all — only a short classified summary line (e.g. "⚠️ Delays · Tap for
+ * details", from [disruptionEffectLabel]/[R.string.notification_disruption_format] — see
+ * `backend/src/normalize/classifyDisruptionEffect.ts` for how the effect itself is derived),
+ * identically in both the collapsed body and the "expanded" one — so the real message can never
+ * be shown at a glance regardless of whether this specific notification instance ends up
+ * promoted or not. The real message is only ever read by tapping the notification into Routine
+ * Details' own Disruptions section.
  *
  * Also always adds a Stop action (the spec's "Stop/Unpin" control) — a plain
  * [NotificationCompat.Action], not a custom view, so it stays valid on the promoted surface too
@@ -121,7 +125,9 @@ class RoutineNotificationBuilder @Inject constructor(
         // fully visible, so there is no "expand to reveal" gate to hide the real message behind.
         // The real message is only ever shown by tapping into Routine Details' own Disruptions
         // section, which is exactly what "Tap for details" refers to.
-        val disruptionIndicator = if (hasDisruption) listOf(localizedContext.getString(R.string.notification_disruption_available)) else emptyList()
+        val disruptionIndicator = model.disruptionEffect?.let {
+            listOf(localizedContext.getString(R.string.notification_disruption_format, disruptionEffectLabel(it)))
+        } ?: emptyList()
 
         when (val content = model.content) {
             is RoutineNotificationContent.Live -> {
@@ -164,6 +170,25 @@ class RoutineNotificationBuilder @Inject constructor(
             }
         }
     }
+
+    /** Maps a classified [DisruptionEffect] to its localized label — fills
+     * [R.string.notification_disruption_format]'s `%1$s` (e.g. "Delays"), never the
+     * disruption's own real header/details (see this class's own doc on why). Exhaustive `when`
+     * with no `else`: adding a tenth [DisruptionEffect] value without extending this function is
+     * a compile error here, not a silent runtime omission. */
+    private fun disruptionEffectLabel(effect: DisruptionEffect): String = localizedContext.getString(
+        when (effect) {
+            DisruptionEffect.DELAYS -> R.string.notification_disruption_effect_delays
+            DisruptionEffect.NO_SERVICE -> R.string.notification_disruption_effect_no_service
+            DisruptionEffect.REDUCED_SERVICE -> R.string.notification_disruption_effect_reduced_service
+            DisruptionEffect.ROUTE_CHANGE -> R.string.notification_disruption_effect_route_change
+            DisruptionEffect.STOP_CHANGE -> R.string.notification_disruption_effect_stop_change
+            DisruptionEffect.REPLACEMENT_SERVICE -> R.string.notification_disruption_effect_replacement_service
+            DisruptionEffect.STATION_ACCESS -> R.string.notification_disruption_effect_station_access
+            DisruptionEffect.ACCESSIBILITY_ISSUE -> R.string.notification_disruption_effect_accessibility_issue
+            DisruptionEffect.DISRUPTION -> R.string.notification_disruption_effect_disruption
+        },
+    )
 
     /** Up to two lines: the soonest departure's own countdown+status (or "Cancelled"), then
      * the following departure's own countdown (or "Cancelled") -- omitted entirely when there

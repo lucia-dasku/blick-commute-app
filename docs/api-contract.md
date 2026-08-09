@@ -215,6 +215,7 @@ share exactly one upstream call and therefore one `fetchedAt` (see §7 and
 | `createdAt` / `modifiedAt` | `created` / `modified` | already ISO 8601 with an explicit offset upstream — passed through unchanged |
 | `validFrom` / `validUntil` | `publish.from` / `publish.upto` | |
 | `priority` | `priority.{importance,influence,urgency}_level` | upstream documents these as sort hints only; no invented `severity` field exists |
+| `effect` | *(derived)* | Blick's own deterministic classification of `message`, e.g. `"DELAYS"` — see "Disruption effect classification" below. Never an upstream field. |
 | `message` | selected from `message_variants[]` | see §3.3 for selection logic; shape is `{header, details, scopeAlias, webLink, language}`, never the raw ambiguous upstream object |
 | `affectedStopAreas[].id/name/type` | `scope.stop_areas[]` | same namespace as SL Transport `stop_area.id` |
 | `affectedLines[].id/designation/transportMode/name` | `scope.lines[]` | same namespace as SL Transport `line.id` |
@@ -277,6 +278,53 @@ Request-side validation and response-side compatibility are intentionally not th
 schema, and must not be unified into one: doing so would either reject legitimate future
 upstream data (if the strict enum were reused for responses) or accept nonsense request
 filters (if the permissive schema were reused for requests).
+
+#### Disruption effect classification
+
+`disruptions[].effect` is Blick's own closed, deterministic classification of `message` into
+one of nine passenger-facing effects — never an SL-provided field, and never an ML/AI
+classification, cause classification, or confidence score. It exists specifically so the
+Android ongoing-commute notification can show a short, useful summary (e.g. "⚠️ Delays · Tap
+for details") instead of a generic "a disruption exists" indicator, without ever placing SL's
+own header/details text into that notification (see the Android client's own notes on this).
+
+```
+DELAYS | NO_SERVICE | REDUCED_SERVICE | ROUTE_CHANGE | STOP_CHANGE
+REPLACEMENT_SERVICE | STATION_ACCESS | ACCESSIBILITY_ISSUE | DISRUPTION
+```
+
+`DISRUPTION` is the conservative fallback — used whenever nothing more specific is confidently
+recognized, and always for a non-Swedish selected `message` (§3.3): a generic label is
+preferable to a confidently wrong one, and this classifier only implements hand-tuned Swedish
+rules for v1 (`src/normalize/classifyDisruptionEffect.ts`).
+
+Classification is a pure, synchronous, local rule match against the already-selected
+`message` — no network call, no database, no AI, negligible cost next to the SL request itself
+— and follows two fixed rules, both deliberately encoded as data (a single precedence-ordered
+rule list), not ad hoc regex ordering:
+
+1. **Header first, details only as a fallback.** SL's `header` normally states the passenger
+   effect directly, while `details` often only adds a cause or secondary information. Example
+   already committed in `fixtures/slDeviationsSlussen.sample.json`: header `"L401 försenat
+   avgång med 5 minuter"` classifies as `DELAYS` on the header alone; its `details` separately
+   mentions a bridge opening (the *cause*), which must never steal the classification away from
+   the header's own wording. Only when the header matches nothing specific are `details`
+   classified the same way — header and details are never concatenated into one search.
+2. **Fixed precedence when a text could match more than one effect:** `NO_SERVICE` →
+   `REPLACEMENT_SERVICE` → `REDUCED_SERVICE` → `ROUTE_CHANGE` → `STOP_CHANGE` →
+   `ACCESSIBILITY_ISSUE` → `STATION_ACCESS` → `DELAYS`. Example: `"Ingen trafik mellan X och Y.
+   Ersättningsbussar kör."` classifies as `NO_SERVICE`, not `REPLACEMENT_SERVICE` — the primary
+   passenger impact is that normal service isn't running at all.
+
+Individual rules are intentionally conservative and context-sensitive rather than broad
+substring checks — notably, bare `"inställd"` (cancelled) is never on its own enough for
+`NO_SERVICE` (`"En avgång är inställd"`, one cancelled departure, must not become "no
+service"), and accessibility wording requires an actual stated problem alongside `"hiss"`/
+`"rulltrappa"`, not just the word's existence. See `classifyDisruptionEffect.ts`'s own rule
+table and doc comments for the exact wording each rule matches, and
+`tests/classifyDisruptionEffect.test.ts` for the full behavioral contract (all nine outcomes,
+precedence, header-vs-details, casing/whitespace/newline normalization, and both real fixture
+disruptions).
 
 ### Removed: `/api/v1/lines`
 

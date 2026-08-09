@@ -31,6 +31,11 @@ data class Disruption(
     val affectedStopAreas: List<SiteDeviationStopAreaRef>,
     val affectedLines: List<DisruptionAffectedLine>,
     val affectedModes: List<TransportMode>,
+    /** Trailing, defaulted (not inserted earlier in the constructor) so existing positional/named
+     * call sites across the test suite keep compiling unchanged — same convention as
+     * [se.blick.app.notification.RoutineNotificationModel]'s own trailing disruption fields. See
+     * [DisruptionEffect]'s own doc for why [DisruptionEffect.DISRUPTION] is always a safe default. */
+    val effect: DisruptionEffect = DisruptionEffect.DISRUPTION,
 )
 
 /**

@@ -1,6 +1,7 @@
 import type { RawDeviation, RawMessageVariant } from "../services/upstreamTypes.js";
 import type { Disruption, DisruptionMessage } from "../models/disruption.js";
 import { asTransportMode } from "./transportMode.js";
+import { classifyDisruptionEffect } from "./classifyDisruptionEffect.js";
 
 /**
  * Selects the Swedish-language message variant. Falls back to the first available
@@ -46,6 +47,7 @@ export function normalizeDisruption(raw: RawDeviation): Disruption {
       influence: raw.priority.influence_level,
       urgency: raw.priority.urgency_level,
     },
+    effect: classifyDisruptionEffect(message),
     message,
     affectedStopAreas: (raw.scope.stop_areas ?? []).map((a) => ({ id: a.id, name: a.name, type: a.type ?? null })),
     affectedLines,

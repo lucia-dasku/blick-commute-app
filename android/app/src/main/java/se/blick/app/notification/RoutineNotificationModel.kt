@@ -1,5 +1,6 @@
 package se.blick.app.notification
 
+import se.blick.app.domain.model.DisruptionEffect
 import java.time.Instant
 
 /**
@@ -40,6 +41,16 @@ data class RoutineNotificationModel(
      * in this model, available to any future consumer that needs it. Never populated without
      * [disruptionHeadline] also being set. */
     val disruptionDetails: String? = null,
+    /** The same disruption's classified [DisruptionEffect] — this IS rendered by
+     * [RoutineNotificationBuilder], as the short "⚠️ Delays · Tap for details"-style summary
+     * line, replacing the old one-size-fits-all "Disruption available" indicator. Null exactly
+     * when [disruptionHeadline] is null (no relevant disruption at all); whenever a disruption
+     * does exist, [se.blick.app.domain.model.Disruption.effect] is never itself missing — an
+     * unclassifiable or not-yet-understood backend value already resolved to
+     * [DisruptionEffect.DISRUPTION] upstream of this model (see
+     * [se.blick.app.domain.model.toDisruptionEffect]), so this field never needs its own
+     * separate "unavailable" fallback here. */
+    val disruptionEffect: DisruptionEffect? = null,
 )
 
 /**

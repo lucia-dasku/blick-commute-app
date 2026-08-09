@@ -152,7 +152,16 @@
     <string name="notification_unavailable">Kunde inte läsa in avgångar just nu. Försöker igen snart.</string>
     <string name="notification_no_departures">Inga kommande avgångar just nu.</string>
     <string name="notification_stale_warning">Kunde inte uppdatera — visar de senaste avgångarna vi kunde läsa in.</string>
-    <string name="notification_disruption_available">⚠️ Trafikstörning · Tryck för detaljer</string>
+    <string name="notification_disruption_format">⚠️ %1$s · Tryck för detaljer</string>
+    <string name="notification_disruption_effect_delays">Förseningar</string>
+    <string name="notification_disruption_effect_no_service">Ingen trafik</string>
+    <string name="notification_disruption_effect_reduced_service">Reducerad trafik</string>
+    <string name="notification_disruption_effect_route_change">Ändrad färdväg</string>
+    <string name="notification_disruption_effect_stop_change">Hållplatsändring</string>
+    <string name="notification_disruption_effect_replacement_service">Ersättningstrafik</string>
+    <string name="notification_disruption_effect_station_access">Ändrad stationsåtkomst</string>
+    <string name="notification_disruption_effect_accessibility_issue">Tillgänglighetsproblem</string>
+    <string name="notification_disruption_effect_disruption">Trafikstörning</string>
     <string name="notification_action_stop">Stoppa</string>
 
     <string name="debug_notification_section_heading">Felsökning: aviseringstest</string>

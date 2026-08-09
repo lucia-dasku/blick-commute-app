@@ -211,10 +211,26 @@
     <!-- The only hint the notification itself ever gives that a disruption exists — its own
          real header/details are never rendered here at all, in either the collapsed or the
          "expanded" body; see RoutineNotificationBuilder's own doc on why (promoted-ongoing
-         notifications have no reliable collapse state to hide the real text behind). "Tap for
-         details" means what it says: tapping opens Routine Details, which shows the real
-         message in full. -->
-    <string name="notification_disruption_available">⚠️ Disruption available · Tap for details</string>
+         notifications have no reliable collapse state to hide the real text behind). %1$s is
+         one of the notification_disruption_effect_* labels below, chosen by
+         classifyDisruptionEffect on the backend (see docs/api-contract.md, "Disruption effect
+         classification") — e.g. "⚠️ Delays · Tap for details". "Tap for details" means what it
+         says: tapping opens Routine Details, which shows the real message in full. -->
+    <string name="notification_disruption_format">⚠️ %1$s · Tap for details</string>
+    <!-- One label per backend DisruptionEffect value (see
+         se.blick.app.domain.model.DisruptionEffect) — notification_disruption_effect_disruption
+         is also the safe fallback label for a disruption whose effect could not be classified or
+         is unrecognized by this build (see DisruptionEffect.DISRUPTION's own doc), not only for
+         the backend's own literal "DISRUPTION" value. -->
+    <string name="notification_disruption_effect_delays">Delays</string>
+    <string name="notification_disruption_effect_no_service">No service</string>
+    <string name="notification_disruption_effect_reduced_service">Reduced service</string>
+    <string name="notification_disruption_effect_route_change">Route change</string>
+    <string name="notification_disruption_effect_stop_change">Stop change</string>
+    <string name="notification_disruption_effect_replacement_service">Replacement service</string>
+    <string name="notification_disruption_effect_station_access">Station access</string>
+    <string name="notification_disruption_effect_accessibility_issue">Accessibility issue</string>
+    <string name="notification_disruption_effect_disruption">Disruption</string>
     <!-- The ongoing/promoted notification's Stop action (see RoutineNotificationBuilder,
          StopRoutineNotificationReceiver) — stops today's active window early, same effect
          as "pause for today" on the routine details screen. -->
