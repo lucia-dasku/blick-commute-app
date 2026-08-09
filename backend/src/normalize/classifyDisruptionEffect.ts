@@ -70,20 +70,15 @@ function splitIntoParagraphs(rawText: string): string[] {
  * these alone.
  *
  * [CONDITIONALLY_PROTECTED_ABBREVIATIONS] are list/aside markers ("...biljetter, kort osv.",
- * "...skyltar m.fl.") that commonly *do* end a sentence on their own, with a genuinely new,
- * unrelated sentence following. Blanket-protecting these would reintroduce the exact
- * cross-sentence merge this file's scope-aware matching exists to prevent — see "abbreviations
- * that can legitimately end a sentence" in this file's test suite for the real case pattern
- * ("...osv. Trafiken är avstängd.") this distinction exists for. These are only protected when
- * NOT followed by whitespace and an uppercase letter — that specific pattern is the one reliable
- * signal that this particular occurrence is genuinely ending its sentence rather than continuing
- * within one. (This is a narrow, per-abbreviation check, not the same thing as this file's
- * earlier, since-removed general uppercase-only sentence-boundary heuristic — see
- * "a sentence boundary is found even when the next sentence does not start with an uppercase
- * letter" for why that broader version was wrong.)
+ * "...skyltar m.fl.", "...cyklar m.m.") that commonly *do* end a sentence on their own, with a
+ * genuinely new, unrelated sentence following. Blanket-protecting these would reintroduce the
+ * exact cross-sentence merge this file's scope-aware matching exists to prevent — see
+ * "abbreviations that can legitimately end a sentence" in this file's test suite for the real
+ * case pattern ("...osv. Trafiken är avstängd.") this distinction exists for. See
+ * [continuesSameSentence] for exactly what "conditionally" means here.
  */
-const ALWAYS_PROTECTED_ABBREVIATIONS = ["fr.o.m.", "t.o.m.", "p.g.a.", "kl.", "ca.", "s.k.", "m.m."];
-const CONDITIONALLY_PROTECTED_ABBREVIATIONS = ["bl.a.", "t.ex.", "m.fl.", "osv.", "dvs."];
+const ALWAYS_PROTECTED_ABBREVIATIONS = ["fr.o.m.", "t.o.m.", "p.g.a.", "kl.", "ca.", "s.k."];
+const CONDITIONALLY_PROTECTED_ABBREVIATIONS = ["bl.a.", "t.ex.", "m.fl.", "m.m.", "osv.", "dvs."];
 
 /** Domain-like tokens ("sl.se") protected the same way as [ALWAYS_PROTECTED_ABBREVIATIONS],
  * generically by pattern rather than by listing every possible domain: real SL text has no space
@@ -97,14 +92,40 @@ const DOMAIN_LIKE_PATTERN = /\b[a-zåäö0-9-]+\.(se|com|nu|org|info|net)\b/gi;
  * is actually stored or matched, unlike a control character would risk. */
 const PERIOD_SENTINEL = "PERIODSENTINEL";
 
+/**
+ * True if [following] — the text immediately after one of [CONDITIONALLY_PROTECTED_ABBREVIATIONS]
+ * — clearly continues the same sentence: whitespace, then a *lowercase* Swedish letter. Anything
+ * else (a digit, an opening quote or parenthesis, a bullet, an uppercase letter, or nothing at
+ * all) is treated as the abbreviation genuinely ending its sentence — splitting there and letting
+ * the classifier's own conservative DISRUPTION fallback take over is safer than guessing that an
+ * ambiguous continuation is safe to protect.
+ *
+ * Deliberately checked with its own case-SENSITIVE regex, entirely separate from the
+ * case-insensitive regex used to find the abbreviation's spelling itself ("Osv."/"OSV." must
+ * still match the abbreviation the same as "osv."). An earlier version combined both checks into
+ * one regex sharing a single `i` flag — which does not only make the abbreviation spelling
+ * case-insensitive, it *also* makes the `[A-ZÅÄÖ]` half of the lookahead match lowercase letters
+ * too, silently turning "not followed by an uppercase letter" into "not followed by any letter at
+ * all" (true only when nothing at all follows). That bug meant every conditional abbreviation was
+ * effectively always treated as sentence-ending, including genuine same-sentence, lowercase
+ * continuations — see "a lowercase same-sentence continuation stays joined" in this file's test
+ * suite for the exact case this silently broke.
+ */
+function continuesSameSentence(following: string): boolean {
+  return /^\s+[a-zåäö]/.test(following);
+}
+
 function protectSpecialPeriods(text: string): string {
   let result = text;
   for (const abbreviation of ALWAYS_PROTECTED_ABBREVIATIONS) {
     result = result.replace(new RegExp(escapeRegExp(abbreviation), "gi"), (match) => match.split(".").join(PERIOD_SENTINEL));
   }
   for (const abbreviation of CONDITIONALLY_PROTECTED_ABBREVIATIONS) {
-    const pattern = new RegExp(`${escapeRegExp(abbreviation)}(?!\\s+[A-ZÅÄÖ])`, "gi");
-    result = result.replace(pattern, (match) => match.split(".").join(PERIOD_SENTINEL));
+    const pattern = new RegExp(escapeRegExp(abbreviation), "gi");
+    result = result.replace(pattern, (match, offset: number, whole: string) => {
+      const following = whole.slice(offset + match.length);
+      return continuesSameSentence(following) ? match.split(".").join(PERIOD_SENTINEL) : match;
+    });
   }
   return result.replace(DOMAIN_LIKE_PATTERN, (match) => match.split(".").join(PERIOD_SENTINEL));
 }

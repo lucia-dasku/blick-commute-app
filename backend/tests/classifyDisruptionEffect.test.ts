@@ -313,6 +313,39 @@ describe("classifyEffectFromText: abbreviations that can legitimately end a sent
   it('"m.fl." followed by a new sentence still splits (does not merge into STOP_CHANGE)', () => {
     expect(classifyEffectFromText("Hållplatsen trafikeras normalt, skyltar m.fl. Informationsskylten är flyttad.")).toBeNull();
   });
+
+  it('"osv." followed by a digit still splits, not merges (the ambiguous case defaults to splitting, not to protecting)', () => {
+    expect(classifyEffectFromText("Entrén är öppen, biljetter osv. 3 augusti stängs biljetthallen.")).toBeNull();
+  });
+
+  it('"osv." followed by an opening quote still splits', () => {
+    expect(classifyEffectFromText('Entrén är öppen, biljetter osv. "Trafiken är avstängd" enligt SL.')).toBeNull();
+  });
+
+  it('"osv." followed by an opening parenthesis still splits', () => {
+    expect(classifyEffectFromText("Entrén är öppen, biljetter osv. (Trafiken är avstängd på grund av arbete.)")).toBeNull();
+  });
+
+  it('sentence-final "m.m." followed by a new, uppercase-started sentence still splits (does not merge into ACCESSIBILITY_ISSUE)', () => {
+    expect(classifyEffectFromText("Entrén är öppen, skyltar m.m. Trafiken är avstängd.")).toBeNull();
+  });
+
+  it('sentence-final "m.m." followed by a date still splits', () => {
+    expect(classifyEffectFromText("Entrén är öppen, skyltar m.m. 16 augusti stängs biljetthallen.")).toBeNull();
+  });
+
+  it("a lowercase same-sentence continuation after \"osv.\" stays joined -- the exact case an earlier, case-insensitive version of this check silently got wrong", () => {
+    // Under the earlier bug, the "not followed by an uppercase letter" check was accidentally
+    // matched case-insensitively too (both halves shared one regex's "i" flag), so it actually
+    // meant "not followed by any letter at all" -- true only when nothing follows. Every
+    // conditional abbreviation, including this genuine same-sentence use, was therefore always
+    // treated as sentence-ending, which would have wrongly returned null here instead.
+    expect(classifyEffectFromText("Hissen, biljetter osv. också skadade, är avstängd.")).toBe("ACCESSIBILITY_ISSUE");
+  });
+
+  it('a lowercase same-sentence continuation after "m.m." also stays joined', () => {
+    expect(classifyEffectFromText("Hissen, skyltar m.m. också trasiga, är avstängd.")).toBe("ACCESSIBILITY_ISSUE");
+  });
 });
 
 describe("classifyEffectFromText: compound rules still match within one unit", () => {
