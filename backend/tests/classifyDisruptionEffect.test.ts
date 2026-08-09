@@ -295,6 +295,26 @@ describe("classifyEffectFromText: a sentence boundary is found even when the nex
   });
 });
 
+describe("classifyEffectFromText: abbreviations that can legitimately end a sentence", () => {
+  // Unlike "kl."/"t.o.m." (grammatical connectors that always have a same-sentence complement
+  // following them), "osv."/"dvs."/"m.fl." commonly end a list or an aside on their own, with a
+  // genuinely new, unrelated sentence following. Blanket-protecting their period the way the
+  // connectors are protected would silently recreate the exact cross-sentence merge this file's
+  // scope-aware matching exists to prevent -- these must still split.
+
+  it('"osv." followed by a new sentence still splits (does not merge into STATION_ACCESS)', () => {
+    expect(classifyEffectFromText("Entrén är öppen, biljetter osv. Trafiken är avstängd.")).toBeNull();
+  });
+
+  it('"dvs." followed by a new sentence still splits (does not merge into STATION_ACCESS)', () => {
+    expect(classifyEffectFromText("Entrén är öppen, dvs. Trafiken är avstängd.")).toBeNull();
+  });
+
+  it('"m.fl." followed by a new sentence still splits (does not merge into STOP_CHANGE)', () => {
+    expect(classifyEffectFromText("Hållplatsen trafikeras normalt, skyltar m.fl. Informationsskylten är flyttad.")).toBeNull();
+  });
+});
+
 describe("classifyEffectFromText: compound rules still match within one unit", () => {
   it("a soft-wrapped single newline inside one sentence still matches (STOP_CHANGE)", () => {
     expect(classifyEffectFromText("Hållplatsen är tillfälligt\nflyttad")).toBe("STOP_CHANGE");
@@ -310,6 +330,22 @@ describe("classifyEffectFromText: compound rules still match within one unit", (
 
   it('a "sl.se" style URL between the two compound halves is not mistaken for a sentence boundary, for the same reason', () => {
     expect(classifyEffectFromText("Hissen, se sl.se för detaljer, är avstängd.")).toBe("ACCESSIBILITY_ISSUE");
+  });
+
+  it('"p.g.a." between the two compound halves is not mistaken for a sentence boundary', () => {
+    expect(classifyEffectFromText("Hissen är, p.g.a. tekniskt fel, avstängd.")).toBe("ACCESSIBILITY_ISSUE");
+  });
+
+  it('"m.m." between the two compound halves is not mistaken for a sentence boundary', () => {
+    expect(classifyEffectFromText("Hissen, se biljetter m.m. här, är avstängd.")).toBe("ACCESSIBILITY_ISSUE");
+  });
+
+  it("a wrapped continuation line inside one bullet item stays joined to it, while the next bullet item stays isolated", () => {
+    // Getting this wrong either way loses real content: folding every line together would merge
+    // separate bullet items back into the paragraph-level false-positive this file already fixes
+    // once; cutting the continuation loose from its own bullet item would split "hiss" from
+    // "avstängd" into two disconnected units and silently lose the match instead.
+    expect(classifyEffectFromText("- Hissen vid Slussen\n  är avstängd\n- Rulltrappan fungerar normalt")).toBe("ACCESSIBILITY_ISSUE");
   });
 
   it("the real Östermalmstorg sentence (appositive commas naming which entrance) still classifies correctly", () => {

@@ -60,22 +60,35 @@ function splitIntoParagraphs(rawText: string): string[] {
 }
 
 /**
- * Named abbreviations whose internal/trailing period must never be read as a sentence end —
- * chosen for actual relevance to SL's own disruption wording (date ranges use "fr.o.m."/"t.o.m.",
- * times use "kl.", and a handful of general-Swedish abbreviations round it out). Deliberately a
- * fixed list rather than a heuristic: a heuristic that infers "this period doesn't end a
- * sentence" from what follows it (e.g. "not followed by an uppercase letter") has a bug baked
- * into its opposite direction too — a genuine new sentence starting with a digit, a quote, a
- * parenthesis, or a bullet then silently fails to split at all, leaving the exact same
- * cross-sentence merge this file exists to prevent. See "compound rules do not combine unrelated
- * sentences" in this file's test suite for the real case ("...entrén ... öppen. 3 augusti
- * stängs...") that failed under an earlier, uppercase-based version of this heuristic.
+ * Named abbreviations whose period must never be read as a sentence end, chosen for actual
+ * relevance to SL's own disruption wording. Split into two lists, not one, because "must never
+ * be read as a sentence end" is only true unconditionally for some of them:
+ *
+ * [ALWAYS_PROTECTED_ABBREVIATIONS] are grammatical connectors — a time, a date, a reason, or a
+ * following noun phrase is required within the *same* sentence ("kl. 06.00", "p.g.a. vägarbete",
+ * "det s.k. Slussenprojektet") — so real SL text essentially never ends a sentence on one of
+ * these alone.
+ *
+ * [CONDITIONALLY_PROTECTED_ABBREVIATIONS] are list/aside markers ("...biljetter, kort osv.",
+ * "...skyltar m.fl.") that commonly *do* end a sentence on their own, with a genuinely new,
+ * unrelated sentence following. Blanket-protecting these would reintroduce the exact
+ * cross-sentence merge this file's scope-aware matching exists to prevent — see "abbreviations
+ * that can legitimately end a sentence" in this file's test suite for the real case pattern
+ * ("...osv. Trafiken är avstängd.") this distinction exists for. These are only protected when
+ * NOT followed by whitespace and an uppercase letter — that specific pattern is the one reliable
+ * signal that this particular occurrence is genuinely ending its sentence rather than continuing
+ * within one. (This is a narrow, per-abbreviation check, not the same thing as this file's
+ * earlier, since-removed general uppercase-only sentence-boundary heuristic — see
+ * "a sentence boundary is found even when the next sentence does not start with an uppercase
+ * letter" for why that broader version was wrong.)
  */
-const PROTECTED_ABBREVIATIONS = ["fr.o.m.", "t.o.m.", "bl.a.", "t.ex.", "m.fl.", "osv.", "dvs.", "s.k.", "kl.", "ca.", "mm."];
+const ALWAYS_PROTECTED_ABBREVIATIONS = ["fr.o.m.", "t.o.m.", "p.g.a.", "kl.", "ca.", "s.k.", "m.m."];
+const CONDITIONALLY_PROTECTED_ABBREVIATIONS = ["bl.a.", "t.ex.", "m.fl.", "osv.", "dvs."];
 
-/** Domain-like tokens ("sl.se") protected the same way as the named abbreviations, generically
- * by pattern rather than by listing every possible domain: real SL text has no space between the
- * name and its TLD, which is exactly what distinguishes it from a genuine ". Next sentence". */
+/** Domain-like tokens ("sl.se") protected the same way as [ALWAYS_PROTECTED_ABBREVIATIONS],
+ * generically by pattern rather than by listing every possible domain: real SL text has no space
+ * between the name and its TLD, which is exactly what distinguishes it from a genuine ". Next
+ * sentence". */
 const DOMAIN_LIKE_PATTERN = /\b[a-zåäö0-9-]+\.(se|com|nu|org|info|net)\b/gi;
 
 /** A marker that cannot occur in real SL text stands in for a protected period during splitting,
@@ -86,8 +99,12 @@ const PERIOD_SENTINEL = "PERIODSENTINEL";
 
 function protectSpecialPeriods(text: string): string {
   let result = text;
-  for (const abbreviation of PROTECTED_ABBREVIATIONS) {
+  for (const abbreviation of ALWAYS_PROTECTED_ABBREVIATIONS) {
     result = result.replace(new RegExp(escapeRegExp(abbreviation), "gi"), (match) => match.split(".").join(PERIOD_SENTINEL));
+  }
+  for (const abbreviation of CONDITIONALLY_PROTECTED_ABBREVIATIONS) {
+    const pattern = new RegExp(`${escapeRegExp(abbreviation)}(?!\\s+[A-ZÅÄÖ])`, "gi");
+    result = result.replace(pattern, (match) => match.split(".").join(PERIOD_SENTINEL));
   }
   return result.replace(DOMAIN_LIKE_PATTERN, (match) => match.split(".").join(PERIOD_SENTINEL));
 }
@@ -111,7 +128,14 @@ function isBulletLine(line: string): boolean {
 /**
  * Groups a paragraph's lines so that ordinary manual line-wrapping (SL routinely wraps one
  * sentence across lines, e.g. "...flyttas hållplats Råsta i\nriktning mot...") still folds back
- * into a single flowing line, while a bullet-marked line is always split out on its own.
+ * into a single flowing line, a bullet line starts a new group of its own, and — the detail that
+ * matters here — a *wrapped continuation of that bullet item* (an ordinary line immediately
+ * following it, with no bullet marker of its own) joins the bullet line it continues rather than
+ * becoming its own disconnected unit. Getting this wrong either way breaks real content: folding
+ * every line together would merge separate bullet items exactly like the paragraph-level bug this
+ * file already fixes once; cutting a wrapped continuation loose from its own bullet item would
+ * split "- Hissen vid Slussen\n  är avstängd" (one logical item, hiss + avstängd together) into
+ * two unrelated-looking pieces and silently lose the match.
  */
 function splitParagraphIntoLineGroups(paragraph: string): string[] {
   const groups: string[] = [];
@@ -119,8 +143,7 @@ function splitParagraphIntoLineGroups(paragraph: string): string[] {
   for (const line of paragraph.split("\n")) {
     if (isBulletLine(line)) {
       if (current.length > 0) groups.push(current.join(" "));
-      current = [];
-      groups.push(line.trim());
+      current = [line.trim()];
     } else {
       current.push(line);
     }
