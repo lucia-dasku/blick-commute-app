@@ -20,6 +20,10 @@ describe("classifyEffectFromText: one effect per rule", () => {
     expect(classifyEffectFromText("Ingen trafik mellan X och Y")).toBe("NO_SERVICE");
   });
 
+  it('"Inställd trafik på Blå linjen mellan T-Centralen och Kungsträdgården" -> NO_SERVICE (exact phrase, real live SL header)', () => {
+    expect(classifyEffectFromText("Inställd trafik på Blå linjen mellan T-Centralen och Kungsträdgården")).toBe("NO_SERVICE");
+  });
+
   it('"Ersättningsbussar kör mellan X och Y" -> REPLACEMENT_SERVICE', () => {
     expect(classifyEffectFromText("Ersättningsbussar kör mellan X och Y")).toBe("REPLACEMENT_SERVICE");
   });
@@ -213,6 +217,136 @@ describe("classifyEffectFromText: precedence when multiple effects could match",
   });
 });
 
+describe("classifyEffectFromText: compound rules do not combine unrelated sentences", () => {
+  // The real bug this section exists for: a live SL disruption's details read (in one sentence)
+  // "...entrén ... är öppen." and, three paragraphs later about a completely different line,
+  // "...Gröna linjen är avstängd...". Searching the whole flattened text let "entré" from the
+  // first sentence pair with "avstängd" from the second and produce STATION_ACCESS for a message
+  // that was not about station access. See "real SL fixture" below for that exact real text.
+
+  it('"Entrén är öppen. Blå linjen är avstängd." does not become STATION_ACCESS', () => {
+    expect(classifyEffectFromText("Entrén är öppen. Blå linjen är avstängd.")).toBeNull();
+  });
+
+  it('"Hissen fungerar. Trafiken är avstängd." does not become ACCESSIBILITY_ISSUE', () => {
+    expect(classifyEffectFromText("Hissen fungerar. Trafiken är avstängd.")).toBeNull();
+  });
+
+  it('"Hållplatsen trafikeras som vanligt. Informationsskylten är flyttad." does not become STOP_CHANGE', () => {
+    expect(classifyEffectFromText("Hållplatsen trafikeras som vanligt. Informationsskylten är flyttad.")).toBeNull();
+  });
+
+  it('a comma-joined contrast clause ("...,  men...") does not combine either', () => {
+    expect(classifyEffectFromText("Entrén är öppen, men Blå linjen är avstängd.")).toBeNull();
+  });
+
+  it('a semicolon-joined clause does not combine either', () => {
+    expect(classifyEffectFromText("Hissen är i drift; trafiken är avstängd.")).toBeNull();
+  });
+
+  it('a comma-joined "medan" clause does not combine either', () => {
+    expect(classifyEffectFromText("Hållplatsen trafikeras som vanligt, medan informationsskylten är flyttad.")).toBeNull();
+  });
+
+  it("a blind comma split would have broken this legitimate single-clause appositive -- it must still classify correctly", () => {
+    expect(classifyEffectFromText("Hissen mellan biljetthallen och gatuplan är avstängd.")).toBe("ACCESSIBILITY_ISSUE");
+  });
+});
+
+describe("classifyEffectFromText: a sentence boundary is found even when the next sentence does not start with an uppercase letter", () => {
+  // An earlier version of the sentence splitter required an uppercase letter right after the
+  // punctuation+whitespace to count as a boundary, specifically to avoid false splits at
+  // abbreviations like "kl. 06.00". That heuristic has the same bug in the opposite direction: a
+  // genuine new sentence starting with a digit, an opening quote, an opening parenthesis, or a
+  // bullet marker then silently fails to split at all -- recreating the exact cross-sentence
+  // merge this file exists to prevent, just triggered a different way. Reproduced for real with
+  // "...entrén ... öppen. 3 augusti stängs..." -- covered here for all three affected effects.
+
+  it('a digit-started second sentence ("3 augusti...") does not merge into STATION_ACCESS', () => {
+    expect(classifyEffectFromText("Entrén är öppen. 3 augusti stängs biljetthallen.")).toBeNull();
+  });
+
+  it('a digit-started second sentence ("3 augusti...") does not merge into ACCESSIBILITY_ISSUE', () => {
+    expect(classifyEffectFromText("Hissen fungerar bra. 3 augusti stängs biljetthallen.")).toBeNull();
+  });
+
+  it('a digit-started second sentence ("3 augusti...") does not merge into STOP_CHANGE', () => {
+    expect(classifyEffectFromText("Hållplatsen trafikeras normalt. 3 augusti är biljettautomaten flyttad.")).toBeNull();
+  });
+
+  it("a quote-started second sentence does not merge into STATION_ACCESS", () => {
+    expect(classifyEffectFromText('Entrén är öppen. "Trafiken är avstängd" enligt SL.')).toBeNull();
+  });
+
+  it("a parenthesis-started second sentence does not merge into STATION_ACCESS", () => {
+    expect(classifyEffectFromText("Entrén är öppen. (Trafiken är avstängd på grund av arbete.)")).toBeNull();
+  });
+
+  it("a bullet-started second line does not merge into STATION_ACCESS, even with no terminating punctuation", () => {
+    expect(classifyEffectFromText("- Entrén är öppen\n- Trafiken är avstängd")).toBeNull();
+  });
+
+  it("a bullet marker does not interfere with matching within its own line", () => {
+    expect(classifyEffectFromText("- Hissen vid entrén är avstängd")).toBe("ACCESSIBILITY_ISSUE");
+  });
+
+  it("an ordinary (non-bulleted) manually-wrapped line still folds back together, unaffected by bullet detection", () => {
+    expect(classifyEffectFromText("Hållplatsen är tillfälligt\nflyttad")).toBe("STOP_CHANGE");
+  });
+});
+
+describe("classifyEffectFromText: compound rules still match within one unit", () => {
+  it("a soft-wrapped single newline inside one sentence still matches (STOP_CHANGE)", () => {
+    expect(classifyEffectFromText("Hållplatsen är tillfälligt\nflyttad")).toBe("STOP_CHANGE");
+  });
+
+  it('"kl." between the two compound halves is not mistaken for a sentence boundary -- a false split here would separate "hiss" from "avstängd" into different units and lose the match', () => {
+    expect(classifyEffectFromText("Hissen är, från kl. 06.00, avstängd.")).toBe("ACCESSIBILITY_ISSUE");
+  });
+
+  it('"t.o.m." between the two compound halves is not mistaken for a sentence boundary, for the same reason', () => {
+    expect(classifyEffectFromText("Hissen, gäller t.o.m. 16 augusti, är avstängd.")).toBe("ACCESSIBILITY_ISSUE");
+  });
+
+  it('a "sl.se" style URL between the two compound halves is not mistaken for a sentence boundary, for the same reason', () => {
+    expect(classifyEffectFromText("Hissen, se sl.se för detaljer, är avstängd.")).toBe("ACCESSIBILITY_ISSUE");
+  });
+
+  it("the real Östermalmstorg sentence (appositive commas naming which entrance) still classifies correctly", () => {
+    expect(classifyEffectFromText("En av hissarna vid Östermalmstorg, entrén mot Stureplan, är avstängd.")).toBe("ACCESSIBILITY_ISSUE");
+  });
+});
+
+describe("classifyEffectFromText: local negation guard", () => {
+  it('"Entrén är inte stängd." does not become STATION_ACCESS', () => {
+    expect(classifyEffectFromText("Entrén är inte stängd.")).toBeNull();
+  });
+
+  it('"Entrén stängs inte." (negation after the verb) does not become STATION_ACCESS', () => {
+    expect(classifyEffectFromText("Entrén stängs inte.")).toBeNull();
+  });
+
+  it('"Hissen är inte avstängd." does not become ACCESSIBILITY_ISSUE', () => {
+    expect(classifyEffectFromText("Hissen är inte avstängd.")).toBeNull();
+  });
+
+  it('"Hållplatsen är inte flyttad." does not become STOP_CHANGE', () => {
+    expect(classifyEffectFromText("Hållplatsen är inte flyttad.")).toBeNull();
+  });
+
+  it("a negated occurrence does not hide a genuinely affirmed one in the same unit", () => {
+    expect(classifyEffectFromText("Den första hissen är inte avstängd, men den andra hissen är avstängd.")).toBe("ACCESSIBILITY_ISSUE");
+  });
+
+  it('"fungerar inte" is unaffected by the negation guard -- "inte" is the disruption signal there, not a negation of it', () => {
+    expect(classifyEffectFromText("Hissen fungerar inte")).toBe("ACCESSIBILITY_ISSUE");
+  });
+
+  it('"stannar inte vid" is unaffected by the negation guard', () => {
+    expect(classifyEffectFromText("Bussen stannar inte vid Slussen")).toBe("STOP_CHANGE");
+  });
+});
+
 describe("classifyEffectFromText: normalization", () => {
   it("matches regardless of uppercase/lowercase", () => {
     expect(classifyEffectFromText("FÖRSENINGAR PÅ LINJE 14")).toBe("DELAYS");
@@ -255,6 +389,44 @@ describe("classifyDisruptionEffect: real SL fixture", () => {
     expect(message.header).toBe("L401 försenat avgång med 5 minuter");
     expect(message.details).toContain("Bro öppning");
     expect(classifyDisruptionEffect(message)).toBe("DELAYS");
+  });
+
+  // Real live disruption (id 11592474, fetched from SL Deviations directly) that exposed the
+  // cross-sentence bug this file's scope-aware rewrite fixes. Testing only
+  // classifyDisruptionEffect(message) is not enough on its own: once the header matches
+  // NO_SERVICE via the new "inställd trafik" phrase, header-first short-circuit means the
+  // details -- where the actual cross-sentence false positive lived -- would never be evaluated
+  // for this fixture, so that single assertion could keep passing even if the details-scoping
+  // fix regressed. Header and details are therefore asserted independently below.
+  describe("the Blue-line closure disruption (id 11592474) -- the real cross-sentence false positive", () => {
+    const header = "Inställd trafik på Blå linjen mellan T-Centralen och Kungsträdgården";
+    const details =
+      "Från och med måndag 22 juni till och med söndag 16 augusti är tågtrafiken på Blå linjen helt inställd mellan " +
+      "T-Centralen och Kungsträdgården på grund av arbeten med tunnelbanans utbyggnad.\n\n" +
+      "Tåg från Akalla och Hjulsta har T-Centralen som slutstation. Mellan T-Centralen och Kungsträdgården hänvisar vi " +
+      "till alternativa resvägar såsom Spårväg City 7, busslinje 65 eller 69, eller en promenad på cirka 800 meter.\n\n" +
+      "Vid T-Centralen avgår tågen från följande spår:\nLinje 10 mot Hjulsta avgår från spår 5.\n" +
+      "Linje 11 mot Akalla avgår från spår 6.\n\n" +
+      "Vid station Kungsträdgården är endast entrén mot Gallerian/Regeringsgatan öppen under arbetets gång.\n\n" +
+      "Var uppmärksam på att Gröna linjen är avstängd mellan Odenplan och S:t Eriksplan och har förändrad trafik under " +
+      "perioden måndag 6 juli till och med söndag 26 juli.\n\n" +
+      "Sök din resa på sl.se eller i SL-appen för att hitta det bästa alternativet för din resa.";
+
+    it("the header alone classifies as NO_SERVICE (the inställd trafik addition)", () => {
+      expect(classifyEffectFromText(header)).toBe("NO_SERVICE");
+    });
+
+    it("the details alone -- entrance open in one sentence, an unrelated line closed three paragraphs later -- classify as null, not STATION_ACCESS (the scope-aware fix)", () => {
+      expect(classifyEffectFromText(details)).toBeNull();
+    });
+
+    it("the full message classifies as NO_SERVICE end to end, from the header", () => {
+      expect(classifyDisruptionEffect(sv(header, details))).toBe("NO_SERVICE");
+    });
+
+    it("with a deliberately generic header, the same details fall through to the safe DISRUPTION fallback -- proving the fix is the scoping, not just the new header phrase", () => {
+      expect(classifyDisruptionEffect(sv("Trafikinformation", details))).toBe("DISRUPTION");
+    });
   });
 });
 
