@@ -1,7 +1,8 @@
 # Blick — backend
 
-TypeScript/Hono proxy and normalization layer in front of SL Transport and SL
-Deviations. See `../docs/api-contract.md` for the full contract, upstream field mapping,
+TypeScript/Hono proxy and normalization layer in front of SL Transport, SL Deviations,
+and SL Journey Planner, plus server-side Google Play purchase verification. See
+`../docs/api-contract.md` for the full contract, upstream field mapping,
 caching policy, error-code semantics, and known limitations.
 
 ## Local development
@@ -16,10 +17,15 @@ curl http://localhost:8787/api/v1/health
 curl "http://localhost:8787/api/v1/stops/search?query=slussen"
 curl "http://localhost:8787/api/v1/departures?siteId=9192"
 curl "http://localhost:8787/api/v1/disruptions?siteId=9192"
+curl "http://localhost:8787/api/v1/journeys/locations/search?query=slussen"
+curl "http://localhost:8787/api/v1/journeys?originId=...&destinationId=...&transportModes=METRO,TRAIN,BUS"
 ```
 
-No API key or `.env` values are required for local development — both upstreams
-(SL Transport, SL Deviations) are keyless (see `.env.example`), and the shared Upstash
+No API key or `.env` values are required to exercise the transit endpoints locally — all
+three SL upstreams are keyless (see `.env.example`). Billing verification deliberately fails
+with a sanitized upstream error until `GOOGLE_PLAY_PACKAGE_NAME`,
+`GOOGLE_PLAY_SERVICE_ACCOUNT_EMAIL`, and `GOOGLE_PLAY_SERVICE_ACCOUNT_PRIVATE_KEY` are set.
+The shared Upstash
 Redis cache/lock that protects SL Deviations in production (see
 `../docs/api-contract.md`, "Caching and fair use") is **optional** here: with
 `UPSTASH_REDIS_REST_URL`/`UPSTASH_REDIS_REST_TOKEN` unset, `npm run dev` automatically

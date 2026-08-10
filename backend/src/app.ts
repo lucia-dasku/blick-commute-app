@@ -13,6 +13,10 @@ import { InFlightDeduper, InMemoryCache, type Cache } from "./lib/cache.js";
 import { InMemoryLock, type DistributedLock } from "./lib/distributedLock.js";
 import { RedisCache, RedisLock } from "./lib/redisClient.js";
 import { config } from "./config/env.js";
+import { createBillingRoute } from "./routes/billing.js";
+import { createGooglePlayPurchaseVerifier } from "./services/googlePlayPurchaseVerifier.js";
+import { createJourneyRoutes } from "./routes/journeys.js";
+import { createSlJourneyPlannerClient } from "./services/slJourneyPlannerClient.js";
 
 /**
  * Builds the Hono app with real (network-calling) service implementations. Kept as a
@@ -47,6 +51,8 @@ export function createApp() {
   app.route("/stops", createStopsRoute(siteDirectory));
   app.route("/departures", createDeparturesRoute(slTransportClient));
   app.route("/disruptions", createDisruptionsRoute(deviationsSnapshotService, siteDirectory));
+  app.route("/billing", createBillingRoute(createGooglePlayPurchaseVerifier(config.googlePlay)));
+  app.route("/journeys", createJourneyRoutes(createSlJourneyPlannerClient()));
 
   app.notFound(notFoundHandler);
   app.onError(onError);

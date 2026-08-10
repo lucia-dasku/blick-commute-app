@@ -1,0 +1,103 @@
+{
+  "systemMessages": [],
+  "journeys": [
+    {
+      "tripDuration": 78,
+      "rating": 100,
+      "interchanges": 0,
+      "legs": [
+        {
+          "infos": [],
+          "duration": 42,
+          "origin": {
+            "id": "9025001000002012",
+            "name": "Slussen, Stockholm",
+            "type": "platform",
+            "departureTimePlanned": "2026-08-10T16:22:00Z",
+            "departureTimeEstimated": "2026-08-10T16:21:42Z"
+          },
+          "destination": {
+            "id": "9025001000002512",
+            "name": "Mariatorget, Stockholm",
+            "type": "platform",
+            "arrivalTimePlanned": "2026-08-10T16:23:18Z",
+            "arrivalTimeEstimated": "2026-08-10T16:22:24Z"
+          },
+          "transportation": {
+            "id": "tfs:02014::R:fixture-1",
+            "name": "Tunnelbana tunnelbanans röda linje 14",
+            "number": "tunnelbanans röda linje 14",
+            "disassembledName": "14",
+            "product": { "id": 8, "class": 2, "name": "Tunnelbana" },
+            "destination": { "id": "18002851", "name": "Fruängen", "type": "stop" }
+          },
+          "properties": { "tripId": "9015001001420696" },
+          "realtimeStatus": ["MONITORED"],
+          "isRealtimeControlled": true
+        }
+      ]
+    },
+    {
+      "tripDuration": 90,
+      "rating": 90,
+      "interchanges": 0,
+      "legs": [
+        {
+          "infos": [],
+          "duration": 50,
+          "origin": {
+            "id": "9025001000002012",
+            "name": "Slussen, Stockholm",
+            "type": "platform",
+            "departureTimePlanned": "2026-08-10T16:24:00Z"
+          },
+          "destination": {
+            "id": "9025001000002512",
+            "name": "Mariatorget, Stockholm",
+            "type": "platform",
+            "arrivalTimePlanned": "2026-08-10T16:25:30Z"
+          },
+          "transportation": {
+            "id": "tfs:02013::R:fixture-2",
+            "name": "Tunnelbana tunnelbanans röda linje 13",
+            "disassembledName": "13",
+            "product": { "id": 8, "class": 2, "name": "Tunnelbana" },
+            "destination": { "id": "18002861", "name": "Norsborg", "type": "stop" }
+          },
+          "properties": { "tripId": "9015001001320697" }
+        }
+      ]
+    },
+    {
+      "tripDuration": 105,
+      "rating": 80,
+      "interchanges": 0,
+      "legs": [
+        {
+          "infos": [],
+          "duration": 65,
+          "origin": {
+            "id": "9025001000002012",
+            "name": "Slussen, Stockholm",
+            "type": "platform",
+            "departureTimePlanned": "2026-08-10T16:26:00Z"
+          },
+          "destination": {
+            "id": "9025001000002512",
+            "name": "Mariatorget, Stockholm",
+            "type": "platform",
+            "arrivalTimePlanned": "2026-08-10T16:27:45Z"
+          },
+          "transportation": {
+            "id": "tfs:02014::R:fixture-3",
+            "name": "Tunnelbana tunnelbanans röda linje 14",
+            "disassembledName": "14",
+            "product": { "id": 8, "class": 2, "name": "Tunnelbana" },
+            "destination": { "id": "18002851", "name": "Fruängen", "type": "stop" }
+          },
+          "properties": { "tripId": "9015001001420698" }
+        }
+      ]
+    }
+  ]
+}

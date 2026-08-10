@@ -1,0 +1,84 @@
+{
+  "systemMessages": [],
+  "journeys": [
+    {
+      "tripDuration": 3390,
+      "rating": 100,
+      "interchanges": 1,
+      "legs": [
+        {
+          "infos": [{ "content": "Sanitized fixture disruption" }],
+          "duration": 558,
+          "origin": {
+            "id": "9025001000002012",
+            "name": "Slussen, Stockholm",
+            "type": "platform",
+            "departureTimePlanned": "2026-08-10T16:29:30Z",
+            "departureTimeEstimated": "2026-08-10T16:29:24Z"
+          },
+          "destination": {
+            "id": "9025001000003012",
+            "name": "Tekniska högskolan, Stockholm",
+            "type": "platform",
+            "arrivalTimePlanned": "2026-08-10T16:38:48Z",
+            "arrivalTimeEstimated": "2026-08-10T16:38:00Z"
+          },
+          "transportation": {
+            "name": "Tunnelbana tunnelbanans röda linje 14",
+            "disassembledName": "14",
+            "product": { "id": 8, "class": 2, "name": "Tunnelbana" },
+            "destination": { "name": "Mörby centrum", "type": "stop" }
+          },
+          "properties": { "tripId": "9015001001420708" }
+        },
+        {
+          "infos": [],
+          "duration": 240,
+          "footPathInfo": { "position": "AFTER" },
+          "origin": {
+            "id": "9021001003011000",
+            "name": "Tekniska högskolan, Stockholm",
+            "type": "stop",
+            "departureTimePlanned": "2026-08-10T16:43:00Z",
+            "departureTimeEstimated": "2026-08-10T16:43:00Z"
+          },
+          "destination": {
+            "id": "9021001003001000",
+            "name": "Stockholms östra, Stockholm",
+            "type": "stop",
+            "arrivalTimePlanned": "2026-08-10T16:47:00Z",
+            "arrivalTimeEstimated": "2026-08-10T16:47:00Z"
+          },
+          "transportation": {
+            "product": { "class": 99, "name": "footpath" }
+          }
+        },
+        {
+          "infos": [],
+          "duration": 2340,
+          "origin": {
+            "id": "9025001000003111",
+            "name": "Stockholms östra, Stockholm",
+            "type": "platform",
+            "departureTimePlanned": "2026-08-10T16:47:00Z",
+            "departureTimeEstimated": "2026-08-10T16:47:00Z"
+          },
+          "destination": {
+            "id": "9025001000009662",
+            "name": "Åkersberga, Österåker",
+            "type": "platform",
+            "arrivalTimePlanned": "2026-08-10T17:26:00Z",
+            "arrivalTimeEstimated": "2026-08-10T17:26:00Z"
+          },
+          "transportation": {
+            "name": "Spårvagn Roslagsbanan 28",
+            "disassembledName": "28",
+            "product": { "id": 9, "class": 4, "name": "Spårvagn" },
+            "destination": { "name": "Österskär", "type": "stop" }
+          },
+          "properties": { "tripId": "9015001002808030" }
+        }
+      ]
+    }
+  ]
+}
