@@ -10,15 +10,25 @@ import kotlinx.coroutines.launch
 import se.blick.app.data.repository.RoutineRepository
 import se.blick.app.domain.model.CommuteRoutine
 import javax.inject.Inject
+import kotlinx.coroutines.flow.combine
+import se.blick.app.billing.EntitlementState
+import se.blick.app.billing.FreeRoutineSelectionStore
+import se.blick.app.billing.PremiumEntitlementRepository
+import se.blick.app.billing.hasPremiumAccess
+import se.blick.app.billing.FreePremiumEntitlementRepository
 
 data class RoutineListUiState(
     val routines: List<CommuteRoutine> = emptyList(),
     val isLoading: Boolean = true,
+    val entitlement: EntitlementState = EntitlementState.Free,
+    val selectedFreeRoutineId: String? = null,
 )
 
 @HiltViewModel
 class RoutineListViewModel @Inject constructor(
     private val routineRepository: RoutineRepository,
+    entitlementRepository: PremiumEntitlementRepository = FreePremiumEntitlementRepository,
+    private val freeRoutineSelectionStore: FreeRoutineSelectionStore? = null,
 ) : ViewModel() {
 
     private val _uiState = MutableStateFlow(RoutineListUiState())
@@ -26,9 +36,16 @@ class RoutineListViewModel @Inject constructor(
 
     init {
         viewModelScope.launch {
-            routineRepository.observeAll().collect { routines ->
-                _uiState.value = RoutineListUiState(routines = routines, isLoading = false)
+            combine(
+                routineRepository.observeAll(),
+                entitlementRepository.entitlement,
+                freeRoutineSelectionStore?.selectedRoutineId ?: MutableStateFlow(null),
+            ) { routines, entitlement, selectedId -> Triple(routines, entitlement, selectedId) }.collect {
+                (routines, entitlement, selectedId) ->
+                _uiState.value = RoutineListUiState(routines, false, entitlement, selectedId)
             }
         }
     }
+
+    fun selectFreeRoutine(id: String) = freeRoutineSelectionStore?.select(id)
 }

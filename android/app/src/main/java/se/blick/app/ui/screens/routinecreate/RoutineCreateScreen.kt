@@ -38,6 +38,7 @@ import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.unit.dp
@@ -45,6 +46,7 @@ import androidx.hilt.navigation.compose.hiltViewModel
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import se.blick.app.R
 import se.blick.app.data.repository.DirectionOption
+import se.blick.app.domain.model.JourneyLocation
 import se.blick.app.domain.model.Site
 import se.blick.app.domain.model.TransportMode
 import se.blick.app.locale.currentBlickLocale
@@ -91,11 +93,18 @@ fun RoutineCreateScreen(
             if (isBlocked) {
                 BlickTopBar(title = stringResource(R.string.routine_create_title), onBack = handleBack)
             } else {
+                val totalSteps = if (uiState.isExactDestination) 2 else 4
+                val stepNumber = when (uiState.step) {
+                    RoutineCreateStep.STOP -> 1
+                    RoutineCreateStep.TRANSPORT_MODE -> 2
+                    RoutineCreateStep.DIRECTION -> 3
+                    RoutineCreateStep.SCHEDULE -> if (uiState.isExactDestination) 2 else 4
+                }
                 BlickWizardHeader(
                     title = stepTitle(uiState.step),
-                    stepNumber = uiState.step.ordinal + 1,
-                    totalSteps = 4,
-                    progress = (uiState.step.ordinal + 1) / 4f,
+                    stepNumber = stepNumber,
+                    totalSteps = totalSteps,
+                    progress = stepNumber / totalSteps.toFloat(),
                     onBack = handleBack,
                 )
             }
@@ -120,10 +129,13 @@ fun RoutineCreateScreen(
             else -> Column(Modifier.fillMaxSize().padding(padding).padding(16.dp)) {
                 Box(Modifier.weight(1f).fillMaxWidth()) {
                     when (uiState.step) {
-                        RoutineCreateStep.STOP -> StopStep(
+                        RoutineCreateStep.STOP -> OriginDestinationStep(
                             uiState = uiState,
                             onQueryChanged = viewModel::onSiteQueryChanged,
-                            onSelectSite = viewModel::selectSite,
+                            onSelectSite = viewModel::selectOrigin,
+                            onDestinationQueryChanged = viewModel::onDestinationQueryChanged,
+                            onSelectDestination = viewModel::selectDestination,
+                            onContinue = viewModel::continueFromStops,
                             onRetryStopSearch = viewModel::retryStopSearch,
                             onRetryDirections = viewModel::retryDirections,
                         )
@@ -192,24 +204,27 @@ private fun stepTitle(step: RoutineCreateStep): String = stringResource(
 )
 
 @Composable
-private fun StopStep(
+internal fun OriginDestinationStep(
     uiState: RoutineCreateUiState,
     onQueryChanged: (String) -> Unit,
     onSelectSite: (Site) -> Unit,
+    onDestinationQueryChanged: (String) -> Unit,
+    onSelectDestination: (JourneyLocation) -> Unit,
+    onContinue: () -> Unit,
     onRetryStopSearch: () -> Unit,
     onRetryDirections: () -> Unit,
 ) {
-    Column(Modifier.fillMaxSize()) {
+    Column(Modifier.fillMaxSize().verticalScroll(rememberScrollState())) {
         OutlinedTextField(
             value = uiState.siteQuery,
             onValueChange = onQueryChanged,
-            label = { Text(stringResource(R.string.routine_create_stop_search_label)) },
+            label = { Text(stringResource(R.string.routine_create_origin_label)) },
             singleLine = true,
             modifier = Modifier.fillMaxWidth(),
         )
         Spacer(Modifier.height(12.dp))
         when {
-            uiState.isLoadingDirections -> CenteredMessage {
+            !uiState.isExactDestination && uiState.isLoadingDirections -> CenteredMessage {
                 CircularProgressIndicator()
                 Spacer(Modifier.height(8.dp))
                 Text(
@@ -222,7 +237,7 @@ private fun StopStep(
             // A real failure (network/server/deserialization) loading directions for the
             // selected site — distinct from directionsEmpty below, which is a successful
             // lookup that legitimately found nothing running right now.
-            uiState.directionsFailed -> Column {
+            !uiState.isExactDestination && uiState.directionsFailed -> Column {
                 Text(
                     stringResource(
                         R.string.routine_create_directions_failed_error,
@@ -233,7 +248,7 @@ private fun StopStep(
                 Spacer(Modifier.height(8.dp))
                 Button(onClick = onRetryDirections) { Text(stringResource(R.string.routine_create_retry)) }
             }
-            uiState.directionsEmpty -> Column {
+            !uiState.isExactDestination && uiState.directionsEmpty -> Column {
                 Text(
                     stringResource(
                         R.string.routine_create_no_departures_error,
@@ -255,10 +270,10 @@ private fun StopStep(
                 Spacer(Modifier.height(8.dp))
                 Button(onClick = onRetryStopSearch) { Text(stringResource(R.string.routine_create_retry)) }
             }
-            uiState.siteResults.isEmpty() && uiState.siteQuery.isNotBlank() ->
+            uiState.selectedSite == null && uiState.siteResults.isEmpty() && uiState.siteQuery.isNotBlank() ->
                 Text(stringResource(R.string.routine_create_no_results))
-            else -> LazyColumn {
-                items(uiState.siteResults, key = { it.siteId }) { site ->
+            uiState.selectedSite == null -> Column {
+                uiState.siteResults.take(5).forEach { site ->
                     ListItem(
                         headlineContent = { Text(site.name) },
                         supportingContent = site.note?.let { note -> { Text(note) } },
@@ -266,6 +281,54 @@ private fun StopStep(
                     )
                 }
             }
+        }
+
+        Spacer(Modifier.height(16.dp))
+        OutlinedTextField(
+            value = uiState.destinationQuery,
+            onValueChange = onDestinationQueryChanged,
+            enabled = uiState.hasPremium,
+            label = { Text(stringResource(R.string.routine_create_destination_label)) },
+            supportingText = {
+                Text(
+                    stringResource(
+                        if (uiState.hasPremium) R.string.routine_create_destination_optional_hint
+                        else R.string.routine_create_destination_premium_hint,
+                    ),
+                )
+            },
+            singleLine = true,
+            modifier = Modifier.fillMaxWidth().testTag("destination-field"),
+        )
+        when {
+            uiState.isSearchingDestination -> CenteredMessage { CircularProgressIndicator() }
+            uiState.destinationSearchFailed -> Text(
+                stringResource(R.string.routine_create_destination_search_error),
+                color = MaterialTheme.colorScheme.error,
+            )
+            uiState.selectedDestination == null && uiState.destinationQuery.isNotBlank() &&
+                uiState.destinationResults.isEmpty() -> Text(stringResource(R.string.routine_create_no_results))
+            uiState.selectedDestination == null -> Column {
+                uiState.destinationResults.take(5).forEach { destination ->
+                    ListItem(
+                        headlineContent = { Text(destination.name) },
+                        modifier = Modifier.clickable { onSelectDestination(destination) },
+                    )
+                }
+            }
+        }
+
+        Spacer(Modifier.height(12.dp))
+        when {
+            uiState.isExactDestination && uiState.isResolvingJourneyOrigin ->
+                Text(stringResource(R.string.routine_create_resolving_origin))
+            uiState.isExactDestination && uiState.journeyOriginResolutionFailed ->
+                Text(stringResource(R.string.routine_create_origin_resolution_error), color = MaterialTheme.colorScheme.error)
+        }
+
+        Spacer(Modifier.height(20.dp))
+        Button(onClick = onContinue, enabled = uiState.canContinueFromStops, modifier = Modifier.fillMaxWidth()) {
+            Text(stringResource(R.string.routine_create_continue))
         }
     }
 }
@@ -366,6 +429,12 @@ private fun ScheduleStep(
                 stringResource(R.string.routine_create_error_duration_limit),
                 color = MaterialTheme.colorScheme.error,
                 style = MaterialTheme.typography.bodySmall,
+            )
+        }
+        if (uiState.scheduleOverlap) {
+            Text(
+                stringResource(R.string.routine_create_error_overlap),
+                color = MaterialTheme.colorScheme.error,
             )
         }
 

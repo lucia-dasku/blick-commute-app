@@ -78,4 +78,24 @@ class RoutineMappersTest {
             assertEquals(setOf(day), routine.toEntity().toDomain().activeDays)
         }
     }
+
+    @Test
+    fun `selected exact journey transport modes round-trip`() {
+        val routine = CommuteRoutine(
+            name = "Train and bus",
+            siteId = 1,
+            siteName = "Origin",
+            transportMode = TransportMode.UNKNOWN,
+            lineId = null,
+            lineDesignation = null,
+            directionCode = null,
+            destinationLabel = null,
+            activeDays = setOf(DayOfWeek.MONDAY),
+            startTime = LocalTime.of(7, 0),
+            endTime = LocalTime.of(8, 0),
+            allowedJourneyTransportModes = setOf(TransportMode.TRAIN, TransportMode.BUS),
+        )
+
+        assertEquals(setOf(TransportMode.TRAIN, TransportMode.BUS), routine.toEntity().toDomain().allowedJourneyTransportModes)
+    }
 }

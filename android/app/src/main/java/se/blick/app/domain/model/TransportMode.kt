@@ -16,5 +16,17 @@ enum class TransportMode {
     UNKNOWN,
 }
 
+/** Modes users can include in exact-destination journey planning. Walking transfer legs are
+ * always allowed and therefore deliberately not represented here. */
+val JOURNEY_TRANSPORT_MODE_OPTIONS: List<TransportMode> = listOf(
+    TransportMode.METRO,
+    TransportMode.TRAIN,
+    TransportMode.BUS,
+    TransportMode.TRAM,
+    TransportMode.FERRY,
+)
+
+val DEFAULT_JOURNEY_TRANSPORT_MODES: Set<TransportMode> = JOURNEY_TRANSPORT_MODE_OPTIONS.toSet()
+
 fun String.toTransportMode(): TransportMode =
     runCatching { TransportMode.valueOf(this) }.getOrDefault(TransportMode.UNKNOWN)

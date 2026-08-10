@@ -139,6 +139,7 @@ dependencies {
     ksp(libs.androidx.room.compiler)
 
     implementation(libs.androidx.datastore.preferences)
+    implementation(libs.google.play.billing)
 
     implementation(libs.hilt.android)
     ksp(libs.hilt.compiler)

@@ -2,7 +2,6 @@ package se.blick.app.domain.usecase
 
 import se.blick.app.domain.model.CommuteRoutine
 import java.time.DayOfWeek
-import java.time.Duration
 import java.time.LocalTime
 
 /**
@@ -40,6 +39,12 @@ private const val CYCLE_MINUTES = MINUTES_PER_DAY * CYCLE_DAYS
 private fun DayOfWeek.cycleIndex(): Int = value - 1
 
 private fun LocalTime.minuteOfDay(): Int = (toSecondOfDay() / 60)
+
+internal fun activeWindowDurationMinutes(start: LocalTime, end: LocalTime): Int {
+    val startMinute = start.minuteOfDay()
+    val endMinute = end.minuteOfDay()
+    return if (endMinute > startMinute) endMinute - startMinute else endMinute + MINUTES_PER_DAY - startMinute
+}
 
 private data class Occurrence(val cycleStartMinute: Int, val durationMinutes: Int)
 
@@ -121,7 +126,8 @@ object RoutineDurationValidator {
         proposedEnabled: Boolean,
         existingRoutines: List<CommuteRoutine>,
     ): RoutineDurationValidationResult {
-        val proposedMinutes = Duration.between(proposedStartTime, proposedEndTime).toMinutes()
+        if (proposedStartTime == proposedEndTime) return RoutineDurationValidationResult.Valid
+        val proposedMinutes = activeWindowDurationMinutes(proposedStartTime, proposedEndTime).toLong()
         // A non-positive duration is a different validation's concern (RoutineCreateUiState.
         // isTimeRangeValid) -- this validator only ever adds a non-negative contribution.
         if (proposedMinutes <= 0) return RoutineDurationValidationResult.Valid
@@ -139,7 +145,8 @@ object RoutineDurationValidator {
         if (proposedEnabled) {
             for (other in existingRoutines) {
                 if (!other.enabled || other.id == proposedRoutineId) continue
-                val otherMinutes = Duration.between(other.startTime, other.endTime).toMinutes()
+                if (other.startTime == other.endTime) continue
+                val otherMinutes = activeWindowDurationMinutes(other.startTime, other.endTime).toLong()
                 if (otherMinutes <= 0) continue
                 val otherStartMinute = other.startTime.minuteOfDay()
                 for (day in other.activeDays) {

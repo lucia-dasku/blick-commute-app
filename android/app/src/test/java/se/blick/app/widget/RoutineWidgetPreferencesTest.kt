@@ -205,4 +205,38 @@ class RoutineWidgetPreferencesTest {
         val restored = prefs.toPreferences().toWidgetUiState() as RoutineWidgetUiState.ActiveRoutine
         assertNull(restored.model.disruptionHeadline)
     }
+
+    @Test
+    fun `exact-destination fastest and alternative journeys round-trip for compact and large layouts`() {
+        val fastest = WidgetJourneyRow(
+            lineDesignation = "14",
+            transportMode = TransportMode.METRO,
+            departureTime = Instant.parse("2026-08-10T07:03:00Z"),
+            arrivalTime = Instant.parse("2026-08-10T07:31:00Z"),
+            transferCount = 0,
+            isRealtime = true,
+        )
+        val alternative = WidgetJourneyRow(
+            lineDesignation = "4",
+            transportMode = TransportMode.BUS,
+            departureTime = Instant.parse("2026-08-10T07:06:00Z"),
+            arrivalTime = Instant.parse("2026-08-10T07:36:00Z"),
+            transferCount = 1,
+            isRealtime = false,
+        )
+        val model = RoutineWidgetModel(
+            routineId = "exact-1",
+            routineName = "To work",
+            stationName = "Fruangen",
+            directionLabel = "Slussen",
+            content = RoutineWidgetContent.Journeys(fastest, alternative),
+            lineDesignation = fastest.lineDesignation,
+            transportMode = fastest.transportMode,
+        )
+
+        val restored = roundTrip(RoutineWidgetUiState.ActiveRoutine(model)) as RoutineWidgetUiState.ActiveRoutine
+
+        assertEquals(model, restored.model)
+        assertEquals(RoutineWidgetContent.Journeys(fastest, alternative), restored.model.content)
+    }
 }

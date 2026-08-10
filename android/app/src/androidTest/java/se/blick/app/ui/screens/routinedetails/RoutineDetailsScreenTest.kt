@@ -15,12 +15,16 @@ import java.time.Instant
 import java.time.LocalTime
 import org.junit.Rule
 import org.junit.Test
+import org.junit.Assert.assertEquals
 import org.junit.runner.RunWith
 import se.blick.app.R
 import se.blick.app.domain.model.CommuteRoutine
 import se.blick.app.domain.model.Disruption
 import se.blick.app.domain.model.DisruptionMessage
 import se.blick.app.domain.model.DisruptionPriority
+import se.blick.app.domain.model.JourneyLeg
+import se.blick.app.domain.model.JourneyPlan
+import se.blick.app.domain.model.RoutineType
 import se.blick.app.domain.model.TransportMode
 import se.blick.app.domain.usecase.DisruptionsState
 import se.blick.app.domain.usecase.LiveDeparturesSnapshot
@@ -101,6 +105,8 @@ class RoutineDetailsScreenTest {
         departuresState: LiveDeparturesState = LiveDeparturesState.Offline,
         routine: CommuteRoutine = sampleRoutine(),
         isPausedToday: Boolean = false,
+        journeys: List<JourneyPlan> = emptyList(),
+        onUpdateJourneyTransportModes: (Set<TransportMode>) -> Unit = {},
     ) {
         composeRule.setContent {
             RoutineDetailsContent(
@@ -110,6 +116,8 @@ class RoutineDetailsScreenTest {
                 departuresState = departuresState,
                 isRefreshing = false,
                 disruptionsState = disruptionsState,
+                journeys = journeys,
+                onUpdateJourneyTransportModes = onUpdateJourneyTransportModes,
                 onRefresh = {},
                 onEdit = {},
                 isTogglingEnabled = false,
@@ -136,6 +144,51 @@ class RoutineDetailsScreenTest {
     }
 
     private fun heading(): String = composeRule.activity.getString(R.string.routine_details_disruptions_heading)
+
+    @Test
+    fun journeyHeader_showsTransportTypeAfterLineNumber() {
+        val departureTime = Instant.now().plusSeconds(5 * 60)
+        val arrivalTime = departureTime.plusSeconds(18 * 60)
+        val leg = JourneyLeg(
+            transportMode = TransportMode.TRAIN,
+            lineDesignation = "43",
+            direction = "Balsta",
+            originName = "Stockholm City",
+            destinationName = "Sundbyberg",
+            departureTime = departureTime,
+            arrivalTime = arrivalTime,
+            isRealtime = true,
+            disruptions = emptyList(),
+        )
+        val journey = JourneyPlan(
+            journeyId = "journey-43",
+            originName = leg.originName,
+            destinationName = leg.destinationName,
+            departureTime = departureTime,
+            arrivalTime = arrivalTime,
+            transferCount = 0,
+            firstLeg = leg,
+            legs = listOf(leg),
+            disruptions = emptyList(),
+        )
+
+        setContent(
+            disruptionsState = DisruptionsState.NoDisruptions,
+            routine = sampleRoutine().copy(
+                type = RoutineType.EXACT_DESTINATION,
+                journeyOriginId = "origin-id",
+                journeyOriginName = journey.originName,
+                journeyDestinationId = "destination-id",
+                journeyDestinationName = journey.destinationName,
+            ),
+            journeys = listOf(journey),
+        )
+
+        composeRule.onNodeWithText("43").assertExists()
+        composeRule.onNodeWithText(
+            composeRule.activity.getString(R.string.journey_mode_commuter_rail),
+        ).assertExists()
+    }
 
     @Test
     fun noRelevantDisruptions_theWholeSectionIsHidden() {
@@ -291,6 +344,67 @@ class RoutineDetailsScreenTest {
         composeRule.onNodeWithText(editLabel).assertExists()
         composeRule.onNodeWithText(disableLabel).assertExists()
         composeRule.onNodeWithText(deleteLabel).assertExists()
+    }
+
+    @Test
+    fun exactDestinationRoutine_manageSectionIncludesEditAction() {
+        val exactRoutine = sampleRoutine().copy(
+            type = RoutineType.EXACT_DESTINATION,
+            transportMode = TransportMode.UNKNOWN,
+            lineId = null,
+            lineDesignation = null,
+            directionCode = null,
+            destinationLabel = null,
+            journeyOriginId = "origin-id",
+            journeyOriginName = "Fruängen",
+            journeyDestinationId = "destination-id",
+            journeyDestinationName = "Mariatorget",
+        )
+        setContent(DisruptionsState.NoDisruptions, routine = exactRoutine)
+
+        val heading = composeRule.activity.getString(R.string.routine_details_actions_heading)
+        composeRule.onNodeWithText(heading).performScrollTo().performClick()
+
+        val editLabel = composeRule.activity.getString(R.string.routine_details_edit_action)
+        composeRule.onNodeWithText(editLabel).assertExists()
+    }
+
+    @Test
+    fun exactDestinationTransportPlusAllowsAddingAndRemovingModes() {
+        var savedModes: Set<TransportMode>? = null
+        val exactRoutine = sampleRoutine().copy(
+            type = RoutineType.EXACT_DESTINATION,
+            transportMode = TransportMode.UNKNOWN,
+            lineId = null,
+            lineDesignation = null,
+            directionCode = null,
+            destinationLabel = null,
+            journeyOriginId = "origin-id",
+            journeyOriginName = "Fruängen",
+            journeyDestinationId = "destination-id",
+            journeyDestinationName = "Mariatorget",
+            allowedJourneyTransportModes = setOf(TransportMode.METRO, TransportMode.BUS),
+        )
+        setContent(
+            DisruptionsState.NoDisruptions,
+            routine = exactRoutine,
+            onUpdateJourneyTransportModes = { savedModes = it },
+        )
+
+        val metro = composeRule.activity.getString(R.string.transport_mode_metro)
+        val bus = composeRule.activity.getString(R.string.transport_mode_bus)
+        composeRule.onNodeWithText("$metro, $bus").performScrollTo().assertExists()
+        composeRule.onNodeWithText(composeRule.activity.getString(R.string.transport_mode_unknown)).assertDoesNotExist()
+
+        val changeLabel = composeRule.activity.getString(R.string.routine_details_transport_change)
+        composeRule.onNodeWithContentDescription(changeLabel).performScrollTo().performClick()
+
+        val train = composeRule.activity.getString(R.string.transport_mode_train)
+        composeRule.onNodeWithText(metro).performClick()
+        composeRule.onNodeWithText(train).performClick()
+        composeRule.onNodeWithText(composeRule.activity.getString(R.string.action_save)).performClick()
+
+        assertEquals(setOf(TransportMode.TRAIN, TransportMode.BUS), savedModes)
     }
 
     @Test

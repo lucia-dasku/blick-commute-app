@@ -16,6 +16,7 @@
 # builds from HiltSyncTask).
 agp = "9.2.1"
 kotlin = "2.3.10"
+billing = "9.1.0"
 composeBom = "2026.06.00"
 hilt = "2.59.2"
 ksp = "2.3.9"
@@ -170,6 +171,7 @@ androidx-room-compiler = { group = "androidx.room", name = "room-compiler", vers
 androidx-room-testing = { group = "androidx.room", name = "room-testing", version.ref = "room" }
 
 androidx-datastore-preferences = { group = "androidx.datastore", name = "datastore-preferences", version.ref = "datastore" }
+google-play-billing = { group = "com.android.billingclient", name = "billing", version.ref = "billing" }
 
 hilt-android = { group = "com.google.dagger", name = "hilt-android", version.ref = "hilt" }
 hilt-compiler = { group = "com.google.dagger", name = "hilt-android-compiler", version.ref = "hilt" }

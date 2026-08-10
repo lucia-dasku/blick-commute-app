@@ -11,6 +11,7 @@ import kotlinx.coroutines.flow.first
 import se.blick.app.data.repository.RoutineRepository
 import se.blick.app.domain.model.CommuteRoutine
 import se.blick.app.domain.model.Disruption
+import se.blick.app.domain.model.JourneyPlan
 import se.blick.app.domain.usecase.LiveDeparturesState
 import se.blick.app.notification.NotificationAvailability
 import se.blick.app.notification.NotificationAvailabilityChecker
@@ -20,6 +21,10 @@ import java.time.Instant
 import java.time.ZonedDateTime
 import javax.inject.Inject
 import javax.inject.Singleton
+import se.blick.app.billing.FreePremiumEntitlementRepository
+import se.blick.app.billing.FreeRoutineSelectionStore
+import se.blick.app.billing.PremiumEntitlementRepository
+import se.blick.app.billing.RoutineTierPolicy
 
 /**
  * Pushes [RoutineWidgetUiState] to every placed [BlickRoutineWidget] instance. Never fetches
@@ -28,6 +33,7 @@ import javax.inject.Singleton
  * own doc for exactly which call sites use it.
  */
 interface RoutineWidgetUpdater {
+    suspend fun updateWithJourneys(routine: CommuteRoutine, journeys: List<JourneyPlan>, now: Instant) {}
     /** Called once per [se.blick.app.scheduling.RoutineActiveWindowWorker] loop tick, right
      * after [se.blick.app.notification.RoutineNotifier.showOrUpdate] — reuses the exact
      * [routine]/[departuresState]/[now] already fetched for the notification, via
@@ -146,7 +152,40 @@ class GlanceRoutineWidgetUpdater @Inject constructor(
     private val notificationAvailabilityChecker: NotificationAvailabilityChecker,
     private val clock: Clock,
     private val deviceZoneProvider: DeviceZoneProvider,
+    private val entitlementRepository: PremiumEntitlementRepository = FreePremiumEntitlementRepository,
+    private val freeRoutineSelectionStore: FreeRoutineSelectionStore? = null,
 ) : RoutineWidgetUpdater {
+
+    override suspend fun updateWithJourneys(routine: CommuteRoutine, journeys: List<JourneyPlan>, now: Instant) {
+        val rows = journeys.take(2).map { journey ->
+            WidgetJourneyRow(
+                journey.firstLeg.lineDesignation,
+                journey.firstLeg.transportMode,
+                journey.departureTime,
+                journey.arrivalTime,
+                journey.transferCount,
+                journey.firstLeg.isRealtime,
+            )
+        }
+        val fastest = rows.firstOrNull()
+        val state = if (fastest == null) {
+            RoutineWidgetUiState.ActiveRoutine(
+                RoutineWidgetModel(
+                    routine.id, routine.name, routine.journeyOriginName ?: routine.siteName,
+                    routine.journeyDestinationName, RoutineWidgetContent.Unavailable,
+                ),
+            )
+        } else {
+            RoutineWidgetUiState.ActiveRoutine(
+                RoutineWidgetModel(
+                    routine.id, routine.name, routine.journeyOriginName ?: routine.siteName,
+                    routine.journeyDestinationName, RoutineWidgetContent.Journeys(fastest, rows.getOrNull(1)),
+                    fastest.lineDesignation, fastest.transportMode,
+                ),
+            )
+        }
+        applyToAllInstances(state)
+    }
 
     override suspend fun updateWithDepartures(routine: CommuteRoutine, departuresState: LiveDeparturesState, now: Instant) {
         updateWithDepartures(routine, departuresState, now, disruption = null)
@@ -163,8 +202,14 @@ class GlanceRoutineWidgetUpdater @Inject constructor(
     override suspend fun reconcile() {
         val now = ZonedDateTime.ofInstant(clock.instant(), deviceZoneProvider.currentZone())
         val routines = routineRepository.observeAll().first()
+        val eligibleRoutines = routines.filter { routine ->
+            RoutineTierPolicy.canRun(
+                routine, routines, entitlementRepository.entitlement.value,
+                freeRoutineSelectionStore?.selectedRoutineId?.value,
+            )
+        }
         val notificationsAvailable = notificationAvailabilityChecker.check() == NotificationAvailability.Available
-        applyToAllInstances(decideReconciledWidgetState(routines, now, notificationsAvailable))
+        applyToAllInstances(decideReconciledWidgetState(eligibleRoutines, now, notificationsAvailable))
     }
 
     override suspend fun showNotificationsUnavailable(routine: CommuteRoutine) {

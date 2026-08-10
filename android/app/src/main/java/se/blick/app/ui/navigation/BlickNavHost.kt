@@ -10,6 +10,7 @@ import androidx.navigation.compose.NavHost
 import androidx.navigation.compose.composable
 import androidx.navigation.compose.rememberNavController
 import se.blick.app.ui.screens.about.AboutScreen
+import se.blick.app.ui.screens.premium.PremiumScreen
 import se.blick.app.ui.screens.routinecreate.RoutineCreateScreen
 import se.blick.app.ui.screens.routinedetails.RoutineDetailsScreen
 import se.blick.app.ui.screens.routinedetails.RoutineDetailsViewModel
@@ -28,12 +29,16 @@ fun BlickNavHost(navController: NavHostController = rememberNavController()) {
         composable(Routes.RoutineList.route) {
             RoutineListScreen(
                 onAddRoutine = { navController.navigate(Routes.RoutineCreate.route) },
+                onOpenPremium = { navController.navigate(Routes.Premium.route) },
                 onOpenRoutine = { routineId -> navController.navigate(Routes.RoutineDetails.routeFor(routineId)) },
                 onOpenAbout = { navController.navigate(Routes.About.route) },
             )
         }
         composable(Routes.About.route) {
             AboutScreen(onBack = { navController.popBackStack() })
+        }
+        composable(Routes.Premium.route) {
+            PremiumScreen(onBack = { navController.popBackStack() })
         }
         composable(Routes.RoutineCreate.route) {
             RoutineCreateScreen(onDone = { navController.popBackStack() })

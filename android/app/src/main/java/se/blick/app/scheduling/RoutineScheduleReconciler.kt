@@ -8,6 +8,11 @@ import se.blick.app.widget.RoutineWidgetUpdater
 import se.blick.app.widget.runWidgetUpdateSafely
 import javax.inject.Inject
 import javax.inject.Singleton
+import se.blick.app.billing.FreePremiumEntitlementRepository
+import se.blick.app.billing.FreeRoutineSelectionStore
+import se.blick.app.billing.PremiumEntitlementRepository
+import se.blick.app.billing.RoutineTierPolicy
+import se.blick.app.domain.usecase.RoutineScheduleOverlapValidator
 
 private const val LOG_TAG = "RoutineScheduleReconciler"
 
@@ -49,6 +54,8 @@ class RoutineScheduleReconciler @Inject constructor(
     private val routineRepository: RoutineRepository,
     private val routineScheduler: RoutineScheduler,
     private val routineWidgetUpdater: RoutineWidgetUpdater,
+    private val entitlementRepository: PremiumEntitlementRepository = FreePremiumEntitlementRepository,
+    private val freeRoutineSelectionStore: FreeRoutineSelectionStore? = null,
 ) {
     suspend fun reconcileAll() {
         val routines = try {
@@ -59,8 +66,24 @@ class RoutineScheduleReconciler @Inject constructor(
             Log.w(LOG_TAG, "Failed to read the routine list during reconcile; scheduling nothing this pass", e)
             emptyList()
         }
+        val safeRoutines = if (freeRoutineSelectionStore != null) {
+            RoutineScheduleOverlapValidator.nonOverlapping(routines)
+        } else {
+            routines
+        }
         routines.forEach { routine ->
             if (!routine.enabled) return@forEach
+            if (safeRoutines.none { it.id == routine.id }) {
+                routineScheduler.cancelActivation(routine.id)
+                return@forEach
+            }
+            if (freeRoutineSelectionStore != null && !RoutineTierPolicy.canRun(
+                    routine, routines, entitlementRepository.entitlement.value,
+                    freeRoutineSelectionStore.selectedRoutineId.value,
+                )) {
+                routineScheduler.cancelActivation(routine.id)
+                return@forEach
+            }
             try {
                 routineScheduler.scheduleActivation(routine)
             } catch (e: CancellationException) {

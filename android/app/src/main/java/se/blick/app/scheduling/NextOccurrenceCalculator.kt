@@ -34,9 +34,8 @@ sealed interface NextOccurrence {
  * WorkManager/JobScheduler deferral, never an exact-to-the-second guarantee — no
  * `SCHEDULE_EXACT_ALARM`/`USE_EXACT_ALARM` is used anywhere in this codebase).
  *
- * Same-day windows only — matching [CommuteRoutine.isTimeRangeValid]'s existing constraint
- * that `startTime` must be before `endTime`; an overnight (crossing-midnight) window is not a
- * representable [CommuteRoutine] today, so this calculator does not attempt to support one.
+ * Windows may cross midnight. The selected weekday is the start day, and an end time equal to
+ * or before the start is resolved on the following date.
  *
  * [ZonedDateTime] (not [java.time.Instant]) is used throughout deliberately: routines are
  * defined in the device's local wall-clock time (see [CommuteRoutine.startTime]/`endTime`,
@@ -67,15 +66,16 @@ object NextOccurrenceCalculator {
     ): NextOccurrence {
         if (routine.activeDays.isEmpty()) return NextOccurrence.None
 
-        for (dayOffset in 0 until SEARCH_HORIZON_DAYS) {
+        for (dayOffset in -1 until SEARCH_HORIZON_DAYS) {
             val candidateDate = now.toLocalDate().plusDays(dayOffset)
-            if (candidateDate == excludedDate) continue
             if (candidateDate.dayOfWeek !in routine.activeDays) continue
 
             val candidateStart = ZonedDateTime.of(candidateDate, routine.startTime, now.zone)
-            val candidateEnd = ZonedDateTime.of(candidateDate, routine.endTime, now.zone)
+            val endDate = if (routine.endTime.isAfter(routine.startTime)) candidateDate else candidateDate.plusDays(1)
+            val candidateEnd = ZonedDateTime.of(endDate, routine.endTime, now.zone)
+            if (candidateDate == excludedDate || endDate == excludedDate) continue
 
-            if (dayOffset == 0L && now.isBefore(candidateEnd) && !now.isBefore(candidateStart)) {
+            if (now.isBefore(candidateEnd) && !now.isBefore(candidateStart)) {
                 return NextOccurrence.ActiveNow(candidateEnd)
             }
             if (candidateStart.isAfter(now)) {

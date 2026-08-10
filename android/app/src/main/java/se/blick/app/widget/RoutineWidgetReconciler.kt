@@ -36,9 +36,11 @@ internal fun decideReconciledWidgetState(
     now: ZonedDateTime,
     notificationsAvailable: Boolean = true,
 ): RoutineWidgetUiState {
-    val routine = routines.firstOrNull { it.enabled } ?: return RoutineWidgetUiState.NoActiveCommute
-    val occurrence = NextOccurrenceCalculator.nextOccurrence(routine, now, excludedDate = routine.pausedDate)
-    if (occurrence !is NextOccurrence.ActiveNow) return RoutineWidgetUiState.NoActiveCommute
+    val routine = routines.firstOrNull { candidate ->
+        candidate.enabled && NextOccurrenceCalculator.nextOccurrence(
+            candidate, now, excludedDate = candidate.pausedDate,
+        ) is NextOccurrence.ActiveNow
+    } ?: return RoutineWidgetUiState.NoActiveCommute
     return if (notificationsAvailable) {
         RoutineWidgetUiState.ActiveRoutine(RoutineWidgetMapper.map(routine, LiveDeparturesState.Loading, now.toInstant()))
     } else {

@@ -29,4 +29,10 @@ data class RoutineEntity(
     val endTimeMinutes: Int,
     val enabled: Boolean,
     val pausedDateEpochDay: Long?,
+    val routineType: String = "LINE_DIRECTION",
+    val journeyOriginId: String? = null,
+    val journeyOriginName: String? = null,
+    val journeyDestinationId: String? = null,
+    val journeyDestinationName: String? = null,
+    val allowedJourneyTransportModes: String = "METRO,TRAIN,BUS,TRAM,FERRY",
 )

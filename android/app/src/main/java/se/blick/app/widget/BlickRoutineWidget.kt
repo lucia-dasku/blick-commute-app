@@ -449,6 +449,36 @@ private fun WidgetContentBody(context: Context, model: RoutineWidgetModel, compa
         RoutineWidgetContent.Offline -> BodyText(context.getString(R.string.notification_offline), tier)
         RoutineWidgetContent.Unavailable -> BodyText(context.getString(R.string.notification_unavailable), tier)
         RoutineWidgetContent.NotificationsUnavailable -> BodyText(context.getString(R.string.widget_notifications_unavailable), tier)
+        is RoutineWidgetContent.Journeys -> JourneyMainContent(context, content, compact, tier)
+    }
+}
+
+@Composable
+private fun JourneyMainContent(context: Context, content: RoutineWidgetContent.Journeys, compact: Boolean, tier: WidgetSizeTier) {
+    val now = java.time.Instant.now()
+    val fastestMinutes = java.time.Duration.between(now, content.fastest.departureTime).toMinutes().coerceAtLeast(0)
+    val arrivalFormatter = java.time.format.DateTimeFormatter.ofPattern("HH:mm").withZone(java.time.ZoneId.systemDefault())
+    Column(modifier = GlanceModifier.fillMaxWidth()) {
+        Text(
+            context.getString(R.string.widget_countdown_minutes_format, fastestMinutes),
+            maxLines = 1,
+            style = TextStyle(fontWeight = FontWeight.Bold, fontSize = tier.countdownSize, color = onBackgroundColor()),
+        )
+        Text(
+            context.getString(R.string.widget_journey_arrival, arrivalFormatter.format(content.fastest.arrivalTime)),
+            maxLines = 1,
+            style = TextStyle(fontSize = tier.secondarySize, color = onSurfaceVariantColor()),
+        )
+        if (!compact) content.alternative?.let { alternative ->
+            val alternativeMinutes = java.time.Duration.between(now, alternative.departureTime).toMinutes().coerceAtLeast(0)
+            Spacer(modifier = GlanceModifier.height(8.dp))
+            Text(
+                context.getString(R.string.widget_journey_alternative, alternative.lineDesignation.orEmpty(), alternativeMinutes,
+                    arrivalFormatter.format(alternative.arrivalTime)),
+                maxLines = 1,
+                style = TextStyle(fontSize = tier.secondarySize, color = onSurfaceVariantColor()),
+            )
+        }
     }
 }
 

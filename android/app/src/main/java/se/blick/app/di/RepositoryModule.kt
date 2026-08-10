@@ -22,11 +22,21 @@ import se.blick.app.data.repository.RoutineRepository
 import se.blick.app.data.repository.RoutineWorkOwnershipRepository
 import se.blick.app.data.repository.StaleSnapshotRepository
 import se.blick.app.data.repository.StopRepository
+import se.blick.app.data.repository.JourneyRepository
+import se.blick.app.data.repository.RemoteJourneyRepository
 import javax.inject.Singleton
+import se.blick.app.billing.GooglePlayPremiumEntitlementRepository
+import se.blick.app.billing.PremiumEntitlementRepository
 
 @Module
 @InstallIn(SingletonComponent::class)
 abstract class RepositoryModule {
+
+    @Binds
+    @Singleton
+    abstract fun bindPremiumEntitlementRepository(
+        impl: GooglePlayPremiumEntitlementRepository,
+    ): PremiumEntitlementRepository
 
     @Binds
     @Singleton
@@ -51,6 +61,10 @@ abstract class RepositoryModule {
     @Binds
     @Singleton
     abstract fun bindStopRepository(impl: RemoteStopRepository): StopRepository
+
+    @Binds
+    @Singleton
+    abstract fun bindJourneyRepository(impl: RemoteJourneyRepository): JourneyRepository
 
     @Binds
     @Singleton

@@ -12,7 +12,7 @@ import androidx.sqlite.db.SupportSQLiteDatabase
         RoutineWorkOwnershipEntity::class,
         RoutineOccurrenceRuntimeEntity::class,
     ],
-    version = 4,
+    version = 6,
     exportSchema = true,
 )
 abstract class BlickDatabase : RoomDatabase() {
@@ -83,6 +83,29 @@ val MIGRATION_3_4: Migration = object : Migration(3, 4) {
                 FOREIGN KEY(`routineId`) REFERENCES `routines`(`id`) ON DELETE CASCADE
             )
             """.trimIndent(),
+        )
+    }
+}
+
+/** Adds the explicit routine discriminator and Journey Planner identifiers without changing
+ * existing line routines. Existing rows remain LINE_DIRECTION by SQL default. */
+val MIGRATION_4_5: Migration = object : Migration(4, 5) {
+    override fun migrate(db: SupportSQLiteDatabase) {
+        db.execSQL("ALTER TABLE `routines` ADD COLUMN `routineType` TEXT NOT NULL DEFAULT 'LINE_DIRECTION'")
+        db.execSQL("ALTER TABLE `routines` ADD COLUMN `journeyOriginId` TEXT")
+        db.execSQL("ALTER TABLE `routines` ADD COLUMN `journeyOriginName` TEXT")
+        db.execSQL("ALTER TABLE `routines` ADD COLUMN `journeyDestinationId` TEXT")
+        db.execSQL("ALTER TABLE `routines` ADD COLUMN `journeyDestinationName` TEXT")
+    }
+}
+
+/** Adds the per-routine Journey Planner mode allow-list. Existing exact-destination routines
+ * keep all regular SL modes enabled until the user narrows the selection. */
+val MIGRATION_5_6: Migration = object : Migration(5, 6) {
+    override fun migrate(db: SupportSQLiteDatabase) {
+        db.execSQL(
+            "ALTER TABLE `routines` ADD COLUMN `allowedJourneyTransportModes` TEXT NOT NULL " +
+                "DEFAULT 'METRO,TRAIN,BUS,TRAM,FERRY'",
         )
     }
 }

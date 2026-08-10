@@ -2,10 +2,16 @@ package se.blick.app.data.remote
 
 import retrofit2.http.GET
 import retrofit2.http.Query
+import retrofit2.http.Body
+import retrofit2.http.POST
 import se.blick.app.data.remote.dto.DeparturesResponseDto
 import se.blick.app.data.remote.dto.DisruptionsResponseDto
 import se.blick.app.data.remote.dto.StopSearchResponseDto
 import se.blick.app.data.remote.dto.SuccessEnvelopeDto
+import se.blick.app.data.remote.dto.PurchaseVerificationRequestDto
+import se.blick.app.data.remote.dto.PurchaseVerificationResponseDto
+import se.blick.app.data.remote.dto.JourneyLocationSearchDto
+import se.blick.app.data.remote.dto.JourneysResponseDto
 
 /**
  * Retrofit service definition. Every response is wrapped in the success envelope
@@ -28,6 +34,21 @@ interface RetrofitBlickApiService {
         @Query("lineId") lineId: Long?,
         @Query("transportMode") transportMode: String?,
     ): SuccessEnvelopeDto<DisruptionsResponseDto>
+
+    @POST("api/v1/billing/verify")
+    suspend fun verifyPurchase(
+        @Body request: PurchaseVerificationRequestDto,
+    ): SuccessEnvelopeDto<PurchaseVerificationResponseDto>
+
+    @GET("api/v1/journeys/locations/search")
+    suspend fun searchJourneyLocations(@Query("query") query: String): SuccessEnvelopeDto<JourneyLocationSearchDto>
+
+    @GET("api/v1/journeys")
+    suspend fun getJourneys(
+        @Query("originId") originId: String,
+        @Query("destinationId") destinationId: String,
+        @Query("transportModes") transportModes: String,
+    ): SuccessEnvelopeDto<JourneysResponseDto>
 }
 
 class RetrofitBlickApiClient(
@@ -38,4 +59,9 @@ class RetrofitBlickApiClient(
         service.getDepartures(siteId, forecastMinutes).data
     override suspend fun getDisruptions(siteId: Long, lineId: Long?, transportMode: String?) =
         service.getDisruptions(siteId, lineId, transportMode).data
+    override suspend fun verifyPurchase(productId: String, purchaseToken: String) =
+        service.verifyPurchase(PurchaseVerificationRequestDto(productId, purchaseToken)).data
+    override suspend fun searchJourneyLocations(query: String) = service.searchJourneyLocations(query).data
+    override suspend fun getJourneys(originId: String, destinationId: String, transportModes: String) =
+        service.getJourneys(originId, destinationId, transportModes).data
 }

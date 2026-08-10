@@ -7,12 +7,40 @@
     <string name="routine_list_title">Your commute routines</string>
     <string name="routine_list_empty">No routines yet. Add one to see departures automatically.</string>
     <string name="routine_list_add">Add routine</string>
-    <string name="routine_list_one_routine_limit_title">One routine at a time</string>
-    <string name="routine_list_one_routine_limit_body">This beta only supports one saved routine. Edit or delete your existing routine before creating another.</string>
-    <string name="routine_list_one_routine_limit_confirm">Got it</string>
+    <string name="routine_list_free_limit_title">Free includes one routine</string>
+    <string name="routine_list_free_limit_body">Upgrade to Blick Premium to save multiple routines and compare complete journeys to an exact destination.</string>
+    <string name="routine_list_premium_locked">Paused · Premium routine</string>
+    <string name="routine_list_use_free">Use as Free routine</string>
+    <string name="routine_create_origin_label">Origin</string>
+    <string name="routine_create_destination_label">Destination</string>
+    <string name="routine_create_destination_premium_hint">Available with Blick Premium</string>
+    <string name="routine_create_destination_optional_hint">Optional — leave blank to choose a line and direction</string>
+    <string name="routine_create_destination_search_error">Couldn’t search for destinations. Check your connection and try again.</string>
+    <string name="routine_create_resolving_origin">Preparing this origin for journey comparison…</string>
+    <string name="routine_create_origin_resolution_error">Couldn’t use this origin for an exact journey. Try selecting it again.</string>
+    <string name="routine_create_continue">Continue</string>
+    <string name="premium_title">Blick Premium</string>
+    <string name="premium_heading">Make every regular journey effortless</string>
+    <string name="premium_feature_multiple">Multiple saved routines</string>
+    <string name="premium_feature_destinations">Exact-destination routines</string>
+    <string name="premium_feature_fastest">Fastest-arrival journey comparison</string>
+    <string name="premium_feature_once">One-time purchase, no subscription</string>
+    <string name="premium_purchase">Purchase Premium</string>
+    <string name="premium_purchase_with_price">Purchase for %1$s</string>
+    <string name="premium_restore">Restore purchase</string>
+    <string name="premium_view">View Premium</string>
+    <string name="premium_active">Premium is active on this Google Play account.</string>
+    <string name="premium_pending">Your purchase is pending. Premium will unlock after Google Play confirms payment.</string>
+    <string name="premium_unavailable">Google Play is temporarily unavailable. Previously verified access is preserved.</string>
+    <string name="premium_debug_note">Developer testing only. This local override does not simulate a Google Play purchase and is unavailable in release builds.</string>
+    <string name="premium_debug_enable">Developer: Unlock Premium</string>
+    <string name="premium_debug_disable">Developer: Return to Free</string>
+    <string name="premium_debug_active">Premium is active through the debug testing override.</string>
 
     <string name="routine_create_title">New routine</string>
     <string name="action_back">Back</string>
+    <string name="action_save">Save</string>
+    <string name="action_cancel">Cancel</string>
     <!-- Shared across the create and details screens for a scheduling-only retry — see
          RoutineCreateViewModel.retryScheduling/RoutineDetailsViewModel.retryScheduling's own docs. -->
     <string name="action_retry">Try again</string>
@@ -37,6 +65,27 @@
     <string name="routine_details_status_disabled">Disabled</string>
     <string name="routine_details_status_paused_today">Paused today</string>
     <string name="routine_details_departures_heading">Next departures</string>
+    <string name="routine_details_journeys_heading">Fastest journeys</string>
+    <string name="routine_details_journeys_unavailable">Couldn\'t compare journeys right now.</string>
+    <string name="routine_details_no_journeys">No journeys found right now.</string>
+    <string name="routine_details_transport_change">Change transport</string>
+    <string name="routine_details_transport_dialog_title">Choose transport</string>
+    <string name="routine_details_transport_dialog_body">Blick will only offer journeys whose public-transport legs use your selected types. Walking transfers are always allowed.</string>
+    <string name="routine_details_transport_one_required">Select at least one transport type.</string>
+    <string name="routine_details_transport_update_failed">Couldn\'t update transport choices. Try again.</string>
+    <string name="journey_fastest">FASTEST</string>
+    <string name="journey_alternative">ALTERNATIVE</string>
+    <string name="journey_departure_in">in %1$d min</string>
+    <string name="journey_direct">Direct</string>
+    <string name="journey_changes">%1$d changes</string>
+    <string name="journey_arrives">Arrives %1$s</string>
+    <string name="journey_later">%1$d min later</string>
+    <string name="journey_tap_details">Tap for the complete journey</string>
+    <string name="journey_mode_metro">Metro</string>
+    <string name="journey_mode_commuter_rail">Commuter rail</string>
+    <string name="journey_mode_bus">Bus</string>
+    <string name="journey_mode_tram">Tram</string>
+    <string name="journey_mode_ferry">Ferry</string>
     <string name="routine_details_refresh_action">Refresh</string>
     <string name="routine_details_not_found">This routine could not be found. It may have been deleted.</string>
     <string name="routine_details_no_departures">No upcoming departures right now.</string>
@@ -97,13 +146,12 @@
     <!-- Page title only — the step number/count is a separate string (routine_create_step_label
          below), rendered as its own muted secondary line by BlickWizardHeader rather than
          combined into one sentence here (see the routine-creation header redesign). -->
-    <string name="routine_create_step_stop">Choose a stop</string>
+    <string name="routine_create_step_stop">Origin and destination</string>
     <string name="routine_create_step_mode">Choose a transport mode</string>
     <string name="routine_create_step_direction">Choose a line and direction</string>
     <string name="routine_create_step_schedule">Days &amp; time</string>
     <string name="routine_create_step_label">Step %1$d of %2$d</string>
 
-    <string name="routine_create_stop_search_label">Search for a stop</string>
     <string name="routine_create_no_results">No stops found.</string>
     <!-- Deliberately generic: never interpolate the underlying exception message, class
          name, or hostname here — see RoutineCreateViewModel's class doc. The real cause is
@@ -121,8 +169,9 @@
     <string name="routine_create_end_time_label">End time</string>
     <string name="routine_create_name_label">Routine name</string>
     <string name="routine_create_error_no_days">Select at least one day.</string>
-    <string name="routine_create_error_time_range">End time must be after start time.</string>
+    <string name="routine_create_error_time_range">Start and end time must be different.</string>
     <string name="routine_create_error_duration_limit">Your active commute window can be up to 5 hours.</string>
+    <string name="routine_create_error_overlap">This schedule overlaps another active routine. Choose a different time.</string>
     <string name="routine_create_save">Save routine</string>
     <string name="routine_create_save_error">Couldn\'t save your routine. Check your connection and try again.</string>
     <!-- Room already succeeded here — deliberately distinct from routine_create_save_error,
@@ -168,11 +217,11 @@
     <string name="about_trafiklab_link">Trafiklab.se</string>
     <string name="about_disclaimer">Blick is an independent app and is not affiliated with, operated by or endorsed by SL or Trafiklab.</string>
     <string name="about_section_privacy_policy">Privacy Policy</string>
-    <string name="about_privacy_last_updated">Last updated: 4 August 2026</string>
+    <string name="about_privacy_last_updated">Last updated: 10 August 2026</string>
     <string name="about_privacy_operator">Blick is operated by Blick Labs.</string>
     <string name="about_privacy_no_account">Blick does not require an account and does not collect your name, email address, precise location, contacts or advertising ID. Blick contains no advertising or analytics.</string>
     <string name="about_privacy_local_storage">Your routines, preferences and cached departure information are stored locally on your device and are not backed up. You can remove this information by deleting your routine, clearing Blick\'s app data or uninstalling the app.</string>
-    <string name="about_privacy_backend">To provide departure and disruption information, Blick sends station searches and selected route identifiers to its backend. Our hosting provider may automatically process limited technical information, such as your IP address and request logs, to deliver and secure the service. Public transport information is obtained from Trafiklab and SL services.</string>
+    <string name="about_privacy_backend">To provide departure, journey and disruption information, Blick sends station searches and selected route identifiers to its backend. If you buy or restore Premium, Blick also sends the Google Play product ID and purchase token to its backend so Google can validate the entitlement; Blick does not receive your payment-card details. Our hosting provider may automatically process limited technical information, such as your IP address and request logs, to deliver and secure the service. Public transport information is obtained from Trafiklab and SL services.</string>
     <string name="about_privacy_usage">We use this information only to operate, secure and improve Blick. We do not sell personal data or use it for advertising.</string>
     <string name="about_privacy_contact">For privacy questions or deletion requests, contact: contactblicklabs@gmail.com</string>
     <string name="about_privacy_updates">We may update this policy if Blick\'s features or data practices change.</string>
@@ -274,6 +323,8 @@
          two resources concatenated at render time ("Next in 16 min"). -->
     <string name="widget_countdown_minutes_format">%1$d min</string>
     <string name="widget_next_departure_format">Next in %1$d min</string>
+    <string name="widget_journey_arrival">Arrives %1$s</string>
+    <string name="widget_journey_alternative">%1$s · in %2$d min · arrives %3$s</string>
     <!-- A short, always-visible header marker for RoutineWidgetContent.Stale — shown
          regardless of compact/full layout or whether any stale departure is still upcoming, see
          StaleIndicator's own doc for why this is the one guaranteed place a stale-data warning

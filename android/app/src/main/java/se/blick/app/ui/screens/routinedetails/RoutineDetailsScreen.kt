@@ -29,9 +29,11 @@ import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.KeyboardArrowDown
 import androidx.compose.material.icons.filled.KeyboardArrowUp
+import androidx.compose.material.icons.filled.Add
 import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.Button
 import androidx.compose.material3.ButtonDefaults
+import androidx.compose.material3.Checkbox
 import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.HorizontalDivider
@@ -70,6 +72,13 @@ import se.blick.app.domain.usecase.DisruptionsState
 import se.blick.app.domain.usecase.LiveDeparturesState
 import se.blick.app.domain.usecase.PreparedDeparture
 import se.blick.app.domain.model.TransportMode
+import se.blick.app.domain.model.JourneyPlan
+import se.blick.app.domain.model.JOURNEY_TRANSPORT_MODE_OPTIONS
+import se.blick.app.domain.model.RoutineType
+import java.time.Duration
+import java.time.Instant
+import java.time.ZoneId
+import java.time.format.DateTimeFormatter
 import se.blick.app.locale.currentBlickLocale
 import se.blick.app.notification.NotificationAvailability
 import se.blick.app.notification.NotificationPostResult
@@ -150,6 +159,11 @@ fun RoutineDetailsScreen(
                 departuresState = uiState.departures,
                 isRefreshing = uiState.isRefreshingDepartures,
                 disruptionsState = uiState.disruptions,
+                journeys = uiState.journeys,
+                journeysUnavailable = uiState.journeysUnavailable,
+                isUpdatingJourneyTransportModes = uiState.isUpdatingJourneyTransportModes,
+                journeyTransportModesUpdateFailed = uiState.journeyTransportModesUpdateFailed,
+                onUpdateJourneyTransportModes = viewModel::updateJourneyTransportModes,
                 onRefresh = viewModel::refresh,
                 onEdit = { onEdit(routine.id) },
                 isTogglingEnabled = uiState.isTogglingEnabled,
@@ -207,6 +221,57 @@ fun RoutineDetailsScreen(
 }
 
 @Composable
+private fun JourneyComparisonSection(journeys: List<JourneyPlan>, unavailable: Boolean) {
+    when {
+        unavailable -> Text(stringResource(R.string.routine_details_journeys_unavailable), color = MaterialTheme.colorScheme.error)
+        journeys.isEmpty() -> Text(stringResource(R.string.routine_details_no_journeys))
+        else -> Column(verticalArrangement = Arrangement.spacedBy(12.dp)) {
+            val fastestArrival = journeys.first().arrivalTime
+            journeys.take(2).forEachIndexed { index, journey ->
+                var expanded by remember(journey.journeyId) { mutableStateOf(false) }
+                Surface(
+                    tonalElevation = if (index == 0) 3.dp else 1.dp,
+                    shape = MaterialTheme.shapes.medium,
+                    modifier = Modifier.fillMaxWidth().clickable { expanded = !expanded },
+                ) {
+                    Column(Modifier.padding(16.dp), verticalArrangement = Arrangement.spacedBy(6.dp)) {
+                        Text(
+                            stringResource(if (index == 0) R.string.journey_fastest else R.string.journey_alternative),
+                            style = MaterialTheme.typography.labelLarge,
+                        )
+                        Row(horizontalArrangement = Arrangement.spacedBy(8.dp), verticalAlignment = Alignment.CenterVertically) {
+                            journey.firstLeg.lineDesignation?.let {
+                                LineBadge(it, journey.firstLeg.transportMode)
+                            }
+                            Text(
+                                stringResource(journey.firstLeg.transportMode.journeyLabelResId()),
+                                style = MaterialTheme.typography.titleMedium,
+                            )
+                            val minutes = Duration.between(Instant.now(), journey.departureTime).toMinutes().coerceAtLeast(0)
+                            Text(stringResource(R.string.journey_departure_in, minutes), style = MaterialTheme.typography.titleMedium)
+                        }
+                        val changes = if (journey.transferCount == 0) stringResource(R.string.journey_direct)
+                            else stringResource(R.string.journey_changes, journey.transferCount)
+                        val arrival = DateTimeFormatter.ofPattern("HH:mm").withZone(ZoneId.systemDefault()).format(journey.arrivalTime)
+                        val later = Duration.between(fastestArrival, journey.arrivalTime).toMinutes()
+                        Text(if (index == 0) "$changes · ${stringResource(R.string.journey_arrives, arrival)}"
+                            else "$changes · ${stringResource(R.string.journey_arrives, arrival)} · ${stringResource(R.string.journey_later, later)}")
+                        if (expanded) {
+                            journey.legs.forEach { leg ->
+                                Text("${leg.originName} → ${leg.destinationName}${leg.lineDesignation?.let { " · $it" }.orEmpty()}")
+                                leg.disruptions.forEach { Text(it, color = MaterialTheme.colorScheme.error) }
+                            }
+                        } else {
+                            Text(stringResource(R.string.journey_tap_details), style = MaterialTheme.typography.bodySmall)
+                        }
+                    }
+                }
+            }
+        }
+    }
+}
+
+@Composable
 private fun CenteredBox(modifier: Modifier = Modifier, content: @Composable () -> Unit) {
     Box(modifier, contentAlignment = Alignment.Center) { content() }
 }
@@ -219,6 +284,11 @@ internal fun RoutineDetailsContent(
     departuresState: LiveDeparturesState,
     isRefreshing: Boolean,
     disruptionsState: DisruptionsState,
+    journeys: List<JourneyPlan> = emptyList(),
+    journeysUnavailable: Boolean = false,
+    isUpdatingJourneyTransportModes: Boolean = false,
+    journeyTransportModesUpdateFailed: Boolean = false,
+    onUpdateJourneyTransportModes: (Set<TransportMode>) -> Unit = {},
     onRefresh: () -> Unit,
     onEdit: () -> Unit,
     isTogglingEnabled: Boolean,
@@ -255,7 +325,7 @@ internal fun RoutineDetailsContent(
         // message is noise once that's confirmed, not useful signal. Loading and Unavailable are
         // each still shown -- neither one means "no disruptions", just "don't know yet" /
         // "couldn't check".
-        if (disruptionsState !is DisruptionsState.NoDisruptions) {
+        if (routine.type == RoutineType.LINE_DIRECTION && disruptionsState !is DisruptionsState.NoDisruptions) {
             Text(stringResource(R.string.routine_details_disruptions_heading), style = MaterialTheme.typography.titleMedium)
             Spacer(Modifier.height(12.dp))
             DisruptionsSection(disruptionsState)
@@ -273,7 +343,10 @@ internal fun RoutineDetailsContent(
             horizontalArrangement = Arrangement.SpaceBetween,
             verticalAlignment = Alignment.CenterVertically,
         ) {
-            Text(stringResource(R.string.routine_details_departures_heading), style = MaterialTheme.typography.titleMedium)
+            Text(
+                stringResource(if (routine.type == RoutineType.EXACT_DESTINATION) R.string.routine_details_journeys_heading else R.string.routine_details_departures_heading),
+                style = MaterialTheme.typography.titleMedium,
+            )
             Button(onClick = onRefresh, enabled = !isRefreshing) {
                 Text(stringResource(R.string.routine_details_refresh_action))
             }
@@ -284,7 +357,11 @@ internal fun RoutineDetailsContent(
         }
         Spacer(Modifier.height(12.dp))
 
-        DeparturesSection(departuresState, routine.transportMode, locale, onRefresh)
+        if (routine.type == RoutineType.EXACT_DESTINATION) {
+            JourneyComparisonSection(journeys, journeysUnavailable)
+        } else {
+            DeparturesSection(departuresState, routine.transportMode, locale, onRefresh)
+        }
 
         // Pause/resume today lives here, directly under the departures it affects, rather than
         // inside the (now collapsible) Manage routine section below -- see PauseTodayButton's
@@ -314,7 +391,16 @@ internal fun RoutineDetailsContent(
         Text(stringResource(R.string.routine_details_info_heading), style = MaterialTheme.typography.titleMedium)
 
         Spacer(Modifier.height(12.dp))
-        DetailRow(stringResource(R.string.routine_details_mode_label), stringResource(routine.transportMode.detailsLabelResId()))
+        if (routine.type == RoutineType.EXACT_DESTINATION) {
+            JourneyTransportModesRow(
+                selectedModes = routine.allowedJourneyTransportModes,
+                isSaving = isUpdatingJourneyTransportModes,
+                updateFailed = journeyTransportModesUpdateFailed,
+                onSave = onUpdateJourneyTransportModes,
+            )
+        } else {
+            DetailRow(stringResource(R.string.routine_details_mode_label), stringResource(routine.transportMode.detailsLabelResId()))
+        }
         routine.lineDesignation?.let { designation ->
             LineDetailRow(stringResource(R.string.routine_details_line_label), designation, routine.transportMode)
         }
@@ -782,6 +868,107 @@ private fun LiveUpdatePromotionRow(isLiveUpdatePromotable: Boolean) {
     }
 }
 
+@Composable
+private fun JourneyTransportModesRow(
+    selectedModes: Set<TransportMode>,
+    isSaving: Boolean,
+    updateFailed: Boolean,
+    onSave: (Set<TransportMode>) -> Unit,
+) {
+    var showDialog by remember { mutableStateOf(false) }
+    var draftModes by remember(selectedModes, showDialog) { mutableStateOf(selectedModes) }
+    val selectedLabels = JOURNEY_TRANSPORT_MODE_OPTIONS
+        .filter(selectedModes::contains)
+        .map { mode -> stringResource(mode.detailsLabelResId()) }
+        .joinToString(", ")
+
+    Column {
+        Row(
+            modifier = Modifier.fillMaxWidth().padding(vertical = 4.dp),
+            horizontalArrangement = Arrangement.SpaceBetween,
+            verticalAlignment = Alignment.CenterVertically,
+        ) {
+            Text(
+                stringResource(R.string.routine_details_mode_label),
+                style = MaterialTheme.typography.bodyMedium,
+                color = MaterialTheme.colorScheme.secondary,
+            )
+            Row(verticalAlignment = Alignment.CenterVertically) {
+                Text(selectedLabels, style = MaterialTheme.typography.bodyMedium)
+                IconButton(
+                    onClick = { showDialog = true },
+                    enabled = !isSaving,
+                ) {
+                    Icon(
+                        Icons.Filled.Add,
+                        contentDescription = stringResource(R.string.routine_details_transport_change),
+                    )
+                }
+            }
+        }
+        if (updateFailed) {
+            Text(
+                stringResource(R.string.routine_details_transport_update_failed),
+                color = MaterialTheme.colorScheme.error,
+                style = MaterialTheme.typography.bodySmall,
+            )
+        }
+    }
+
+    if (showDialog) {
+        AlertDialog(
+            onDismissRequest = { if (!isSaving) showDialog = false },
+            title = { Text(stringResource(R.string.routine_details_transport_dialog_title)) },
+            text = {
+                Column {
+                    Text(stringResource(R.string.routine_details_transport_dialog_body))
+                    Spacer(Modifier.height(8.dp))
+                    JOURNEY_TRANSPORT_MODE_OPTIONS.forEach { mode ->
+                        val checked = mode in draftModes
+                        Row(
+                            modifier = Modifier.fillMaxWidth().clickable {
+                                draftModes = if (checked) draftModes - mode else draftModes + mode
+                            },
+                            verticalAlignment = Alignment.CenterVertically,
+                        ) {
+                            Checkbox(
+                                checked = checked,
+                                onCheckedChange = { isChecked ->
+                                    draftModes = if (isChecked) draftModes + mode else draftModes - mode
+                                },
+                            )
+                            Text(stringResource(mode.detailsLabelResId()))
+                        }
+                    }
+                    if (draftModes.isEmpty()) {
+                        Text(
+                            stringResource(R.string.routine_details_transport_one_required),
+                            color = MaterialTheme.colorScheme.error,
+                            style = MaterialTheme.typography.bodySmall,
+                        )
+                    }
+                }
+            },
+            confirmButton = {
+                TextButton(
+                    onClick = {
+                        onSave(draftModes)
+                        showDialog = false
+                    },
+                    enabled = draftModes.isNotEmpty() && !isSaving,
+                ) {
+                    Text(stringResource(R.string.action_save))
+                }
+            },
+            dismissButton = {
+                TextButton(onClick = { showDialog = false }, enabled = !isSaving) {
+                    Text(stringResource(R.string.action_cancel))
+                }
+            },
+        )
+    }
+}
+
 /** [dotColor] is null for every row except Status -- see that call site's own doc on why only
  * Enabled/Disabled (never Paused today) get one. Same small dot/gap/vertical-centering as the
  * departure list's own Live indicator (see [DepartureRow]), so both read as the same visual
@@ -1018,4 +1205,13 @@ private fun TransportMode.detailsLabelResId(): Int = when (this) {
     TransportMode.FERRY -> R.string.transport_mode_ferry
     TransportMode.TAXI -> R.string.transport_mode_taxi
     TransportMode.UNKNOWN -> R.string.transport_mode_unknown
+}
+
+private fun TransportMode.journeyLabelResId(): Int = when (this) {
+    TransportMode.METRO -> R.string.journey_mode_metro
+    TransportMode.TRAIN -> R.string.journey_mode_commuter_rail
+    TransportMode.BUS -> R.string.journey_mode_bus
+    TransportMode.TRAM -> R.string.journey_mode_tram
+    TransportMode.SHIP, TransportMode.FERRY -> R.string.journey_mode_ferry
+    TransportMode.TAXI, TransportMode.UNKNOWN -> R.string.transport_mode_unknown
 }
