@@ -15,6 +15,9 @@ interface RoutineDao {
     @Query("SELECT * FROM routines WHERE id = :id")
     suspend fun getById(id: String): RoutineEntity?
 
+    @Query("SELECT * FROM routines ORDER BY name ASC")
+    suspend fun getAll(): List<RoutineEntity>
+
     // @Upsert (insert, or update in place on a primary-key conflict) rather than
     // @Insert(onConflict = OnConflictStrategy.REPLACE) -- REPLACE resolves a conflict by
     // issuing a real SQL DELETE of the existing row before re-inserting, and that DELETE fires

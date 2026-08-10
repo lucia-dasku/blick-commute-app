@@ -37,9 +37,19 @@ private object WidgetKeys {
     val FOLLOWING_MINUTES = longPreferencesKey("followingMinutes")
     val FOLLOWING_IS_REAL_TIME = booleanPreferencesKey("followingIsRealTime")
     val FOLLOWING_IS_CANCELLED = booleanPreferencesKey("followingIsCancelled")
+    val JOURNEY_FASTEST_DEPARTURE = longPreferencesKey("journeyFastestDeparture")
+    val JOURNEY_FASTEST_ARRIVAL = longPreferencesKey("journeyFastestArrival")
+    val JOURNEY_FASTEST_CHANGES = longPreferencesKey("journeyFastestChanges")
+    val JOURNEY_FASTEST_REALTIME = booleanPreferencesKey("journeyFastestRealtime")
+    val JOURNEY_ALTERNATIVE_DEPARTURE = longPreferencesKey("journeyAlternativeDeparture")
+    val JOURNEY_ALTERNATIVE_ARRIVAL = longPreferencesKey("journeyAlternativeArrival")
+    val JOURNEY_ALTERNATIVE_CHANGES = longPreferencesKey("journeyAlternativeChanges")
+    val JOURNEY_ALTERNATIVE_REALTIME = booleanPreferencesKey("journeyAlternativeRealtime")
+    val JOURNEY_ALTERNATIVE_LINE = stringPreferencesKey("journeyAlternativeLine")
+    val JOURNEY_ALTERNATIVE_MODE = stringPreferencesKey("journeyAlternativeMode")
 }
 
-private enum class ContentType { NO_ACTIVE_COMMUTE, LOADING, LIVE, STALE, NO_UPCOMING, OFFLINE, UNAVAILABLE, NOTIFICATIONS_UNAVAILABLE }
+private enum class ContentType { NO_ACTIVE_COMMUTE, LOADING, LIVE, STALE, NO_UPCOMING, OFFLINE, UNAVAILABLE, NOTIFICATIONS_UNAVAILABLE, JOURNEYS }
 
 /** Clears every key this codec owns before writing new ones — a widget state transition (e.g.
  * [RoutineWidgetContent.Live] to [RoutineWidgetContent.Offline]) must never leave a stale
@@ -77,8 +87,29 @@ internal fun RoutineWidgetUiState.writeInto(prefs: MutablePreferences) {
                 RoutineWidgetContent.Unavailable -> prefs[WidgetKeys.CONTENT_TYPE] = ContentType.UNAVAILABLE.name
                 RoutineWidgetContent.NotificationsUnavailable ->
                     prefs[WidgetKeys.CONTENT_TYPE] = ContentType.NOTIFICATIONS_UNAVAILABLE.name
+                is RoutineWidgetContent.Journeys -> {
+                    prefs[WidgetKeys.CONTENT_TYPE] = ContentType.JOURNEYS.name
+                    prefs.writeJourney(content.fastest, alternative = false)
+                    content.alternative?.let { prefs.writeJourney(it, alternative = true) }
+                }
             }
         }
+    }
+}
+
+private fun MutablePreferences.writeJourney(row: WidgetJourneyRow, alternative: Boolean) {
+    if (!alternative) {
+        this[WidgetKeys.JOURNEY_FASTEST_DEPARTURE] = row.departureTime.toEpochMilli()
+        this[WidgetKeys.JOURNEY_FASTEST_ARRIVAL] = row.arrivalTime.toEpochMilli()
+        this[WidgetKeys.JOURNEY_FASTEST_CHANGES] = row.transferCount.toLong()
+        this[WidgetKeys.JOURNEY_FASTEST_REALTIME] = row.isRealtime
+    } else {
+        this[WidgetKeys.JOURNEY_ALTERNATIVE_DEPARTURE] = row.departureTime.toEpochMilli()
+        this[WidgetKeys.JOURNEY_ALTERNATIVE_ARRIVAL] = row.arrivalTime.toEpochMilli()
+        this[WidgetKeys.JOURNEY_ALTERNATIVE_CHANGES] = row.transferCount.toLong()
+        this[WidgetKeys.JOURNEY_ALTERNATIVE_REALTIME] = row.isRealtime
+        row.lineDesignation?.let { this[WidgetKeys.JOURNEY_ALTERNATIVE_LINE] = it }
+        this[WidgetKeys.JOURNEY_ALTERNATIVE_MODE] = row.transportMode.name
     }
 }
 
@@ -129,6 +160,25 @@ internal fun Preferences.toWidgetUiState(): RoutineWidgetUiState {
         ContentType.OFFLINE -> RoutineWidgetContent.Offline
         ContentType.UNAVAILABLE -> RoutineWidgetContent.Unavailable
         ContentType.NOTIFICATIONS_UNAVAILABLE -> RoutineWidgetContent.NotificationsUnavailable
+        ContentType.JOURNEYS -> {
+            val fastestDeparture = this[WidgetKeys.JOURNEY_FASTEST_DEPARTURE] ?: return RoutineWidgetUiState.NoActiveCommute
+            val fastestArrival = this[WidgetKeys.JOURNEY_FASTEST_ARRIVAL] ?: return RoutineWidgetUiState.NoActiveCommute
+            val fastest = WidgetJourneyRow(
+                lineDesignation, transportMode, Instant.ofEpochMilli(fastestDeparture), Instant.ofEpochMilli(fastestArrival),
+                (this[WidgetKeys.JOURNEY_FASTEST_CHANGES] ?: 0L).toInt(), this[WidgetKeys.JOURNEY_FASTEST_REALTIME] ?: false,
+            )
+            val alternative = this[WidgetKeys.JOURNEY_ALTERNATIVE_DEPARTURE]?.let { departure ->
+                WidgetJourneyRow(
+                    this[WidgetKeys.JOURNEY_ALTERNATIVE_LINE],
+                    this[WidgetKeys.JOURNEY_ALTERNATIVE_MODE]?.toTransportMode() ?: TransportMode.UNKNOWN,
+                    Instant.ofEpochMilli(departure),
+                    Instant.ofEpochMilli(this[WidgetKeys.JOURNEY_ALTERNATIVE_ARRIVAL] ?: return@let null),
+                    (this[WidgetKeys.JOURNEY_ALTERNATIVE_CHANGES] ?: 0L).toInt(),
+                    this[WidgetKeys.JOURNEY_ALTERNATIVE_REALTIME] ?: false,
+                )
+            }
+            RoutineWidgetContent.Journeys(fastest, alternative)
+        }
         ContentType.NO_ACTIVE_COMMUTE -> return RoutineWidgetUiState.NoActiveCommute
     }
     return RoutineWidgetUiState.ActiveRoutine(

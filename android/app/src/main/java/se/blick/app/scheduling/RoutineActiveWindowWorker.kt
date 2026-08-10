@@ -37,9 +37,21 @@ import se.blick.app.notification.RoutineNotificationIds
 import se.blick.app.notification.RoutineNotificationMapper
 import se.blick.app.notification.RoutineNotifier
 import se.blick.app.widget.RoutineWidgetUpdater
+import se.blick.app.billing.FreePremiumEntitlementRepository
+import se.blick.app.billing.FreeRoutineSelectionStore
+import se.blick.app.billing.PremiumEntitlementRepository
+import se.blick.app.billing.RoutineTierPolicy
+import kotlinx.coroutines.flow.first
+import se.blick.app.domain.model.RoutineType
+import se.blick.app.domain.model.JourneyPlan
+import se.blick.app.domain.usecase.GetRankedJourneysUseCase
+import se.blick.app.domain.usecase.LiveDeparturesSnapshot
+import se.blick.app.domain.usecase.PreparedDeparture
+import se.blick.app.domain.usecase.RoutineScheduleOverlapValidator
 import se.blick.app.widget.runWidgetUpdateSafely
 import java.time.Clock
 import java.time.Duration
+import java.time.Instant
 import java.time.ZonedDateTime
 
 private const val LOG_TAG = "RoutineActiveWindowWorker"
@@ -279,6 +291,9 @@ class RoutineActiveWindowWorker @AssistedInject constructor(
     private val deviceZoneProvider: DeviceZoneProvider,
     private val elapsedRealtimeProvider: ElapsedRealtimeProvider,
     private val bootCountProvider: BootCountProvider,
+    private val entitlementRepository: PremiumEntitlementRepository = FreePremiumEntitlementRepository,
+    private val freeRoutineSelectionStore: FreeRoutineSelectionStore? = null,
+    private val getRankedJourneys: GetRankedJourneysUseCase? = null,
 ) : CoroutineWorker(context, params) {
 
     private fun zonedNow(): ZonedDateTime = ZonedDateTime.ofInstant(clock.instant(), deviceZoneProvider.currentZone())
@@ -304,6 +319,22 @@ class RoutineActiveWindowWorker @AssistedInject constructor(
         if (!routine.enabled) {
             runWidgetUpdateSafely { routineWidgetUpdater.reconcile() }
             return Result.success()
+        }
+        // Hilt always supplies the selection store in production. Keeping this dependency
+        // optional lets focused worker tests (and previews) construct the worker without also
+        // having to implement an unrelated all-routines stream.
+        if (freeRoutineSelectionStore != null) {
+            val allRoutines = routineRepository.observeAll().first()
+            if (RoutineScheduleOverlapValidator.nonOverlapping(allRoutines).none { it.id == routine.id } ||
+                !RoutineTierPolicy.canRun(
+                    routine, allRoutines, entitlementRepository.entitlement.value,
+                    freeRoutineSelectionStore.selectedRoutineId.value,
+                )
+            ) {
+                routineScheduler.cancelActivation(routineId)
+                runWidgetUpdateSafely { routineWidgetUpdater.reconcile() }
+                return Result.success()
+            }
         }
 
         // Defensive backstop for a routine already enqueued (in WorkManager's own durable
@@ -338,7 +369,12 @@ class RoutineActiveWindowWorker @AssistedInject constructor(
             return Result.success()
         }
         val windowEnd = occurrence.windowEnd
-        val windowStart = ZonedDateTime.of(windowEnd.toLocalDate(), routine.startTime, windowEnd.zone)
+        val windowStartDate = if (routine.endTime.isAfter(routine.startTime)) {
+            windowEnd.toLocalDate()
+        } else {
+            windowEnd.toLocalDate().minusDays(1)
+        }
+        val windowStart = ZonedDateTime.of(windowStartDate, routine.startTime, windowEnd.zone)
 
         // Read BEFORE any foreground execution begins, and reused below rather than re-read --
         // both so an already-exhausted occurrence (a replacement worker or reboot-recovered
@@ -484,20 +520,41 @@ class RoutineActiveWindowWorker @AssistedInject constructor(
                     break
                 }
 
-                val identity = current.departureIdentity()
-                val previous = staleSnapshotRepository.get(routineId, identity)
-
-                // Departures are fetched and posted ALONE first -- disruptions are never
+                // Departures/journeys are fetched and posted ALONE first -- disruptions are never
                 // awaited before this notification goes out. GetLiveDeparturesUseCase itself
                 // never throws (besides a real CancellationException, which propagates and ends
                 // this run exactly like any other failure here would -- see doWork's own
                 // CancellationException handling).
-                val departuresState = getLiveDepartures(current, previous = previous).last()
-                if (departuresState is LiveDeparturesState.Live) {
-                    staleSnapshotRepository.save(routineId, identity, departuresState.snapshot)
+                val journeyPlans = if (current.type == RoutineType.EXACT_DESTINATION) {
+                    val origin = current.journeyOriginId
+                    val destination = current.journeyDestinationId
+                    if (origin != null && destination != null && getRankedJourneys != null) {
+                        try {
+                            getRankedJourneys(origin, destination, current.allowedJourneyTransportModes)
+                        } catch (e: CancellationException) {
+                            throw e
+                        } catch (_: Exception) {
+                            emptyList()
+                        }
+                    } else emptyList()
+                } else emptyList()
+                // The exact projection and notification mapper must share one timestamp.
+                // Otherwise a boundary departure clamped to "now" by the projection can be
+                // observed a few milliseconds later by the mapper and immediately discarded
+                // as expired, producing "No upcoming departures" while the widget shows 0 min.
+                val exactProjectionNow = clock.instant()
+                val exactProjection = journeyPlans.firstOrNull()?.toFirstLegNotificationProjection(current, exactProjectionNow)
+                val departuresState = if (current.type == RoutineType.EXACT_DESTINATION) {
+                    exactProjection?.departuresState ?: LiveDeparturesState.Unavailable
+                } else {
+                    val identity = current.departureIdentity()
+                    val previous = staleSnapshotRepository.get(routineId, identity)
+                    getLiveDepartures(current, previous = previous).last().also { state ->
+                        if (state is LiveDeparturesState.Live) staleSnapshotRepository.save(routineId, identity, state.snapshot)
+                    }
                 }
 
-                val now = clock.instant()
+                val now = if (exactProjection != null) exactProjectionNow else clock.instant()
                 // A fallback carried over from an earlier tick may have expired by now (its own
                 // validUntil has passed) even though nothing has explicitly replaced it yet --
                 // only a fresh Loaded/NoDisruptions result normally updates lastKnownDisruption
@@ -509,7 +566,8 @@ class RoutineActiveWindowWorker @AssistedInject constructor(
                     lastKnownDisruption = null
                 }
                 val disruptionAtPost = lastKnownDisruption
-                val model = RoutineNotificationMapper.map(current, departuresState, now, disruptionAtPost)
+                val notificationRoutine = exactProjection?.routine ?: current
+                val model = RoutineNotificationMapper.map(notificationRoutine, departuresState, now, disruptionAtPost)
                 // The real NotificationPostResult is intentionally not surfaced anywhere from
                 // here (there is no UI attached to a background worker to report it to) --
                 // but it is also never used to claim success; showOrUpdate itself already
@@ -522,7 +580,10 @@ class RoutineActiveWindowWorker @AssistedInject constructor(
                 // this function's own outer `catch (e: Exception)` below and be treated as a
                 // "handled failure" -- cutting the whole active-window loop short even though
                 // the notification above already posted successfully this tick.
-                runWidgetUpdateSafely { routineWidgetUpdater.updateWithDepartures(current, departuresState, now, disruptionAtPost) }
+                runWidgetUpdateSafely {
+                    if (current.type == RoutineType.EXACT_DESTINATION) routineWidgetUpdater.updateWithJourneys(current, journeyPlans, now)
+                    else routineWidgetUpdater.updateWithDepartures(current, departuresState, now, disruptionAtPost)
+                }
 
                 // Disruptions are fetched only AFTER departures have already posted, bounded by
                 // DISRUPTIONS_FETCH_TIMEOUT_MS so a slow SL Deviations request can never delay --
@@ -539,7 +600,8 @@ class RoutineActiveWindowWorker @AssistedInject constructor(
                 // on the other hand, DOES clear it, since that is a genuine, positive
                 // confirmation that nothing is currently affecting this routine, not merely an
                 // absence of information.
-                when (val disruptionResult = withTimeoutOrNull(DISRUPTIONS_FETCH_TIMEOUT_MS) { getDisruptions(current).last() }) {
+                when (val disruptionResult = if (current.type == RoutineType.EXACT_DESTINATION) null else
+                    withTimeoutOrNull(DISRUPTIONS_FETCH_TIMEOUT_MS) { getDisruptions(current).last() }) {
                     is DisruptionsState.Loaded -> lastKnownDisruption = disruptionResult.disruptions.firstOrNull()
                     is DisruptionsState.NoDisruptions -> lastKnownDisruption = null
                     is DisruptionsState.Unavailable, is DisruptionsState.Loading, null -> Unit
@@ -556,7 +618,7 @@ class RoutineActiveWindowWorker @AssistedInject constructor(
                     // reflect the instant it is actually built at, not a timestamp from before
                     // that fetch even started.
                     val nowAfterDisruptionFetch = clock.instant()
-                    routineNotifier.showOrUpdate(RoutineNotificationMapper.map(current, departuresState, nowAfterDisruptionFetch, lastKnownDisruption))
+                    routineNotifier.showOrUpdate(RoutineNotificationMapper.map(notificationRoutine, departuresState, nowAfterDisruptionFetch, lastKnownDisruption))
                     // Mirrors the notification's own second, disruption-aware update above --
                     // same tick, same already-fetched departuresState, no separate widget fetch
                     // or timer.
@@ -840,4 +902,51 @@ class RoutineActiveWindowWorker @AssistedInject constructor(
     companion object {
         const val KEY_ROUTINE_ID = "routineId"
     }
+}
+
+/** Projects only the fastest journey's first public-transport leg into the existing simple
+ * notification model. Final destination, competing journeys and final arrival deliberately do
+ * not enter this projection. */
+internal data class ExactJourneyNotificationProjection(
+    val routine: CommuteRoutine,
+    val departuresState: LiveDeparturesState,
+)
+
+internal fun JourneyPlan.toFirstLegNotificationProjection(
+    routine: CommuteRoutine,
+    now: Instant,
+): ExactJourneyNotificationProjection {
+    val firstLegDeparture = firstLeg.departureTime ?: departureTime
+    // A live Journey Planner response can still contain a vehicle that departed only
+    // seconds ago (and the backend response itself may be cached for up to 30 seconds).
+    // The details screen and widget deliberately render that boundary as "0 min". Clamp
+    // only the notification projection's effective time to the current tick as well, so
+    // RoutineNotificationMapper does not drop the same journey as already expired and
+    // contradict the other two surfaces with "No upcoming departures".
+    val notificationEffectiveTime = if (firstLegDeparture.isBefore(now)) now else firstLegDeparture
+    val minutes = Duration.between(now, firstLegDeparture).toMinutes().coerceAtLeast(0)
+    val departure = PreparedDeparture(
+        departureId = journeyId,
+        lineDesignation = firstLeg.lineDesignation.orEmpty(),
+        direction = firstLeg.direction,
+        destination = firstLeg.direction ?: firstLeg.destinationName,
+        scheduledTime = firstLegDeparture,
+        expectedTime = if (firstLeg.isRealtime) firstLegDeparture else null,
+        effectiveTime = notificationEffectiveTime,
+        minutesRemaining = minutes,
+        isRealTime = firstLeg.isRealtime,
+        isCancelled = false,
+        state = "EXPECTED",
+        journeyState = "NORMAL",
+        predictionState = null,
+        tripDeviations = emptyList(),
+    )
+    return ExactJourneyNotificationProjection(
+        routine = routine.copy(
+            lineDesignation = firstLeg.lineDesignation,
+            transportMode = firstLeg.transportMode,
+            destinationLabel = firstLeg.direction ?: firstLeg.destinationName,
+        ),
+        departuresState = LiveDeparturesState.Live(LiveDeparturesSnapshot(listOf(departure), now)),
+    )
 }

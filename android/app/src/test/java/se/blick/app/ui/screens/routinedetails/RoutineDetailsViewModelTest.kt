@@ -35,6 +35,7 @@ import se.blick.app.domain.model.DisruptionMessage
 import se.blick.app.domain.model.DisruptionPriority
 import se.blick.app.domain.model.Journey
 import se.blick.app.domain.model.LineRef
+import se.blick.app.domain.model.RoutineType
 import se.blick.app.domain.model.StopAreaRef
 import se.blick.app.domain.model.StopPointRef
 import se.blick.app.domain.model.TransportMode
@@ -530,6 +531,33 @@ class RoutineDetailsViewModelTest {
     )
 
     // ---- Routine loading ----
+
+    @Test
+    fun `updating exact journey modes persists refreshes and reschedules the same routine`() = runTest(dispatcher) {
+        val routine = sampleRoutine().copy(
+            type = RoutineType.EXACT_DESTINATION,
+            transportMode = TransportMode.UNKNOWN,
+            journeyOriginId = "origin-id",
+            journeyOriginName = "Fruängen",
+            journeyDestinationId = "destination-id",
+            journeyDestinationName = "Mariatorget",
+        )
+        val repository = FakeRoutineRepository(routine)
+        val scheduler = FakeRoutineScheduler()
+        val vm = viewModel(routine = routine, routines = repository, scheduler = scheduler)
+        dispatcher.scheduler.advanceUntilIdle()
+
+        vm.updateJourneyTransportModes(setOf(TransportMode.TRAIN, TransportMode.BUS))
+        dispatcher.scheduler.advanceUntilIdle()
+
+        assertEquals(
+            setOf(TransportMode.TRAIN, TransportMode.BUS),
+            repository.getById(routine.id)?.allowedJourneyTransportModes,
+        )
+        assertEquals(setOf(TransportMode.TRAIN, TransportMode.BUS), vm.uiState.value.routine?.allowedJourneyTransportModes)
+        assertEquals(setOf(TransportMode.TRAIN, TransportMode.BUS), scheduler.scheduledRoutines.last().allowedJourneyTransportModes)
+        assertFalse(vm.uiState.value.journeyTransportModesUpdateFailed)
+    }
 
     @Test
     fun `the correct routine is loaded using the navigation id`() = runTest(dispatcher) {

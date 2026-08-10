@@ -22,6 +22,7 @@ import org.junit.Rule
 import org.junit.Test
 import org.junit.runner.RunWith
 import se.blick.app.R
+import se.blick.app.billing.EntitlementState
 import se.blick.app.domain.model.CommuteRoutine
 import se.blick.app.domain.model.TransportMode
 
@@ -173,7 +174,7 @@ class RoutineListScreenTest {
         composeRule.onNodeWithContentDescription(fabDescription).performClick()
 
         // The explanation dialog appears...
-        val dialogTitle = composeRule.activity.getString(R.string.routine_list_one_routine_limit_title)
+        val dialogTitle = composeRule.activity.getString(R.string.routine_list_free_limit_title)
         composeRule.onNodeWithText(dialogTitle).assertExists()
 
         // ...and the creation flow is never opened. This does NOT claim a second routine can
@@ -195,10 +196,10 @@ class RoutineListScreenTest {
         val fabDescription = composeRule.activity.getString(R.string.routine_list_add)
         composeRule.onNodeWithContentDescription(fabDescription).performClick()
 
-        val confirmText = composeRule.activity.getString(R.string.routine_list_one_routine_limit_confirm)
-        composeRule.onNodeWithText(confirmText).performClick()
+        val dismissText = composeRule.activity.getString(R.string.action_back)
+        composeRule.onNodeWithText(dismissText).performClick()
 
-        val dialogTitle = composeRule.activity.getString(R.string.routine_list_one_routine_limit_title)
+        val dialogTitle = composeRule.activity.getString(R.string.routine_list_free_limit_title)
         composeRule.onNodeWithText(dialogTitle).assertDoesNotExist()
     }
 
@@ -292,5 +293,26 @@ class RoutineListScreenTest {
         }
 
         assertEquals(true, aboutOpened)
+    }
+
+    @Test
+    fun premiumAddButtonOpensUnifiedFormDirectlyWithoutRoutineTypeChooser() {
+        var addRoutineClicked = false
+        composeRule.setContent {
+            RoutineListContent(
+                uiState = RoutineListUiState(
+                    routines = listOf(sampleRoutine()),
+                    isLoading = false,
+                    entitlement = EntitlementState.Premium,
+                ),
+                onAddRoutine = { addRoutineClicked = true },
+                onOpenRoutine = {},
+            )
+        }
+
+        val fabDescription = composeRule.activity.getString(R.string.routine_list_add)
+        composeRule.onNodeWithContentDescription(fabDescription).performClick()
+
+        assertEquals(true, addRoutineClicked)
     }
 }

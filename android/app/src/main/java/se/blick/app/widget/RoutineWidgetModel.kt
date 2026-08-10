@@ -84,7 +84,17 @@ sealed interface RoutineWidgetContent {
      * of being left showing [Loading] forever.
      */
     data object NotificationsUnavailable : RoutineWidgetContent
+    data class Journeys(val fastest: WidgetJourneyRow, val alternative: WidgetJourneyRow?) : RoutineWidgetContent
 }
+
+data class WidgetJourneyRow(
+    val lineDesignation: String?,
+    val transportMode: TransportMode,
+    val departureTime: Instant,
+    val arrivalTime: Instant,
+    val transferCount: Int,
+    val isRealtime: Boolean,
+)
 
 data class WidgetDepartureRow(
     val lineDesignation: String,

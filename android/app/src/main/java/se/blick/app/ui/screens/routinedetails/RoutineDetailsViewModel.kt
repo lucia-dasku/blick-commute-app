@@ -22,6 +22,11 @@ import se.blick.app.data.local.datastore.AppSettingsDataStore
 import se.blick.app.data.repository.RoutineRepository
 import se.blick.app.data.repository.StaleSnapshotRepository
 import se.blick.app.domain.model.CommuteRoutine
+import se.blick.app.domain.model.JourneyPlan
+import se.blick.app.domain.model.JOURNEY_TRANSPORT_MODE_OPTIONS
+import se.blick.app.domain.model.RoutineType
+import se.blick.app.domain.model.TransportMode
+import se.blick.app.domain.usecase.GetRankedJourneysUseCase
 import se.blick.app.domain.usecase.DisruptionsState
 import se.blick.app.domain.usecase.GetDisruptionsUseCase
 import se.blick.app.domain.usecase.GetLiveDeparturesUseCase
@@ -105,6 +110,10 @@ data class RoutineDetailsUiState(
      * `remember(context)` snapshot taken once). Defaults to [NotificationAvailability.Available]
      * purely as a harmless initial value until the first real check runs in `init`. */
     val notificationAvailability: NotificationAvailability = NotificationAvailability.Available,
+    val journeys: List<JourneyPlan> = emptyList(),
+    val journeysUnavailable: Boolean = false,
+    val isUpdatingJourneyTransportModes: Boolean = false,
+    val journeyTransportModesUpdateFailed: Boolean = false,
 )
 
 /**
@@ -137,6 +146,7 @@ class RoutineDetailsViewModel @Inject constructor(
     private val notificationRecoveryReporter: NotificationRecoveryReporter,
     private val clock: Clock,
     private val deviceZoneProvider: DeviceZoneProvider,
+    private val getRankedJourneys: GetRankedJourneysUseCase? = null,
 ) : ViewModel() {
 
     private val routineId: String =
@@ -199,7 +209,7 @@ class RoutineDetailsViewModel @Inject constructor(
                     )
                 }
                 loadDepartures(routine, RefreshTrigger.INITIAL)
-                loadDisruptions(routine, isInitial = true)
+                if (routine.type == RoutineType.LINE_DIRECTION) loadDisruptions(routine, isInitial = true)
             }
         }
         viewModelScope.launch {
@@ -335,7 +345,7 @@ class RoutineDetailsViewModel @Inject constructor(
                 if (hasStartedAutoRefreshOnce) {
                     _uiState.value.routine?.let {
                         loadDepartures(it, RefreshTrigger.AUTOMATIC)
-                        loadDisruptions(it, isInitial = false)
+                        if (it.type == RoutineType.LINE_DIRECTION) loadDisruptions(it, isInitial = false)
                     }
                 }
                 hasStartedAutoRefreshOnce = true
@@ -343,7 +353,7 @@ class RoutineDetailsViewModel @Inject constructor(
                     delay(AUTO_REFRESH_INTERVAL_MS)
                     _uiState.value.routine?.let {
                         loadDepartures(it, RefreshTrigger.AUTOMATIC)
-                        loadDisruptions(it, isInitial = false)
+                        if (it.type == RoutineType.LINE_DIRECTION) loadDisruptions(it, isInitial = false)
                     }
                 }
             }
@@ -374,7 +384,57 @@ class RoutineDetailsViewModel @Inject constructor(
     fun refresh() {
         val routine = _uiState.value.routine ?: return
         loadDepartures(routine, RefreshTrigger.MANUAL)
-        loadDisruptions(routine, isInitial = false)
+        if (routine.type == RoutineType.LINE_DIRECTION) loadDisruptions(routine, isInitial = false)
+    }
+
+    /** Persists the exact-destination routine's Journey Planner mode allow-list, then refreshes
+     * every consumer from the same stored routine. Walking transfer legs remain implicitly
+     * allowed and an empty public-mode selection is rejected by the UI and here. */
+    fun updateJourneyTransportModes(modes: Set<TransportMode>) {
+        val state = _uiState.value
+        val routine = state.routine ?: return
+        val supportedModes = modes.filterTo(linkedSetOf(), JOURNEY_TRANSPORT_MODE_OPTIONS::contains)
+        if (routine.type != RoutineType.EXACT_DESTINATION || supportedModes.isEmpty() ||
+            state.isUpdatingJourneyTransportModes || supportedModes == routine.allowedJourneyTransportModes
+        ) return
+
+        val updated = routine.copy(allowedJourneyTransportModes = supportedModes)
+        _uiState.update {
+            it.copy(isUpdatingJourneyTransportModes = true, journeyTransportModesUpdateFailed = false)
+        }
+        viewModelScope.launch {
+            try {
+                routineRepository.save(updated)
+            } catch (e: CancellationException) {
+                _uiState.update { it.copy(isUpdatingJourneyTransportModes = false) }
+                throw e
+            } catch (e: Exception) {
+                Log.e(LOG_TAG, "Failed to update journey transport modes for ${routine.id}", e)
+                _uiState.update {
+                    it.copy(isUpdatingJourneyTransportModes = false, journeyTransportModesUpdateFailed = true)
+                }
+                return@launch
+            }
+
+            _uiState.update {
+                it.copy(
+                    routine = updated,
+                    isUpdatingJourneyTransportModes = false,
+                    journeyTransportModesUpdateFailed = false,
+                    schedulingFailed = false,
+                )
+            }
+            loadDepartures(updated, RefreshTrigger.MANUAL)
+            try {
+                routineScheduler.scheduleActivation(updated)
+            } catch (e: CancellationException) {
+                throw e
+            } catch (e: Exception) {
+                Log.e(LOG_TAG, "Journey modes were saved but rescheduling ${routine.id} failed", e)
+                _uiState.update { it.copy(schedulingFailed = true) }
+            }
+            runWidgetUpdateSafely { routineWidgetUpdater.reconcile() }
+        }
     }
 
     /**
@@ -720,6 +780,10 @@ class RoutineDetailsViewModel @Inject constructor(
     fun isLiveUpdatePromotable(): Boolean = promotedNotificationChecker.isPromotable()
 
     private fun loadDepartures(routine: CommuteRoutine, trigger: RefreshTrigger) {
+        if (routine.type == RoutineType.EXACT_DESTINATION) {
+            loadJourneys(routine, trigger)
+            return
+        }
         departuresJob?.cancel()
         val requestId = ++departuresRequestId
         val identity = routine.departureIdentity()
@@ -764,6 +828,27 @@ class RoutineDetailsViewModel @Inject constructor(
                     staleSnapshotRepository.save(routineId, identity, state.snapshot)
                 }
                 _uiState.update { it.copy(departures = state, isRefreshingDepartures = false) }
+            }
+        }
+    }
+
+    private fun loadJourneys(routine: CommuteRoutine, trigger: RefreshTrigger) {
+        departuresJob?.cancel()
+        val useCase = getRankedJourneys
+        val originId = routine.journeyOriginId
+        val destinationId = routine.journeyDestinationId
+        if (useCase == null || originId == null || destinationId == null) {
+            _uiState.update { it.copy(journeysUnavailable = true, isRefreshingDepartures = false) }
+            return
+        }
+        if (trigger == RefreshTrigger.MANUAL) _uiState.update { it.copy(isRefreshingDepartures = true) }
+        departuresJob = viewModelScope.launch {
+            try {
+                val journeys = useCase(originId, destinationId, routine.allowedJourneyTransportModes)
+                _uiState.update { it.copy(journeys = journeys, journeysUnavailable = false, isRefreshingDepartures = false) }
+            } catch (e: CancellationException) { throw e }
+            catch (_: Exception) {
+                _uiState.update { it.copy(journeysUnavailable = true, isRefreshingDepartures = false) }
             }
         }
     }

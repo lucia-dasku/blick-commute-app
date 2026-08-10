@@ -41,6 +41,37 @@ export interface RedisConfig {
   token: string;
 }
 
+export interface GooglePlayConfig {
+  packageName: string;
+  serviceAccountEmail: string;
+  privateKey: string;
+}
+
+/** Credentials are optional so local development and non-billing tests remain usable. The
+ * verification endpoint reports a sanitized temporary-unavailable response when they are not
+ * configured. A partial configuration is rejected eagerly because it can never work. */
+export function readGooglePlayConfig(
+  packageNameRaw: string | undefined,
+  serviceAccountEmailRaw: string | undefined,
+  privateKeyRaw: string | undefined,
+): GooglePlayConfig | undefined {
+  const packageName = packageNameRaw?.trim() || undefined;
+  const serviceAccountEmail = serviceAccountEmailRaw?.trim() || undefined;
+  const privateKey = privateKeyRaw?.replace(/\\n/g, "\n").trim() || undefined;
+  const values = [packageName, serviceAccountEmail, privateKey];
+  if (values.every((value) => value === undefined)) return undefined;
+  if (values.some((value) => value === undefined)) {
+    throw new Error(
+      "GOOGLE_PLAY_PACKAGE_NAME, GOOGLE_PLAY_SERVICE_ACCOUNT_EMAIL and " +
+        "GOOGLE_PLAY_SERVICE_ACCOUNT_PRIVATE_KEY must all be set, or all be left unset.",
+    );
+  }
+  if (!privateKey!.includes("BEGIN PRIVATE KEY")) {
+    throw new Error("GOOGLE_PLAY_SERVICE_ACCOUNT_PRIVATE_KEY must be a PEM PKCS#8 private key");
+  }
+  return { packageName: packageName!, serviceAccountEmail: serviceAccountEmail!, privateKey: privateKey! };
+}
+
 /**
  * Validates the Upstash Redis REST credentials backing the shared cache/lock that
  * protects the SL Deviations upstream across all Vercel instances (see
@@ -101,6 +132,7 @@ export const config = {
   port: readPort(process.env.PORT),
   slTransportBaseUrl: process.env.SL_TRANSPORT_BASE_URL ?? "https://transport.integration.sl.se/v1",
   slDeviationsBaseUrl: process.env.SL_DEVIATIONS_BASE_URL ?? "https://deviations.integration.sl.se/v1",
+  slJourneyPlannerBaseUrl: process.env.SL_JOURNEY_PLANNER_BASE_URL ?? "https://journeyplanner.integration.sl.se/v2",
   /**
    * How long to wait for an upstream (SL Transport or SL Deviations) response before
    * aborting the request and returning UPSTREAM_TIMEOUT (504). See
@@ -111,4 +143,9 @@ export const config = {
    * in-memory Cache/DistributedLock fallback" (src/app.ts); `undefined` in production is
    * impossible — `readRedisConfig` throws first, failing startup instead. */
   redis: readRedisConfig(process.env.UPSTASH_REDIS_REST_URL, process.env.UPSTASH_REDIS_REST_TOKEN, nodeEnv),
+  googlePlay: readGooglePlayConfig(
+    process.env.GOOGLE_PLAY_PACKAGE_NAME,
+    process.env.GOOGLE_PLAY_SERVICE_ACCOUNT_EMAIL,
+    process.env.GOOGLE_PLAY_SERVICE_ACCOUNT_PRIVATE_KEY,
+  ),
 } as const;

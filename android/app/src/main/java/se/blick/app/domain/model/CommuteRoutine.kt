@@ -5,6 +5,8 @@ import java.time.LocalTime
 import java.time.LocalDate
 import java.util.UUID
 
+enum class RoutineType { LINE_DIRECTION, EXACT_DESTINATION }
+
 /**
  * A saved commute routine. Deliberately platform-neutral identity fields
  * (siteId/lineId/transportMode/directionCode) per docs/api-contract.md §10 — destination
@@ -30,4 +32,13 @@ data class CommuteRoutine(
     val endTime: LocalTime,
     val enabled: Boolean = true,
     val pausedDate: LocalDate? = null,
+    val type: RoutineType = RoutineType.LINE_DIRECTION,
+    /** SL Journey Planner global identifiers. They are intentionally separate from SL
+     * Transport's numeric site id and from the display-only direction label. */
+    val journeyOriginId: String? = null,
+    val journeyOriginName: String? = null,
+    val journeyDestinationId: String? = null,
+    val journeyDestinationName: String? = null,
+    /** Public-transport modes SL may use when planning an exact-destination journey. */
+    val allowedJourneyTransportModes: Set<TransportMode> = DEFAULT_JOURNEY_TRANSPORT_MODES,
 )

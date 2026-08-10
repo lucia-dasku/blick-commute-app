@@ -6,8 +6,11 @@ import androidx.compose.foundation.layout.fillMaxHeight
 import androidx.compose.foundation.layout.requiredWidth
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.test.assertIsDisplayed
+import androidx.compose.ui.test.assertIsEnabled
+import androidx.compose.ui.test.assertIsNotEnabled
 import androidx.compose.ui.test.junit4.v2.createAndroidComposeRule
 import androidx.compose.ui.test.onNodeWithText
+import androidx.compose.ui.test.onNodeWithTag
 import androidx.compose.ui.test.performClick
 import androidx.compose.ui.unit.Dp
 import androidx.compose.ui.unit.dp
@@ -135,5 +138,34 @@ class RoutineCreateScreenTest {
         // content was clipped or replaced when selected, at the narrowest supported width.
         composeRule.onNodeWithText(labels[0]).assertIsDisplayed()
         composeRule.onNodeWithText(labels[6]).assertIsDisplayed()
+    }
+
+    private fun setUnifiedOriginDestinationContent(hasPremium: Boolean) {
+        composeRule.setContent {
+            OriginDestinationStep(
+                uiState = RoutineCreateUiState(hasPremium = hasPremium),
+                onQueryChanged = {},
+                onSelectSite = {},
+                onDestinationQueryChanged = {},
+                onSelectDestination = {},
+                onContinue = {},
+                onRetryStopSearch = {},
+                onRetryDirections = {},
+            )
+        }
+    }
+
+    @Test
+    fun freeUser_destinationFieldIsVisibleButInactive() {
+        setUnifiedOriginDestinationContent(hasPremium = false)
+
+        composeRule.onNodeWithTag("destination-field").assertIsDisplayed().assertIsNotEnabled()
+    }
+
+    @Test
+    fun premiumUser_destinationFieldIsActiveInTheSameForm() {
+        setUnifiedOriginDestinationContent(hasPremium = true)
+
+        composeRule.onNodeWithTag("destination-field").assertIsDisplayed().assertIsEnabled()
     }
 }

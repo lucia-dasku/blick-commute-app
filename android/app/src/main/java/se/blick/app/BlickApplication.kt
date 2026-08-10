@@ -17,6 +17,7 @@ import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.SupervisorJob
 import kotlinx.coroutines.launch
 import se.blick.app.scheduling.NotificationRecoveryCoordinator
+import se.blick.app.billing.PremiumEntitlementRepository
 import javax.inject.Inject
 
 /**
@@ -57,6 +58,7 @@ class BlickApplication : Application(), Configuration.Provider {
     @Inject lateinit var hiltWorkerFactory: HiltWorkerFactory
 
     @Inject lateinit var notificationRecoveryCoordinator: NotificationRecoveryCoordinator
+    @Inject lateinit var premiumEntitlementRepository: PremiumEntitlementRepository
 
     private val applicationScope = CoroutineScope(SupervisorJob() + Dispatchers.Default)
 
@@ -65,7 +67,10 @@ class BlickApplication : Application(), Configuration.Provider {
 
     override fun onCreate() {
         super.onCreate()
-        applicationScope.launch { notificationRecoveryCoordinator.onAppStart() }
+        applicationScope.launch {
+            premiumEntitlementRepository.refresh()
+            notificationRecoveryCoordinator.onAppStart()
+        }
         registerTimeZoneChangeReceiver()
         registerForegroundRecovery()
     }
@@ -74,7 +79,10 @@ class BlickApplication : Application(), Configuration.Provider {
         ProcessLifecycleOwner.get().lifecycle.addObserver(
             object : DefaultLifecycleObserver {
                 override fun onStart(owner: LifecycleOwner) {
-                    applicationScope.launch { notificationRecoveryCoordinator.onForeground() }
+                    applicationScope.launch {
+                        premiumEntitlementRepository.refresh()
+                        notificationRecoveryCoordinator.onForeground()
+                    }
                 }
             },
         )

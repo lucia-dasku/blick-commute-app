@@ -1,5 +1,6 @@
 package se.blick.app.ui.screens.routinecreate
 
+import android.app.Activity
 import androidx.lifecycle.SavedStateHandle
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.CompletableDeferred
@@ -7,6 +8,7 @@ import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.ExperimentalCoroutinesApi
 import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.MutableStateFlow
+import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.test.StandardTestDispatcher
 import kotlinx.coroutines.test.resetMain
@@ -20,11 +22,17 @@ import org.junit.Before
 import org.junit.Test
 import se.blick.app.data.local.datastore.AppSettings
 import se.blick.app.data.local.datastore.AppSettingsDataStore
+import se.blick.app.billing.EntitlementState
+import se.blick.app.billing.PremiumEntitlementRepository
 import se.blick.app.data.repository.DirectionOption
 import se.blick.app.data.repository.DirectionOptionsSource
+import se.blick.app.data.repository.JourneyRepository
 import se.blick.app.data.repository.RoutineRepository
 import se.blick.app.data.repository.StopRepository
 import se.blick.app.domain.model.CommuteRoutine
+import se.blick.app.domain.model.JourneyLocation
+import se.blick.app.domain.model.JourneyPlan
+import se.blick.app.domain.model.RoutineType
 import se.blick.app.domain.model.Site
 import se.blick.app.domain.model.TransportMode
 import se.blick.app.domain.usecase.LiveDeparturesState
@@ -353,6 +361,28 @@ class RoutineCreateViewModelTest {
         }
     }
 
+    private class FakeJourneyRepository(
+        private val locations: List<JourneyLocation> = emptyList(),
+    ) : JourneyRepository {
+        override suspend fun searchLocations(query: String): List<JourneyLocation> = locations
+        override suspend fun getJourneys(
+            originId: String,
+            destinationId: String,
+            allowedTransportModes: Set<TransportMode>,
+        ): List<JourneyPlan> = emptyList()
+    }
+
+    private class FakePremiumEntitlementRepository(
+        initial: EntitlementState,
+    ) : PremiumEntitlementRepository {
+        private val entitlementState = MutableStateFlow(initial)
+        override val entitlement: StateFlow<EntitlementState> = entitlementState
+        override val localizedPrice: StateFlow<String?> = MutableStateFlow(null)
+        override suspend fun refresh() = Unit
+        override suspend fun restore() = Unit
+        override fun launchPurchase(activity: Activity) = Unit
+    }
+
     private fun viewModel(
         stops: StopRepository = FakeStopRepository(mapOf("Fru" to listOf(fruangen))),
         directions: DirectionOptionsSource = FakeDirectionOptionsSource(mapOf(9145L to listOf(busOption, metroOption))),
@@ -360,6 +390,8 @@ class RoutineCreateViewModelTest {
         scheduler: RoutineScheduler = FakeRoutineScheduler(),
         widgetUpdater: RoutineWidgetUpdater = FakeRoutineWidgetUpdater(),
         appSettingsDataStore: AppSettingsDataStore = FakeAppSettingsDataStore(),
+        journeys: JourneyRepository = FakeJourneyRepository(),
+        entitlement: PremiumEntitlementRepository = FakePremiumEntitlementRepository(EntitlementState.Free),
         routineId: String? = null,
     ) = RoutineCreateViewModel(
         SavedStateHandle(routineId?.let { mapOf(Routes.RoutineEdit.ARG_ROUTINE_ID to it) } ?: emptyMap()),
@@ -369,6 +401,8 @@ class RoutineCreateViewModelTest {
         scheduler,
         widgetUpdater,
         appSettingsDataStore,
+        journeys,
+        entitlement,
     )
 
     /** Selects [fruangen], advances past its (successful, non-empty) direction lookup, sets
@@ -781,7 +815,7 @@ class RoutineCreateViewModelTest {
     }
 
     @Test
-    fun `canSave is false without active days or with an invalid time range`() = runTest(dispatcher) {
+    fun `canSave is false without active days, supports overnight, and rejects a zero-length range`() = runTest(dispatcher) {
         val vm = viewModel()
         vm.selectSite(fruangen)
         dispatcher.scheduler.advanceUntilIdle()
@@ -794,8 +828,32 @@ class RoutineCreateViewModelTest {
         vm.setStartTime(LocalTime.of(9, 0))
         vm.setEndTime(LocalTime.of(7, 0))
 
+        assertTrue(vm.uiState.value.canSave)
+        assertTrue(vm.uiState.value.isTimeRangeValid)
+
+        vm.setEndTime(LocalTime.of(9, 0))
         assertFalse(vm.uiState.value.canSave)
         assertFalse(vm.uiState.value.isTimeRangeValid)
+    }
+
+    @Test
+    fun `changing start time to equal or later than end moves end one hour later`() = runTest(dispatcher) {
+        val vm = viewModel()
+
+        vm.setStartTime(LocalTime.of(9, 0))
+        assertEquals(LocalTime.of(10, 0), vm.uiState.value.endTime)
+
+        vm.setStartTime(LocalTime.of(10, 0))
+        assertEquals(LocalTime.of(11, 0), vm.uiState.value.endTime)
+    }
+
+    @Test
+    fun `changing start time to before end keeps end unchanged`() = runTest(dispatcher) {
+        val vm = viewModel()
+
+        vm.setStartTime(LocalTime.of(6, 0))
+
+        assertEquals(LocalTime.of(9, 0), vm.uiState.value.endTime)
     }
 
     // ---- Saving ----
@@ -1067,6 +1125,51 @@ class RoutineCreateViewModelTest {
         assertEquals(LocalTime.of(8, 30), state.endTime)
         assertEquals("Morning commute", state.name)
         assertEquals(RoutineCreateStep.SCHEDULE, state.step)
+    }
+
+    @Test
+    fun `edit mode pre-fills and preserves an exact destination routine`() = runTest(dispatcher) {
+        val routine = existingRoutine(
+            lineId = null,
+            lineDesignation = null,
+            transportMode = TransportMode.UNKNOWN,
+            directionCode = null,
+            destinationLabel = null,
+        ).copy(
+            type = RoutineType.EXACT_DESTINATION,
+            journeyOriginId = "origin-id",
+            journeyOriginName = "Fruängen",
+            journeyDestinationId = "destination-id",
+            journeyDestinationName = "Mariatorget",
+            allowedJourneyTransportModes = setOf(TransportMode.TRAIN, TransportMode.BUS),
+        )
+        val routines = FakeRoutineRepository(listOf(routine))
+        val vm = viewModel(
+            routines = routines,
+            entitlement = FakePremiumEntitlementRepository(EntitlementState.Premium),
+            routineId = routine.id,
+        )
+        dispatcher.scheduler.advanceUntilIdle()
+
+        val state = vm.uiState.value
+        assertTrue(state.isEditMode)
+        assertTrue(state.hasPremium)
+        assertEquals(RoutineCreateStep.SCHEDULE, state.step)
+        assertEquals("origin-id", state.journeyOrigin?.id)
+        assertEquals("destination-id", state.selectedDestination?.id)
+        assertEquals("Mariatorget", state.destinationQuery)
+        assertTrue(state.canSave)
+
+        vm.setName("Updated exact commute")
+        vm.save {}
+        dispatcher.scheduler.advanceUntilIdle()
+
+        val updated = routines.getById(routine.id)
+        assertEquals(RoutineType.EXACT_DESTINATION, updated?.type)
+        assertEquals("origin-id", updated?.journeyOriginId)
+        assertEquals("destination-id", updated?.journeyDestinationId)
+        assertEquals(setOf(TransportMode.TRAIN, TransportMode.BUS), updated?.allowedJourneyTransportModes)
+        assertEquals("Updated exact commute", updated?.name)
     }
 
     @Test
@@ -1449,6 +1552,57 @@ class RoutineCreateViewModelTest {
 
         assertTrue(saved)
         assertFalse(vm.uiState.value.durationLimitExceeded)
+    }
+
+    // ---- Unified origin/destination flow ----
+
+    @Test
+    fun `free entitlement keeps destination input inactive`() = runTest(dispatcher) {
+        val locations = listOf(JourneyLocation("destination", "Mariatorget"))
+        val vm = viewModel(journeys = FakeJourneyRepository(locations))
+        dispatcher.scheduler.advanceUntilIdle()
+
+        vm.onDestinationQueryChanged("Mariatorget")
+        dispatcher.scheduler.advanceUntilIdle()
+
+        assertFalse(vm.uiState.value.hasPremium)
+        assertEquals("", vm.uiState.value.destinationQuery)
+        assertTrue(vm.uiState.value.destinationResults.isEmpty())
+    }
+
+    @Test
+    fun `premium destination in unified form saves exact journey identifiers`() = runTest(dispatcher) {
+        val origin = JourneyLocation("9091001000009145", "Fruängen")
+        val destination = JourneyLocation("9091001000009297", "Mariatorget")
+        val routines = FakeRoutineRepository()
+        val vm = viewModel(
+            routines = routines,
+            journeys = FakeJourneyRepository(listOf(origin, destination)),
+            entitlement = FakePremiumEntitlementRepository(EntitlementState.Premium),
+        )
+        dispatcher.scheduler.advanceUntilIdle()
+
+        vm.selectOrigin(fruangen)
+        dispatcher.scheduler.advanceUntilIdle()
+        assertEquals(RoutineCreateStep.STOP, vm.uiState.value.step)
+        assertEquals(origin, vm.uiState.value.journeyOrigin)
+
+        vm.onDestinationQueryChanged("Mariatorget")
+        dispatcher.scheduler.advanceUntilIdle()
+        vm.selectDestination(destination)
+        assertTrue(vm.uiState.value.canContinueFromStops)
+
+        vm.continueFromStops()
+        assertEquals(RoutineCreateStep.SCHEDULE, vm.uiState.value.step)
+        vm.toggleDay(DayOfWeek.MONDAY)
+        vm.save {}
+        dispatcher.scheduler.advanceUntilIdle()
+
+        val saved = routines.saved.single()
+        assertEquals(RoutineType.EXACT_DESTINATION, saved.type)
+        assertEquals(origin.id, saved.journeyOriginId)
+        assertEquals(destination.id, saved.journeyDestinationId)
+        assertEquals(null, saved.lineId)
     }
 
     // ---- Scheduler integration ----

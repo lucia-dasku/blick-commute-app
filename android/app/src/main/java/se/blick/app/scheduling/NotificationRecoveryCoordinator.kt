@@ -16,6 +16,11 @@ import java.time.Clock
 import java.time.ZonedDateTime
 import javax.inject.Inject
 import javax.inject.Singleton
+import se.blick.app.billing.FreePremiumEntitlementRepository
+import se.blick.app.billing.FreeRoutineSelectionStore
+import se.blick.app.billing.PremiumEntitlementRepository
+import se.blick.app.billing.RoutineTierPolicy
+import se.blick.app.domain.usecase.RoutineScheduleOverlapValidator
 
 private const val LOG_TAG = "NotificationRecovery"
 
@@ -116,6 +121,8 @@ class NotificationRecoveryCoordinator @Inject constructor(
     private val routineScheduleReconciler: RoutineScheduleReconciler,
     private val clock: Clock,
     private val deviceZoneProvider: DeviceZoneProvider,
+    private val entitlementRepository: PremiumEntitlementRepository = FreePremiumEntitlementRepository,
+    private val freeRoutineSelectionStore: FreeRoutineSelectionStore? = null,
 ) : NotificationRecoveryReporter {
     private val mutex = Mutex()
 
@@ -276,8 +283,24 @@ class NotificationRecoveryCoordinator @Inject constructor(
             allSucceeded = false
             emptyList()
         }
+        val safeRoutines = if (freeRoutineSelectionStore != null) {
+            RoutineScheduleOverlapValidator.nonOverlapping(routines)
+        } else {
+            routines
+        }
         routines.forEach { routine ->
             if (!routine.enabled) return@forEach
+            if (safeRoutines.none { it.id == routine.id }) {
+                routineScheduler.cancelActivation(routine.id)
+                return@forEach
+            }
+            if (freeRoutineSelectionStore != null && !RoutineTierPolicy.canRun(
+                    routine, routines, entitlementRepository.entitlement.value,
+                    freeRoutineSelectionStore.selectedRoutineId.value,
+                )) {
+                routineScheduler.cancelActivation(routine.id)
+                return@forEach
+            }
             try {
                 val occurrence = NextOccurrenceCalculator.nextOccurrence(routine, now, excludedDate = routine.pausedDate)
                 scheduleIfSafe(routine, occurrence)
@@ -304,8 +327,19 @@ class NotificationRecoveryCoordinator @Inject constructor(
 
         try {
             val now = zonedNow()
-            routineRepository.observeAll().first().forEach { routine ->
+            val routines = routineRepository.observeAll().first()
+            val safeRoutines = if (freeRoutineSelectionStore != null) {
+                RoutineScheduleOverlapValidator.nonOverlapping(routines)
+            } else {
+                routines
+            }
+            routines.forEach { routine ->
                 if (!routine.enabled) return@forEach
+                if (safeRoutines.none { it.id == routine.id }) return@forEach
+                if (freeRoutineSelectionStore != null && !RoutineTierPolicy.canRun(
+                        routine, routines, entitlementRepository.entitlement.value,
+                        freeRoutineSelectionStore.selectedRoutineId.value,
+                    )) return@forEach
                 val occurrence = NextOccurrenceCalculator.nextOccurrence(routine, now, excludedDate = routine.pausedDate)
                 if (occurrence is NextOccurrence.ActiveNow) {
                     scheduleIfSafe(routine, occurrence)

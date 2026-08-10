@@ -1,5 +1,41 @@
 # Blick — Android
 
+## Free and Premium tiers
+
+The app now uses one Google Play package with a central, server-verified entitlement source.
+Free keeps one saved line-and-direction routine. The non-consumable one-time product
+`blick_premium_lifetime` unlocks multiple non-overlapping routines and exact-destination
+journeys. The displayed price always comes from Google Play; the planned 49 SEK value is a
+Play Console configuration value, never app copy.
+
+Routine creation is one unified form for both tiers. Origin is always active. Destination is
+shown disabled with Premium guidance for Free users and becomes searchable for Premium users.
+Premium may leave Destination blank to continue with line/direction, or select a destination to
+skip those steps and save an exact-destination routine.
+
+Exact-destination routines store Journey Planner origin/destination IDs separately from SL
+Transport site/direction fields. Their Routine Details Transport row has a `+` multi-select whose
+persisted allow-list controls foreground refreshes, the widget, and the notification worker. They
+show the earliest-final-arrival journey and only label another journey Alternative when it uses a
+different public-transport mode combination; a later trip on the same mode is not an alternative.
+The compact widget shows only the fastest and a larger widget also shows a genuine alternative.
+The ongoing notification intentionally projects only the fastest
+journey's first public-transport leg into the existing notification model—never the exact
+destination, alternative, transfer comparison, or final arrival.
+
+Room schema version 5 adds the routine type and Journey Planner identity/display columns via
+`MIGRATION_4_5`; version 6 adds the journey-mode allow-list via `MIGRATION_5_6`. Existing routines
+start with all regular modes enabled. Schedule validation treats each
+week as circular, handles overnight windows and the Sunday/Monday boundary, and permits touching
+but not overlapping endpoints. This retains a single active 30-second worker and stable
+notification owner.
+
+If Premium is revoked or refunded, stored routines are retained. Premium-only routines remain
+visible but locked; the user can select one existing line-and-direction routine to run as Free.
+A previously verified Premium entitlement is cached only as a temporary outage fallback, never
+as permanent proof of purchase. See [`../docs/play-console-checklist.md`](../docs/play-console-checklist.md)
+before any release.
+
 Kotlin + Jetpack Compose client. Talks only to the Blick backend (`../backend`),
 never directly to SL Transport/SL Deviations — see `../docs/api-contract.md`.
 
@@ -18,12 +54,10 @@ screen is open plus a manual Refresh action), and routine management: editing an
 routine (same wizard/ViewModel as creation, reached via the `routine-edit/{routineId}`
 route — see `RoutineCreateViewModel`'s edit-mode support), enable/disable,
 pause-today/resume-today (with automatic cleanup of an expired pause on load), delete
-(with an in-screen Material3 confirmation dialog), and a first-beta one-routine limit
-enforced at the app/UI level: the "Add routine" FAB always stays visible, but tapping it
-with a routine already saved shows an in-place dialog explaining the beta limit instead of
-opening (and then blocking) the creation flow — see `RoutineListContent`'s doc and
-`RoutineCreateViewModel.oneRoutineLimitReached`, kept as defence in depth for any other
-entry point into that screen.
+(with an in-screen Material3 confirmation dialog), central Google Play entitlement state,
+tier-aware limits enforced in both UI and Room persistence, Premium exact-destination creation,
+and multiple-routine schedule-overlap protection. Refunded/revoked Premium routines remain
+stored and visible but locked; one selected line/direction routine remains eligible for Free.
 
 The ongoing-notification loop is fully implemented, not just its foundation:
 `notification/RoutineNotificationMapper` (a pure mapper, no Android dependency —

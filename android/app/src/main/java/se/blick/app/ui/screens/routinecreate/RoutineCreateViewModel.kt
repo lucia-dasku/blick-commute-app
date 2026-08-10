@@ -9,6 +9,7 @@ import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.ExperimentalCoroutinesApi
 import kotlinx.coroutines.FlowPreview
 import kotlinx.coroutines.Job
+import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
@@ -21,9 +22,12 @@ import kotlinx.coroutines.launch
 import se.blick.app.data.local.datastore.AppSettingsDataStore
 import se.blick.app.data.repository.DirectionOption
 import se.blick.app.data.repository.DirectionOptionsSource
+import se.blick.app.data.repository.JourneyRepository
 import se.blick.app.data.repository.RoutineRepository
 import se.blick.app.data.repository.StopRepository
 import se.blick.app.domain.model.CommuteRoutine
+import se.blick.app.domain.model.JourneyLocation
+import se.blick.app.domain.model.RoutineType
 import se.blick.app.domain.model.Site
 import se.blick.app.domain.model.TransportMode
 import se.blick.app.domain.usecase.RoutineDurationValidationResult
@@ -35,6 +39,10 @@ import se.blick.app.widget.runWidgetUpdateSafely
 import java.time.DayOfWeek
 import java.time.LocalTime
 import javax.inject.Inject
+import se.blick.app.billing.FreePremiumEntitlementRepository
+import se.blick.app.billing.PremiumEntitlementRepository
+import se.blick.app.billing.hasPremiumAccess
+import se.blick.app.data.repository.RoutineScheduleOverlapException
 
 private const val LOG_TAG = "RoutineCreateViewModel"
 
@@ -66,6 +74,15 @@ data class RoutineCreateUiState(
     val siteResults: List<Site> = emptyList(),
     val searchFailed: Boolean = false,
     val selectedSite: Site? = null,
+    val hasPremium: Boolean = false,
+    val destinationQuery: String = "",
+    val destinationResults: List<JourneyLocation> = emptyList(),
+    val selectedDestination: JourneyLocation? = null,
+    val journeyOrigin: JourneyLocation? = null,
+    val isSearchingDestination: Boolean = false,
+    val destinationSearchFailed: Boolean = false,
+    val isResolvingJourneyOrigin: Boolean = false,
+    val journeyOriginResolutionFailed: Boolean = false,
     val isLoadingDirections: Boolean = false,
     // A successful lookup that legitimately found zero lines/directions currently running
     // (see DirectionOptionsSource's live-departures-window limitation) — as distinct from...
@@ -100,6 +117,7 @@ data class RoutineCreateUiState(
      * active days — the exact inputs this validation depends on — so a stale error can never
      * linger after the user has already adjusted the schedule to fix it. */
     val durationLimitExceeded: Boolean = false,
+    val scheduleOverlap: Boolean = false,
     /** True when this screen was opened to edit an existing routine (see
      * [RoutineCreateViewModel]'s edit-mode support) rather than to create a new one. */
     val isEditMode: Boolean = false,
@@ -116,10 +134,22 @@ data class RoutineCreateUiState(
     val hasSelectedDays: Boolean get() = activeDays.isNotEmpty()
 
     /** Same-day window only for this first version — no overnight (end-before-start) routines. */
-    val isTimeRangeValid: Boolean get() = startTime.isBefore(endTime)
+    val isTimeRangeValid: Boolean get() = startTime != endTime
+
+    val isExactDestination: Boolean get() = selectedDestination != null
+
+    val canContinueFromStops: Boolean
+        get() = selectedSite != null && when {
+            isExactDestination -> hasPremium && journeyOrigin != null &&
+                journeyOrigin.id != selectedDestination?.id && !isResolvingJourneyOrigin
+            destinationQuery.isNotBlank() -> false
+            else -> !isLoadingDirections && directionOptions.isNotEmpty()
+        }
 
     val canSave: Boolean
-        get() = selectedSite != null && selectedDirection != null &&
+        get() = selectedSite != null &&
+            (if (isExactDestination) hasPremium && journeyOrigin != null &&
+                journeyOrigin.id != selectedDestination?.id else selectedDirection != null) &&
             hasSelectedDays && isTimeRangeValid && name.isNotBlank() && !isSaving &&
             !oneRoutineLimitReached
 }
@@ -134,6 +164,8 @@ class RoutineCreateViewModel @Inject constructor(
     private val routineScheduler: RoutineScheduler,
     private val routineWidgetUpdater: RoutineWidgetUpdater,
     private val appSettingsDataStore: AppSettingsDataStore,
+    private val journeyRepository: JourneyRepository,
+    private val entitlementRepository: PremiumEntitlementRepository = FreePremiumEntitlementRepository,
 ) : ViewModel() {
 
     /** Present only when this screen was reached via [Routes.RoutineEdit] — absent (null)
@@ -185,6 +217,9 @@ class RoutineCreateViewModel @Inject constructor(
      */
     private var directionsJob: Job? = null
     private var directionsRequestId = 0
+    private var destinationJob: Job? = null
+    private var journeyOriginJob: Job? = null
+    private var advanceAfterDirectionsLoad = true
 
     private fun cancelInFlightDirectionsRequest() {
         directionsRequestId++
@@ -206,13 +241,35 @@ class RoutineCreateViewModel @Inject constructor(
         val routineId = editingRoutineId
         if (routineId != null) {
             _uiState.update { it.copy(isEditMode = true, isLoadingExistingRoutine = true) }
+            viewModelScope.launch {
+                entitlementRepository.entitlement.collect { entitlement ->
+                    _uiState.update { it.copy(hasPremium = entitlement.hasPremiumAccess) }
+                }
+            }
             viewModelScope.launch { loadExistingRoutine(routineId) }
         } else {
             // First-beta one-routine limit (see RoutineListScreen for the matching list-side
             // guard) — both read the same RoutineRepository, so they can't disagree.
             viewModelScope.launch {
-                if (routineRepository.hasAnyRoutine()) {
-                    _uiState.update { it.copy(oneRoutineLimitReached = true) }
+                entitlementRepository.entitlement.collect { entitlement ->
+                    val hasPremium = entitlement.hasPremiumAccess
+                    val hasFreeLineRoutine = routineRepository.observeAll().first()
+                        .any { routine -> routine.type == RoutineType.LINE_DIRECTION }
+                    _uiState.update {
+                        it.copy(
+                            hasPremium = hasPremium,
+                            oneRoutineLimitReached = hasFreeLineRoutine && !hasPremium,
+                            destinationQuery = if (hasPremium) it.destinationQuery else "",
+                            destinationResults = if (hasPremium) it.destinationResults else emptyList(),
+                            selectedDestination = if (hasPremium) it.selectedDestination else null,
+                            journeyOrigin = if (hasPremium) it.journeyOrigin else null,
+                        )
+                    }
+                    if (hasPremium) {
+                        _uiState.value.selectedSite
+                            ?.takeIf { _uiState.value.journeyOrigin == null }
+                            ?.let(::resolveJourneyOrigin)
+                    }
                 }
             }
         }
@@ -246,6 +303,28 @@ class RoutineCreateViewModel @Inject constructor(
             lon = null,
             stopAreaIds = listOf(existing.siteId),
         )
+        if (existing.type == RoutineType.EXACT_DESTINATION) {
+            val journeyOrigin = existing.journeyOriginId?.let { id ->
+                JourneyLocation(id = id, name = existing.journeyOriginName ?: existing.siteName)
+            }
+            val journeyDestination = existing.journeyDestinationId?.let { id ->
+                JourneyLocation(id = id, name = existing.journeyDestinationName.orEmpty())
+            }
+            _uiState.update {
+                it.copy(
+                    selectedSite = syntheticSite,
+                    journeyOrigin = journeyOrigin,
+                    destinationQuery = journeyDestination?.name.orEmpty(),
+                    selectedDestination = journeyDestination,
+                    selectedTransportMode = null,
+                    selectedDirection = null,
+                    directionOptions = emptyList(),
+                    availableTransportModes = emptyList(),
+                    step = RoutineCreateStep.SCHEDULE,
+                )
+            }
+            return
+        }
         val savedDirection = existing.lineId?.let { lineId ->
             DirectionOption(
                 lineId = lineId,
@@ -280,6 +359,7 @@ class RoutineCreateViewModel @Inject constructor(
 
     fun onSiteQueryChanged(query: String) {
         cancelInFlightDirectionsRequest()
+        journeyOriginJob?.cancel()
         _uiState.update {
             it.copy(
                 siteQuery = query,
@@ -288,6 +368,9 @@ class RoutineCreateViewModel @Inject constructor(
                 // caught this: typing a new query used to leave the stale direction-error
                 // UI on screen indefinitely, hiding the new search's own results.
                 selectedSite = null,
+                journeyOrigin = null,
+                isResolvingJourneyOrigin = false,
+                journeyOriginResolutionFailed = false,
                 isLoadingDirections = false,
                 directionsEmpty = false,
                 directionsFailed = false,
@@ -309,8 +392,95 @@ class RoutineCreateViewModel @Inject constructor(
         // Explicit user-initiated station change: always start fresh — a previously
         // preselected mode/direction (from edit mode, or from a prior stop) is no longer
         // valid for a different stop. See onSiteQueryChanged's doc for the same rule.
+        selectSite(site, advanceAfterLoad = true)
+    }
+
+    fun selectOrigin(site: Site) {
+        selectSite(site, advanceAfterLoad = false)
+    }
+
+    private fun selectSite(site: Site, advanceAfterLoad: Boolean) {
         activePreselect = null
-        fetchDirections(site, preselect = null)
+        _uiState.update { current ->
+            val suggestedName = current.selectedDestination?.let { "${site.name} → ${it.name}" }
+            current.copy(
+                siteQuery = site.name,
+                siteResults = emptyList(),
+                name = if (!nameManuallyEdited && suggestedName != null) suggestedName else current.name,
+            )
+        }
+        fetchDirections(site, preselect = null, advanceAfterLoad = advanceAfterLoad)
+        resolveJourneyOrigin(site)
+    }
+
+    fun onDestinationQueryChanged(query: String) {
+        if (!_uiState.value.hasPremium) return
+        destinationJob?.cancel()
+        _uiState.update {
+            it.copy(
+                destinationQuery = query,
+                selectedDestination = null,
+                destinationResults = emptyList(),
+                destinationSearchFailed = false,
+                isSearchingDestination = query.isNotBlank(),
+            )
+        }
+        if (query.isBlank()) return
+        destinationJob = viewModelScope.launch {
+            delay(300)
+            try {
+                val results = journeyRepository.searchLocations(query)
+                _uiState.update {
+                    it.copy(destinationResults = results, isSearchingDestination = false, destinationSearchFailed = false)
+                }
+            } catch (e: CancellationException) {
+                throw e
+            } catch (e: Exception) {
+                Log.e(LOG_TAG, "Journey destination search failed", e)
+                _uiState.update {
+                    it.copy(destinationResults = emptyList(), isSearchingDestination = false, destinationSearchFailed = true)
+                }
+            }
+        }
+    }
+
+    fun selectDestination(destination: JourneyLocation) {
+        _uiState.update { current ->
+            val suggestedName = "${current.selectedSite?.name.orEmpty()} → ${destination.name}".trim()
+            current.copy(
+                destinationQuery = destination.name,
+                destinationResults = emptyList(),
+                selectedDestination = destination,
+                name = if (nameManuallyEdited) current.name else suggestedName,
+            )
+        }
+    }
+
+    private fun resolveJourneyOrigin(site: Site) {
+        if (!_uiState.value.hasPremium) return
+        journeyOriginJob?.cancel()
+        _uiState.update { it.copy(journeyOrigin = null, isResolvingJourneyOrigin = true, journeyOriginResolutionFailed = false) }
+        journeyOriginJob = viewModelScope.launch {
+            try {
+                val locations = journeyRepository.searchLocations(site.name)
+                val normalizedSiteName = site.name.substringBefore(',').trim()
+                val match = locations.firstOrNull {
+                    it.name.substringBefore(',').trim().equals(normalizedSiteName, ignoreCase = true)
+                } ?: locations.firstOrNull()
+                _uiState.update {
+                    it.copy(
+                        journeyOrigin = match,
+                        isResolvingJourneyOrigin = false,
+                        journeyOriginResolutionFailed = match == null,
+                    )
+                }
+            } catch (e: CancellationException) {
+                throw e
+            } catch (e: Exception) {
+                Log.e(LOG_TAG, "Could not resolve Journey Planner origin for ${site.name}", e)
+                _uiState.update { it.copy(isResolvingJourneyOrigin = false, journeyOriginResolutionFailed = true) }
+            }
+        }
     }
 
     /**
@@ -321,7 +491,9 @@ class RoutineCreateViewModel @Inject constructor(
      * discards the pre-filled mode/direction.
      */
     fun retryDirections() {
-        _uiState.value.selectedSite?.let { site -> fetchDirections(site, preselect = activePreselect) }
+        _uiState.value.selectedSite?.let { site ->
+            fetchDirections(site, preselect = activePreselect, advanceAfterLoad = advanceAfterDirectionsLoad)
+        }
     }
 
     /**
@@ -339,8 +511,9 @@ class RoutineCreateViewModel @Inject constructor(
      * re-run. Cancel/invalidate any previous in-flight request first — see the class doc on
      * [directionsJob]/[directionsRequestId].
      */
-    private fun fetchDirections(site: Site, preselect: DirectionOption?) {
+    private fun fetchDirections(site: Site, preselect: DirectionOption?, advanceAfterLoad: Boolean = true) {
         cancelInFlightDirectionsRequest()
+        advanceAfterDirectionsLoad = advanceAfterLoad
         val requestId = directionsRequestId
         _uiState.update {
             it.copy(
@@ -378,7 +551,11 @@ class RoutineCreateViewModel @Inject constructor(
                         availableTransportModes = effectiveOptions.map { option -> option.transportMode }.distinct(),
                         selectedTransportMode = selected?.transportMode ?: it.selectedTransportMode,
                         selectedDirection = selected ?: it.selectedDirection,
-                        step = if (preselect != null) RoutineCreateStep.SCHEDULE else RoutineCreateStep.TRANSPORT_MODE,
+                        step = when {
+                            preselect != null -> RoutineCreateStep.SCHEDULE
+                            advanceAfterLoad -> RoutineCreateStep.TRANSPORT_MODE
+                            else -> it.step
+                        },
                     )
                 }
             } catch (e: CancellationException) {
@@ -394,6 +571,13 @@ class RoutineCreateViewModel @Inject constructor(
     fun selectTransportMode(mode: TransportMode) {
         _uiState.update {
             it.copy(selectedTransportMode = mode, selectedDirection = null, step = RoutineCreateStep.DIRECTION)
+        }
+    }
+
+    fun continueFromStops() {
+        if (!_uiState.value.canContinueFromStops) return
+        _uiState.update {
+            it.copy(step = if (it.isExactDestination) RoutineCreateStep.SCHEDULE else RoutineCreateStep.TRANSPORT_MODE)
         }
     }
 
@@ -419,16 +603,23 @@ class RoutineCreateViewModel @Inject constructor(
         _uiState.update {
             val days = it.activeDays.toMutableSet()
             if (!days.add(day)) days.remove(day)
-            it.copy(activeDays = days, durationLimitExceeded = false)
+            it.copy(activeDays = days, durationLimitExceeded = false, scheduleOverlap = false)
         }
     }
 
     fun setStartTime(time: LocalTime) {
-        _uiState.update { it.copy(startTime = time, durationLimitExceeded = false) }
+        _uiState.update {
+            it.copy(
+                startTime = time,
+                endTime = if (time >= it.endTime) time.plusHours(1) else it.endTime,
+                durationLimitExceeded = false,
+                scheduleOverlap = false,
+            )
+        }
     }
 
     fun setEndTime(time: LocalTime) {
-        _uiState.update { it.copy(endTime = time, durationLimitExceeded = false) }
+        _uiState.update { it.copy(endTime = time, durationLimitExceeded = false, scheduleOverlap = false) }
     }
 
     fun setName(name: String) {
@@ -452,7 +643,11 @@ class RoutineCreateViewModel @Inject constructor(
             RoutineCreateStep.STOP -> return false
             RoutineCreateStep.TRANSPORT_MODE -> RoutineCreateStep.STOP
             RoutineCreateStep.DIRECTION -> RoutineCreateStep.TRANSPORT_MODE
-            RoutineCreateStep.SCHEDULE -> RoutineCreateStep.DIRECTION
+            RoutineCreateStep.SCHEDULE -> if (_uiState.value.isExactDestination) {
+                RoutineCreateStep.STOP
+            } else {
+                RoutineCreateStep.DIRECTION
+            }
         }
         _uiState.update { it.copy(step = previous) }
         return true
@@ -506,7 +701,9 @@ class RoutineCreateViewModel @Inject constructor(
         val state = _uiState.value
         if (state.isSaving) return
         val site = state.selectedSite ?: return
-        val direction = state.selectedDirection ?: return
+        val direction = state.selectedDirection
+        val journeyOrigin = state.journeyOrigin
+        val journeyDestination = state.selectedDestination
         if (!state.canSave) return
         if (!state.isEditMode && state.oneRoutineLimitReached) return
 
@@ -514,22 +711,49 @@ class RoutineCreateViewModel @Inject constructor(
         viewModelScope.launch {
             try {
                 val existing = originalRoutine
-                val toSave = CommuteRoutine(
-                    id = existing?.id ?: java.util.UUID.randomUUID().toString(),
-                    name = state.name,
-                    siteId = site.siteId,
-                    siteName = site.name,
-                    transportMode = direction.transportMode,
-                    lineId = direction.lineId,
-                    lineDesignation = direction.lineDesignation,
-                    directionCode = direction.directionCode,
-                    destinationLabel = direction.destinationLabel,
-                    activeDays = state.activeDays,
-                    startTime = state.startTime,
-                    endTime = state.endTime,
-                    enabled = existing?.enabled ?: true,
-                    pausedDate = existing?.pausedDate,
-                )
+                val toSave = if (journeyDestination != null && journeyOrigin != null) {
+                    CommuteRoutine(
+                        id = existing?.id ?: java.util.UUID.randomUUID().toString(),
+                        name = state.name,
+                        siteId = site.siteId,
+                        siteName = site.name,
+                        transportMode = TransportMode.UNKNOWN,
+                        lineId = null,
+                        lineDesignation = null,
+                        directionCode = null,
+                        destinationLabel = null,
+                        activeDays = state.activeDays,
+                        startTime = state.startTime,
+                        endTime = state.endTime,
+                        enabled = existing?.enabled ?: true,
+                        pausedDate = existing?.pausedDate,
+                        type = RoutineType.EXACT_DESTINATION,
+                        journeyOriginId = journeyOrigin.id,
+                        journeyOriginName = journeyOrigin.name,
+                        journeyDestinationId = journeyDestination.id,
+                        journeyDestinationName = journeyDestination.name,
+                        allowedJourneyTransportModes = existing?.allowedJourneyTransportModes
+                            ?: se.blick.app.domain.model.DEFAULT_JOURNEY_TRANSPORT_MODES,
+                    )
+                } else {
+                    val selectedDirection = direction ?: return@launch
+                    CommuteRoutine(
+                        id = existing?.id ?: java.util.UUID.randomUUID().toString(),
+                        name = state.name,
+                        siteId = site.siteId,
+                        siteName = site.name,
+                        transportMode = selectedDirection.transportMode,
+                        lineId = selectedDirection.lineId,
+                        lineDesignation = selectedDirection.lineDesignation,
+                        directionCode = selectedDirection.directionCode,
+                        destinationLabel = selectedDirection.destinationLabel,
+                        activeDays = state.activeDays,
+                        startTime = state.startTime,
+                        endTime = state.endTime,
+                        enabled = existing?.enabled ?: true,
+                        pausedDate = existing?.pausedDate,
+                    )
+                }
 
                 val otherRoutines = routineRepository.observeAll().first()
                 val durationValidation = RoutineDurationValidator.validate(
@@ -591,6 +815,8 @@ class RoutineCreateViewModel @Inject constructor(
             } catch (e: CancellationException) {
                 _uiState.update { it.copy(isSaving = false) }
                 throw e
+            } catch (e: RoutineScheduleOverlapException) {
+                _uiState.update { it.copy(isSaving = false, scheduleOverlap = true) }
             } catch (e: Exception) {
                 Log.e(LOG_TAG, "Failed to save routine", e)
                 _uiState.update { it.copy(isSaving = false, saveFailed = true) }
