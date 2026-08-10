@@ -1,15 +1,17 @@
 # Blick
 
-A scheduled Android departure display for regular SL commuters, across any SL transport
-mode (bus, metro, train, tram, ferry). Users choose a stop, transport mode, line,
-direction, weekdays, and time window; during that period, upcoming departures appear in
+A scheduled Android departure and journey display for regular SL commuters, across any
+SL transport mode (bus, metro, train, tram, ferry). Free users can save one line-and-direction
+routine. A one-time Premium entitlement adds multiple non-overlapping routines and exact-
+destination journey comparison ranked by earliest final arrival. During a routine's window,
+upcoming departures or the fastest complete journeys appear in
 one quiet, updating lock-screen notification. Blick requests promotion of that
 notification to Android 16's Live Update surface, but Android — and, on Samsung
 devices, One UI — alone decides whether it actually renders as a prominent Now Bar card;
 a plain ongoing notification is the automatic, transparent fallback wherever it doesn't.
-The backend also retrieves and normalizes SL disruption data, though the Android client
-does not yet request, consume, or surface it anywhere (see
-`docs/Blick_Project_Documentation.md`'s "Not yet implemented" list). See
+The backend retrieves and normalizes SL departures, disruptions, and Journey Planner data;
+the Android client consumes all three. It also verifies Premium purchase tokens with the
+Google Play Developer API. See
 `docs/Blick_Project_Documentation.md` for the full product specification.
 
 ## Repository layout
@@ -33,8 +35,12 @@ blick/
 
 ![Blick data flow](docs/framework.svg)
 
-**Currently implemented:** the user creates a routine (any of the supported SL
-transport modes — bus, metro, train, tram, ferry), which is saved locally and scheduled
+**Currently implemented:** every tier uses one creation form. Origin is always available;
+Destination is visibly disabled for Free and enabled for verified Premium. Leaving Destination
+blank continues through line/direction selection, while selecting it creates an exact-destination
+routine. Premium can save multiple routines. Schedules may not
+overlap, including across midnight and the Sunday/Monday boundary, so only one 30-second worker,
+stable notification, and widget data source owns an active window. Each routine is saved locally and scheduled
 for its next active window via WorkManager (best-effort, not exact — see
 `android/README.md`). Whether or not the app is open, that window activates
 automatically, requesting departures for the routine through the backend (which in
@@ -46,18 +52,26 @@ debug-only manual "Show/update test notification" control also remains available
 debug builds. Separately, opening the routine's details screen fetches
 immediately and again automatically about every 30 seconds while that screen stays
 open — independent of the notification loop — with manual Refresh also available.
-(SL Deviations is not part of this automatic flow — see the intro above.)
+Relevant SL Deviations are fetched after the departure notification is posted, so their
+availability cannot delay the primary live update.
 
 The notification also always carries a Stop action ("Stop/Unpin" the current window
 early — same effect as "pause for today").
 
-A home-screen widget shows the same routine/station/direction and next-two-departures
-information during the active window — updated from the exact same ~30-second worker
+A home-screen widget shows the same routine/station/direction and next-two-departures,
+or the fastest exact-destination journey (plus a journey using a genuinely different transport
+combination when SL supplies one), during
+the active window — updated from the exact same ~30-second worker
 loop, never a separate refresh mechanism — and reads exactly **"No active commute."**
 outside it. Tapping the widget opens the routine's details screen. See
 `android/README.md`'s Status section for the full account.
 
 ## Status
+
+The Free/Premium implementation is code-complete but still requires the Play Console product,
+Google Cloud service-account access, backend secrets, and release-track testing described in
+[`docs/play-console-checklist.md`](docs/play-console-checklist.md). Do not treat a build without
+that configuration as production-ready purchase verification.
 
 Foundation plus a real, largely end-to-end feature set, device-verified on a physical
 tablet and on a real Samsung Galaxy S23 Ultra (One UI 8.5, Android 16), where the full
@@ -68,11 +82,10 @@ appeared on that device behind Settings → Developer options → "Live notifica
 all apps," a Samsung-imposed restriction with no known removal date — see
 `android/README.md`'s Known limitations for why that's Samsung's decision, not a fixable
 Blick gap. The backend's contract,
-normalization, and caching logic are implemented and
-tested (192 passing tests). The Android side has routine creation (live SL stop search,
+normalization, caching, Journey Planner, and purchase-verification logic are implemented and
+tested (384 passing tests). The Android side has line/direction and exact-destination creation,
 transport mode/line/direction discovery, Room persistence), an always-visible
-Add-routine control (with an explicit, in-place explanation — never a creation flow
-that can't save — once the current first-beta one-routine limit is reached), a
+Add-routine control with tier-aware creation and a Premium explanation for Free users, a
 foreground routine details/live-preview screen (automatic 30-second refresh plus manual
 refresh, next two matching departures, and
 loading/live/no-departures/offline/stale/unavailable states), full routine management

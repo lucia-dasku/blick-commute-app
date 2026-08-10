@@ -5,6 +5,37 @@ every normalized field maps back to the upstream SL APIs. It is kept in sync wit
 implementation under `backend/src`; the normalization code links back to this file in
 comments at the points where a non-obvious decision was made.
 
+## Premium and Journey Planner additions
+
+### `POST /api/v1/billing/verify`
+
+Request JSON: `{ "productId": "blick_premium_lifetime", "purchaseToken": "..." }`.
+The product ID is closed to that one non-consumable product. The backend exchanges its Google
+service-account assertion for an OAuth access token, calls Android Publisher Product Purchases
+v2 for the configured package, grants entitlement only for a completed, unrefunded purchase,
+and acknowledges an unacknowledged valid purchase through the publisher API. Credentials never
+enter the Android app or repository. Responses use the existing sanitized error envelope and
+`Cache-Control: no-store`.
+
+### `GET /api/v1/journeys/locations/search?query=`
+
+Resolves a user-entered stop/location through Journey Planner Stop Finder and returns supported
+global identifiers plus display names. Android must persist these identifiers; SL Transport's
+numeric site IDs are not assumed to be compatible.
+
+### `GET /api/v1/journeys?originId=&destinationId=&transportModes=METRO,TRAIN,BUS`
+
+Calls Journey Planner Trips with `route_type=leasttime`, normalizes complete legs, first public
+transport mode/line, departure and final arrival, transfer count, realtime flags, stop names and
+disruptions, and maps the requested allow-list to SL's `incl_mot_*` parameters. Walking transfer
+legs are always permitted; a journey using any unselected public mode is rejected defensively.
+Results are sorted by final arrival and contain the fastest journey plus, when SL supplies one,
+the earliest journey with a different public-transport mode combination. A later departure using
+the same modes is not mislabeled as an alternative. `transportModes` defaults to all regular modes
+for backward compatibility and rejects empty or unsupported selections. Upstream timeout/network/
+schema failures retain the existing error-envelope behavior. Responses are public-cacheable for
+30 seconds so app/detail/widget consumers do not independently amplify upstream traffic.
+
 ## 1. Upstream architecture
 
 The backend talks to two keyless, official SL/Trafiklab APIs:
