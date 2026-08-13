@@ -23,6 +23,7 @@ import org.junit.Assert.assertTrue
 import org.junit.Rule
 import org.junit.Test
 import org.junit.runner.RunWith
+import se.blick.app.R
 
 /**
  * Instrumented Compose UI test for [WeekdaySelector] — exercises it directly (an `internal`
@@ -140,7 +141,7 @@ class RoutineCreateScreenTest {
         composeRule.onNodeWithText(labels[6]).assertIsDisplayed()
     }
 
-    private fun setUnifiedOriginDestinationContent(hasPremium: Boolean) {
+    private fun setUnifiedOriginDestinationContent(hasPremium: Boolean, onOpenPremium: () -> Unit = {}) {
         composeRule.setContent {
             OriginDestinationStep(
                 uiState = RoutineCreateUiState(hasPremium = hasPremium),
@@ -151,6 +152,7 @@ class RoutineCreateScreenTest {
                 onContinue = {},
                 onRetryStopSearch = {},
                 onRetryDirections = {},
+                onOpenPremium = onOpenPremium,
             )
         }
     }
@@ -167,5 +169,26 @@ class RoutineCreateScreenTest {
         setUnifiedOriginDestinationContent(hasPremium = true)
 
         composeRule.onNodeWithTag("destination-field").assertIsDisplayed().assertIsEnabled()
+    }
+
+    @Test
+    fun freeUser_seesThePremiumUpsellAndItsButtonOpensPremium() {
+        var opened = false
+        setUnifiedOriginDestinationContent(hasPremium = false, onOpenPremium = { opened = true })
+
+        val upsellBody = composeRule.activity.getString(R.string.routine_create_premium_upsell_body)
+        val upsellButton = composeRule.activity.getString(R.string.routine_create_premium_upsell_button)
+        composeRule.onNodeWithText(upsellBody).assertIsDisplayed()
+        composeRule.onNodeWithText(upsellButton).assertIsDisplayed().performClick()
+
+        assertTrue("expected the upsell button to invoke onOpenPremium", opened)
+    }
+
+    @Test
+    fun premiumUser_neverSeesThePremiumUpsell() {
+        setUnifiedOriginDestinationContent(hasPremium = true)
+
+        val upsellButton = composeRule.activity.getString(R.string.routine_create_premium_upsell_button)
+        composeRule.onNodeWithText(upsellButton).assertDoesNotExist()
     }
 }

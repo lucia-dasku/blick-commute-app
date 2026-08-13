@@ -41,7 +41,10 @@ fun BlickNavHost(navController: NavHostController = rememberNavController()) {
             PremiumScreen(onBack = { navController.popBackStack() })
         }
         composable(Routes.RoutineCreate.route) {
-            RoutineCreateScreen(onDone = { navController.popBackStack() })
+            RoutineCreateScreen(
+                onDone = { navController.popBackStack() },
+                onOpenPremium = { navController.navigate(Routes.Premium.route) },
+            )
         }
         composable(Routes.RoutineEdit.route) {
             // Same screen/ViewModel as RoutineCreate (see RoutineCreateViewModel's edit-mode
@@ -56,6 +59,7 @@ fun BlickNavHost(navController: NavHostController = rememberNavController()) {
                         ?.set(ROUTE_RESULT_ROUTINE_EDITED, true)
                     navController.popBackStack()
                 },
+                onOpenPremium = { navController.navigate(Routes.Premium.route) },
             )
         }
         composable(Routes.RoutineDetails.route) { backStackEntry ->

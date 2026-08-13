@@ -14,6 +14,8 @@
     <string name="routine_create_destination_label">Destination</string>
     <string name="routine_create_destination_premium_hint">Tillgängligt med Blick Premium</string>
     <string name="routine_create_destination_optional_hint">Valfritt — lämna tomt för att välja linje och riktning</string>
+    <string name="routine_create_premium_upsell_body">Skaffa Premium för att ange en exakt destination och jämföra kompletta resor.</string>
+    <string name="routine_create_premium_upsell_button">Skaffa Premium</string>
     <string name="routine_create_destination_search_error">Kunde inte söka efter destinationer. Kontrollera anslutningen och försök igen.</string>
     <string name="routine_create_resolving_origin">Förbereder startplatsen för resejämförelse…</string>
     <string name="routine_create_origin_resolution_error">Kunde inte använda startplatsen för en exakt resa. Försök välja den igen.</string>

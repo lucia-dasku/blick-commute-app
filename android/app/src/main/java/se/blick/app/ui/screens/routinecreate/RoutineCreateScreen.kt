@@ -27,6 +27,7 @@ import androidx.compose.material3.ListItem
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.Scaffold
+import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
 import androidx.compose.material3.TimePicker
@@ -70,6 +71,10 @@ import java.time.format.TextStyle
 @Composable
 fun RoutineCreateScreen(
     onDone: () -> Unit,
+    // Defaulted so this screen keeps compiling for any test/preview call site written before
+    // the premium upsell existed — see OriginDestinationStep's own doc on where this is
+    // actually used.
+    onOpenPremium: () -> Unit = {},
     viewModel: RoutineCreateViewModel = hiltViewModel(),
 ) {
     val uiState by viewModel.uiState.collectAsStateWithLifecycle()
@@ -138,6 +143,7 @@ fun RoutineCreateScreen(
                             onContinue = viewModel::continueFromStops,
                             onRetryStopSearch = viewModel::retryStopSearch,
                             onRetryDirections = viewModel::retryDirections,
+                            onOpenPremium = onOpenPremium,
                         )
                         RoutineCreateStep.TRANSPORT_MODE -> TransportModeStep(
                             uiState = uiState,
@@ -213,6 +219,11 @@ internal fun OriginDestinationStep(
     onContinue: () -> Unit,
     onRetryStopSearch: () -> Unit,
     onRetryDirections: () -> Unit,
+    // Defaulted -- only RoutineCreateScreen's own real call site (via BlickNavHost) passes an
+    // actual navigation callback; every other existing call site (RoutineCreateScreenTest's
+    // setUnifiedOriginDestinationContent) has no premium screen to navigate to and doesn't
+    // care about this control.
+    onOpenPremium: () -> Unit = {},
 ) {
     Column(Modifier.fillMaxSize().verticalScroll(rememberScrollState())) {
         OutlinedTextField(
@@ -329,6 +340,37 @@ internal fun OriginDestinationStep(
         Spacer(Modifier.height(20.dp))
         Button(onClick = onContinue, enabled = uiState.canContinueFromStops, modifier = Modifier.fillMaxWidth()) {
             Text(stringResource(R.string.routine_create_continue))
+        }
+
+        // Free-only, and placed below the primary Continue action rather than beside the
+        // destination field above -- a supplementary offer, not a second competing call to
+        // action at the point where a free user is already trying to move forward with a
+        // line/direction routine. Still reachable with no more than a short scroll: this
+        // whole step is already a single scrollable Column (see the Modifier above).
+        if (!uiState.hasPremium) {
+            Spacer(Modifier.height(24.dp))
+            PremiumUpsellCard(onOpenPremium = onOpenPremium)
+        }
+    }
+}
+
+/** The transparent, always-reachable path from "I can't set an exact destination" (the
+ * disabled destination field and its own hint above) to actually getting Premium — see
+ * [OriginDestinationStep]'s own call site. Previously the only way to reach the Premium
+ * screen from this wizard was to already know the routine list screen's free-routine-limit
+ * dialog existed. */
+@Composable
+private fun PremiumUpsellCard(onOpenPremium: () -> Unit) {
+    Surface(
+        tonalElevation = 1.dp,
+        shape = MaterialTheme.shapes.medium,
+        modifier = Modifier.fillMaxWidth(),
+    ) {
+        Column(Modifier.padding(16.dp), verticalArrangement = Arrangement.spacedBy(12.dp)) {
+            Text(stringResource(R.string.routine_create_premium_upsell_body), style = MaterialTheme.typography.bodyMedium)
+            Button(onClick = onOpenPremium, modifier = Modifier.fillMaxWidth()) {
+                Text(stringResource(R.string.routine_create_premium_upsell_button))
+            }
         }
     }
 }

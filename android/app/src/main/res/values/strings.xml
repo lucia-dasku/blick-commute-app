@@ -15,6 +15,8 @@
     <string name="routine_create_destination_label">Destination</string>
     <string name="routine_create_destination_premium_hint">Available with Blick Premium</string>
     <string name="routine_create_destination_optional_hint">Optional — leave blank to choose a line and direction</string>
+    <string name="routine_create_premium_upsell_body">Get Premium to set an exact destination and compare complete journeys.</string>
+    <string name="routine_create_premium_upsell_button">Get Premium</string>
     <string name="routine_create_destination_search_error">Couldn’t search for destinations. Check your connection and try again.</string>
     <string name="routine_create_resolving_origin">Preparing this origin for journey comparison…</string>
     <string name="routine_create_origin_resolution_error">Couldn’t use this origin for an exact journey. Try selecting it again.</string>
