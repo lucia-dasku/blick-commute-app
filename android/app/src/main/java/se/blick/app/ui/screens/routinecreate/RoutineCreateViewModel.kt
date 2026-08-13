@@ -133,7 +133,11 @@ data class RoutineCreateUiState(
 ) {
     val hasSelectedDays: Boolean get() = activeDays.isNotEmpty()
 
-    /** Same-day window only for this first version — no overnight (end-before-start) routines. */
+    /** Only an exact start-equals-end selection is invalid — an end time at or before the start
+     * is a valid overnight (midnight-crossing) window, resolved onto the following date by
+     * [se.blick.app.scheduling.NextOccurrenceCalculator],
+     * [se.blick.app.domain.usecase.RoutineDurationValidator], and
+     * [se.blick.app.domain.usecase.RoutineScheduleOverlapValidator] alike. */
     val isTimeRangeValid: Boolean get() = startTime != endTime
 
     val isExactDestination: Boolean get() = selectedDestination != null
