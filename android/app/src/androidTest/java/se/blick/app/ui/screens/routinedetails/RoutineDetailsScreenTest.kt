@@ -1,6 +1,11 @@
 package se.blick.app.ui.screens.routinedetails
 
 import androidx.activity.ComponentActivity
+import androidx.compose.runtime.MutableState
+import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableStateOf
+import androidx.compose.runtime.remember
+import androidx.compose.runtime.setValue
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.test.assertCountEquals
 import androidx.compose.ui.test.junit4.v2.createAndroidComposeRule
@@ -106,6 +111,7 @@ class RoutineDetailsScreenTest {
         routine: CommuteRoutine = sampleRoutine(),
         isPausedToday: Boolean = false,
         journeys: List<JourneyPlan> = emptyList(),
+        now: Instant = Instant.now(),
         onUpdateJourneyTransportModes: (Set<TransportMode>) -> Unit = {},
     ) {
         composeRule.setContent {
@@ -117,6 +123,7 @@ class RoutineDetailsScreenTest {
                 isRefreshing = false,
                 disruptionsState = disruptionsState,
                 journeys = journeys,
+                now = now,
                 onUpdateJourneyTransportModes = onUpdateJourneyTransportModes,
                 onRefresh = {},
                 onEdit = {},
@@ -188,6 +195,148 @@ class RoutineDetailsScreenTest {
         composeRule.onNodeWithText(
             composeRule.activity.getString(R.string.journey_mode_commuter_rail),
         ).assertExists()
+    }
+
+    @Test
+    fun anExpiredJourneyIsNeverRenderedAsFastestWithACountdown() {
+        // Deterministic, not Instant.now()-relative -- the journey departed one second before
+        // the fixed `now` this test supplies to setContent, proving the render-time filter reads
+        // that supplied timestamp rather than depending on the real system clock.
+        val now = Instant.parse("2026-08-10T22:12:00Z")
+        val departureTime = now.minusSeconds(1)
+        val arrivalTime = departureTime.plusSeconds(15 * 60)
+        val leg = JourneyLeg(
+            transportMode = TransportMode.BUS,
+            lineDesignation = "57",
+            direction = "Norsborg",
+            originName = "Slussen",
+            destinationName = "Norsborg",
+            departureTime = departureTime,
+            arrivalTime = arrivalTime,
+            isRealtime = true,
+            disruptions = emptyList(),
+        )
+        val expiredJourney = JourneyPlan(
+            journeyId = "journey-expired",
+            originName = leg.originName,
+            destinationName = leg.destinationName,
+            departureTime = departureTime,
+            arrivalTime = arrivalTime,
+            transferCount = 0,
+            firstLeg = leg,
+            legs = listOf(leg),
+            disruptions = emptyList(),
+        )
+
+        setContent(
+            disruptionsState = DisruptionsState.NoDisruptions,
+            routine = sampleRoutine().copy(
+                type = RoutineType.EXACT_DESTINATION,
+                journeyOriginId = "origin-id",
+                journeyOriginName = expiredJourney.originName,
+                journeyDestinationId = "destination-id",
+                journeyDestinationName = expiredJourney.destinationName,
+            ),
+            journeys = listOf(expiredJourney),
+            now = now,
+        )
+
+        // No card, no line badge, no "FASTEST" label, no countdown for the expired journey --
+        // only the existing no-journeys state.
+        composeRule.onNodeWithText("57").assertDoesNotExist()
+        composeRule.onNodeWithText(composeRule.activity.getString(R.string.journey_fastest)).assertDoesNotExist()
+        composeRule.onNodeWithText(
+            composeRule.activity.getString(R.string.routine_details_no_journeys),
+        ).assertExists()
+    }
+
+    @Test
+    fun countdownAdvancesWhenOnlyTheEvaluationTimestampChangesForAnIdenticalJourneyList() {
+        // Mirrors RoutineDetailsUiState.journeysEvaluatedAt's exact boundary: a journey departing
+        // at 08:04:30 reads "in 5 min" when evaluated at 08:00:00, and "in 4 min" once evaluated
+        // at 08:00:30 -- for the SAME journeys list object, proving the countdown genuinely comes
+        // from the `now` parameter recomposing, not from the journey list itself changing.
+        val departureTime = Instant.parse("2026-07-28T08:04:30Z")
+        val arrivalTime = departureTime.plusSeconds(900)
+        val leg = JourneyLeg(
+            transportMode = TransportMode.METRO,
+            lineDesignation = "14",
+            direction = "Arlanda",
+            originName = "Fruängen",
+            destinationName = "Arlanda",
+            departureTime = departureTime,
+            arrivalTime = arrivalTime,
+            isRealtime = true,
+            disruptions = emptyList(),
+        )
+        val journeys = listOf(
+            JourneyPlan(
+                journeyId = "journey-1",
+                originName = leg.originName,
+                destinationName = leg.destinationName,
+                departureTime = departureTime,
+                arrivalTime = arrivalTime,
+                transferCount = 0,
+                firstLeg = leg,
+                legs = listOf(leg),
+                disruptions = emptyList(),
+            ),
+        )
+        val routine = sampleRoutine().copy(
+            type = RoutineType.EXACT_DESTINATION,
+            journeyOriginId = "origin-id",
+            journeyOriginName = leg.originName,
+            journeyDestinationId = "destination-id",
+            journeyDestinationName = leg.destinationName,
+        )
+        lateinit var now: MutableState<Instant>
+
+        composeRule.setContent {
+            now = remember { mutableStateOf(Instant.parse("2026-07-28T08:00:00Z")) }
+            RoutineDetailsContent(
+                modifier = Modifier,
+                routine = routine,
+                isPausedToday = false,
+                departuresState = LiveDeparturesState.Offline,
+                isRefreshing = false,
+                disruptionsState = DisruptionsState.NoDisruptions,
+                journeys = journeys,
+                now = now.value,
+                onUpdateJourneyTransportModes = {},
+                onRefresh = {},
+                onEdit = {},
+                isTogglingEnabled = false,
+                enabledActionFailed = false,
+                hasSeenNotificationRationale = true,
+                onNotificationRationaleSeen = {},
+                notificationAvailability = NotificationAvailability.Available,
+                onToggleEnabled = {},
+                isTogglingPause = false,
+                pauseActionFailed = false,
+                onPauseToday = {},
+                onResumeToday = {},
+                isDeleting = false,
+                deleteFailed = false,
+                onRequestDelete = {},
+                schedulingFailed = false,
+                isRetryingScheduling = false,
+                onRetryScheduling = {},
+                onShowDebugNotification = { null },
+                onRemoveDebugNotification = {},
+                isLiveUpdatePromotable = { false },
+            )
+        }
+
+        composeRule.onNodeWithText("in 5 min").assertExists()
+        composeRule.onNodeWithText("in 4 min").assertDoesNotExist()
+
+        // The SAME journeys list is never re-supplied -- only the evaluation timestamp advances,
+        // exactly like a real automatic refresh whose journey response was structurally identical
+        // but whose journeysEvaluatedAt still moved forward.
+        composeRule.runOnIdle { now.value = Instant.parse("2026-07-28T08:00:30Z") }
+
+        composeRule.onNodeWithText("in 4 min").assertExists()
+        composeRule.onNodeWithText("in 5 min").assertDoesNotExist()
     }
 
     @Test
@@ -367,6 +516,33 @@ class RoutineDetailsScreenTest {
 
         val editLabel = composeRule.activity.getString(R.string.routine_details_edit_action)
         composeRule.onNodeWithText(editLabel).assertExists()
+    }
+
+    @Test
+    fun exactDestinationRoutine_showsRouteRowWithOriginAndDestination() {
+        // Regression test: exact-destination routines never populate destinationLabel (a
+        // LINE_DIRECTION-only field), so the old single "Direction" row silently rendered
+        // nothing for them -- the Route row below is what now replaces it for this type.
+        val exactRoutine = sampleRoutine().copy(
+            type = RoutineType.EXACT_DESTINATION,
+            transportMode = TransportMode.UNKNOWN,
+            lineId = null,
+            lineDesignation = null,
+            directionCode = null,
+            destinationLabel = null,
+            journeyOriginId = "origin-id",
+            journeyOriginName = "Fruängen",
+            journeyDestinationId = "destination-id",
+            journeyDestinationName = "Mariatorget",
+        )
+        setContent(DisruptionsState.NoDisruptions, routine = exactRoutine)
+
+        val routeLabel = composeRule.activity.getString(R.string.routine_details_route_label)
+        composeRule.onNodeWithText(routeLabel).performScrollTo().assertExists()
+        composeRule.onNodeWithText("Fruängen → Mariatorget").assertExists()
+
+        val directionLabel = composeRule.activity.getString(R.string.routine_details_direction_label)
+        composeRule.onNodeWithText(directionLabel).assertDoesNotExist()
     }
 
     @Test

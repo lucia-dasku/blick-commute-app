@@ -71,6 +71,9 @@ import se.blick.app.domain.model.Disruption
 import se.blick.app.domain.usecase.DisruptionsState
 import se.blick.app.domain.usecase.LiveDeparturesState
 import se.blick.app.domain.usecase.PreparedDeparture
+import se.blick.app.domain.usecase.countdownMinutes
+import se.blick.app.domain.usecase.effectiveFirstDeparture
+import se.blick.app.domain.usecase.filterCurrentJourneys
 import se.blick.app.domain.model.TransportMode
 import se.blick.app.domain.model.JourneyPlan
 import se.blick.app.domain.model.JOURNEY_TRANSPORT_MODE_OPTIONS
@@ -161,6 +164,10 @@ fun RoutineDetailsScreen(
                 disruptionsState = uiState.disruptions,
                 journeys = uiState.journeys,
                 journeysUnavailable = uiState.journeysUnavailable,
+                // The ViewModel's own journeysEvaluatedAt, not the default Instant.now() --
+                // see that field's own doc, and RoutineDetailsContent's now parameter doc, for
+                // why production must never rely on the default here.
+                now = uiState.journeysEvaluatedAt,
                 isUpdatingJourneyTransportModes = uiState.isUpdatingJourneyTransportModes,
                 journeyTransportModesUpdateFailed = uiState.journeyTransportModesUpdateFailed,
                 onUpdateJourneyTransportModes = viewModel::updateJourneyTransportModes,
@@ -221,13 +228,20 @@ fun RoutineDetailsScreen(
 }
 
 @Composable
-private fun JourneyComparisonSection(journeys: List<JourneyPlan>, unavailable: Boolean) {
+private fun JourneyComparisonSection(journeys: List<JourneyPlan>, unavailable: Boolean, now: Instant) {
+    // Render-time eligibility filter: a journey that was still current when fetched can have
+    // since departed by the time this composable actually renders (a fresh 30-second fetch, or
+    // simply a later recomposition of an already-fetched list). Filtering here, before deciding
+    // between the "no journeys" state and the card list, is what keeps an expired journey from
+    // ever being labeled "FASTEST"/"Alternative" or showing its line badge, arrival, changes, or
+    // countdown -- countdownMinutes below is therefore never called with a past departure.
+    val currentJourneys = journeys.filterCurrentJourneys(now)
     when {
         unavailable -> Text(stringResource(R.string.routine_details_journeys_unavailable), color = MaterialTheme.colorScheme.error)
-        journeys.isEmpty() -> Text(stringResource(R.string.routine_details_no_journeys))
+        currentJourneys.isEmpty() -> Text(stringResource(R.string.routine_details_no_journeys))
         else -> Column(verticalArrangement = Arrangement.spacedBy(12.dp)) {
-            val fastestArrival = journeys.first().arrivalTime
-            journeys.take(2).forEachIndexed { index, journey ->
+            val fastestArrival = currentJourneys.first().arrivalTime
+            currentJourneys.take(2).forEachIndexed { index, journey ->
                 var expanded by remember(journey.journeyId) { mutableStateOf(false) }
                 Surface(
                     tonalElevation = if (index == 0) 3.dp else 1.dp,
@@ -247,7 +261,14 @@ private fun JourneyComparisonSection(journeys: List<JourneyPlan>, unavailable: B
                                 stringResource(journey.firstLeg.transportMode.journeyLabelResId()),
                                 style = MaterialTheme.typography.titleMedium,
                             )
-                            val minutes = Duration.between(Instant.now(), journey.departureTime).toMinutes().coerceAtLeast(0)
+                            // countdownMinutes, never a floor-based Duration.toMinutes().coerceAtLeast(0):
+                            // that would floor a genuinely-upcoming departure under a minute away down
+                            // to "0 min" (indistinguishable from one that already departed) and would
+                            // hide an already-expired departure as "0 min" rather than it having already
+                            // been removed by the filter above. effectiveFirstDeparture, not the raw
+                            // top-level departureTime, for both this eligibility check and this
+                            // countdown -- see that function's own doc.
+                            val minutes = countdownMinutes(now, journey.effectiveFirstDeparture())
                             Text(stringResource(R.string.journey_departure_in, minutes), style = MaterialTheme.typography.titleMedium)
                         }
                         val changes = if (journey.transferCount == 0) stringResource(R.string.journey_direct)
@@ -286,6 +307,16 @@ internal fun RoutineDetailsContent(
     disruptionsState: DisruptionsState,
     journeys: List<JourneyPlan> = emptyList(),
     journeysUnavailable: Boolean = false,
+    /** The "now" [JourneyComparisonSection] filters and computes countdowns against.
+     * [RoutineDetailsScreen] (the only production call site) always passes
+     * `uiState.journeysEvaluatedAt` here — never relies on this parameter's own default -- see
+     * that field's own doc: it is what makes an otherwise-identical automatic refresh actually
+     * reach Compose at all, so recomposition (and therefore this parameter's own value) advancing
+     * is a direct consequence of the ViewModel's own ~30-second fetch loop completing, not of a
+     * separate render-time clock read. The `Instant.now()` default exists only so a test that
+     * doesn't care about the exact instant (e.g. `RoutineDetailsScreenTest` cases unrelated to
+     * journeys) isn't forced to supply one. */
+    now: Instant = Instant.now(),
     isUpdatingJourneyTransportModes: Boolean = false,
     journeyTransportModesUpdateFailed: Boolean = false,
     onUpdateJourneyTransportModes: (Set<TransportMode>) -> Unit = {},
@@ -358,7 +389,7 @@ internal fun RoutineDetailsContent(
         Spacer(Modifier.height(12.dp))
 
         if (routine.type == RoutineType.EXACT_DESTINATION) {
-            JourneyComparisonSection(journeys, journeysUnavailable)
+            JourneyComparisonSection(journeys, journeysUnavailable, now)
         } else {
             DeparturesSection(departuresState, routine.transportMode, locale, onRefresh)
         }
@@ -404,11 +435,24 @@ internal fun RoutineDetailsContent(
         routine.lineDesignation?.let { designation ->
             LineDetailRow(stringResource(R.string.routine_details_line_label), designation, routine.transportMode)
         }
-        // "{siteName} → {destination}", the same default pattern routine.name itself is built
-        // from (see RoutineCreateViewModel.selectDirection) -- now the one place on this screen
-        // that spells out the full route, since the heading above no longer does.
-        routine.destinationLabel?.let { destination ->
-            DetailRow(stringResource(R.string.routine_details_direction_label), "${routine.siteName} → $destination")
+        if (routine.type == RoutineType.EXACT_DESTINATION) {
+            // Exact-destination routines never populate destinationLabel (that field is a
+            // LINE_DIRECTION-only concept -- the destination printed on a physical vehicle's
+            // signage) -- their own origin/destination instead live in journeyOriginName/
+            // journeyDestinationName. Labeled "Route" rather than reusing "Direction": this
+            // shows the whole origin-to-destination path, whereas "destination" on its own
+            // reads as just the single point the user gets off at.
+            DetailRow(
+                stringResource(R.string.routine_details_route_label),
+                "${routine.journeyOriginName ?: routine.siteName} → ${routine.journeyDestinationName.orEmpty()}",
+            )
+        } else {
+            // "{siteName} → {destination}", the same default pattern routine.name itself is built
+            // from (see RoutineCreateViewModel.selectDirection) -- now the one place on this screen
+            // that spells out the full route, since the heading above no longer does.
+            routine.destinationLabel?.let { destination ->
+                DetailRow(stringResource(R.string.routine_details_direction_label), "${routine.siteName} → $destination")
+            }
         }
         DetailRow(
             stringResource(R.string.routine_details_schedule_label),

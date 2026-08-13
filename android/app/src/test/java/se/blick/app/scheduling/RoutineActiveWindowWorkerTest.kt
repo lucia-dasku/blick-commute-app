@@ -26,6 +26,7 @@ import org.robolectric.RuntimeEnvironment
 import org.robolectric.annotation.Config
 import se.blick.app.data.repository.DepartureRepository
 import se.blick.app.data.repository.DisruptionRepository
+import se.blick.app.data.repository.JourneyRepository
 import se.blick.app.data.repository.RoutineOccurrenceRuntimeRepository
 import se.blick.app.data.repository.RoutineOccurrenceRuntimeState
 import se.blick.app.data.repository.RoutineRepository
@@ -38,14 +39,20 @@ import se.blick.app.domain.model.Disruption
 import se.blick.app.domain.model.DisruptionMessage
 import se.blick.app.domain.model.DisruptionPriority
 import se.blick.app.domain.model.Journey
+import se.blick.app.domain.model.JourneyLeg
+import se.blick.app.domain.model.JourneyLocation
+import se.blick.app.domain.model.JourneyPlan
 import se.blick.app.domain.model.LineRef
+import se.blick.app.domain.model.RoutineType
 import se.blick.app.domain.model.StopAreaRef
 import se.blick.app.domain.model.StopPointRef
 import se.blick.app.domain.model.TransportMode
 import se.blick.app.domain.usecase.DepartureIdentity
 import se.blick.app.domain.usecase.GetDisruptionsUseCase
 import se.blick.app.domain.usecase.GetLiveDeparturesUseCase
+import se.blick.app.domain.usecase.GetRankedJourneysUseCase
 import se.blick.app.domain.usecase.LiveDeparturesSnapshot
+import se.blick.app.domain.usecase.countdownMinutes
 import se.blick.app.notification.NotificationAvailability
 import se.blick.app.notification.NotificationAvailabilityChecker
 import se.blick.app.notification.NotificationPostResult
@@ -383,8 +390,15 @@ class RoutineActiveWindowWorkerTest {
         val updateCalls = mutableListOf<Pair<CommuteRoutine, LiveDeparturesState>>()
         val disruptionsAtUpdate = mutableListOf<Disruption?>()
         val notificationsUnavailableCalls = mutableListOf<CommuteRoutine>()
+        /** Every [updateWithJourneys] call's own [now] alongside the exact journey list it was
+         * given — used by the exact-destination tests below to prove the worker passes the SAME
+         * already-filtered list (and the same instant) here as it used for the notification. */
+        val journeysUpdateCalls = mutableListOf<Pair<List<JourneyPlan>, Instant>>()
         var clearCallCount = 0
         var reconcileCallCount = 0
+        override suspend fun updateWithJourneys(routine: CommuteRoutine, journeys: List<JourneyPlan>, now: Instant) {
+            journeysUpdateCalls += journeys to now
+        }
         override suspend fun updateWithDepartures(routine: CommuteRoutine, departuresState: LiveDeparturesState, now: Instant) {
             updateWithDepartures(routine, departuresState, now, disruption = null)
         }
@@ -538,6 +552,7 @@ class RoutineActiveWindowWorkerTest {
         routineOccurrenceRuntimeRepository: RoutineOccurrenceRuntimeRepository = FakeRoutineOccurrenceRuntimeRepository(),
         elapsedRealtimeProvider: ElapsedRealtimeProvider = FakeElapsedRealtimeProvider(),
         bootCountProvider: BootCountProvider = FakeBootCountProvider(),
+        getRankedJourneys: se.blick.app.domain.usecase.GetRankedJourneysUseCase? = null,
     ): RoutineActiveWindowWorker =
         TestListenableWorkerBuilder<RoutineActiveWindowWorker>(context)
             .setInputData(workDataOf(RoutineActiveWindowWorker.KEY_ROUTINE_ID to routineId))
@@ -565,6 +580,7 @@ class RoutineActiveWindowWorkerTest {
                     deviceZoneProvider,
                     elapsedRealtimeProvider,
                     bootCountProvider,
+                    getRankedJourneys = getRankedJourneys,
                 )
             })
             .build()
@@ -2840,5 +2856,148 @@ class RoutineActiveWindowWorkerTest {
 
         jobB.cancel()
         jobB.join()
+    }
+
+    // ---- Exact-destination journeys: the worker re-filters the ranked list AGAIN, immediately
+    // after GetRankedJourneysUseCase returns, and uses that SAME already-filtered list and
+    // instant for both the notification projection and routineWidgetUpdater.updateWithJourneys
+    // -- see RoutineActiveWindowWorker.doWork's own comment at rawJourneyPlans/journeyPlans. ----
+
+    private fun exactDestinationRoutine(
+        id: String = "r1",
+        startTime: LocalTime = LocalTime.of(7, 0),
+        endTime: LocalTime = LocalTime.of(7, 2),
+    ) = CommuteRoutine(
+        id = id,
+        name = "Airport commute",
+        siteId = 9145,
+        siteName = "Fruängen",
+        transportMode = TransportMode.UNKNOWN,
+        lineId = null,
+        lineDesignation = null,
+        directionCode = null,
+        destinationLabel = null,
+        activeDays = setOf(DayOfWeek.MONDAY),
+        startTime = startTime,
+        endTime = endTime,
+        type = RoutineType.EXACT_DESTINATION,
+        journeyOriginId = "origin-id",
+        journeyOriginName = "Fruängen",
+        journeyDestinationId = "destination-id",
+        journeyDestinationName = "Arlanda",
+    )
+
+    private fun exactJourney(id: String, departure: Instant, lineDesignation: String = "14") = run {
+        val leg = JourneyLeg(
+            TransportMode.METRO, lineDesignation, "Direction", "Fruängen", "Arlanda",
+            departure, departure.plusSeconds(600), true, emptyList(),
+        )
+        JourneyPlan(id, "Fruängen", "Arlanda", departure, departure.plusSeconds(600), 0, leg, listOf(leg), emptyList())
+    }
+
+    /** A [JourneyRepository] that always returns the same [journeys] -- the "network round-trip"
+     * itself does no clock work here; the race this section tests is instead modeled by giving
+     * [GetRankedJourneysUseCase] its OWN, separately-controlled [Clock] (see each test's own
+     * comment) rather than by choreographing advances within a single shared clock, since
+     * production code has no suspension point between GetRankedJourneysUseCase's own post-response
+     * `now` read and the worker's subsequent one for a shared TickingClock to advance across. */
+    private class FakeJourneyRepository(private val journeys: List<JourneyPlan>) : JourneyRepository {
+        override suspend fun searchLocations(query: String): List<JourneyLocation> = emptyList()
+        override suspend fun getJourneys(
+            originId: String,
+            destinationId: String,
+            allowedTransportModes: Set<TransportMode>,
+        ): List<JourneyPlan> = journeys
+    }
+
+    @Test
+    fun `the worker removes a journey that expires between use-case filtering and worker processing, agreeing across notification and widget`() =
+        runTest {
+            val clock = TickingClock(Instant.parse("2026-07-27T05:00:00Z"), zone) // 07:00 local, Monday
+            val exactRoutine = exactDestinationRoutine()
+            val repository = ScriptedRoutineRepository(clock) { exactRoutine }
+            // Two getById calls happen before the journeys fetch (doWork's own initial read, then
+            // the loop's own `current` read), each advancing `clock` by 30s -- so `clock` reads
+            // 07:01:00 local (05:01:00Z) by the time getRankedJourneys is invoked and by the time
+            // this worker's own exactProjectionNow is captured immediately after it returns.
+            //
+            // GetRankedJourneysUseCase is wired to a DIFFERENT, EARLIER, fixed Clock -- modeling a
+            // use case whose own post-response `now` was genuinely earlier than what's true by the
+            // time the worker actually gets around to processing its result (the real-world
+            // equivalent of network/processing latency between the two). The journey departs at
+            // 05:00:58Z: still current per the use case's own 05:00:55Z `now` (58 >= 55), but
+            // already departed per the worker's own, later 05:01:00Z (58 < 60).
+            val useCaseClock = Clock.fixed(Instant.parse("2026-07-27T05:00:55Z"), zone)
+            val borderlineJourney = exactJourney("borderline", Instant.parse("2026-07-27T05:00:58Z"))
+            val getRankedJourneys = GetRankedJourneysUseCase(FakeJourneyRepository(listOf(borderlineJourney)), useCaseClock)
+            val notifier = RecordingNotifier()
+            val widgetUpdater = RecordingWidgetUpdater()
+
+            val worker = buildWorker(
+                exactRoutine.id,
+                repository,
+                GetLiveDeparturesUseCase(FakeDepartureRepository { error("unused for an exact-destination routine") }, clock),
+                notifier,
+                RecordingScheduler(),
+                clock,
+                widgetUpdater = widgetUpdater,
+                getRankedJourneys = getRankedJourneys,
+            )
+            worker.doWork()
+
+            // Notification: the expired journey is never shown as live -- Unavailable, not a
+            // "0 min" departure.
+            assertTrue("expected at least the foreground placeholder notification", notifier.shown.isNotEmpty())
+            assertTrue(
+                "expected no live journey in the notification once it expired",
+                notifier.shown.any { it.content is RoutineNotificationContent.Unavailable },
+            )
+            // Widget: received the WORKER's own re-filtered (empty) list -- never the raw,
+            // already-stale one GetRankedJourneysUseCase itself returned.
+            assertTrue("expected at least one updateWithJourneys call", widgetUpdater.journeysUpdateCalls.isNotEmpty())
+            assertTrue(
+                "expected every updateWithJourneys call to have received an empty, already-filtered list",
+                widgetUpdater.journeysUpdateCalls.all { (journeys, _) -> journeys.isEmpty() },
+            )
+        }
+
+    @Test
+    fun `the worker passes the identical filtered journey list and instant to both the notification projection and the widget`() = runTest {
+        val clock = TickingClock(Instant.parse("2026-07-27T05:00:00Z"), zone) // 07:00 local, Monday
+        val exactRoutine = exactDestinationRoutine()
+        val repository = ScriptedRoutineRepository(clock) { exactRoutine }
+        // Comfortably upcoming per BOTH clocks -- this proves consistency for a journey that
+        // survives, complementing the expiry test above.
+        val useCaseClock = Clock.fixed(Instant.parse("2026-07-27T05:00:30Z"), zone)
+        val upcomingJourney = exactJourney("upcoming", Instant.parse("2026-07-27T05:05:00Z"))
+        val getRankedJourneys = GetRankedJourneysUseCase(FakeJourneyRepository(listOf(upcomingJourney)), useCaseClock)
+        val notifier = RecordingNotifier()
+        val widgetUpdater = RecordingWidgetUpdater()
+
+        val worker = buildWorker(
+            exactRoutine.id,
+            repository,
+            GetLiveDeparturesUseCase(FakeDepartureRepository { error("unused for an exact-destination routine") }, clock),
+            notifier,
+            RecordingScheduler(),
+            clock,
+            widgetUpdater = widgetUpdater,
+            getRankedJourneys = getRankedJourneys,
+        )
+        worker.doWork()
+
+        val liveContent = notifier.shown.map { it.content }.filterIsInstance<RoutineNotificationContent.Live>()
+        assertTrue("expected the notification to show the surviving journey live", liveContent.isNotEmpty())
+        val notificationDeparture = liveContent.first().departures.single()
+        assertEquals("14", notificationDeparture.lineDesignation)
+
+        assertTrue("expected at least one updateWithJourneys call", widgetUpdater.journeysUpdateCalls.isNotEmpty())
+        val (journeysAtUpdate, nowAtUpdate) = widgetUpdater.journeysUpdateCalls.first()
+        assertEquals(listOf("upcoming"), journeysAtUpdate.map { it.journeyId })
+        // Same instant the notification projection itself used for this tick: recomputing the
+        // notification's own countdown against nowAtUpdate reproduces exactly what it showed --
+        // proving both surfaces shared one eligibility decision AND one timestamp, not two
+        // independently-read ones that merely happened not to disagree this time.
+        assertEquals(notificationDeparture.minutesRemaining, countdownMinutes(nowAtUpdate, upcomingJourney.departureTime))
     }
 }

@@ -46,6 +46,7 @@ import se.blick.app.ui.navigation.Routes
 import se.blick.app.widget.RoutineWidgetUpdater
 import se.blick.app.widget.runWidgetUpdateSafely
 import java.time.Clock
+import java.time.Instant
 import java.time.LocalDate
 import java.time.ZonedDateTime
 import javax.inject.Inject
@@ -112,6 +113,22 @@ data class RoutineDetailsUiState(
     val notificationAvailability: NotificationAvailability = NotificationAvailability.Available,
     val journeys: List<JourneyPlan> = emptyList(),
     val journeysUnavailable: Boolean = false,
+    /**
+     * When [journeys] was last successfully evaluated — captured from [Clock.instant] AFTER
+     * [GetRankedJourneysUseCase] returns (see [RoutineDetailsViewModel.loadJourneys]), never
+     * before it's called. Exists purely so a completed automatic refresh is always observable to
+     * [kotlinx.coroutines.flow.StateFlow], even when the newly-fetched [journeys] are structurally
+     * equal to the previous list: [StateFlow] suppresses an update whose new value is `equals` to
+     * the old one, and a `data class`'s `equals` compares every field — without this field
+     * changing too, an identical-looking refresh would never re-emit, leaving Compose showing a
+     * stale countdown (or briefly retaining an already-departed journey) for minutes at a time
+     * even though the automatic ~30-second fetch loop was working correctly the whole time. Never
+     * used to change which journeys are shown or how they're ranked — only to make an otherwise-
+     * unchanged refresh visible. Defaults to [Instant.EPOCH], a harmless placeholder before the
+     * very first journeys fetch has ever completed (this screen shows no journey cards yet at
+     * that point regardless of what `now` filtering would do with it).
+     */
+    val journeysEvaluatedAt: Instant = Instant.EPOCH,
     val isUpdatingJourneyTransportModes: Boolean = false,
     val journeyTransportModesUpdateFailed: Boolean = false,
 )
@@ -845,7 +862,15 @@ class RoutineDetailsViewModel @Inject constructor(
         departuresJob = viewModelScope.launch {
             try {
                 val journeys = useCase(originId, destinationId, routine.allowedJourneyTransportModes)
-                _uiState.update { it.copy(journeys = journeys, journeysUnavailable = false, isRefreshingDepartures = false) }
+                // Captured AFTER the use case returns, never before -- see
+                // RoutineDetailsUiState.journeysEvaluatedAt's own doc. Stored in the SAME update as
+                // `journeys` so both land in a single StateFlow emission: this timestamp changing is
+                // what makes this refresh observable even when `journeys` itself is structurally
+                // identical to what was already displayed.
+                val evaluatedAt = clock.instant()
+                _uiState.update {
+                    it.copy(journeys = journeys, journeysUnavailable = false, isRefreshingDepartures = false, journeysEvaluatedAt = evaluatedAt)
+                }
             } catch (e: CancellationException) { throw e }
             catch (_: Exception) {
                 _uiState.update { it.copy(journeysUnavailable = true, isRefreshingDepartures = false) }

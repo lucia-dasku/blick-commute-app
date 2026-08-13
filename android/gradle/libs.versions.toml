@@ -59,7 +59,20 @@ activityCompose = "1.10.1"
 navigationCompose = "2.8.9"
 room = "2.8.1"
 datastore = "1.1.2"
-kotlinxSerialization = "1.7.3"
+# Must match what androidx.room:room-migration:2.8.1 (schema-bundle serializers used by
+# androidx.room.testing.MigrationTestHelper -- see Migration4To5Test/Migration5To6Test) itself
+# depends on, or Room's own precompiled FieldBundle/EntityBundle/DatabaseBundle $$serializer
+# classes throw AbstractMethodError on GeneratedSerializer.typeParametersSerializers() at
+# runtime: the kotlinx-serialization Gradle plugin publishes its own BOM that applies a
+# `strictly` constraint across every org.jetbrains.kotlinx module, so whatever version is
+# declared here silently overrides -- rather than merely losing a version-conflict vote to --
+# Room's own (non-strict) request for a newer kotlinx-serialization-core. This was invisible
+# until Migration4To5Test/Migration5To6Test (this project's first MigrationTestHelper-based
+# tests) actually ran on a real device, since it is a pure runtime ABI mismatch, not a compile
+# error. Confirmed via `./gradlew :app:dependencies --configuration debugAndroidTestRuntimeClasspath`,
+# which showed room-migration:2.8.1 requesting kotlinx-serialization-json:1.8.1 and the
+# `{strictly 1.7.3}` constraint winning instead.
+kotlinxSerialization = "1.8.1"
 kotlinxCoroutines = "1.9.0"
 retrofit = "2.11.0"
 # Bumped 2026-08-07 from 2.9.1 to 2.11.1 (NOT the latest stable, 2.11.2 -- see below).
@@ -205,6 +218,15 @@ hilt-work = { group = "androidx.hilt", name = "hilt-work", version.ref = "hiltWo
 androidx-hilt-compiler = { group = "androidx.hilt", name = "hilt-compiler", version.ref = "hiltWork" }
 
 androidx-glance-appwidget = { group = "androidx.glance", name = "glance-appwidget", version.ref = "glance" }
+# Real Glance composable rendering assertions (runGlanceAppWidgetUnitTest, hasText()/onNode()
+# node matchers) against BlickRoutineWidget's own production composables, run as a local JVM/
+# Robolectric test (see BlickRoutineWidgetRenderTest) -- not an instrumented androidTest API.
+# Same version as glance-appwidget above; glance-appwidget-testing transitively pulls in
+# glance-testing, but both are declared explicitly for the same reason androidx-compose-ui-test
+# is declared alongside ui-test-junit4 above (AGP 9 variant-aware resolution has previously kept
+# a transitive-only artifact off this project's real compile classpath).
+androidx-glance-testing = { group = "androidx.glance", name = "glance-testing", version.ref = "glance" }
+androidx-glance-appwidget-testing = { group = "androidx.glance", name = "glance-appwidget-testing", version.ref = "glance" }
 
 retrofit-core = { group = "com.squareup.retrofit2", name = "retrofit", version.ref = "retrofit" }
 # First-party artifact, not the old com.jakewharton.retrofit:retrofit2-kotlinx-serialization-converter:1.0.0

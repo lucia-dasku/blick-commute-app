@@ -97,6 +97,18 @@ android {
             excludes += "/META-INF/{AL2.0,LGPL2.1}"
         }
     }
+
+    sourceSets {
+        // Room's exported schema JSON (see the `ksp { room.schemaLocation }` block below) is
+        // written to disk, but is NOT on the androidTest APK's classpath/assets by default --
+        // androidx.room.testing.MigrationTestHelper reads a prior version's schema from its
+        // assets at runtime (see Migration4To5Test/Migration5To6Test), so without this it fails
+        // on-device with "Cannot find the schema file in the assets folder", not a compile error,
+        // meaning this gap was invisible until these tests actually ran on a real device/emulator.
+        getByName("androidTest") {
+            assets.srcDirs("$projectDir/schemas")
+        }
+    }
 }
 
 kotlin {
@@ -176,6 +188,11 @@ dependencies {
     // WorkManagerRoutineSchedulerTest) -- deterministic worker/scheduler tests, no real
     // device or foreground-service execution needed.
     testImplementation(libs.androidx.work.testing)
+    // runGlanceAppWidgetUnitTest/hasText()/onNode() against BlickRoutineWidget's own real
+    // composables (BlickRoutineWidgetRenderTest) -- see libs.versions.toml's own comment on
+    // these two entries for why both are declared explicitly.
+    testImplementation(libs.androidx.glance.testing)
+    testImplementation(libs.androidx.glance.appwidget.testing)
 
     androidTestImplementation(libs.androidx.test.ext.junit)
     androidTestImplementation(libs.androidx.espresso.core)

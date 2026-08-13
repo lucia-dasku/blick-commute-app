@@ -157,34 +157,7 @@ class GlanceRoutineWidgetUpdater @Inject constructor(
 ) : RoutineWidgetUpdater {
 
     override suspend fun updateWithJourneys(routine: CommuteRoutine, journeys: List<JourneyPlan>, now: Instant) {
-        val rows = journeys.take(2).map { journey ->
-            WidgetJourneyRow(
-                journey.firstLeg.lineDesignation,
-                journey.firstLeg.transportMode,
-                journey.departureTime,
-                journey.arrivalTime,
-                journey.transferCount,
-                journey.firstLeg.isRealtime,
-            )
-        }
-        val fastest = rows.firstOrNull()
-        val state = if (fastest == null) {
-            RoutineWidgetUiState.ActiveRoutine(
-                RoutineWidgetModel(
-                    routine.id, routine.name, routine.journeyOriginName ?: routine.siteName,
-                    routine.journeyDestinationName, RoutineWidgetContent.Unavailable,
-                ),
-            )
-        } else {
-            RoutineWidgetUiState.ActiveRoutine(
-                RoutineWidgetModel(
-                    routine.id, routine.name, routine.journeyOriginName ?: routine.siteName,
-                    routine.journeyDestinationName, RoutineWidgetContent.Journeys(fastest, rows.getOrNull(1)),
-                    fastest.lineDesignation, fastest.transportMode,
-                ),
-            )
-        }
-        applyToAllInstances(state)
+        applyToAllInstances(decideJourneysWidgetState(routine, journeys, now))
     }
 
     override suspend fun updateWithDepartures(routine: CommuteRoutine, departuresState: LiveDeparturesState, now: Instant) {

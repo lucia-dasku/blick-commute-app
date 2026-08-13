@@ -25,6 +25,7 @@ import se.blick.app.data.local.datastore.AppSettings
 import se.blick.app.data.local.datastore.AppSettingsDataStore
 import se.blick.app.data.repository.DepartureRepository
 import se.blick.app.data.repository.DisruptionRepository
+import se.blick.app.data.repository.JourneyRepository
 import se.blick.app.data.repository.RoutineRepository
 import se.blick.app.data.repository.StaleSnapshotRepository
 import se.blick.app.domain.model.CommuteRoutine
@@ -34,6 +35,9 @@ import se.blick.app.domain.model.Disruption
 import se.blick.app.domain.model.DisruptionMessage
 import se.blick.app.domain.model.DisruptionPriority
 import se.blick.app.domain.model.Journey
+import se.blick.app.domain.model.JourneyLeg
+import se.blick.app.domain.model.JourneyLocation
+import se.blick.app.domain.model.JourneyPlan
 import se.blick.app.domain.model.LineRef
 import se.blick.app.domain.model.RoutineType
 import se.blick.app.domain.model.StopAreaRef
@@ -43,8 +47,10 @@ import se.blick.app.domain.usecase.DepartureIdentity
 import se.blick.app.domain.usecase.DisruptionsState
 import se.blick.app.domain.usecase.GetDisruptionsUseCase
 import se.blick.app.domain.usecase.GetLiveDeparturesUseCase
+import se.blick.app.domain.usecase.GetRankedJourneysUseCase
 import se.blick.app.domain.usecase.LiveDeparturesSnapshot
 import se.blick.app.domain.usecase.LiveDeparturesState
+import se.blick.app.domain.usecase.countdownMinutes
 import se.blick.app.notification.NotificationAvailability
 import se.blick.app.notification.NotificationAvailabilityChecker
 import se.blick.app.notification.NotificationPostResult
@@ -513,6 +519,11 @@ class RoutineDetailsViewModelTest {
         promotedNotificationChecker: PromotedNotificationChecker = FakePromotedNotificationChecker(),
         notificationRecoveryReporter: NotificationRecoveryReporter = FakeNotificationRecoveryReporter(),
         deviceZoneProvider: DeviceZoneProvider = this.deviceZoneProvider,
+        // Defaults to the file-level fixed clock -- every existing test keeps using that same
+        // instant unless it opts into a controllable one (see the exact-journey refresh tests,
+        // which need a Clock they can advance BETWEEN consecutive automatic fetches).
+        clock: Clock = this.clock,
+        getRankedJourneys: GetRankedJourneysUseCase? = null,
     ) = RoutineDetailsViewModel(
         savedStateHandle = SavedStateHandle(mapOf(Routes.RoutineDetails.ARG_ROUTINE_ID to routineId)),
         routineRepository = routines,
@@ -528,6 +539,7 @@ class RoutineDetailsViewModelTest {
         notificationRecoveryReporter = notificationRecoveryReporter,
         clock = clock,
         deviceZoneProvider = deviceZoneProvider,
+        getRankedJourneys = getRankedJourneys,
     )
 
     // ---- Routine loading ----
@@ -2438,4 +2450,133 @@ class RoutineDetailsViewModelTest {
 
         assertEquals("Header d1", notifier.shown.single().disruptionHeadline)
     }
+
+    // ---- journeysEvaluatedAt: makes a completed automatic refresh observable to StateFlow even
+    // when the newly-fetched journeys are structurally identical to what was already displayed
+    // (see RoutineDetailsUiState.journeysEvaluatedAt's own doc) ----
+
+    /** A settable [Clock] the test advances explicitly BETWEEN consecutive automatic fetches --
+     * unlike the file-level fixed [clock], this lets a test assert on what changes (or doesn't)
+     * as real time passes across refreshes, without any real sleep or wall-clock dependency. */
+    private class SettableClock(startInstant: Instant, private val zoneId: ZoneId = ZoneOffset.UTC) : Clock() {
+        var instant: Instant = startInstant
+        override fun getZone(): ZoneId = zoneId
+        override fun withZone(zoneId: ZoneId): Clock = SettableClock(instant, zoneId)
+        override fun instant(): Instant = instant
+    }
+
+    /** Always returns the SAME [journeys] list, however many times [getJourneys] is called --
+     * models the real "identical structurally-equal response on the next automatic refresh"
+     * scenario [RoutineDetailsUiState.journeysEvaluatedAt] exists to make observable. */
+    private class FixedJourneyRepository(private val journeys: List<JourneyPlan>) : JourneyRepository {
+        var callCount = 0
+        override suspend fun searchLocations(query: String): List<JourneyLocation> = emptyList()
+        override suspend fun getJourneys(
+            originId: String,
+            destinationId: String,
+            allowedTransportModes: Set<TransportMode>,
+        ): List<JourneyPlan> {
+            callCount++
+            return journeys
+        }
+    }
+
+    private fun exactDestinationRoutine(id: String = "r1") = sampleRoutine(id = id).copy(
+        type = RoutineType.EXACT_DESTINATION,
+        transportMode = TransportMode.UNKNOWN,
+        lineId = null,
+        lineDesignation = null,
+        directionCode = null,
+        destinationLabel = null,
+        journeyOriginId = "origin-id",
+        journeyOriginName = "Fruängen",
+        journeyDestinationId = "destination-id",
+        journeyDestinationName = "Arlanda",
+    )
+
+    private fun journeyPlan(id: String, departure: Instant, lineDesignation: String = "14") = run {
+        val leg = JourneyLeg(
+            TransportMode.METRO, lineDesignation, "Direction", "Fruängen", "Arlanda",
+            departure, departure.plusSeconds(600), true, emptyList(),
+        )
+        JourneyPlan(id, "Fruängen", "Arlanda", departure, departure.plusSeconds(600), 0, leg, listOf(leg), emptyList())
+    }
+
+    @Test
+    fun `journeysEvaluatedAt advances on an identical automatic refresh, and the countdown-relevant timestamp reflects it`() =
+        runTest(dispatcher) {
+            // Journey departs at 08:04:30; the first fetch is evaluated at 08:00:00 (4m30s away,
+            // ceiling-rounds to 5 min) and the second, identical fetch at 08:00:30 (4m exactly).
+            val departure = Instant.parse("2026-07-28T08:04:30Z")
+            val testClock = SettableClock(Instant.parse("2026-07-28T08:00:00Z"))
+            val journey = journeyPlan("journey-1", departure)
+            val journeyRepository = FixedJourneyRepository(listOf(journey))
+            val getRankedJourneys = GetRankedJourneysUseCase(journeyRepository, testClock)
+            val routine = exactDestinationRoutine()
+            val vm = viewModel(routine = routine, routines = FakeRoutineRepository(routine), clock = testClock, getRankedJourneys = getRankedJourneys)
+            dispatcher.scheduler.advanceUntilIdle()
+
+            val firstJourneys = vm.uiState.value.journeys
+            val firstEvaluatedAt = vm.uiState.value.journeysEvaluatedAt
+            assertEquals(listOf("journey-1"), firstJourneys.map { it.journeyId })
+            assertEquals(Instant.parse("2026-07-28T08:00:00Z"), firstEvaluatedAt)
+            assertEquals(5L, countdownMinutes(firstEvaluatedAt, departure))
+
+            // Real time passes between refreshes -- the test clock is advanced exactly like a
+            // real Clock would have moved on its own; the fake repository keeps returning the
+            // SAME (structurally equal) journey list regardless.
+            testClock.instant = Instant.parse("2026-07-28T08:00:30Z")
+            val job = launch { vm.runAutoRefresh() }
+            dispatcher.scheduler.runCurrent()
+            dispatcher.scheduler.advanceTimeBy(RoutineDetailsViewModel.AUTO_REFRESH_INTERVAL_MS + 1)
+            dispatcher.scheduler.runCurrent()
+
+            assertEquals(2, journeyRepository.callCount)
+            val secondJourneys = vm.uiState.value.journeys
+            val secondEvaluatedAt = vm.uiState.value.journeysEvaluatedAt
+            // The journey list itself is structurally equal -- proving this is genuinely the
+            // "identical response" scenario journeysEvaluatedAt exists for, not a coincidentally
+            // different one.
+            assertEquals(firstJourneys, secondJourneys)
+            // journeysEvaluatedAt still moved forward -- StateFlow's own `data class` equality
+            // check on the WHOLE state therefore sees a real change and emits, even though
+            // `journeys` alone did not change.
+            assertEquals(Instant.parse("2026-07-28T08:00:30Z"), secondEvaluatedAt)
+            assertTrue(secondEvaluatedAt.isAfter(firstEvaluatedAt))
+            // The countdown a recomposed JourneyComparisonSection would compute from this new
+            // timestamp has genuinely advanced: 5 min -> 4 min, for the exact same journey.
+            assertEquals(4L, countdownMinutes(secondEvaluatedAt, departure))
+
+            job.cancel()
+        }
+
+    @Test
+    fun `once the evaluation time passes the departure, journeys becomes empty rather than keeping an expired entry`() =
+        runTest(dispatcher) {
+            val departure = Instant.parse("2026-07-28T08:04:30Z")
+            val testClock = SettableClock(Instant.parse("2026-07-28T08:00:00Z"))
+            val journey = journeyPlan("journey-1", departure)
+            val journeyRepository = FixedJourneyRepository(listOf(journey))
+            val getRankedJourneys = GetRankedJourneysUseCase(journeyRepository, testClock)
+            val routine = exactDestinationRoutine()
+            val vm = viewModel(routine = routine, routines = FakeRoutineRepository(routine), clock = testClock, getRankedJourneys = getRankedJourneys)
+            dispatcher.scheduler.advanceUntilIdle()
+            assertEquals(listOf("journey-1"), vm.uiState.value.journeys.map { it.journeyId })
+
+            // The evaluation instant is now strictly after the journey's own departure.
+            testClock.instant = departure.plusSeconds(1)
+            val job = launch { vm.runAutoRefresh() }
+            dispatcher.scheduler.runCurrent()
+            dispatcher.scheduler.advanceTimeBy(RoutineDetailsViewModel.AUTO_REFRESH_INTERVAL_MS + 1)
+            dispatcher.scheduler.runCurrent()
+
+            // GetRankedJourneysUseCase's own defensive filter already removes it -- the card must
+            // disappear (the existing no-journeys state), never remain visible at "0 min".
+            assertEquals(emptyList<JourneyPlan>(), vm.uiState.value.journeys)
+            assertFalse(vm.uiState.value.journeysUnavailable)
+            assertEquals(departure.plusSeconds(1), vm.uiState.value.journeysEvaluatedAt)
+
+            job.cancel()
+        }
+
 }
