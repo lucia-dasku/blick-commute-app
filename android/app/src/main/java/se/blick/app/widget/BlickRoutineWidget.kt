@@ -42,6 +42,8 @@ import androidx.glance.text.Text
 import androidx.glance.text.TextStyle
 import androidx.glance.unit.ColorProvider
 import se.blick.app.R
+import se.blick.app.domain.usecase.countdownMinutes
+import se.blick.app.domain.usecase.isDepartureCurrent
 import se.blick.app.locale.withAppLocale
 
 /**
@@ -222,9 +224,22 @@ private val BADGE_TEXT_WHITE = ColorProvider(Color.White)
  * shared [Scaffold] — see that function's own doc for why: a present disruption needs its own
  * full-bleed strip along the very bottom edge, which [Scaffold]'s single uniformly-padded
  * `content` slot cannot represent. [NoActiveCommuteContent] has no such need, so it keeps using
- * [Scaffold] exactly as before. */
+ * [Scaffold] exactly as before.
+ *
+ * `internal`, not `private` — this is the exact composable [BlickRoutineWidget.provideGlance]
+ * calls (through [currentState]/[toWidgetUiState]), so it's also the one [BlickRoutineWidgetRenderTest]
+ * renders through Glance's own real unit-test pipeline to prove [ActiveRoutineContent] truly
+ * calls [resolveEffectiveModel] and that the [GlanceTheme] wrapper every color lookup below
+ * depends on is present, rather than reproducing this tree's selection logic in the test.
+ *
+ * [now] defaults to [java.time.Instant.now] for the one real production call site
+ * ([BlickRoutineWidget.provideGlance]). It's an explicit parameter rather than a bare internal
+ * read specifically so a test can supply one fixed instant here and have it flow, unread again,
+ * all the way through [ActiveRoutineContent]'s journey resolution/eligibility/countdown -- see
+ * [BlickRoutineWidgetRenderTest]'s own doc for the race a second, independent clock read used to
+ * cause. */
 @Composable
-private fun BlickWidgetContent(state: RoutineWidgetUiState) {
+internal fun BlickWidgetContent(state: RoutineWidgetUiState, now: java.time.Instant = java.time.Instant.now()) {
     // .withAppLocale() -- this Context flows down into every Blick-owned string lookup below
     // (ActiveRoutineContent and everything under it already take context as a plain parameter,
     // see this file's own doc), resolving against Blick's own selected app language rather than
@@ -235,7 +250,7 @@ private fun BlickWidgetContent(state: RoutineWidgetUiState) {
     GlanceTheme {
         when (state) {
             RoutineWidgetUiState.NoActiveCommute -> Scaffold { NoActiveCommuteContent() }
-            is RoutineWidgetUiState.ActiveRoutine -> ActiveRoutineContent(context, state.model)
+            is RoutineWidgetUiState.ActiveRoutine -> ActiveRoutineContent(context, state.model, now)
         }
     }
 }
@@ -280,7 +295,19 @@ private val WIDGET_HORIZONTAL_PADDING = 16.dp
  * (see [WIDGET_HORIZONTAL_PADDING]), so the common (no disruption) case looks unchanged.
  */
 @Composable
-private fun ActiveRoutineContent(context: Context, model: RoutineWidgetModel) {
+private fun ActiveRoutineContent(context: Context, model: RoutineWidgetModel, now: java.time.Instant) {
+    // [now] is BlickWidgetContent's own single Instant for this whole render (see that
+    // function's own doc) -- never read independently here. Threaded through render-time
+    // journey resolution (header selection AND eligibility) below, and further into
+    // WidgetContentBody/JourneyMainContent's own countdown calculation, so every part of one
+    // composition agrees on exactly the same "now".
+    // See resolveEffectiveModel's own doc: for a Journeys routine, this re-resolves fastest/
+    // alternative against `now` (promoting the alternative into the primary slot if the original
+    // fastest has since departed, or falling back to Unavailable if both have) and keeps the
+    // header's own line badge in agreement with whatever it resolves to -- for every other
+    // RoutineWidgetContent, `model` is returned completely unchanged. Used for EVERYTHING below,
+    // not just the body, so the header can never disagree with what the body actually renders.
+    val model = resolveEffectiveModel(model, now)
     val clickAction = actionStartActivity(routineDetailsTapIntent(context, model.routineId))
     // Read once per composition: SizeMode.Exact recomposes this whole tree on every resize, so
     // every use below always reflects the widget's current on-screen size.
@@ -332,7 +359,7 @@ private fun ActiveRoutineContent(context: Context, model: RoutineWidgetModel) {
                 // right above it. Dropped entirely rather than only in compact mode.
                 WidgetHeader(model, tier, routeText, isStale)
                 Spacer(modifier = GlanceModifier.height(if (compact) 6.dp else 12.dp))
-                WidgetContentBody(context, model, compact, tier)
+                WidgetContentBody(context, model, compact, tier, now)
             }
             if (disruptionHeadline != null) {
                 DisruptionStrip(disruptionHeadline, tier)
@@ -431,8 +458,49 @@ private fun LineBadge(text: String, color: LineBadgeColor, textSize: TextUnit) {
     }
 }
 
+/**
+ * Resolves what this widget should actually render for [model] at [now] — the render-time
+ * counterpart to [decideJourneysWidgetState]'s own write-time filter (see that function's own
+ * doc): a [RoutineWidgetContent.Journeys] row persisted as still-current at UPDATE time can have
+ * since departed by the time Glance actually composes it, since this widget has no self-refresh
+ * of its own between the worker's ~30-second pushes (see [BlickRoutineWidget]'s own class doc).
+ * For any [RoutineWidgetContent] other than [RoutineWidgetContent.Journeys] (a LINE_DIRECTION
+ * routine, or no active routine at all), [model] is returned completely unchanged.
+ *
+ * Evaluates [RoutineWidgetContent.Journeys.fastest] and [RoutineWidgetContent.Journeys.alternative]
+ * in that existing order via [isDepartureCurrent]:
+ * - both current: [model] is returned unchanged.
+ * - only [RoutineWidgetContent.Journeys.fastest] current: the alternative is dropped (becomes
+ *   null) — never rendered as a secondary journey once it's no longer genuinely valid.
+ * - only [RoutineWidgetContent.Journeys.alternative] current: it is PROMOTED into the `fastest`
+ *   slot — used for the primary countdown/arrival AND for [RoutineWidgetModel.lineDesignation]/
+ *   [RoutineWidgetModel.transportMode] (the header's own line badge), which otherwise still
+ *   describe the original, now-expired fastest row (they are set once, at
+ *   [decideJourneysWidgetState]'s own write time, and never independently re-derived by anything
+ *   downstream) — and is never ALSO shown a second time as its own alternative.
+ * - neither current: falls back to [RoutineWidgetContent.Unavailable], with
+ *   [RoutineWidgetModel.lineDesignation] cleared to `null` so the header stops rendering a line
+ *   badge at all rather than keep showing an expired journey's one over an "unavailable" body.
+ *
+ * A single small pure function (no Glance/Android dependency) precisely so it can be unit-tested
+ * directly — see `BlickRoutineWidgetTest` — independent of the real Glance rendering pipeline,
+ * which [ActiveRoutineContent] separately proves actually calls this.
+ */
+internal fun resolveEffectiveModel(model: RoutineWidgetModel, now: java.time.Instant): RoutineWidgetModel {
+    val content = model.content
+    if (content !is RoutineWidgetContent.Journeys) return model
+    val current = listOfNotNull(content.fastest, content.alternative).filter { isDepartureCurrent(now, it.departureTime) }
+    val primary = current.firstOrNull()
+        ?: return model.copy(content = RoutineWidgetContent.Unavailable, lineDesignation = null)
+    return model.copy(
+        content = RoutineWidgetContent.Journeys(primary, current.getOrNull(1)),
+        lineDesignation = primary.lineDesignation,
+        transportMode = primary.transportMode,
+    )
+}
+
 @Composable
-private fun WidgetContentBody(context: Context, model: RoutineWidgetModel, compact: Boolean, tier: WidgetSizeTier) {
+private fun WidgetContentBody(context: Context, model: RoutineWidgetModel, compact: Boolean, tier: WidgetSizeTier, now: java.time.Instant) {
     when (val content = model.content) {
         RoutineWidgetContent.Loading -> BodyText(context.getString(R.string.notification_loading), tier)
         is RoutineWidgetContent.Live -> DepartureMainContent(context, content.next, content.following, compact, tier)
@@ -449,14 +517,35 @@ private fun WidgetContentBody(context: Context, model: RoutineWidgetModel, compa
         RoutineWidgetContent.Offline -> BodyText(context.getString(R.string.notification_offline), tier)
         RoutineWidgetContent.Unavailable -> BodyText(context.getString(R.string.notification_unavailable), tier)
         RoutineWidgetContent.NotificationsUnavailable -> BodyText(context.getString(R.string.widget_notifications_unavailable), tier)
-        is RoutineWidgetContent.Journeys -> JourneyMainContent(context, content, compact, tier)
+        is RoutineWidgetContent.Journeys -> JourneyMainContent(context, content, compact, tier, now)
     }
 }
 
 @Composable
-private fun JourneyMainContent(context: Context, content: RoutineWidgetContent.Journeys, compact: Boolean, tier: WidgetSizeTier) {
-    val now = java.time.Instant.now()
-    val fastestMinutes = java.time.Duration.between(now, content.fastest.departureTime).toMinutes().coerceAtLeast(0)
+private fun JourneyMainContent(
+    context: Context,
+    content: RoutineWidgetContent.Journeys,
+    compact: Boolean,
+    tier: WidgetSizeTier,
+    now: java.time.Instant,
+) {
+    // Final render-time eligibility check, using the same isDepartureCurrent building block every
+    // other exact-journey consumer shares (see that function's own doc), against the SAME `now`
+    // ActiveRoutineContent already resolved this exact row with (see resolveEffectiveModel) --
+    // never re-read here. In normal operation `content.fastest` is therefore already guaranteed
+    // current by construction; this stays a defensive backstop rather than assuming that
+    // guarantee holds regardless of caller. An expired fastest row is never rendered as "0 min" --
+    // it falls back to the same "unavailable" body text RoutineWidgetContent.Unavailable already
+    // uses elsewhere in this file.
+    if (!isDepartureCurrent(now, content.fastest.departureTime)) {
+        BodyText(context.getString(R.string.notification_unavailable), tier)
+        return
+    }
+    // countdownMinutes, never a floor-based Duration.toMinutes().coerceAtLeast(0) -- see
+    // RoutineDetailsScreen's identical JourneyComparisonSection comment for why. Safe to call
+    // unconditionally now: the guard above already refused to reach this line for an expired
+    // fastest departure.
+    val fastestMinutes = countdownMinutes(now, content.fastest.departureTime)
     val arrivalFormatter = java.time.format.DateTimeFormatter.ofPattern("HH:mm").withZone(java.time.ZoneId.systemDefault())
     Column(modifier = GlanceModifier.fillMaxWidth()) {
         Text(
@@ -469,16 +558,20 @@ private fun JourneyMainContent(context: Context, content: RoutineWidgetContent.J
             maxLines = 1,
             style = TextStyle(fontSize = tier.secondarySize, color = onSurfaceVariantColor()),
         )
-        if (!compact) content.alternative?.let { alternative ->
-            val alternativeMinutes = java.time.Duration.between(now, alternative.departureTime).toMinutes().coerceAtLeast(0)
-            Spacer(modifier = GlanceModifier.height(8.dp))
-            Text(
-                context.getString(R.string.widget_journey_alternative, alternative.lineDesignation.orEmpty(), alternativeMinutes,
-                    arrivalFormatter.format(alternative.arrivalTime)),
-                maxLines = 1,
-                style = TextStyle(fontSize = tier.secondarySize, color = onSurfaceVariantColor()),
-            )
-        }
+        // Same final render-time check applied to the alternative independently -- an expired
+        // alternative is simply omitted (the fastest row above is unaffected), never shown as 0 min.
+        if (!compact) content.alternative
+            ?.takeIf { isDepartureCurrent(now, it.departureTime) }
+            ?.let { alternative ->
+                val alternativeMinutes = countdownMinutes(now, alternative.departureTime)
+                Spacer(modifier = GlanceModifier.height(8.dp))
+                Text(
+                    context.getString(R.string.widget_journey_alternative, alternative.lineDesignation.orEmpty(), alternativeMinutes,
+                        arrivalFormatter.format(alternative.arrivalTime)),
+                    maxLines = 1,
+                    style = TextStyle(fontSize = tier.secondarySize, color = onSurfaceVariantColor()),
+                )
+            }
     }
 }
 

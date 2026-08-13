@@ -4,8 +4,11 @@ import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.unit.dp
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
+import org.junit.Assert.assertNull
 import org.junit.Assert.assertTrue
 import org.junit.Test
+import se.blick.app.domain.model.TransportMode
+import java.time.Instant
 
 /**
  * Pure JVM tests for [isCompactLayout] and [LineBadgeColor.toBadgeColor] — no Android/Glance
@@ -120,5 +123,123 @@ class BlickRoutineWidgetTest {
         assertEquals(Color(0xFFDB2925), LineBadgeColor.Red.toBadgeColor())
         assertEquals(Color(0xFF38803F), LineBadgeColor.Green.toBadgeColor())
         assertEquals(Color(0xFF6B7280), LineBadgeColor.Unknown.toBadgeColor())
+    }
+
+    // ---- resolveEffectiveModel: render-time alternative-promotion matrix ----
+    //
+    // Pure JVM tests, same rationale as isCompactLayout above -- RoutineWidgetModel/
+    // RoutineWidgetContent/WidgetJourneyRow are plain data classes usable with no Glance/Android
+    // dependency at all.
+
+    private val resolveNow = Instant.parse("2026-08-11T08:00:00Z")
+
+    private fun journeyRow(
+        departureTime: Instant,
+        lineDesignation: String? = "14",
+        transportMode: TransportMode = TransportMode.BUS,
+    ) = WidgetJourneyRow(
+        lineDesignation = lineDesignation,
+        transportMode = transportMode,
+        departureTime = departureTime,
+        arrivalTime = departureTime.plusSeconds(600),
+        transferCount = 0,
+        isRealtime = true,
+    )
+
+    private fun journeysModel(fastest: WidgetJourneyRow, alternative: WidgetJourneyRow?) = RoutineWidgetModel(
+        routineId = "r1",
+        routineName = "Airport commute",
+        stationName = "Fruängen",
+        directionLabel = "Arlanda",
+        content = RoutineWidgetContent.Journeys(fastest, alternative),
+        lineDesignation = fastest.lineDesignation,
+        transportMode = fastest.transportMode,
+    )
+
+    @Test
+    fun `both fastest and alternative current -- model returned unchanged`() {
+        val fastest = journeyRow(resolveNow.plusSeconds(60), lineDesignation = "14", transportMode = TransportMode.BUS)
+        val alternative = journeyRow(resolveNow.plusSeconds(120), lineDesignation = "57", transportMode = TransportMode.METRO)
+        val model = journeysModel(fastest, alternative)
+
+        val resolved = resolveEffectiveModel(model, resolveNow)
+
+        assertEquals(model, resolved)
+    }
+
+    @Test
+    fun `only fastest current -- alternative is dropped, header keeps the fastest's own line`() {
+        val fastest = journeyRow(resolveNow.plusSeconds(60), lineDesignation = "14", transportMode = TransportMode.BUS)
+        val expiredAlternative = journeyRow(resolveNow.minusSeconds(1), lineDesignation = "57", transportMode = TransportMode.METRO)
+        val model = journeysModel(fastest, expiredAlternative)
+
+        val resolved = resolveEffectiveModel(model, resolveNow)
+
+        assertEquals(RoutineWidgetContent.Journeys(fastest, null), resolved.content)
+        assertEquals("14", resolved.lineDesignation)
+        assertEquals(TransportMode.BUS, resolved.transportMode)
+    }
+
+    @Test
+    fun `only alternative current -- promoted into the fastest slot and drives the header badge`() {
+        val expiredFastest = journeyRow(resolveNow.minusSeconds(1), lineDesignation = "14", transportMode = TransportMode.BUS)
+        val alternative = journeyRow(resolveNow.plusSeconds(120), lineDesignation = "57", transportMode = TransportMode.METRO)
+        val model = journeysModel(expiredFastest, alternative)
+
+        val resolved = resolveEffectiveModel(model, resolveNow)
+
+        assertEquals(RoutineWidgetContent.Journeys(alternative, null), resolved.content)
+        assertEquals("57", resolved.lineDesignation)
+        assertEquals(TransportMode.METRO, resolved.transportMode)
+    }
+
+    @Test
+    fun `neither current -- falls back to Unavailable with no line badge`() {
+        val expiredFastest = journeyRow(resolveNow.minusSeconds(1), lineDesignation = "14")
+        val expiredAlternative = journeyRow(resolveNow.minusSeconds(1), lineDesignation = "57")
+        val model = journeysModel(expiredFastest, expiredAlternative)
+
+        val resolved = resolveEffectiveModel(model, resolveNow)
+
+        assertEquals(RoutineWidgetContent.Unavailable, resolved.content)
+        assertNull(resolved.lineDesignation)
+    }
+
+    @Test
+    fun `an expired fastest with no alternative to promote also falls back to Unavailable`() {
+        val expiredFastest = journeyRow(resolveNow.minusSeconds(1))
+        val model = journeysModel(expiredFastest, null)
+
+        val resolved = resolveEffectiveModel(model, resolveNow)
+
+        assertEquals(RoutineWidgetContent.Unavailable, resolved.content)
+        assertNull(resolved.lineDesignation)
+    }
+
+    @Test
+    fun `a departure exactly at now is still current, not yet dropped`() {
+        val fastest = journeyRow(resolveNow)
+        val model = journeysModel(fastest, null)
+
+        val resolved = resolveEffectiveModel(model, resolveNow)
+
+        assertEquals(RoutineWidgetContent.Journeys(fastest, null), resolved.content)
+    }
+
+    @Test
+    fun `non-Journeys content is returned completely unchanged`() {
+        val model = RoutineWidgetModel(
+            routineId = "r1",
+            routineName = "Airport commute",
+            stationName = "Fruängen",
+            directionLabel = "Arlanda",
+            content = RoutineWidgetContent.Loading,
+            lineDesignation = "14",
+            transportMode = TransportMode.BUS,
+        )
+
+        val resolved = resolveEffectiveModel(model, resolveNow)
+
+        assertEquals(model, resolved)
     }
 }

@@ -48,6 +48,10 @@ import se.blick.app.domain.usecase.GetRankedJourneysUseCase
 import se.blick.app.domain.usecase.LiveDeparturesSnapshot
 import se.blick.app.domain.usecase.PreparedDeparture
 import se.blick.app.domain.usecase.RoutineScheduleOverlapValidator
+import se.blick.app.domain.usecase.countdownMinutes
+import se.blick.app.domain.usecase.effectiveFirstDeparture
+import se.blick.app.domain.usecase.filterCurrentJourneys
+import se.blick.app.domain.usecase.isCurrentJourney
 import se.blick.app.widget.runWidgetUpdateSafely
 import java.time.Clock
 import java.time.Duration
@@ -525,7 +529,7 @@ class RoutineActiveWindowWorker @AssistedInject constructor(
                 // never throws (besides a real CancellationException, which propagates and ends
                 // this run exactly like any other failure here would -- see doWork's own
                 // CancellationException handling).
-                val journeyPlans = if (current.type == RoutineType.EXACT_DESTINATION) {
+                val rawJourneyPlans = if (current.type == RoutineType.EXACT_DESTINATION) {
                     val origin = current.journeyOriginId
                     val destination = current.journeyDestinationId
                     if (origin != null && destination != null && getRankedJourneys != null) {
@@ -538,11 +542,23 @@ class RoutineActiveWindowWorker @AssistedInject constructor(
                         }
                     } else emptyList()
                 } else emptyList()
-                // The exact projection and notification mapper must share one timestamp.
-                // Otherwise a boundary departure clamped to "now" by the projection can be
-                // observed a few milliseconds later by the mapper and immediately discarded
-                // as expired, producing "No upcoming departures" while the widget shows 0 min.
+                // Captured, and re-filtered against, immediately after getRankedJourneys returns --
+                // GetRankedJourneysUseCase itself already filtered defensively against ITS OWN
+                // post-response `now` (see that class's own doc), but that call's result still has
+                // to travel back through this coroutine before this line runs, and a journey that
+                // was genuinely still current a moment ago can have departed in the meantime. Never
+                // trusting rawJourneyPlans as already-current a second time here is what lets this
+                // worker's own tick close that remaining window, rather than merely relying on
+                // GetRankedJourneysUseCase's own guarantee.
+                //
+                // journeyPlans (the re-filtered result) and exactProjectionNow (this same instant)
+                // are then the ONE shared eligibility decision used for every surface this tick
+                // touches -- the notification projection below, RoutineNotificationMapper's own
+                // render, AND routineWidgetUpdater.updateWithJourneys further down all see the
+                // identical already-filtered list and the identical instant, so the notification and
+                // the widget can never disagree about whether the same journey is still current.
                 val exactProjectionNow = clock.instant()
+                val journeyPlans = rawJourneyPlans.filterCurrentJourneys(exactProjectionNow)
                 val exactProjection = journeyPlans.firstOrNull()?.toFirstLegNotificationProjection(current, exactProjectionNow)
                 val departuresState = if (current.type == RoutineType.EXACT_DESTINATION) {
                     exactProjection?.departuresState ?: LiveDeparturesState.Unavailable
@@ -912,19 +928,24 @@ internal data class ExactJourneyNotificationProjection(
     val departuresState: LiveDeparturesState,
 )
 
+/**
+ * Returns `null` — refusing to project this journey into a live notification at all — when
+ * [isCurrentJourney] considers it no longer current at [now] (already departed, even by one
+ * millisecond, or over the two-change limit), rather than clamping its departure to [now] to
+ * make an already-departed journey look current. That clamp was the root cause of a real
+ * production incident: a bus that had already arrived (and a metro that had already arrived
+ * after it) kept being shown as "FASTEST"/"alternative" with a "0 min" countdown well after both
+ * had actually departed. The caller ([RoutineActiveWindowWorker.doWork]) already re-filters the
+ * whole journey list against this exact same [now] before ever calling this function — see that
+ * call site's own doc — but this check stays here too rather than trusting that upstream
+ * guarantee alone, exactly like every other defensive check in this worker.
+ */
 internal fun JourneyPlan.toFirstLegNotificationProjection(
     routine: CommuteRoutine,
     now: Instant,
-): ExactJourneyNotificationProjection {
-    val firstLegDeparture = firstLeg.departureTime ?: departureTime
-    // A live Journey Planner response can still contain a vehicle that departed only
-    // seconds ago (and the backend response itself may be cached for up to 30 seconds).
-    // The details screen and widget deliberately render that boundary as "0 min". Clamp
-    // only the notification projection's effective time to the current tick as well, so
-    // RoutineNotificationMapper does not drop the same journey as already expired and
-    // contradict the other two surfaces with "No upcoming departures".
-    val notificationEffectiveTime = if (firstLegDeparture.isBefore(now)) now else firstLegDeparture
-    val minutes = Duration.between(now, firstLegDeparture).toMinutes().coerceAtLeast(0)
+): ExactJourneyNotificationProjection? {
+    if (!isCurrentJourney(now)) return null
+    val firstLegDeparture = effectiveFirstDeparture()
     val departure = PreparedDeparture(
         departureId = journeyId,
         lineDesignation = firstLeg.lineDesignation.orEmpty(),
@@ -932,8 +953,13 @@ internal fun JourneyPlan.toFirstLegNotificationProjection(
         destination = firstLeg.direction ?: firstLeg.destinationName,
         scheduledTime = firstLegDeparture,
         expectedTime = if (firstLeg.isRealtime) firstLegDeparture else null,
-        effectiveTime = notificationEffectiveTime,
-        minutesRemaining = minutes,
+        effectiveTime = firstLegDeparture,
+        // countdownMinutes, never a floor-based Duration.toMinutes().coerceAtLeast(0) -- see
+        // that function's own doc for the ceiling rule this depends on (a departure under a
+        // minute away must read "1 min", never floored to "0 min", while one exactly at `now`
+        // reads "0 min"). No coerceAtLeast(0) is needed here to hide a negative duration: the
+        // guard above already refuses to reach this line at all for an expired departure.
+        minutesRemaining = countdownMinutes(now, firstLegDeparture),
         isRealTime = firstLeg.isRealtime,
         isCancelled = false,
         state = "EXPECTED",

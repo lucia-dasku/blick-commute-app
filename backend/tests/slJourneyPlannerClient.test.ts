@@ -30,10 +30,15 @@ function stubJourneyPlannerResponse(body: unknown) {
 
 afterEach(() => vi.unstubAllGlobals());
 
+/** Fixed "now" for every test below — before both fixtures' departure times (16:21:42Z and
+ * 16:29:24Z) — so these tests stay deterministic regardless of the real wall clock (see
+ * createJourneyRoutes's own injectable `now` parameter). */
+const FIXED_NOW = () => new Date("2026-08-10T16:00:00Z");
+
 describe("SL Journey Planner live-response contract", () => {
   it("accepts the sanitized direct fixture and does not mislabel the next same-mode trip as an alternative", async () => {
     const fetchMock = stubJourneyPlannerResponse(directFixture);
-    const routes = createJourneyRoutes(createSlJourneyPlannerClient("https://journey-planner.fixture/v2"));
+    const routes = createJourneyRoutes(createSlJourneyPlannerClient("https://journey-planner.fixture/v2"), FIXED_NOW);
 
     const response = await routes.request("/?originId=origin-global-id&destinationId=destination-global-id");
 
@@ -53,13 +58,17 @@ describe("SL Journey Planner live-response contract", () => {
     expect(requestedUrl.searchParams.get("name_origin")).toBe("origin-global-id");
     expect(requestedUrl.searchParams.get("name_destination")).toBe("destination-global-id");
     expect(requestedUrl.searchParams.get("calc_number_of_trips")).toBe("3");
+    // The two parameters this fix adds — see slJourneyPlannerClient.ts's own doc on why each
+    // one exists.
+    expect(requestedUrl.searchParams.get("calc_one_direction")).toBe("true");
+    expect(requestedUrl.searchParams.get("max_changes")).toBe("2");
     expect(requestedUrl.searchParams.get("incl_mot_2")).toBe("true");
     expect(requestedUrl.searchParams.get("incl_mot_5")).toBe("true");
   });
 
   it("maps the selected app modes to SL inclusion parameters", async () => {
     const fetchMock = stubJourneyPlannerResponse(directFixture);
-    const routes = createJourneyRoutes(createSlJourneyPlannerClient("https://journey-planner.fixture/v2"));
+    const routes = createJourneyRoutes(createSlJourneyPlannerClient("https://journey-planner.fixture/v2"), FIXED_NOW);
 
     const response = await routes.request(
       "/?originId=origin-global-id&destinationId=destination-global-id&transportModes=METRO,TRAIN",
@@ -77,7 +86,7 @@ describe("SL Journey Planner live-response contract", () => {
 
   it("accepts the sanitized transfer fixture, composes a stable leg-trip ID, and recognizes footpaths", async () => {
     stubJourneyPlannerResponse(transferFixture);
-    const routes = createJourneyRoutes(createSlJourneyPlannerClient("https://journey-planner.fixture/v2"));
+    const routes = createJourneyRoutes(createSlJourneyPlannerClient("https://journey-planner.fixture/v2"), FIXED_NOW);
 
     const response = await routes.request("/?originId=origin-global-id&destinationId=destination-global-id");
 

@@ -47,6 +47,7 @@
     <string name="routine_details_mode_label">Transportmedel</string>
     <string name="routine_details_line_label">Linje</string>
     <string name="routine_details_direction_label">Riktning</string>
+    <string name="routine_details_route_label">Rutt</string>
     <string name="routine_details_schedule_label">Schema</string>
     <string name="routine_details_schedule_every_day">Varje dag</string>
     <string name="routine_details_schedule_weekdays">Vardagar</string>

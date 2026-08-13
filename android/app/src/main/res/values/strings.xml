@@ -53,6 +53,7 @@
     <string name="routine_details_mode_label">Transport</string>
     <string name="routine_details_line_label">Line</string>
     <string name="routine_details_direction_label">Direction</string>
+    <string name="routine_details_route_label">Route</string>
     <string name="routine_details_schedule_label">Schedule</string>
     <!-- Cleaner labels for the two most common active-day combinations — see
          RoutineDetailsFormatting.formatActiveDays's own doc for the exact matching rule.

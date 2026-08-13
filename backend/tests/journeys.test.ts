@@ -19,6 +19,11 @@ interface LocationSearchResponse {
   locations: Array<{ id: string; name: string }>;
 }
 
+/** Fixed "now" for every test below that uses the 2026-08-10 mock timestamps — deliberately
+ * before all of them, so these tests stay deterministic regardless of the real wall clock (see
+ * createJourneyRoutes's own injectable `now` parameter). */
+const FIXED_NOW = () => new Date("2026-08-10T07:00:00Z");
+
 function rawJourney(id: string, departure: string, arrival: string, interchanges = 0) {
   return {
     tripId: id,
@@ -47,7 +52,7 @@ describe("journey routes", () => {
         ];
       },
     };
-    const response = await createJourneyRoutes(client).request("/?originId=origin&destinationId=destination");
+    const response = await createJourneyRoutes(client, FIXED_NOW).request("/?originId=origin&destinationId=destination");
     expect(response.status).toBe(200);
     const body = (await response.json()) as SuccessEnvelope<JourneyResponse>;
     expect(body.data.journeys.map((journey: { journeyId: string }) => journey.journeyId)).toEqual(["fast", "slow"]);
@@ -67,7 +72,7 @@ describe("journey routes", () => {
       },
     };
 
-    const response = await createJourneyRoutes(client).request(
+    const response = await createJourneyRoutes(client, FIXED_NOW).request(
       "/?originId=origin&destinationId=destination&transportModes=METRO",
     );
     const body = (await response.json()) as SuccessEnvelope<JourneyResponse>;
@@ -93,7 +98,7 @@ describe("journey routes", () => {
       },
     };
 
-    const response = await createJourneyRoutes(client).request(
+    const response = await createJourneyRoutes(client, FIXED_NOW).request(
       "/?originId=origin&destinationId=destination&transportModes=METRO,BUS",
     );
     const body = (await response.json()) as SuccessEnvelope<JourneyResponse>;
@@ -163,7 +168,7 @@ describe("journey routes", () => {
       },
     };
 
-    const response = await createJourneyRoutes(client).request("/?originId=origin&destinationId=destination");
+    const response = await createJourneyRoutes(client, FIXED_NOW).request("/?originId=origin&destinationId=destination");
     const body = (await response.json()) as SuccessEnvelope<JourneyResponse>;
     const journey = body.data.journeys[0]!;
 
@@ -171,5 +176,137 @@ describe("journey routes", () => {
     expect(journey.firstLeg.lineDesignation).toBe("14");
     expect(journey.legs.map((leg) => leg.lineDesignation)).toEqual(["14", "409"]);
     expect(journey.disruptions).toEqual(["Lift unavailable"]);
+  });
+
+  // ---- Expired-journey rejection (2026-08-10 22:12 production incident: a bus that arrived
+  // at 19:45 was shown as "fastest" and a metro that arrived at 22:10 as "alternative") ----
+
+  const NOW_22_12 = () => new Date("2026-08-10T22:12:00Z");
+
+  it("rejects a bus that already arrived at 19:45 and a metro that already arrived at 22:10, leaving no journeys", async () => {
+    const client: SlJourneyPlannerClient = {
+      async searchStops() { return []; },
+      async trips() {
+        return [
+          rawJourney("bus", "2026-08-10T19:30:00Z", "2026-08-10T19:45:00Z", 3),
+          rawJourney("fast", "2026-08-10T21:55:00Z", "2026-08-10T22:10:00Z"),
+        ];
+      },
+    };
+    const response = await createJourneyRoutes(client, NOW_22_12).request("/?originId=origin&destinationId=destination");
+    const body = (await response.json()) as SuccessEnvelope<JourneyResponse>;
+    expect(response.status).toBe(200);
+    expect(body.data.journeys).toEqual([]);
+  });
+
+  it("a genuinely upcoming journey is unaffected and becomes fastest even alongside expired ones", async () => {
+    const client: SlJourneyPlannerClient = {
+      async searchStops() { return []; },
+      async trips() {
+        return [
+          rawJourney("bus", "2026-08-10T19:30:00Z", "2026-08-10T19:45:00Z", 3),
+          rawJourney("fast", "2026-08-10T22:15:00Z", "2026-08-10T22:35:00Z"),
+        ];
+      },
+    };
+    const response = await createJourneyRoutes(client, NOW_22_12).request("/?originId=origin&destinationId=destination");
+    const body = (await response.json()) as SuccessEnvelope<JourneyResponse>;
+    expect(body.data.journeys.map((journey) => journey.journeyId)).toEqual(["fast"]);
+  });
+
+  it("expired results are rejected before fastest/alternative selection, not merely reordered", async () => {
+    const client: SlJourneyPlannerClient = {
+      async searchStops() { return []; },
+      async trips() {
+        return [
+          // Earliest arrival of the two, but already departed and arrived -- must never become
+          // "fastest" purely because it sorts first by arrival time.
+          rawJourney("expired", "2026-08-10T19:30:00Z", "2026-08-10T19:45:00Z"),
+          rawJourney("fast", "2026-08-10T22:15:00Z", "2026-08-10T22:35:00Z", 0),
+        ];
+      },
+    };
+    const response = await createJourneyRoutes(client, NOW_22_12).request("/?originId=origin&destinationId=destination");
+    const body = (await response.json()) as SuccessEnvelope<JourneyResponse>;
+    expect(body.data.journeys.map((journey) => journey.journeyId)).toEqual(["fast"]);
+  });
+
+  it("the different-mode fallback search also rejects an expired candidate", async () => {
+    const client: SlJourneyPlannerClient = {
+      async searchStops() { return []; },
+      async trips(_originId, _destinationId, transportModes) {
+        if (transportModes?.length === 1 && transportModes[0] === "BUS") {
+          // The only BUS-only candidate SL returns for the fallback search already departed.
+          return [rawJourney("expired-bus-alternative", "2026-08-10T19:30:00Z", "2026-08-10T19:45:00Z")];
+        }
+        return [
+          rawJourney("fast", "2026-08-10T22:15:00Z", "2026-08-10T22:35:00Z"),
+          rawJourney("fast", "2026-08-10T22:20:00Z", "2026-08-10T22:40:00Z"),
+        ];
+      },
+    };
+    const response = await createJourneyRoutes(client, NOW_22_12).request(
+      "/?originId=origin&destinationId=destination&transportModes=METRO,BUS",
+    );
+    const body = (await response.json()) as SuccessEnvelope<JourneyResponse>;
+    expect(body.data.journeys.map((journey) => journey.journeyId)).toEqual(["fast"]);
+  });
+
+  // ---- max_changes=2 enforcement (defense-in-depth: enforced again here even though
+  // slJourneyPlannerClient.ts also asks SL for max_changes=2 upstream) ----
+
+  it("allows a direct (zero-change) journey", async () => {
+    const client: SlJourneyPlannerClient = {
+      async searchStops() { return []; },
+      async trips() { return [rawJourney("candidate", "2026-08-10T08:00:00Z", "2026-08-10T08:20:00Z", 0)]; },
+    };
+    const response = await createJourneyRoutes(client, FIXED_NOW).request("/?originId=origin&destinationId=destination");
+    const body = (await response.json()) as SuccessEnvelope<JourneyResponse>;
+    expect(body.data.journeys.map((journey) => journey.journeyId)).toEqual(["candidate"]);
+  });
+
+  it("allows a one-change journey", async () => {
+    const client: SlJourneyPlannerClient = {
+      async searchStops() { return []; },
+      async trips() { return [rawJourney("candidate", "2026-08-10T08:00:00Z", "2026-08-10T08:20:00Z", 1)]; },
+    };
+    const response = await createJourneyRoutes(client, FIXED_NOW).request("/?originId=origin&destinationId=destination");
+    const body = (await response.json()) as SuccessEnvelope<JourneyResponse>;
+    expect(body.data.journeys.map((journey) => journey.journeyId)).toEqual(["candidate"]);
+  });
+
+  it("allows a two-change journey", async () => {
+    const client: SlJourneyPlannerClient = {
+      async searchStops() { return []; },
+      async trips() { return [rawJourney("candidate", "2026-08-10T08:00:00Z", "2026-08-10T08:20:00Z", 2)]; },
+    };
+    const response = await createJourneyRoutes(client, FIXED_NOW).request("/?originId=origin&destinationId=destination");
+    const body = (await response.json()) as SuccessEnvelope<JourneyResponse>;
+    expect(body.data.journeys.map((journey) => journey.journeyId)).toEqual(["candidate"]);
+  });
+
+  it("rejects a three-change journey even if the upstream response unexpectedly includes one", async () => {
+    const client: SlJourneyPlannerClient = {
+      async searchStops() { return []; },
+      async trips() { return [rawJourney("candidate", "2026-08-10T08:00:00Z", "2026-08-10T08:10:00Z", 3)]; },
+    };
+    const response = await createJourneyRoutes(client, FIXED_NOW).request("/?originId=origin&destinationId=destination");
+    const body = (await response.json()) as SuccessEnvelope<JourneyResponse>;
+    expect(body.data.journeys).toEqual([]);
+  });
+
+  it("a three-change journey never wins fastest, even with the earliest arrival, alongside a valid alternative", async () => {
+    const client: SlJourneyPlannerClient = {
+      async searchStops() { return []; },
+      async trips() {
+        return [
+          rawJourney("three-changes", "2026-08-10T08:00:00Z", "2026-08-10T08:10:00Z", 3),
+          rawJourney("two-changes", "2026-08-10T08:00:00Z", "2026-08-10T08:20:00Z", 2),
+        ];
+      },
+    };
+    const response = await createJourneyRoutes(client, FIXED_NOW).request("/?originId=origin&destinationId=destination");
+    const body = (await response.json()) as SuccessEnvelope<JourneyResponse>;
+    expect(body.data.journeys.map((journey) => journey.journeyId)).toEqual(["two-changes"]);
   });
 });

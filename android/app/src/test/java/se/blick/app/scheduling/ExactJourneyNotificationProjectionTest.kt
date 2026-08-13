@@ -2,6 +2,7 @@ package se.blick.app.scheduling
 
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
+import org.junit.Assert.assertNull
 import org.junit.Test
 import se.blick.app.domain.model.CommuteRoutine
 import se.blick.app.domain.model.JourneyLeg
@@ -62,7 +63,9 @@ class ExactJourneyNotificationProjectionTest {
             disruptions = listOf("Later-leg disruption"),
         )
 
-        val projection = plan.toFirstLegNotificationProjection(routine, now)
+        val projection = checkNotNull(plan.toFirstLegNotificationProjection(routine, now)) {
+            "This journey has not departed yet -- a projection was expected"
+        }
         val model = RoutineNotificationMapper.map(projection.routine, projection.departuresState, now)
         val row = (model.content as RoutineNotificationContent.Live).departures.single()
 
@@ -75,10 +78,9 @@ class ExactJourneyNotificationProjectionTest {
         assertFalse(model.toString().contains("Later-leg disruption"))
     }
 
-    @Test
-    fun `journey that departed seconds ago remains a zero-minute live notification`() {
-        val departure = Instant.parse("2026-08-10T07:05:00Z")
-        val now = Instant.parse("2026-08-10T07:05:20Z")
+    /** Same routine/leg/plan shape as the boundary tests below, differing only in [departure]
+     * and [now] — factored out since several tests below only ever vary that one relationship. */
+    private fun boundaryPlan(departure: Instant): Pair<CommuteRoutine, JourneyPlan> {
         val routine = CommuteRoutine(
             id = "exact-boundary",
             name = "Boundary commute",
@@ -105,7 +107,7 @@ class ExactJourneyNotificationProjectionTest {
             originName = "Slussen",
             destinationName = "T-Centralen",
             departureTime = departure,
-            arrivalTime = Instant.parse("2026-08-10T07:08:00Z"),
+            arrivalTime = departure.plusSeconds(180),
             isRealtime = true,
             disruptions = emptyList(),
         )
@@ -114,18 +116,58 @@ class ExactJourneyNotificationProjectionTest {
             originName = "Slussen",
             destinationName = "T-Centralen",
             departureTime = departure,
-            arrivalTime = Instant.parse("2026-08-10T07:08:00Z"),
+            arrivalTime = departure.plusSeconds(180),
             transferCount = 0,
             firstLeg = firstLeg,
             legs = listOf(firstLeg),
             disruptions = emptyList(),
         )
+        return routine to plan
+    }
 
-        val projection = plan.toFirstLegNotificationProjection(routine, now)
+    /** Replaces a prior version of this test that asserted a journey which had already departed
+     * 20 seconds earlier still produced a "0 min" live notification (by clamping its departure
+     * to `now`). That behaviour was the root cause of a real production incident — a bus that
+     * had already arrived kept being shown as "FASTEST" — and must no longer be protected: an
+     * already-departed journey must be refused a live notification projection entirely, not
+     * shown at zero minutes. */
+    @Test
+    fun `a journey that departed 20 seconds ago produces no live notification projection`() {
+        val departure = Instant.parse("2026-08-10T07:05:00Z")
+        val now = Instant.parse("2026-08-10T07:05:20Z")
+        val (routine, plan) = boundaryPlan(departure)
+
+        assertNull(plan.toFirstLegNotificationProjection(routine, now))
+    }
+
+    @Test
+    fun `a journey departing exactly at now still produces a zero-minute live notification`() {
+        val departure = Instant.parse("2026-08-10T07:05:00Z")
+        val now = departure
+        val (routine, plan) = boundaryPlan(departure)
+
+        val projection = checkNotNull(plan.toFirstLegNotificationProjection(routine, now)) {
+            "A departure exactly at now must still produce a projection"
+        }
         val model = RoutineNotificationMapper.map(projection.routine, projection.departuresState, now)
         val row = (model.content as RoutineNotificationContent.Live).departures.single()
 
         assertEquals(now, row.effectiveTime)
         assertEquals(0L, row.minutesRemaining)
+    }
+
+    @Test
+    fun `a journey departing 25 seconds from now displays one minute, not zero`() {
+        val now = Instant.parse("2026-08-10T07:05:00Z")
+        val departure = now.plusSeconds(25)
+        val (routine, plan) = boundaryPlan(departure)
+
+        val projection = checkNotNull(plan.toFirstLegNotificationProjection(routine, now)) {
+            "This journey has not departed yet -- a projection was expected"
+        }
+        val model = RoutineNotificationMapper.map(projection.routine, projection.departuresState, now)
+        val row = (model.content as RoutineNotificationContent.Live).departures.single()
+
+        assertEquals(1L, row.minutesRemaining)
     }
 }
