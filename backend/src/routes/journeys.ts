@@ -31,7 +31,29 @@ function transportSignature(journey: { legs: Array<{ transportMode: string }> })
     .join(",");
 }
 
-export function createJourneyRoutes(client: SlJourneyPlannerClient) {
+/** Mirrors the `max_changes` request parameter sent to SL (see slJourneyPlannerClient.ts) —
+ * enforced again here, defensively, since SL is not guaranteed to always honor it and a cached
+ * upstream response could predate this parameter existing at all. */
+const MAX_CHANGES = 2;
+
+/** True only for a journey whose first public-transport departure has not yet passed
+ * `requestedAtMillis`, and that requires no more than MAX_CHANGES changes. `journey.departureTime`
+ * is already normalizeJourney's own "effective first public-transport departure" (derived from
+ * the first non-walking leg, not necessarily legs[0] — see that function's own doc), so no
+ * further leg inspection is needed here. Applied identically to the primary ranking and the
+ * different-mode fallback search (both funnel through rankedFor below) so neither path can ever
+ * surface an expired or over-the-limit journey as "fastest" or "alternative". */
+function isEligibleJourney(journey: { departureTime: string; transferCount: number }, requestedAtMillis: number): boolean {
+  return Date.parse(journey.departureTime) >= requestedAtMillis && journey.transferCount <= MAX_CHANGES;
+}
+
+/**
+ * `now` is captured once per request (never re-read mid-request) and is an injectable
+ * `() => Date` — defaulted to the real wall clock in production, overridable in tests — so
+ * "is this journey already expired" can be asserted deterministically rather than racing the
+ * real clock (see journeys.test.ts).
+ */
+export function createJourneyRoutes(client: SlJourneyPlannerClient, now: () => Date = () => new Date()) {
   const route = new Hono();
   route.get("/locations/search", async (c) => {
     const query = required(c.req.query("query"), "query", 100);
@@ -47,6 +69,13 @@ export function createJourneyRoutes(client: SlJourneyPlannerClient) {
     const destinationId = required(c.req.query("destinationId"), "destinationId");
     const transportModes = requestedTransportModes(c.req.query("transportModes"));
     if (originId === destinationId) throw new AppError("VALIDATION_ERROR", "Origin and destination must differ");
+
+    // One timestamp for the whole request: every eligibility check below (the primary search
+    // and the different-mode fallback alike) is measured against this same instant, never a
+    // freshly re-read wall clock partway through.
+    const requestedAt = now();
+    const requestedAtMillis = requestedAt.getTime();
+
     const rankedFor = async (modes: JourneyTransportMode[]) => {
       const allowedModes = new Set<string>(modes);
       return (await client.trips(originId, destinationId, modes))
@@ -55,6 +84,10 @@ export function createJourneyRoutes(client: SlJourneyPlannerClient) {
         .filter((journey) => journey.legs
           .filter((leg) => leg.transportMode !== "WALK")
           .every((leg) => allowedModes.has(leg.transportMode)))
+        // Defends against SL including an already-departed trip despite calc_one_direction
+        // (see slJourneyPlannerClient.ts) and against a >MAX_CHANGES trip despite max_changes —
+        // applied BEFORE sorting/fastest/alternative selection so neither can ever pick one.
+        .filter((journey) => isEligibleJourney(journey, requestedAtMillis))
         .sort((a, b) => Date.parse(a.arrivalTime) - Date.parse(b.arrivalTime));
     };
 
@@ -72,7 +105,7 @@ export function createJourneyRoutes(client: SlJourneyPlannerClient) {
     }
     const journeys = fastest == null ? [] : [fastest, ...(alternative == null ? [] : [alternative])];
     c.header("Cache-Control", "public, s-maxage=30, stale-while-revalidate=30");
-    return c.json(successEnvelope({ fetchedAt: new Date().toISOString(), journeys }));
+    return c.json(successEnvelope({ fetchedAt: requestedAt.toISOString(), journeys }));
   });
   return route;
 }

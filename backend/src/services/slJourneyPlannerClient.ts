@@ -85,6 +85,18 @@ export function createSlJourneyPlannerClient(baseUrl = config.slJourneyPlannerBa
         name_destination: destinationId,
         calc_number_of_trips: "3",
         route_type: "leasttime",
+        // Without this, SL may include a trip departing before name_origin/name_destination's
+        // requested time in the result set (its "closest to the requested time" behavior is not
+        // one-directional by default) — one root cause of a past departure ever being ranked as
+        // "fastest" (see journeys.ts's own defensive departure-time filter for the other layer of
+        // protection against this same class of bug).
+        calc_one_direction: "true",
+        // SL's own default (nine) is far looser than a commute journey should ever need; this
+        // app never wants to present a nine-change trip as a viable "fastest"/"alternative"
+        // option. journeys.ts independently filters journey.transferCount defensively — this
+        // upstream parameter's job is only to avoid asking SL to consider (and cache) such trips
+        // at all.
+        max_changes: "2",
         incl_mot_0: String(enabled.has("TRAIN")),
         incl_mot_2: String(enabled.has("METRO")),
         incl_mot_4: String(enabled.has("TRAM")),
