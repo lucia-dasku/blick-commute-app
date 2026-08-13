@@ -394,10 +394,17 @@ class RoutineActiveWindowWorkerTest {
          * given — used by the exact-destination tests below to prove the worker passes the SAME
          * already-filtered list (and the same instant) here as it used for the notification. */
         val journeysUpdateCalls = mutableListOf<Pair<List<JourneyPlan>, Instant>>()
+        /** Every [updateWithJourneys] call's own [fetchFailed] argument, in the same order as
+         * [journeysUpdateCalls] — a separate parallel list (matching [disruptionsAtUpdate]'s own
+         * existing pattern alongside [updateCalls]) rather than changing [journeysUpdateCalls]'s
+         * element type, so every pre-existing destructuring assertion against it keeps compiling
+         * unchanged. */
+        val journeysFetchFailedAtUpdate = mutableListOf<Boolean>()
         var clearCallCount = 0
         var reconcileCallCount = 0
-        override suspend fun updateWithJourneys(routine: CommuteRoutine, journeys: List<JourneyPlan>, now: Instant) {
+        override suspend fun updateWithJourneys(routine: CommuteRoutine, journeys: List<JourneyPlan>, now: Instant, fetchFailed: Boolean) {
             journeysUpdateCalls += journeys to now
+            journeysFetchFailedAtUpdate += fetchFailed
         }
         override suspend fun updateWithDepartures(routine: CommuteRoutine, departuresState: LiveDeparturesState, now: Instant) {
             updateWithDepartures(routine, departuresState, now, disruption = null)
@@ -2945,19 +2952,29 @@ class RoutineActiveWindowWorkerTest {
             )
             worker.doWork()
 
-            // Notification: the expired journey is never shown as live -- Unavailable, not a
-            // "0 min" departure.
+            // Notification: the expired journey is never shown as live -- NoUpcomingDepartures,
+            // not a "0 min" departure. NoUpcomingDepartures, not Unavailable: the search itself
+            // genuinely succeeded (FakeJourneyRepository returned a real journey) -- it simply
+            // expired by the time the worker re-checked it, which is not a fetch failure and must
+            // never be represented as one (see RoutineActiveWindowWorker's own comment on
+            // rawJourneyPlans for the production incident this distinction now prevents).
             assertTrue("expected at least the foreground placeholder notification", notifier.shown.isNotEmpty())
             assertTrue(
                 "expected no live journey in the notification once it expired",
-                notifier.shown.any { it.content is RoutineNotificationContent.Unavailable },
+                notifier.shown.any { it.content is RoutineNotificationContent.NoUpcomingDepartures },
             )
             // Widget: received the WORKER's own re-filtered (empty) list -- never the raw,
-            // already-stale one GetRankedJourneysUseCase itself returned.
+            // already-stale one GetRankedJourneysUseCase itself returned -- and fetchFailed =
+            // false for the exact same reason the notification isn't Unavailable above: the
+            // search itself did not fail.
             assertTrue("expected at least one updateWithJourneys call", widgetUpdater.journeysUpdateCalls.isNotEmpty())
             assertTrue(
                 "expected every updateWithJourneys call to have received an empty, already-filtered list",
                 widgetUpdater.journeysUpdateCalls.all { (journeys, _) -> journeys.isEmpty() },
+            )
+            assertTrue(
+                "expected every updateWithJourneys call to report fetchFailed = false",
+                widgetUpdater.journeysFetchFailedAtUpdate.all { fetchFailed -> !fetchFailed },
             )
         }
 
@@ -3000,4 +3017,53 @@ class RoutineActiveWindowWorkerTest {
         // independently-read ones that merely happened not to disagree this time.
         assertEquals(notificationDeparture.minutesRemaining, countdownMinutes(nowAtUpdate, upcomingJourney.departureTime))
     }
+
+    /** Always throws -- models a genuine search failure (network/backend error), as opposed to
+     * [FakeJourneyRepository] succeeding with a list that later turns out empty or expired. */
+    private class ThrowingJourneyRepository : JourneyRepository {
+        override suspend fun searchLocations(query: String): List<JourneyLocation> = emptyList()
+        override suspend fun getJourneys(
+            originId: String,
+            destinationId: String,
+            allowedTransportModes: Set<TransportMode>,
+        ): List<JourneyPlan> = throw IOException("SL Journey Planner unavailable")
+    }
+
+    @Test
+    fun `a genuine search failure is reported as Unavailable, not NoUpcomingDepartures, and the widget receives fetchFailed = true`() =
+        runTest {
+            val clock = TickingClock(Instant.parse("2026-07-27T05:00:00Z"), zone) // 07:00 local, Monday
+            val exactRoutine = exactDestinationRoutine()
+            val repository = ScriptedRoutineRepository(clock) { exactRoutine }
+            val getRankedJourneys = GetRankedJourneysUseCase(ThrowingJourneyRepository(), Clock.fixed(clock.instant(), zone))
+            val notifier = RecordingNotifier()
+            val widgetUpdater = RecordingWidgetUpdater()
+
+            val worker = buildWorker(
+                exactRoutine.id,
+                repository,
+                GetLiveDeparturesUseCase(FakeDepartureRepository { error("unused for an exact-destination routine") }, clock),
+                notifier,
+                RecordingScheduler(),
+                clock,
+                widgetUpdater = widgetUpdater,
+                getRankedJourneys = getRankedJourneys,
+            )
+            worker.doWork()
+
+            // Unlike an empty or all-expired result (see the two tests above), a search that
+            // never completed at all must still read as a genuine failure -- the one case
+            // Unavailable's "Couldn't load departures right now. Will try again soon." copy is
+            // actually correct for.
+            assertTrue("expected at least the foreground placeholder notification", notifier.shown.isNotEmpty())
+            assertTrue(
+                "expected the notification to report Unavailable for a genuine search failure",
+                notifier.shown.any { it.content is RoutineNotificationContent.Unavailable },
+            )
+            assertTrue("expected at least one updateWithJourneys call", widgetUpdater.journeysUpdateCalls.isNotEmpty())
+            assertTrue(
+                "expected every updateWithJourneys call to report fetchFailed = true",
+                widgetUpdater.journeysFetchFailedAtUpdate.isNotEmpty() && widgetUpdater.journeysFetchFailedAtUpdate.all { it },
+            )
+        }
 }

@@ -33,7 +33,12 @@ import se.blick.app.billing.RoutineTierPolicy
  * own doc for exactly which call sites use it.
  */
 interface RoutineWidgetUpdater {
-    suspend fun updateWithJourneys(routine: CommuteRoutine, journeys: List<JourneyPlan>, now: Instant) {}
+    /** [fetchFailed] — see [decideJourneysWidgetState]'s own doc — distinguishes a genuine
+     * search failure from a search that succeeded and simply found nothing; defaults to `false`
+     * so every existing fake/test that only cares about the common case keeps compiling
+     * unchanged, the same reasoning as the four-argument [updateWithDepartures] overload's own
+     * default body. */
+    suspend fun updateWithJourneys(routine: CommuteRoutine, journeys: List<JourneyPlan>, now: Instant, fetchFailed: Boolean = false) {}
     /** Called once per [se.blick.app.scheduling.RoutineActiveWindowWorker] loop tick, right
      * after [se.blick.app.notification.RoutineNotifier.showOrUpdate] — reuses the exact
      * [routine]/[departuresState]/[now] already fetched for the notification, via
@@ -156,8 +161,8 @@ class GlanceRoutineWidgetUpdater @Inject constructor(
     private val freeRoutineSelectionStore: FreeRoutineSelectionStore? = null,
 ) : RoutineWidgetUpdater {
 
-    override suspend fun updateWithJourneys(routine: CommuteRoutine, journeys: List<JourneyPlan>, now: Instant) {
-        applyToAllInstances(decideJourneysWidgetState(routine, journeys, now))
+    override suspend fun updateWithJourneys(routine: CommuteRoutine, journeys: List<JourneyPlan>, now: Instant, fetchFailed: Boolean) {
+        applyToAllInstances(decideJourneysWidgetState(routine, journeys, now, fetchFailed))
     }
 
     override suspend fun updateWithDepartures(routine: CommuteRoutine, departuresState: LiveDeparturesState, now: Instant) {

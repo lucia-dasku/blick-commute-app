@@ -529,7 +529,25 @@ class RoutineActiveWindowWorker @AssistedInject constructor(
                 // never throws (besides a real CancellationException, which propagates and ends
                 // this run exactly like any other failure here would -- see doWork's own
                 // CancellationException handling).
-                val rawJourneyPlans = if (current.type == RoutineType.EXACT_DESTINATION) {
+                //
+                // Nullable, not List<JourneyPlan> defaulting to emptyList() -- null here means the
+                // search itself never completed (an exception, or a malformed routine missing an
+                // origin/destination id), while a non-null-but-empty list means it completed fine
+                // and genuinely found nothing. Collapsing those two into the same emptyList() was
+                // a real bug: every route below then had no way to tell "the request failed" apart
+                // from "the request succeeded with no results", so a perfectly normal empty result
+                // (no eligible departure right now, or none within the configured change limit)
+                // rendered exactly like a failed fetch -- the notification/widget's own Unavailable
+                // copy ("Couldn't load departures right now. Will try again soon.") wrongly telling
+                // the user something was broken, while the in-app Routine Details screen (which
+                // never conflated the two) correctly showed "No journeys found right now." for the
+                // exact same underlying result. See exactProjectionNow below for how this
+                // distinction is threaded into both surfaces via LiveDeparturesState.Unavailable
+                // vs LiveDeparturesState.NoUpcomingDepartures -- the same split
+                // se.blick.app.domain.usecase.LiveDeparturesState's own doc already requires for
+                // the plain-departures path -- and RoutineWidgetUpdater.updateWithJourneys's own
+                // new fetchFailed parameter for the widget.
+                val rawJourneyPlans: List<JourneyPlan>? = if (current.type == RoutineType.EXACT_DESTINATION) {
                     val origin = current.journeyOriginId
                     val destination = current.journeyDestinationId
                     if (origin != null && destination != null && getRankedJourneys != null) {
@@ -538,9 +556,9 @@ class RoutineActiveWindowWorker @AssistedInject constructor(
                         } catch (e: CancellationException) {
                             throw e
                         } catch (_: Exception) {
-                            emptyList()
+                            null
                         }
-                    } else emptyList()
+                    } else null
                 } else emptyList()
                 // Captured, and re-filtered against, immediately after getRankedJourneys returns --
                 // GetRankedJourneysUseCase itself already filtered defensively against ITS OWN
@@ -558,10 +576,14 @@ class RoutineActiveWindowWorker @AssistedInject constructor(
                 // identical already-filtered list and the identical instant, so the notification and
                 // the widget can never disagree about whether the same journey is still current.
                 val exactProjectionNow = clock.instant()
-                val journeyPlans = rawJourneyPlans.filterCurrentJourneys(exactProjectionNow)
+                val journeyPlans = (rawJourneyPlans ?: emptyList()).filterCurrentJourneys(exactProjectionNow)
                 val exactProjection = journeyPlans.firstOrNull()?.toFirstLegNotificationProjection(current, exactProjectionNow)
                 val departuresState = if (current.type == RoutineType.EXACT_DESTINATION) {
-                    exactProjection?.departuresState ?: LiveDeparturesState.Unavailable
+                    exactProjection?.departuresState ?: if (rawJourneyPlans == null) {
+                        LiveDeparturesState.Unavailable
+                    } else {
+                        LiveDeparturesState.NoUpcomingDepartures(exactProjectionNow)
+                    }
                 } else {
                     val identity = current.departureIdentity()
                     val previous = staleSnapshotRepository.get(routineId, identity)
@@ -597,8 +619,11 @@ class RoutineActiveWindowWorker @AssistedInject constructor(
                 // "handled failure" -- cutting the whole active-window loop short even though
                 // the notification above already posted successfully this tick.
                 runWidgetUpdateSafely {
-                    if (current.type == RoutineType.EXACT_DESTINATION) routineWidgetUpdater.updateWithJourneys(current, journeyPlans, now)
-                    else routineWidgetUpdater.updateWithDepartures(current, departuresState, now, disruptionAtPost)
+                    if (current.type == RoutineType.EXACT_DESTINATION) {
+                        routineWidgetUpdater.updateWithJourneys(current, journeyPlans, now, fetchFailed = rawJourneyPlans == null)
+                    } else {
+                        routineWidgetUpdater.updateWithDepartures(current, departuresState, now, disruptionAtPost)
+                    }
                 }
 
                 // Disruptions are fetched only AFTER departures have already posted, bounded by

@@ -21,8 +21,24 @@ import java.time.Instant
  * always the journey's own [effectiveFirstDeparture] — never the raw top-level
  * [JourneyPlan.departureTime] on its own, which does not necessarily reflect the first genuine
  * public-transport leg.
- */
-internal fun decideJourneysWidgetState(routine: CommuteRoutine, journeys: List<JourneyPlan>, now: Instant): RoutineWidgetUiState {
+ *
+ * [fetchFailed] distinguishes "the search genuinely failed" from "the search succeeded and
+ * genuinely found nothing" — the same empty-vs-failure split
+ * [se.blick.app.domain.usecase.LiveDeparturesState] already documents for the plain-departures
+ * path (its own [se.blick.app.domain.usecase.LiveDeparturesState.NoUpcomingDepartures] vs
+ * [se.blick.app.domain.usecase.LiveDeparturesState.Unavailable]). Before this parameter existed,
+ * an empty [journeys] list (a perfectly normal outcome — no eligible route right now, or none
+ * within the configured change limit) always fell to [RoutineWidgetContent.Unavailable], whose
+ * own copy ("Couldn't load departures right now. Will try again soon.") wrongly told the user
+ * something was broken and would retry, when the search had actually already completed
+ * successfully and found nothing to show. Defaults to `false` (empty-but-not-failed) — the
+ * common case, and the one every pre-existing test/fake exercises. */
+internal fun decideJourneysWidgetState(
+    routine: CommuteRoutine,
+    journeys: List<JourneyPlan>,
+    now: Instant,
+    fetchFailed: Boolean = false,
+): RoutineWidgetUiState {
     val rows = journeys.filterCurrentJourneys(now).take(2).map { journey ->
         WidgetJourneyRow(
             journey.firstLeg.lineDesignation,
@@ -36,7 +52,8 @@ internal fun decideJourneysWidgetState(routine: CommuteRoutine, journeys: List<J
     val fastest = rows.firstOrNull() ?: return RoutineWidgetUiState.ActiveRoutine(
         RoutineWidgetModel(
             routine.id, routine.name, routine.journeyOriginName ?: routine.siteName,
-            routine.journeyDestinationName, RoutineWidgetContent.Unavailable,
+            routine.journeyDestinationName,
+            if (fetchFailed) RoutineWidgetContent.Unavailable else RoutineWidgetContent.NoUpcomingDepartures(now),
         ),
     )
     return RoutineWidgetUiState.ActiveRoutine(

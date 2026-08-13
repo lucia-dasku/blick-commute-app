@@ -60,17 +60,32 @@ class RoutineWidgetJourneysMapperTest {
         )
     }
 
-    @Test fun `an expired journey is never persisted as Journeys content -- falls back to Unavailable`() {
+    @Test fun `an expired journey is never persisted as Journeys content -- falls back to NoUpcomingDepartures, not Unavailable`() {
         val expired = journey("expired", now.minusSeconds(1), now.minusSeconds(1))
 
         val state = decideJourneysWidgetState(routine(), listOf(expired), now)
 
         val model = (state as RoutineWidgetUiState.ActiveRoutine).model
-        assertEquals(RoutineWidgetContent.Unavailable, model.content)
+        // The search itself succeeded (it returned a real journey) -- it has simply since
+        // expired, which is not a failure. See the next two tests for the same distinction on
+        // an empty list, and for fetchFailed = true actually producing Unavailable.
+        assertEquals(RoutineWidgetContent.NoUpcomingDepartures(now), model.content)
     }
 
-    @Test fun `an empty journey list produces Unavailable, not Journeys`() {
+    @Test fun `an empty journey list produces NoUpcomingDepartures, not Unavailable, when the search itself did not fail`() {
         val state = decideJourneysWidgetState(routine(), emptyList(), now)
+
+        val model = (state as RoutineWidgetUiState.ActiveRoutine).model
+        // fetchFailed defaults to false: an empty list on its own means the search completed
+        // successfully and genuinely found nothing (no eligible route right now, or none within
+        // the configured change limit) -- not that anything is broken. Unavailable's own copy
+        // ("Couldn't load departures right now. Will try again soon.") would wrongly claim a
+        // retry is coming for a result that was already final.
+        assertEquals(RoutineWidgetContent.NoUpcomingDepartures(now), model.content)
+    }
+
+    @Test fun `an empty journey list with fetchFailed = true produces Unavailable`() {
+        val state = decideJourneysWidgetState(routine(), emptyList(), now, fetchFailed = true)
 
         val model = (state as RoutineWidgetUiState.ActiveRoutine).model
         assertEquals(RoutineWidgetContent.Unavailable, model.content)
