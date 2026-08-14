@@ -3,6 +3,7 @@ package se.blick.app.data.local.room
 import kotlinx.serialization.Serializable
 import kotlinx.serialization.encodeToString
 import kotlinx.serialization.json.Json
+import se.blick.app.domain.model.toJourneyRole
 import se.blick.app.domain.model.toTransportMode
 import se.blick.app.domain.usecase.DepartureIdentity
 import se.blick.app.domain.usecase.LiveDeparturesSnapshot
@@ -35,6 +36,14 @@ private data class StaleDepartureRow(
     val state: String,
     val journeyState: String,
     val predictionState: String?,
+    /** Backend-authoritative (see [se.blick.app.domain.model.JourneyRole]'s own doc) --
+     * populated only for the exact-destination journey path; always `null` for an ordinary
+     * LINE_DIRECTION row, which has no such concept. New in this version: the default keeps
+     * decoding a row persisted by an OLDER app version (which never wrote this key at all)
+     * safe -- kotlinx.serialization fills a missing key with its declared default rather
+     * than failing, so an old snapshot still loads, simply without a role (see `toDomain`'s
+     * own fail-closed parse for why that never becomes PRIMARY by accident either). */
+    val journeyRole: String? = null,
 )
 
 private fun PreparedDeparture.toRow() = StaleDepartureRow(
@@ -51,6 +60,7 @@ private fun PreparedDeparture.toRow() = StaleDepartureRow(
     state = state,
     journeyState = journeyState,
     predictionState = predictionState,
+    journeyRole = journeyRole?.name,
 )
 
 private fun StaleDepartureRow.toDomain() = PreparedDeparture(
@@ -68,6 +78,11 @@ private fun StaleDepartureRow.toDomain() = PreparedDeparture(
     journeyState = journeyState,
     predictionState = predictionState,
     tripDeviations = emptyList(),
+    // Fail-closed (see toJourneyRole's own doc): a missing key (an old snapshot) or a
+    // malformed/unrecognized stored value both resolve to null here, never PRIMARY by
+    // default -- RoutineNotificationBuilder's own null handling already renders that
+    // correctly as the ordinary NEXT wording rather than crashing or guessing ALTERNATIVE.
+    journeyRole = journeyRole.toJourneyRole(),
 )
 
 fun StaleSnapshotEntity.identity(): DepartureIdentity = DepartureIdentity(

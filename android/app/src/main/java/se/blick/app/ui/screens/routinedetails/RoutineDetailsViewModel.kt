@@ -40,6 +40,8 @@ import se.blick.app.notification.PromotedNotificationChecker
 import se.blick.app.notification.RoutineNotificationMapper
 import se.blick.app.notification.RoutineNotifier
 import se.blick.app.scheduling.DeviceZoneProvider
+import se.blick.app.scheduling.NextOccurrence
+import se.blick.app.scheduling.NextOccurrenceCalculator
 import se.blick.app.scheduling.NotificationRecoveryReporter
 import se.blick.app.scheduling.RoutineScheduler
 import se.blick.app.ui.navigation.Routes
@@ -209,7 +211,36 @@ class RoutineDetailsViewModel @Inject constructor(
      * midnight in any zone ahead of UTC (e.g. Sweden) — the worker's own mid-loop
      * `pausedDate == today` check (which this screen's pause/resume actions must agree
      * with) already uses the device zone, so this must too. */
-    private fun today(): LocalDate = ZonedDateTime.ofInstant(clock.instant(), deviceZoneProvider.currentZone()).toLocalDate()
+    private fun zonedNow(): ZonedDateTime = ZonedDateTime.ofInstant(clock.instant(), deviceZoneProvider.currentZone())
+
+    private fun today(): LocalDate = zonedNow().toLocalDate()
+
+    /**
+     * [GetRankedJourneysUseCase]'s own `searchUntil` — see that parameter's doc. Only ever
+     * non-null for [NextOccurrence.ActiveNow], derived from the same shared
+     * [NextOccurrenceCalculator] scheduling logic [se.blick.app.scheduling.RoutineActiveWindowWorker]
+     * and every other occurrence calculation in this app already uses, rather than a duplicated
+     * one — its `windowEnd` is a genuine bound on the search the backend is about to run RIGHT
+     * NOW, since the backend always searches forward from the request's own current time.
+     *
+     * [NextOccurrence.Upcoming] deliberately returns `null`, NOT `occurrence.windowEnd.toInstant()`:
+     * that end belongs to a FUTURE occurrence's window, not to a search starting now — combining
+     * today's "now" with a future occurrence's own end would silently search across everything
+     * in between (e.g. overnight), never a boundary the backend can meaningfully honor for a
+     * search it runs at the current instant. If forward-looking journey planning for an upcoming
+     * occurrence is ever wanted, it needs its own proper `searchFrom = upcoming.windowStart` /
+     * `searchUntil = upcoming.windowEnd` contract threaded through as a pair — not implemented
+     * here. [NextOccurrence.None] also returns `null`: no eligible occurrence at all right now or
+     * ahead (`activeDays` empty, or every candidate day excluded). [GetRankedJourneysUseCase]
+     * already treats a null `searchUntil` as "no boundary to offer", never inventing one here
+     * either.
+     */
+    private fun currentSearchUntil(routine: CommuteRoutine): Instant? =
+        when (val occurrence = NextOccurrenceCalculator.nextOccurrence(routine, zonedNow(), excludedDate = routine.pausedDate)) {
+            is NextOccurrence.ActiveNow -> occurrence.windowEnd.toInstant()
+            is NextOccurrence.Upcoming -> null
+            NextOccurrence.None -> null
+        }
 
     init {
         viewModelScope.launch {
@@ -859,9 +890,10 @@ class RoutineDetailsViewModel @Inject constructor(
             return
         }
         if (trigger == RefreshTrigger.MANUAL) _uiState.update { it.copy(isRefreshingDepartures = true) }
+        val searchUntil = currentSearchUntil(routine)
         departuresJob = viewModelScope.launch {
             try {
-                val journeys = useCase(originId, destinationId, routine.allowedJourneyTransportModes)
+                val journeys = useCase(originId, destinationId, routine.allowedJourneyTransportModes, searchUntil)
                 // Captured AFTER the use case returns, never before -- see
                 // RoutineDetailsUiState.journeysEvaluatedAt's own doc. Stored in the SAME update as
                 // `journeys` so both land in a single StateFlow emission: this timestamp changing is

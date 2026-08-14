@@ -10,6 +10,7 @@ import se.blick.app.domain.model.Disruption
 import se.blick.app.domain.model.DisruptionEffect
 import se.blick.app.domain.model.DisruptionMessage
 import se.blick.app.domain.model.DisruptionPriority
+import se.blick.app.domain.model.JourneyRole
 import se.blick.app.domain.model.TransportMode
 import se.blick.app.domain.usecase.LiveDeparturesSnapshot
 import se.blick.app.domain.usecase.LiveDeparturesState
@@ -56,6 +57,7 @@ class RoutineNotificationMapperTest {
         minutesRemaining: Long = 999L, // deliberately wrong/stale -- the mapper must recompute, never trust this
         isRealTime: Boolean = true,
         isCancelled: Boolean = false,
+        journeyRole: JourneyRole? = null,
     ) = PreparedDeparture(
         departureId = departureId,
         lineDesignation = lineDesignation,
@@ -71,6 +73,7 @@ class RoutineNotificationMapperTest {
         journeyState = "EXPECTED",
         predictionState = null,
         tripDeviations = emptyList(),
+        journeyRole = journeyRole,
     )
 
     private fun snapshot(vararg departures: PreparedDeparture, fetchedAt: Instant = now) =
@@ -305,6 +308,40 @@ class RoutineNotificationMapperTest {
         val state = LiveDeparturesState.Live(snapshot(d))
         val content = RoutineNotificationMapper.map(routine(), state, now).content as RoutineNotificationContent.Live
         assertEquals("Southbound", content.departures.single().destinationLabel)
+    }
+
+    // ---- journeyRole: carried through unchanged from PreparedDeparture, exact-destination only ----
+
+    @Test
+    fun `a PRIMARY journeyRole is carried through unchanged`() {
+        val d = prepared(journeyRole = JourneyRole.PRIMARY)
+        val state = LiveDeparturesState.Live(snapshot(d))
+        val content = RoutineNotificationMapper.map(routine(), state, now).content as RoutineNotificationContent.Live
+        assertEquals(JourneyRole.PRIMARY, content.departures.single().journeyRole)
+    }
+
+    @Test
+    fun `a NEXT journeyRole is carried through unchanged`() {
+        val d = prepared(journeyRole = JourneyRole.NEXT)
+        val state = LiveDeparturesState.Live(snapshot(d))
+        val content = RoutineNotificationMapper.map(routine(), state, now).content as RoutineNotificationContent.Live
+        assertEquals(JourneyRole.NEXT, content.departures.single().journeyRole)
+    }
+
+    @Test
+    fun `an ALTERNATIVE journeyRole is carried through unchanged`() {
+        val d = prepared(journeyRole = JourneyRole.ALTERNATIVE)
+        val state = LiveDeparturesState.Live(snapshot(d))
+        val content = RoutineNotificationMapper.map(routine(), state, now).content as RoutineNotificationContent.Live
+        assertEquals(JourneyRole.ALTERNATIVE, content.departures.single().journeyRole)
+    }
+
+    @Test
+    fun `a null journeyRole (the ordinary LINE_DIRECTION path) is carried through as null, never defaulted`() {
+        val d = prepared(journeyRole = null)
+        val state = LiveDeparturesState.Live(snapshot(d))
+        val content = RoutineNotificationMapper.map(routine(), state, now).content as RoutineNotificationContent.Live
+        assertNull(content.departures.single().journeyRole)
     }
 
     // ---- NoUpcomingDepartures ----

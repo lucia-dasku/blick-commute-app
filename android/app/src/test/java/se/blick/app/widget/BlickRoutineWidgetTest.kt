@@ -7,6 +7,7 @@ import org.junit.Assert.assertFalse
 import org.junit.Assert.assertNull
 import org.junit.Assert.assertTrue
 import org.junit.Test
+import se.blick.app.domain.model.JourneyRole
 import se.blick.app.domain.model.TransportMode
 import java.time.Instant
 
@@ -137,6 +138,7 @@ class BlickRoutineWidgetTest {
         departureTime: Instant,
         lineDesignation: String? = "14",
         transportMode: TransportMode = TransportMode.BUS,
+        role: JourneyRole = JourneyRole.PRIMARY,
     ) = WidgetJourneyRow(
         lineDesignation = lineDesignation,
         transportMode = transportMode,
@@ -144,23 +146,24 @@ class BlickRoutineWidgetTest {
         arrivalTime = departureTime.plusSeconds(600),
         transferCount = 0,
         isRealtime = true,
+        role = role,
     )
 
-    private fun journeysModel(fastest: WidgetJourneyRow, alternative: WidgetJourneyRow?) = RoutineWidgetModel(
+    private fun journeysModel(primary: WidgetJourneyRow, secondary: WidgetJourneyRow?) = RoutineWidgetModel(
         routineId = "r1",
         routineName = "Airport commute",
         stationName = "Fruängen",
         directionLabel = "Arlanda",
-        content = RoutineWidgetContent.Journeys(fastest, alternative),
-        lineDesignation = fastest.lineDesignation,
-        transportMode = fastest.transportMode,
+        content = RoutineWidgetContent.Journeys(primary, secondary),
+        lineDesignation = primary.lineDesignation,
+        transportMode = primary.transportMode,
     )
 
     @Test
-    fun `both fastest and alternative current -- model returned unchanged`() {
-        val fastest = journeyRow(resolveNow.plusSeconds(60), lineDesignation = "14", transportMode = TransportMode.BUS)
-        val alternative = journeyRow(resolveNow.plusSeconds(120), lineDesignation = "57", transportMode = TransportMode.METRO)
-        val model = journeysModel(fastest, alternative)
+    fun `both primary and secondary current -- model returned unchanged`() {
+        val primary = journeyRow(resolveNow.plusSeconds(60), lineDesignation = "14", transportMode = TransportMode.BUS)
+        val secondary = journeyRow(resolveNow.plusSeconds(120), lineDesignation = "57", transportMode = TransportMode.METRO, role = JourneyRole.NEXT)
+        val model = journeysModel(primary, secondary)
 
         val resolved = resolveEffectiveModel(model, resolveNow)
 
@@ -168,36 +171,60 @@ class BlickRoutineWidgetTest {
     }
 
     @Test
-    fun `only fastest current -- alternative is dropped, header keeps the fastest's own line`() {
-        val fastest = journeyRow(resolveNow.plusSeconds(60), lineDesignation = "14", transportMode = TransportMode.BUS)
-        val expiredAlternative = journeyRow(resolveNow.minusSeconds(1), lineDesignation = "57", transportMode = TransportMode.METRO)
-        val model = journeysModel(fastest, expiredAlternative)
+    fun `only primary current -- secondary is dropped, header keeps the primary's own line`() {
+        val primary = journeyRow(resolveNow.plusSeconds(60), lineDesignation = "14", transportMode = TransportMode.BUS)
+        val expiredSecondary = journeyRow(resolveNow.minusSeconds(1), lineDesignation = "57", transportMode = TransportMode.METRO, role = JourneyRole.NEXT)
+        val model = journeysModel(primary, expiredSecondary)
 
         val resolved = resolveEffectiveModel(model, resolveNow)
 
-        assertEquals(RoutineWidgetContent.Journeys(fastest, null), resolved.content)
+        assertEquals(RoutineWidgetContent.Journeys(primary, null), resolved.content)
         assertEquals("14", resolved.lineDesignation)
         assertEquals(TransportMode.BUS, resolved.transportMode)
     }
 
     @Test
-    fun `only alternative current -- promoted into the fastest slot and drives the header badge`() {
-        val expiredFastest = journeyRow(resolveNow.minusSeconds(1), lineDesignation = "14", transportMode = TransportMode.BUS)
-        val alternative = journeyRow(resolveNow.plusSeconds(120), lineDesignation = "57", transportMode = TransportMode.METRO)
-        val model = journeysModel(expiredFastest, alternative)
+    fun `only secondary current -- promoted into the primary slot and drives the header badge`() {
+        val expiredPrimary = journeyRow(resolveNow.minusSeconds(1), lineDesignation = "14", transportMode = TransportMode.BUS)
+        val secondary = journeyRow(resolveNow.plusSeconds(120), lineDesignation = "57", transportMode = TransportMode.METRO, role = JourneyRole.NEXT)
+        val model = journeysModel(expiredPrimary, secondary)
 
         val resolved = resolveEffectiveModel(model, resolveNow)
 
-        assertEquals(RoutineWidgetContent.Journeys(alternative, null), resolved.content)
+        assertEquals(RoutineWidgetContent.Journeys(secondary, null), resolved.content)
         assertEquals("57", resolved.lineDesignation)
         assertEquals(TransportMode.METRO, resolved.transportMode)
     }
 
     @Test
+    fun `a promoted NEXT row keeps its own real role -- promotion never silently rewrites it to PRIMARY`() {
+        val expiredPrimary = journeyRow(resolveNow.minusSeconds(1), role = JourneyRole.PRIMARY)
+        val next = journeyRow(resolveNow.plusSeconds(120), role = JourneyRole.NEXT)
+        val model = journeysModel(expiredPrimary, next)
+
+        val resolved = resolveEffectiveModel(model, resolveNow)
+
+        val promoted = (resolved.content as RoutineWidgetContent.Journeys).primary
+        assertEquals(JourneyRole.NEXT, promoted.role)
+    }
+
+    @Test
+    fun `a promoted ALTERNATIVE row keeps its own real role -- promotion never silently rewrites it to PRIMARY`() {
+        val expiredPrimary = journeyRow(resolveNow.minusSeconds(1), role = JourneyRole.PRIMARY)
+        val alternative = journeyRow(resolveNow.plusSeconds(120), role = JourneyRole.ALTERNATIVE)
+        val model = journeysModel(expiredPrimary, alternative)
+
+        val resolved = resolveEffectiveModel(model, resolveNow)
+
+        val promoted = (resolved.content as RoutineWidgetContent.Journeys).primary
+        assertEquals(JourneyRole.ALTERNATIVE, promoted.role)
+    }
+
+    @Test
     fun `neither current -- falls back to Unavailable with no line badge`() {
-        val expiredFastest = journeyRow(resolveNow.minusSeconds(1), lineDesignation = "14")
-        val expiredAlternative = journeyRow(resolveNow.minusSeconds(1), lineDesignation = "57")
-        val model = journeysModel(expiredFastest, expiredAlternative)
+        val expiredPrimary = journeyRow(resolveNow.minusSeconds(1), lineDesignation = "14")
+        val expiredSecondary = journeyRow(resolveNow.minusSeconds(1), lineDesignation = "57", role = JourneyRole.NEXT)
+        val model = journeysModel(expiredPrimary, expiredSecondary)
 
         val resolved = resolveEffectiveModel(model, resolveNow)
 
@@ -206,9 +233,9 @@ class BlickRoutineWidgetTest {
     }
 
     @Test
-    fun `an expired fastest with no alternative to promote also falls back to Unavailable`() {
-        val expiredFastest = journeyRow(resolveNow.minusSeconds(1))
-        val model = journeysModel(expiredFastest, null)
+    fun `an expired primary with no secondary to promote also falls back to Unavailable`() {
+        val expiredPrimary = journeyRow(resolveNow.minusSeconds(1))
+        val model = journeysModel(expiredPrimary, null)
 
         val resolved = resolveEffectiveModel(model, resolveNow)
 
@@ -218,12 +245,12 @@ class BlickRoutineWidgetTest {
 
     @Test
     fun `a departure exactly at now is still current, not yet dropped`() {
-        val fastest = journeyRow(resolveNow)
-        val model = journeysModel(fastest, null)
+        val primary = journeyRow(resolveNow)
+        val model = journeysModel(primary, null)
 
         val resolved = resolveEffectiveModel(model, resolveNow)
 
-        assertEquals(RoutineWidgetContent.Journeys(fastest, null), resolved.content)
+        assertEquals(RoutineWidgetContent.Journeys(primary, null), resolved.content)
     }
 
     @Test

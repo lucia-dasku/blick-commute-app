@@ -23,18 +23,85 @@ Resolves a user-entered stop/location through Journey Planner Stop Finder and re
 global identifiers plus display names. Android must persist these identifiers; SL Transport's
 numeric site IDs are not assumed to be compatible.
 
-### `GET /api/v1/journeys?originId=&destinationId=&transportModes=METRO,TRAIN,BUS`
+### `GET /api/v1/journeys?originId=&destinationId=&transportModes=METRO,TRAIN,BUS&searchUntil=`
 
-Calls Journey Planner Trips with `route_type=leasttime`, normalizes complete legs, first public
-transport mode/line, departure and final arrival, transfer count, realtime flags, stop names and
-disruptions, and maps the requested allow-list to SL's `incl_mot_*` parameters. Walking transfer
-legs are always permitted; a journey using any unselected public mode is rejected defensively.
-Results are sorted by final arrival and contain the fastest journey plus, when SL supplies one,
-the earliest journey with a different public-transport mode combination. A later departure using
-the same modes is not mislabeled as an alternative. `transportModes` defaults to all regular modes
-for backward compatibility and rejects empty or unsupported selections. Upstream timeout/network/
-schema failures retain the existing error-envelope behavior. Responses are public-cacheable for
-30 seconds so app/detail/widget consumers do not independently amplify upstream traffic.
+Calls Journey Planner Trips, normalizes complete legs (first public transport mode/line,
+departure and final arrival, transfer count, realtime flags, stop names, disruptions, and each
+leg's own canonicalized stop-area sequence — see `backend/src/domain/routePattern.ts`), and maps
+the requested allow-list to SL's `incl_mot_*` parameters. Walking transfer legs are always
+permitted; a journey using any unselected public mode is rejected defensively. `transportModes`
+defaults to all regular modes for backward compatibility and rejects empty or unsupported
+selections. `searchUntil` (an ISO-8601 instant) bounds how far forward the backend's own targeted
+acquisition may search for NEXT/ALTERNATIVE; a malformed value is a validation error, but an
+absent one is not — it means "answer from the initial acquisition alone", never an invented search
+horizon. Upstream timeout/network/schema failures retain the existing error-envelope behavior.
+Responses are public-cacheable for 30 seconds so app/detail/widget consumers do not independently
+amplify upstream traffic.
+
+Each returned journey carries a `role` of `PRIMARY`, `NEXT`, or `ALTERNATIVE` — Android renders
+off this field and never infers a role from list position (see `backend/src/routes/journeys.ts`'s
+own doc for the full model):
+
+- Two journeys are **route-compatible** when their public-transport legs structurally match — same
+  leg count, same transport mode per leg, same boarding/alighting stop per leg (canonical
+  stop-area id, not platform id, so a platform change alone never breaks compatibility), and stop
+  sequences that are either identical or one an ordered subsequence of the other (a local/express
+  pair, or a different line through the same corridor). Line designation is never compared. This
+  is a pairwise "is this candidate a legitimate stand-in for PRIMARY" check, not a globally
+  transitive equivalence class (see `backend/src/domain/routePattern.ts`'s own doc for a
+  counterexample) — Blick only ever asks it about one candidate against the current PRIMARY.
+- PRIMARY and NEXT are selected directly from the full eligible candidate pool, deliberately
+  WITHOUT a Pareto-dominance pass first — dominance and "soonest compatible departure" are
+  different questions, and filtering globally can silently eliminate the correct NEXT (see
+  `backend/src/domain/journeyRoles.ts`'s own doc for the two concrete failure modes this avoids).
+  Dominance is applied only once, scoped to the candidates that already structurally qualify as
+  ALTERNATIVE (see below): journey B is discarded when another qualifying journey A is no worse on
+  departure time (a *later* departure counts as no worse when arrival is no later), final arrival,
+  transfer count, and total walking duration, and strictly better on at least one — never a
+  minute-based "is this close enough" threshold. Walking participates in that comparison only when
+  BOTH candidates have a known walking duration; if either side's is unknown (SL didn't report
+  one), dominance is never established between them at all, on any dimension — an unknown value is
+  never treated as zero, as equal, or as automatically no worse.
+- **PRIMARY** is the current regular route's own next departure — deterministic lexicographic
+  order (earliest arrival, then fewer transfers, then less known walking, then a later departure,
+  then journey id), never a weighted score.
+- **NEXT** is the earliest still-current departure route-compatible with PRIMARY that departs after
+  it; two candidates departing at exactly the same effective instant are broken by the same
+  earliest-arrival/fewer-transfers/less-known-walking order, then journey id — never by journey id
+  alone. SL only ever returns up to 3 trips per request, so when NEXT isn't in the initial batch
+  the backend issues further, narrower requests (anchored just after PRIMARY's own departure,
+  restricted to its own route's transport modes and transfer count) until NEXT is found,
+  `searchUntil` is reached, or SL can make no further forward progress. A batch that merely repeats
+  an already-seen set of journeys never stops this on its own — SL is a best-match proposal
+  service, not exhaustive pagination, so a repeated response doesn't prove a further request
+  couldn't still expose something new; only reaching the boundary, an outright empty response, a
+  lack of forward progress, or the shared per-request upstream budget being spent ends the search.
+- **ALTERNATIVE** is a useful journey that is NOT route-compatible with PRIMARY, that departs after
+  PRIMARY, before NEXT, and arrives strictly before NEXT's own arrival — only ever searched for
+  once both PRIMARY and NEXT are known, using the same targeted-acquisition strategy. A compatible
+  journey discovered during that search is never treated as an alternative; it reclassifies NEXT
+  (and the interval still being searched) before alternative candidates are evaluated again.
+- Every candidate the backend has ever seen for one request is kept as a single pool entry per
+  journey id, holding the MOST RECENTLY returned representation of it — a later batch's updated
+  realtime data (a delayed departure, a revised arrival estimate, a changed transfer count)
+  replaces what an earlier batch reported, rather than the first observation being kept forever.
+  PRIMARY, NEXT, and ALTERNATIVE are all re-derived from scratch after every batch, so an update to
+  a journey already in the pool can change any of the three roles exactly as a brand-new discovery
+  could — including PRIMARY itself. If that happens mid-search, the NEXT/ALTERNATIVE search
+  in flight (which was targeted to the OLD PRIMARY's own transport modes/transfer count) is
+  abandoned and restarted against the new PRIMARY, never left running against a journey that is no
+  longer current (see `backend/src/routes/journeys.ts`'s own `resolveSelection` doc for the exact
+  state machine). This retargeting draws from the same shared upstream request budget as everything
+  else — it cannot itself cause unbounded requests.
+- The backend logs one structured `journey_acquisition_metrics` line per request (SL call counts
+  broken down by phase, whether PRIMARY retargeted, whether the budget was exhausted) purely for
+  operational visibility. It carries no station names, stop ids, or journey payloads, and is never
+  part of the response body.
+
+A response therefore contains `PRIMARY` alone, `PRIMARY, NEXT`, or `PRIMARY, ALTERNATIVE, NEXT`
+(in that departure order) — never an unrelated journey mislabelled `NEXT` merely to fill a second
+slot, and never more than one upstream request in the common case where PRIMARY and NEXT are both
+already in the initial batch and no alternative exists to find.
 
 ## 1. Upstream architecture
 

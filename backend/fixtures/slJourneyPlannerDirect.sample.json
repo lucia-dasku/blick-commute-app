@@ -13,6 +13,7 @@
             "id": "9025001000002012",
             "name": "Slussen, Stockholm",
             "type": "platform",
+            "parent": { "id": "9021001000002000", "name": "Slussen, Stockholm", "type": "stop" },
             "departureTimePlanned": "2026-08-10T16:22:00Z",
             "departureTimeEstimated": "2026-08-10T16:21:42Z"
           },
@@ -20,6 +21,7 @@
             "id": "9025001000002512",
             "name": "Mariatorget, Stockholm",
             "type": "platform",
+            "parent": { "id": "9021001000002500", "name": "Mariatorget, Stockholm", "type": "stop" },
             "arrivalTimePlanned": "2026-08-10T16:23:18Z",
             "arrivalTimeEstimated": "2026-08-10T16:22:24Z"
           },
@@ -33,7 +35,25 @@
           },
           "properties": { "tripId": "9015001001420696" },
           "realtimeStatus": ["MONITORED"],
-          "isRealtimeControlled": true
+          "isRealtimeControlled": true,
+          "stopSequence": [
+            {
+              "id": "9025001000002012",
+              "name": "Slussen, Stockholm",
+              "type": "platform",
+              "parent": { "id": "9021001000002000", "name": "Slussen, Stockholm", "type": "stop" },
+              "departureTimePlanned": "2026-08-10T16:22:00Z",
+              "departureTimeEstimated": "2026-08-10T16:21:42Z"
+            },
+            {
+              "id": "9025001000002512",
+              "name": "Mariatorget, Stockholm",
+              "type": "platform",
+              "parent": { "id": "9021001000002500", "name": "Mariatorget, Stockholm", "type": "stop" },
+              "arrivalTimePlanned": "2026-08-10T16:23:18Z",
+              "arrivalTimeEstimated": "2026-08-10T16:22:24Z"
+            }
+          ]
         }
       ]
     },
@@ -46,15 +66,17 @@
           "infos": [],
           "duration": 50,
           "origin": {
-            "id": "9025001000002012",
+            "id": "9025001000002013",
             "name": "Slussen, Stockholm",
             "type": "platform",
+            "parent": { "id": "9021001000002000", "name": "Slussen, Stockholm", "type": "stop" },
             "departureTimePlanned": "2026-08-10T16:24:00Z"
           },
           "destination": {
             "id": "9025001000002512",
             "name": "Mariatorget, Stockholm",
             "type": "platform",
+            "parent": { "id": "9021001000002500", "name": "Mariatorget, Stockholm", "type": "stop" },
             "arrivalTimePlanned": "2026-08-10T16:25:30Z"
           },
           "transportation": {
@@ -64,7 +86,23 @@
             "product": { "id": 8, "class": 2, "name": "Tunnelbana" },
             "destination": { "id": "18002861", "name": "Norsborg", "type": "stop" }
           },
-          "properties": { "tripId": "9015001001320697" }
+          "properties": { "tripId": "9015001001320697" },
+          "stopSequence": [
+            {
+              "id": "9025001000002013",
+              "name": "Slussen, Stockholm",
+              "type": "platform",
+              "parent": { "id": "9021001000002000", "name": "Slussen, Stockholm", "type": "stop" },
+              "departureTimePlanned": "2026-08-10T16:24:00Z"
+            },
+            {
+              "id": "9025001000002512",
+              "name": "Mariatorget, Stockholm",
+              "type": "platform",
+              "parent": { "id": "9021001000002500", "name": "Mariatorget, Stockholm", "type": "stop" },
+              "arrivalTimePlanned": "2026-08-10T16:25:30Z"
+            }
+          ]
         }
       ]
     },
@@ -80,12 +118,14 @@
             "id": "9025001000002012",
             "name": "Slussen, Stockholm",
             "type": "platform",
+            "parent": { "id": "9021001000002000", "name": "Slussen, Stockholm", "type": "stop" },
             "departureTimePlanned": "2026-08-10T16:26:00Z"
           },
           "destination": {
             "id": "9025001000002512",
             "name": "Mariatorget, Stockholm",
             "type": "platform",
+            "parent": { "id": "9021001000002500", "name": "Mariatorget, Stockholm", "type": "stop" },
             "arrivalTimePlanned": "2026-08-10T16:27:45Z"
           },
           "transportation": {
@@ -95,7 +135,23 @@
             "product": { "id": 8, "class": 2, "name": "Tunnelbana" },
             "destination": { "id": "18002851", "name": "Fruängen", "type": "stop" }
           },
-          "properties": { "tripId": "9015001001420698" }
+          "properties": { "tripId": "9015001001420698" },
+          "stopSequence": [
+            {
+              "id": "9025001000002012",
+              "name": "Slussen, Stockholm",
+              "type": "platform",
+              "parent": { "id": "9021001000002000", "name": "Slussen, Stockholm", "type": "stop" },
+              "departureTimePlanned": "2026-08-10T16:26:00Z"
+            },
+            {
+              "id": "9025001000002512",
+              "name": "Mariatorget, Stockholm",
+              "type": "platform",
+              "parent": { "id": "9021001000002500", "name": "Mariatorget, Stockholm", "type": "stop" },
+              "arrivalTimePlanned": "2026-08-10T16:27:45Z"
+            }
+          ]
         }
       ]
     }

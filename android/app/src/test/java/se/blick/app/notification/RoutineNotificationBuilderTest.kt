@@ -20,6 +20,7 @@ import org.robolectric.annotation.Config
 import se.blick.app.MainActivity
 import se.blick.app.R
 import se.blick.app.domain.model.DisruptionEffect
+import se.blick.app.domain.model.JourneyRole
 import se.blick.app.ui.screens.routinedetails.formatDepartureTime
 import java.time.Instant
 import java.util.Locale
@@ -77,7 +78,8 @@ class RoutineNotificationBuilderTest {
         minutesRemaining: Long = 4,
         isRealTime: Boolean = true,
         isCancelled: Boolean = false,
-    ) = NotificationDepartureRow(lineDesignation, destinationLabel, effectiveTime, minutesRemaining, isRealTime, isCancelled)
+        journeyRole: JourneyRole? = null,
+    ) = NotificationDepartureRow(lineDesignation, destinationLabel, effectiveTime, minutesRemaining, isRealTime, isCancelled, journeyRole)
 
     // ---- Channel ----
 
@@ -327,6 +329,77 @@ class RoutineNotificationBuilderTest {
             ),
         )
         assertEquals(context.getString(R.string.notification_next_departure_cancelled), bigTextLines(notification)[1])
+    }
+
+    // ---- Second-row wording depends on JourneyRole (exact-destination only) ----
+
+    @Test
+    fun `a NEXT-role second departure keeps the existing Next wording`() {
+        val notification = builder.build(
+            model(
+                content = RoutineNotificationContent.Live(
+                    listOf(sampleRow(), sampleRow(minutesRemaining = 18, journeyRole = JourneyRole.NEXT)),
+                ),
+            ),
+        )
+        assertEquals(context.getString(R.string.notification_next_departure_format, 18L), bigTextLines(notification)[1])
+    }
+
+    @Test
+    fun `an ALTERNATIVE-role second departure visibly says Alternative, not Next`() {
+        val notification = builder.build(
+            model(
+                content = RoutineNotificationContent.Live(
+                    listOf(sampleRow(), sampleRow(minutesRemaining = 18, journeyRole = JourneyRole.ALTERNATIVE)),
+                ),
+            ),
+        )
+        assertEquals(context.getString(R.string.notification_alternative_departure_format, 18L), bigTextLines(notification)[1])
+    }
+
+    @Test
+    fun `a row carrying ALTERNATIVE because it was restored from a stale snapshot still renders Alternative, not Next`() {
+        // NotificationDepartureRow.journeyRole doesn't know or care whether it came from a
+        // live fetch or a restored StaleSnapshotMappers.kt round-trip -- the whole point of
+        // persisting the role there is that this rendering decision needs no special case
+        // for "stale" at all. See RoomStaleSnapshotRepositoryTest's own round-trip tests for
+        // the persistence half of this guarantee.
+        val restoredFromStaleSnapshot = sampleRow(minutesRemaining = 18, journeyRole = JourneyRole.ALTERNATIVE)
+        val notification = builder.build(
+            model(
+                content = RoutineNotificationContent.Stale(
+                    departures = listOf(sampleRow(), restoredFromStaleSnapshot),
+                    lastCheckedAt = now,
+                ),
+            ),
+        )
+        // expandedLines: [staleWarning, primaryLine, secondLine, lastCheckedLine] -- see
+        // applyContent's own Stale branch.
+        assertEquals(context.getString(R.string.notification_alternative_departure_format, 18L), bigTextLines(notification)[2])
+    }
+
+    @Test
+    fun `a cancelled ALTERNATIVE second departure shows a distinct Alternative Cancelled line, not Next Cancelled`() {
+        val notification = builder.build(
+            model(
+                content = RoutineNotificationContent.Live(
+                    listOf(sampleRow(), sampleRow(isCancelled = true, minutesRemaining = 18, journeyRole = JourneyRole.ALTERNATIVE)),
+                ),
+            ),
+        )
+        assertEquals(context.getString(R.string.notification_alternative_departure_cancelled), bigTextLines(notification)[1])
+    }
+
+    @Test
+    fun `a second departure with no role at all (the ordinary LINE_DIRECTION path) keeps the existing Next wording, unchanged`() {
+        val notification = builder.build(
+            model(
+                content = RoutineNotificationContent.Live(
+                    listOf(sampleRow(), sampleRow(minutesRemaining = 18, journeyRole = null)),
+                ),
+            ),
+        )
+        assertEquals(context.getString(R.string.notification_next_departure_format, 18L), bigTextLines(notification)[1])
     }
 
     // ---- Distinct state content ----

@@ -2470,13 +2470,17 @@ class RoutineDetailsViewModelTest {
      * scenario [RoutineDetailsUiState.journeysEvaluatedAt] exists to make observable. */
     private class FixedJourneyRepository(private val journeys: List<JourneyPlan>) : JourneyRepository {
         var callCount = 0
+        var receivedSearchUntil: Instant? = null
+            private set
         override suspend fun searchLocations(query: String): List<JourneyLocation> = emptyList()
         override suspend fun getJourneys(
             originId: String,
             destinationId: String,
             allowedTransportModes: Set<TransportMode>,
+            searchUntil: Instant?,
         ): List<JourneyPlan> {
             callCount++
+            receivedSearchUntil = searchUntil
             return journeys
         }
     }
@@ -2501,6 +2505,141 @@ class RoutineDetailsViewModelTest {
         )
         JourneyPlan(id, "Fruängen", "Arlanda", departure, departure.plusSeconds(600), 0, leg, listOf(leg), emptyList())
     }
+
+    @Test
+    fun `loadJourneys passes this routine's own current-occurrence windowEnd as searchUntil, derived from NextOccurrenceCalculator`() =
+        runTest(dispatcher) {
+            // Monday 07:00-09:00 local, evaluated while the window is already active (08:00
+            // local) -- windowEnd resolves to 09:00 local = 07:00:00Z at a fixed +02:00 offset.
+            val fixedZone = ZoneOffset.of("+02:00")
+            val testClock = SettableClock(Instant.parse("2026-07-27T06:00:00Z"), ZoneOffset.UTC) // Monday 08:00 local
+            val routine = exactDestinationRoutine().copy(
+                activeDays = setOf(DayOfWeek.MONDAY),
+                startTime = LocalTime.of(7, 0),
+                endTime = LocalTime.of(9, 0),
+            )
+            val journeyRepository = FixedJourneyRepository(listOf(journeyPlan("journey-1", Instant.parse("2026-07-27T06:05:00Z"))))
+            val getRankedJourneys = GetRankedJourneysUseCase(journeyRepository, testClock)
+
+            val vm = viewModel(
+                routine = routine,
+                routines = FakeRoutineRepository(routine),
+                clock = testClock,
+                deviceZoneProvider = DeviceZoneProvider { fixedZone },
+                getRankedJourneys = getRankedJourneys,
+            )
+            dispatcher.scheduler.advanceUntilIdle()
+
+            assertEquals(Instant.parse("2026-07-27T07:00:00Z"), journeyRepository.receivedSearchUntil)
+        }
+
+    @Test
+    fun `loadJourneys passes null searchUntil for an Upcoming occurrence -- a future occurrence's own windowEnd is never combined with now`() =
+        runTest(dispatcher) {
+            // Routine only active on Tuesdays; "today" (the fixed clock) is Monday, so
+            // NextOccurrenceCalculator resolves to Upcoming (next Tuesday), never ActiveNow.
+            // The backend always searches from ITS OWN current time, so a future occurrence's
+            // windowEnd is not a valid boundary for a search starting now.
+            val testClock = SettableClock(Instant.parse("2026-07-27T06:00:00Z"), ZoneOffset.UTC) // Monday 06:00 UTC
+            val routine = exactDestinationRoutine().copy(
+                activeDays = setOf(DayOfWeek.TUESDAY),
+                startTime = LocalTime.of(7, 0),
+                endTime = LocalTime.of(9, 0),
+            )
+            val journeyRepository = FixedJourneyRepository(listOf(journeyPlan("journey-1", Instant.parse("2026-07-28T07:05:00Z"))))
+            val getRankedJourneys = GetRankedJourneysUseCase(journeyRepository, testClock)
+
+            val vm = viewModel(
+                routine = routine,
+                routines = FakeRoutineRepository(routine),
+                clock = testClock,
+                deviceZoneProvider = DeviceZoneProvider { ZoneOffset.UTC },
+                getRankedJourneys = getRankedJourneys,
+            )
+            dispatcher.scheduler.advanceUntilIdle()
+
+            assertNull(journeyRepository.receivedSearchUntil)
+        }
+
+    @Test
+    fun `loadJourneys passes null searchUntil when the routine has no eligible occurrence at all`() =
+        runTest(dispatcher) {
+            val testClock = SettableClock(Instant.parse("2026-07-27T06:00:00Z"), ZoneOffset.UTC)
+            val routine = exactDestinationRoutine().copy(activeDays = emptySet())
+            val journeyRepository = FixedJourneyRepository(listOf(journeyPlan("journey-1", Instant.parse("2026-07-28T07:05:00Z"))))
+            val getRankedJourneys = GetRankedJourneysUseCase(journeyRepository, testClock)
+
+            val vm = viewModel(
+                routine = routine,
+                routines = FakeRoutineRepository(routine),
+                clock = testClock,
+                deviceZoneProvider = DeviceZoneProvider { ZoneOffset.UTC },
+                getRankedJourneys = getRankedJourneys,
+            )
+            dispatcher.scheduler.advanceUntilIdle()
+
+            assertNull(journeyRepository.receivedSearchUntil)
+        }
+
+    @Test
+    fun `loadJourneys passes null searchUntil when today's occurrence is paused, correctly pushing to an Upcoming next-eligible day`() =
+        runTest(dispatcher) {
+            // Routine active only on Mondays, paused for today (Monday) -- excludedDate
+            // correctly pushes the next eligible occurrence to next Monday, which is Upcoming,
+            // not ActiveNow. Proves the exclusion logic and the new null-for-Upcoming rule
+            // compose correctly, not just each in isolation.
+            val today = LocalDate.parse("2026-07-27") // a Monday
+            val testClock = SettableClock(Instant.parse("2026-07-27T06:00:00Z"), ZoneOffset.UTC)
+            val routine = exactDestinationRoutine().copy(
+                activeDays = setOf(DayOfWeek.MONDAY),
+                startTime = LocalTime.of(7, 0),
+                endTime = LocalTime.of(9, 0),
+                pausedDate = today,
+            )
+            val journeyRepository = FixedJourneyRepository(listOf(journeyPlan("journey-1", Instant.parse("2026-08-03T07:05:00Z"))))
+            val getRankedJourneys = GetRankedJourneysUseCase(journeyRepository, testClock)
+
+            val vm = viewModel(
+                routine = routine,
+                routines = FakeRoutineRepository(routine),
+                clock = testClock,
+                deviceZoneProvider = DeviceZoneProvider { ZoneOffset.UTC },
+                getRankedJourneys = getRankedJourneys,
+            )
+            dispatcher.scheduler.advanceUntilIdle()
+
+            assertNull(journeyRepository.receivedSearchUntil)
+        }
+
+    @Test
+    fun `loadJourneys passes the DST-correct ActiveNow window end as searchUntil across the 2026 spring-forward transition`() =
+        runTest(dispatcher) {
+            // Europe/Stockholm clocks jump 02:00 CET -> 03:00 CEST on 2026-03-29. A 01:00-04:00
+            // local window straddles the gap; ZonedDateTime.of resolves 04:00 local to its
+            // correct real instant (04:00 CEST = 02:00Z) regardless -- this fix only changes
+            // the Upcoming/None branches, so ActiveNow's own DST handling must still be exact.
+            val transitionDate = LocalDate.parse("2026-03-29")
+            val stockholmZone = ZoneId.of("Europe/Stockholm")
+            val testClock = SettableClock(Instant.parse("2026-03-29T00:30:00Z"), ZoneOffset.UTC) // 01:30 CET local, before the gap
+            val routine = exactDestinationRoutine().copy(
+                activeDays = setOf(transitionDate.dayOfWeek),
+                startTime = LocalTime.of(1, 0),
+                endTime = LocalTime.of(4, 0),
+            )
+            val journeyRepository = FixedJourneyRepository(listOf(journeyPlan("journey-1", Instant.parse("2026-03-29T00:35:00Z"))))
+            val getRankedJourneys = GetRankedJourneysUseCase(journeyRepository, testClock)
+
+            val vm = viewModel(
+                routine = routine,
+                routines = FakeRoutineRepository(routine),
+                clock = testClock,
+                deviceZoneProvider = DeviceZoneProvider { stockholmZone },
+                getRankedJourneys = getRankedJourneys,
+            )
+            dispatcher.scheduler.advanceUntilIdle()
+
+            assertEquals(Instant.parse("2026-03-29T02:00:00Z"), journeyRepository.receivedSearchUntil)
+        }
 
     @Test
     fun `journeysEvaluatedAt advances on an identical automatic refresh, and the countdown-relevant timestamp reflects it`() =

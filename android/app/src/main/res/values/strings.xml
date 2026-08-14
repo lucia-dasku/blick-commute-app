@@ -47,10 +47,6 @@
          RoutineCreateViewModel.retryScheduling/RoutineDetailsViewModel.retryScheduling's own docs. -->
     <string name="action_retry">Try again</string>
 
-    <!-- routine_details_title is the top app bar's own page title, deliberately short; the
-         body's own section heading below it says the fuller "Routine details" instead, so the
-         two are separate strings even though they used to be the same text. -->
-    <string name="routine_details_title">Routine</string>
     <string name="routine_details_info_heading">Routine details</string>
     <string name="routine_details_mode_label">Transport</string>
     <string name="routine_details_line_label">Line</string>
@@ -68,7 +64,6 @@
     <string name="routine_details_status_disabled">Disabled</string>
     <string name="routine_details_status_paused_today">Paused today</string>
     <string name="routine_details_departures_heading">Next departures</string>
-    <string name="routine_details_journeys_heading">Fastest journeys</string>
     <string name="routine_details_journeys_unavailable">Couldn\'t compare journeys right now.</string>
     <string name="routine_details_no_journeys">No journeys found right now.</string>
     <string name="routine_details_transport_change">Change transport</string>
@@ -77,12 +72,16 @@
     <string name="routine_details_transport_one_required">Select at least one transport type.</string>
     <string name="routine_details_transport_update_failed">Couldn\'t update transport choices. Try again.</string>
     <string name="journey_fastest">FASTEST</string>
+    <string name="journey_next">NEXT</string>
     <string name="journey_alternative">ALTERNATIVE</string>
     <string name="journey_departure_in">in %1$d min</string>
     <string name="journey_direct">Direct</string>
+    <string name="journey_with_changes">With changes</string>
+    <string name="journey_no_direct_available">No direct journey available</string>
     <string name="journey_changes">%1$d changes</string>
     <string name="journey_arrives">Arrives %1$s</string>
     <string name="journey_later">%1$d min later</string>
+    <string name="journey_duration_minutes">%1$d min</string>
     <string name="journey_tap_details">Tap for the complete journey</string>
     <string name="journey_mode_metro">Metro</string>
     <string name="journey_mode_commuter_rail">Commuter rail</string>
@@ -202,8 +201,8 @@
          practicable", see docs/api-contract.md §8), and the one place the privacy policy is
          shown — see docs/api-contract.md §8's own note that this project has no separate
          hosted privacy-policy page. about_action/about_title deliberately keep their original
-         resource names even though the screen now covers more than "about" — same convention
-         as routine_details_title's own doc: renaming an internal id has no user-facing benefit. -->
+         resource names even though the screen now covers more than "about" — renaming an
+         internal id has no user-facing benefit. -->
     <string name="about_action">Settings</string>
     <string name="about_title">Settings</string>
     <!-- Blick's own two explicit language choices — always spelled in their own language
@@ -252,6 +251,11 @@
          notification_next_departure_cancelled instead. -->
     <string name="notification_next_departure_format">Next in %1$d min</string>
     <string name="notification_next_departure_cancelled">Next · Cancelled</string>
+    <!-- Second row when it is a genuinely different route (JourneyRole.ALTERNATIVE), not the
+         same route family's own next departure — visibly says "Alternative" so it is never
+         mistaken for a plain follow-up. -->
+    <string name="notification_alternative_departure_format">Alternative in %1$d min</string>
+    <string name="notification_alternative_departure_cancelled">Alternative · Cancelled</string>
     <string name="notification_loading">Updating departures…</string>
     <string name="notification_last_checked_format">Last checked %1$s</string>
     <!-- Deliberately generic, same rationale as the routine details screen's own error strings:
@@ -327,7 +331,11 @@
     <string name="widget_countdown_minutes_format">%1$d min</string>
     <string name="widget_next_departure_format">Next in %1$d min</string>
     <string name="widget_journey_arrival">Arrives %1$s</string>
-    <string name="widget_journey_alternative">%1$s · in %2$d min · arrives %3$s</string>
+    <!-- Second exact-journey row when it is NEXT: the same route family's own next departure. -->
+    <string name="widget_journey_next">%1$s · in %2$d min · arrives %3$s</string>
+    <!-- Second exact-journey row when it is ALTERNATIVE: a genuinely different route — visibly
+         labelled so it's never mistaken for just another regular departure. -->
+    <string name="widget_journey_alternative">Alternative: %1$s · in %2$d min · arrives %3$s</string>
     <!-- A short, always-visible header marker for RoutineWidgetContent.Stale — shown
          regardless of compact/full layout or whether any stale departure is still upcoming, see
          StaleIndicator's own doc for why this is the one guaranteed place a stale-data warning

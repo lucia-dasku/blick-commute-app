@@ -47,9 +47,10 @@ internal fun decideJourneysWidgetState(
             journey.arrivalTime,
             journey.transferCount,
             journey.firstLeg.isRealtime,
+            journey.role,
         )
     }
-    val fastest = rows.firstOrNull() ?: return RoutineWidgetUiState.ActiveRoutine(
+    val primary = rows.firstOrNull() ?: return RoutineWidgetUiState.ActiveRoutine(
         RoutineWidgetModel(
             routine.id, routine.name, routine.journeyOriginName ?: routine.siteName,
             routine.journeyDestinationName,
@@ -59,8 +60,8 @@ internal fun decideJourneysWidgetState(
     return RoutineWidgetUiState.ActiveRoutine(
         RoutineWidgetModel(
             routine.id, routine.name, routine.journeyOriginName ?: routine.siteName,
-            routine.journeyDestinationName, RoutineWidgetContent.Journeys(fastest, rows.getOrNull(1)),
-            fastest.lineDesignation, fastest.transportMode,
+            routine.journeyDestinationName, RoutineWidgetContent.Journeys(primary, rows.getOrNull(1)),
+            primary.lineDesignation, primary.transportMode,
         ),
     )
 }

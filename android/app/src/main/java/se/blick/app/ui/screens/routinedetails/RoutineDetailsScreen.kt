@@ -27,6 +27,7 @@ import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.filled.Check
 import androidx.compose.material.icons.filled.KeyboardArrowDown
 import androidx.compose.material.icons.filled.KeyboardArrowUp
 import androidx.compose.material.icons.filled.Add
@@ -36,6 +37,8 @@ import androidx.compose.material3.ButtonDefaults
 import androidx.compose.material3.Checkbox
 import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.ExperimentalMaterial3Api
+import androidx.compose.material3.FilterChip
+import androidx.compose.material3.FilterChipDefaults
 import androidx.compose.material3.HorizontalDivider
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
@@ -76,6 +79,7 @@ import se.blick.app.domain.usecase.effectiveFirstDeparture
 import se.blick.app.domain.usecase.filterCurrentJourneys
 import se.blick.app.domain.model.TransportMode
 import se.blick.app.domain.model.JourneyPlan
+import se.blick.app.domain.model.JourneyRole
 import se.blick.app.domain.model.JOURNEY_TRANSPORT_MODE_OPTIONS
 import se.blick.app.domain.model.RoutineType
 import java.time.Duration
@@ -140,7 +144,10 @@ fun RoutineDetailsScreen(
 
     Scaffold(
         topBar = {
-            BlickTopBar(title = stringResource(R.string.routine_details_title), onBack = onBack)
+            // No title -- the journeys/departures heading right below already identifies this
+            // screen by its own route/routine name (see JourneyComparisonSection's own call
+            // site), so a second, generic "Routine" label up here was redundant.
+            BlickTopBar(title = null, onBack = onBack)
         },
     ) { padding ->
         val routine = uiState.routine
@@ -227,6 +234,12 @@ fun RoutineDetailsScreen(
     }
 }
 
+/** "{origin} → {destination}" -- the same pattern the Route detail row further down this screen
+ * already builds (see that row's own comment) -- reused here as the journeys section's own
+ * heading, and shown nowhere near a composable so it doesn't need to be one itself. */
+private fun exactDestinationRouteLabel(routine: CommuteRoutine) =
+    "${routine.journeyOriginName ?: routine.siteName} → ${routine.journeyDestinationName.orEmpty()}"
+
 @Composable
 private fun JourneyComparisonSection(journeys: List<JourneyPlan>, unavailable: Boolean, now: Instant) {
     // Render-time eligibility filter: a journey that was still current when fetched can have
@@ -236,59 +249,151 @@ private fun JourneyComparisonSection(journeys: List<JourneyPlan>, unavailable: B
     // ever being labeled "FASTEST"/"Alternative" or showing its line badge, arrival, changes, or
     // countdown -- countdownMinutes below is therefore never called with a past departure.
     val currentJourneys = journeys.filterCurrentJourneys(now)
-    when {
-        unavailable -> Text(stringResource(R.string.routine_details_journeys_unavailable), color = MaterialTheme.colorScheme.error)
-        currentJourneys.isEmpty() -> Text(stringResource(R.string.routine_details_no_journeys))
-        else -> Column(verticalArrangement = Arrangement.spacedBy(12.dp)) {
-            val fastestArrival = currentJourneys.first().arrivalTime
-            currentJourneys.take(2).forEachIndexed { index, journey ->
-                var expanded by remember(journey.journeyId) { mutableStateOf(false) }
-                Surface(
-                    tonalElevation = if (index == 0) 3.dp else 1.dp,
-                    shape = MaterialTheme.shapes.medium,
-                    modifier = Modifier.fillMaxWidth().clickable { expanded = !expanded },
-                ) {
-                    Column(Modifier.padding(16.dp), verticalArrangement = Arrangement.spacedBy(6.dp)) {
-                        Text(
-                            stringResource(if (index == 0) R.string.journey_fastest else R.string.journey_alternative),
-                            style = MaterialTheme.typography.labelLarge,
-                        )
-                        Row(horizontalArrangement = Arrangement.spacedBy(8.dp), verticalAlignment = Alignment.CenterVertically) {
-                            journey.firstLeg.lineDesignation?.let {
-                                LineBadge(it, journey.firstLeg.transportMode)
-                            }
+
+    // Local, transient UI state -- not persisted on the ViewModel, exactly like each card's own
+    // `expanded` below: which journeys are currently visible is a pure display filter over
+    // `currentJourneys`, not something any other part of the app needs to read. Both default to
+    // selected so the initial view is unfiltered -- identical to `currentJourneys` unfiltered.
+    var showDirect by remember { mutableStateOf(true) }
+    var showWithChanges by remember { mutableStateOf(true) }
+    val filteredJourneys = currentJourneys.filter { journey ->
+        (showDirect && journey.transferCount == 0) || (showWithChanges && journey.transferCount > 0)
+    }
+
+    Column(verticalArrangement = Arrangement.spacedBy(12.dp)) {
+        JourneyFilterRow(
+            showDirect = showDirect,
+            showWithChanges = showWithChanges,
+            // Toggling off the only currently-selected filter is a no-op rather than leaving
+            // both unselected -- an intentionally unreachable "nothing selected" state would
+            // just show the plain no-journeys message below for no discoverable reason, a dead
+            // end no tap could recover from except turning the OTHER filter on first.
+            onToggleDirect = { if (showWithChanges || !showDirect) showDirect = !showDirect },
+            onToggleWithChanges = { if (showDirect || !showWithChanges) showWithChanges = !showWithChanges },
+        )
+        when {
+            unavailable -> Text(stringResource(R.string.routine_details_journeys_unavailable), color = MaterialTheme.colorScheme.error)
+            currentJourneys.isEmpty() -> Text(stringResource(R.string.routine_details_no_journeys))
+            // Only Direct is selected and filtering down to it left nothing -- a distinct,
+            // specific message from the generic no-journeys one below, since the user has
+            // actively asked for direct-only and there is a concrete, actionable fact to state
+            // (changes are available; direct is not), not just "nothing found".
+            filteredJourneys.isEmpty() && showDirect && !showWithChanges ->
+                Text(stringResource(R.string.journey_no_direct_available))
+            filteredJourneys.isEmpty() -> Text(stringResource(R.string.routine_details_no_journeys))
+            else -> Column(verticalArrangement = Arrangement.spacedBy(12.dp)) {
+                val fastestArrival = filteredJourneys.first().arrivalTime
+                // Up to three cards: the backend already caps a routine's own journeys at
+                // PRIMARY + ALTERNATIVE? + NEXT? (see backend/src/routes/journeys.ts's own doc),
+                // so this cap is a defensive backstop, not a UI-driven truncation -- unlike the
+                // old two-card limit, a genuine gap-filling ALTERNATIVE must never push the
+                // regular NEXT departure off screen here (the widget/notification are the
+                // surfaces that only ever want two rows, not this screen -- see their own code).
+                filteredJourneys.take(3).forEachIndexed { index, journey ->
+                    var expanded by remember(journey.journeyId) { mutableStateOf(false) }
+                    Surface(
+                        tonalElevation = if (index == 0) 3.dp else 1.dp,
+                        shape = MaterialTheme.shapes.medium,
+                        modifier = Modifier.fillMaxWidth().clickable { expanded = !expanded },
+                    ) {
+                        Column(Modifier.padding(16.dp), verticalArrangement = Arrangement.spacedBy(6.dp)) {
+                            // Labelled from the journey's OWN role, never list position: the
+                            // Direct/With-changes filters above can leave any single journey as
+                            // the only (and therefore first-shown) card, and it must still say
+                            // what it actually is rather than default to "FASTEST" purely by
+                            // virtue of being shown first (see JourneyFilterRow's own doc, and
+                            // the product spec's "filtering cannot cause misleading role
+                            // labels" requirement).
                             Text(
-                                stringResource(journey.firstLeg.transportMode.journeyLabelResId()),
-                                style = MaterialTheme.typography.titleMedium,
+                                stringResource(
+                                    when (journey.role) {
+                                        JourneyRole.PRIMARY -> R.string.journey_fastest
+                                        JourneyRole.NEXT -> R.string.journey_next
+                                        JourneyRole.ALTERNATIVE -> R.string.journey_alternative
+                                    },
+                                ),
+                                style = MaterialTheme.typography.labelLarge,
                             )
-                            // countdownMinutes, never a floor-based Duration.toMinutes().coerceAtLeast(0):
-                            // that would floor a genuinely-upcoming departure under a minute away down
-                            // to "0 min" (indistinguishable from one that already departed) and would
-                            // hide an already-expired departure as "0 min" rather than it having already
-                            // been removed by the filter above. effectiveFirstDeparture, not the raw
-                            // top-level departureTime, for both this eligibility check and this
-                            // countdown -- see that function's own doc.
-                            val minutes = countdownMinutes(now, journey.effectiveFirstDeparture())
-                            Text(stringResource(R.string.journey_departure_in, minutes), style = MaterialTheme.typography.titleMedium)
-                        }
-                        val changes = if (journey.transferCount == 0) stringResource(R.string.journey_direct)
-                            else stringResource(R.string.journey_changes, journey.transferCount)
-                        val arrival = DateTimeFormatter.ofPattern("HH:mm").withZone(ZoneId.systemDefault()).format(journey.arrivalTime)
-                        val later = Duration.between(fastestArrival, journey.arrivalTime).toMinutes()
-                        Text(if (index == 0) "$changes · ${stringResource(R.string.journey_arrives, arrival)}"
-                            else "$changes · ${stringResource(R.string.journey_arrives, arrival)} · ${stringResource(R.string.journey_later, later)}")
-                        if (expanded) {
-                            journey.legs.forEach { leg ->
-                                Text("${leg.originName} → ${leg.destinationName}${leg.lineDesignation?.let { " · $it" }.orEmpty()}")
-                                leg.disruptions.forEach { Text(it, color = MaterialTheme.colorScheme.error) }
+                            Row(horizontalArrangement = Arrangement.spacedBy(8.dp), verticalAlignment = Alignment.CenterVertically) {
+                                journey.firstLeg.lineDesignation?.let {
+                                    LineBadge(it, journey.firstLeg.transportMode)
+                                }
+                                Text(
+                                    stringResource(journey.firstLeg.transportMode.journeyLabelResId()),
+                                    style = MaterialTheme.typography.titleMedium,
+                                )
+                                // countdownMinutes, never a floor-based Duration.toMinutes().coerceAtLeast(0):
+                                // that would floor a genuinely-upcoming departure under a minute away down
+                                // to "0 min" (indistinguishable from one that already departed) and would
+                                // hide an already-expired departure as "0 min" rather than it having already
+                                // been removed by the filter above. effectiveFirstDeparture, not the raw
+                                // top-level departureTime, for both this eligibility check and this
+                                // countdown -- see that function's own doc.
+                                val minutes = countdownMinutes(now, journey.effectiveFirstDeparture())
+                                Text(stringResource(R.string.journey_departure_in, minutes), style = MaterialTheme.typography.titleMedium)
                             }
-                        } else {
-                            Text(stringResource(R.string.journey_tap_details), style = MaterialTheme.typography.bodySmall)
+                            val changes = if (journey.transferCount == 0) stringResource(R.string.journey_direct)
+                                else stringResource(R.string.journey_changes, journey.transferCount)
+                            val arrival = DateTimeFormatter.ofPattern("HH:mm").withZone(ZoneId.systemDefault()).format(journey.arrivalTime)
+                            val later = Duration.between(fastestArrival, journey.arrivalTime).toMinutes()
+                            Text(if (index == 0) "$changes · ${stringResource(R.string.journey_arrives, arrival)}"
+                                else "$changes · ${stringResource(R.string.journey_arrives, arrival)} · ${stringResource(R.string.journey_later, later)}")
+                            if (expanded) {
+                                journey.legs.forEach { leg ->
+                                    Text("${leg.originName} → ${leg.destinationName}${leg.lineDesignation?.let { " · $it" }.orEmpty()}")
+                                    leg.disruptions.forEach { Text(it, color = MaterialTheme.colorScheme.error) }
+                                }
+                            } else {
+                                Text(stringResource(R.string.journey_tap_details), style = MaterialTheme.typography.bodySmall)
+                            }
+                            // Total journey time -- always the true bottom of the card, after the
+                            // expanded leg breakdown or the collapsed "tap for details" hint,
+                            // regardless of which of those two is currently showing. The same
+                            // effectiveFirstDeparture the countdown above is measured from, not
+                            // the raw top-level departureTime, so this duration is consistent
+                            // with the departure this card actually displays.
+                            val durationMinutes = Duration.between(journey.effectiveFirstDeparture(), journey.arrivalTime).toMinutes()
+                            Text(
+                                "⏱ ${stringResource(R.string.journey_duration_minutes, durationMinutes)}",
+                                style = MaterialTheme.typography.bodySmall,
+                                color = MaterialTheme.colorScheme.secondary,
+                            )
                         }
                     }
                 }
             }
         }
+    }
+}
+
+/** Independently toggleable Direct / With changes filters over the journeys
+ * [JourneyComparisonSection] shows -- both default selected (see that composable's own state),
+ * so the initial view is unfiltered. Each chip shows a checkmark while selected, Material3's own
+ * standard [FilterChip] affordance for "this option is currently active". */
+@Composable
+private fun JourneyFilterRow(
+    showDirect: Boolean,
+    showWithChanges: Boolean,
+    onToggleDirect: () -> Unit,
+    onToggleWithChanges: () -> Unit,
+) {
+    Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+        FilterChip(
+            selected = showDirect,
+            onClick = onToggleDirect,
+            label = { Text(stringResource(R.string.journey_direct)) },
+            leadingIcon = if (showDirect) {
+                { Icon(Icons.Filled.Check, contentDescription = null, modifier = Modifier.size(FilterChipDefaults.IconSize)) }
+            } else null,
+        )
+        FilterChip(
+            selected = showWithChanges,
+            onClick = onToggleWithChanges,
+            label = { Text(stringResource(R.string.journey_with_changes)) },
+            leadingIcon = if (showWithChanges) {
+                { Icon(Icons.Filled.Check, contentDescription = null, modifier = Modifier.size(FilterChipDefaults.IconSize)) }
+            } else null,
+        )
     }
 }
 
@@ -374,8 +479,15 @@ internal fun RoutineDetailsContent(
             horizontalArrangement = Arrangement.SpaceBetween,
             verticalAlignment = Alignment.CenterVertically,
         ) {
+            // Exact-destination: the route itself ("{origin} → {destination}") rather than a
+            // generic "Fastest journeys" label -- this is now the first thing identifying which
+            // routine's journeys these are at all, since the top app bar above no longer carries
+            // a title (see BlickTopBar's own call site). LINE_DIRECTION keeps its existing
+            // generic "Next departures" heading -- that type's own route is already named by
+            // routine.name itself, shown nowhere near this heading either way.
             Text(
-                stringResource(if (routine.type == RoutineType.EXACT_DESTINATION) R.string.routine_details_journeys_heading else R.string.routine_details_departures_heading),
+                if (routine.type == RoutineType.EXACT_DESTINATION) exactDestinationRouteLabel(routine)
+                else stringResource(R.string.routine_details_departures_heading),
                 style = MaterialTheme.typography.titleMedium,
             )
             Button(onClick = onRefresh, enabled = !isRefreshing) {
@@ -413,10 +525,8 @@ internal fun RoutineDetailsContent(
 
         // A fixed section heading rather than routine.name -- the routine's own name/route is
         // still fully identifiable below via the Direction row's own "{siteName} → {destination}"
-        // value (see that row's own comment), just no longer repeated up here too. A distinct
-        // string from the top app bar's own routine_details_title (which now just says
-        // "Routine") even though both used to share the same "Routine details" text -- and the
-        // same titleMedium size as this screen's other two section headings ("Next departures",
+        // value (see that row's own comment), just no longer repeated up here too. The same
+        // titleMedium size as this screen's other two section headings ("Next departures",
         // "Manage routine"), rather than the larger headlineSmall inherited from when this line
         // showed the routine's own name as a prominent heading.
         Text(stringResource(R.string.routine_details_info_heading), style = MaterialTheme.typography.titleMedium)

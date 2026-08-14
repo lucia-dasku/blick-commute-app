@@ -16,6 +16,35 @@ data class JourneyLeg(
     val disruptions: List<String>,
 )
 
+/**
+ * A journey's semantic role within its routine's exact-destination result, assigned by the
+ * backend (see `backend/src/routes/journeys.ts`'s own doc) since only it has the full candidate
+ * set -- including targeted follow-up SL searches this app never sees -- needed to compare
+ * journeys structurally (same route family: same transit legs, same transport mode and stops per
+ * leg, regardless of line designation -- see `backend/src/domain/routePattern.ts`) and by Pareto
+ * dominance (see `backend/src/domain/dominance.ts`). [PRIMARY] is the current regular route
+ * family's own departure to catch right now; [NEXT] is the next departure in that SAME route
+ * family if you miss it; [ALTERNATIVE] is a genuinely useful journey from a DIFFERENT route
+ * family that departs after [PRIMARY], before [NEXT], and arrives before [NEXT] does -- never a
+ * fixed minute-based gap or arrival-advantage threshold. Consumers must render off this field,
+ * never off a journey's position within [se.blick.app.domain.usecase.GetRankedJourneysUseCase]'s
+ * result list.
+ */
+enum class JourneyRole { PRIMARY, NEXT, ALTERNATIVE }
+
+/** Defensive, FAIL-CLOSED parse of the backend's own role string. Backend roles are
+ * authoritative (see this enum's own doc) — an invalid, unrecognized, or entirely absent
+ * value must never silently become [JourneyRole.PRIMARY] (or any other specific role):
+ * doing so would let a malformed response — a backend rollout/rollback mismatch, a stale
+ * cached response predating this field, or a genuine bug — render as though it were a
+ * trustworthy PRIMARY departure. Returns `null` for anything that isn't exactly one of
+ * [JourneyRole.entries]'s own names; a caller must treat `null` as "this journey's role
+ * could not be established" and act accordingly — see
+ * [se.blick.app.data.repository.RemoteJourneyRepository], which drops the whole journey
+ * from its mapped result rather than ever inventing a role for it. */
+fun String?.toJourneyRole(): JourneyRole? =
+    this?.let { runCatching { JourneyRole.valueOf(it) }.getOrNull() }
+
 data class JourneyPlan(
     val journeyId: String,
     val originName: String,
@@ -26,4 +55,5 @@ data class JourneyPlan(
     val firstLeg: JourneyLeg,
     val legs: List<JourneyLeg>,
     val disruptions: List<String>,
+    val role: JourneyRole = JourneyRole.PRIMARY,
 )

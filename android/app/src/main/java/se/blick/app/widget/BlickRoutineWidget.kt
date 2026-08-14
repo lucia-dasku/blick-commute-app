@@ -42,6 +42,7 @@ import androidx.glance.text.Text
 import androidx.glance.text.TextStyle
 import androidx.glance.unit.ColorProvider
 import se.blick.app.R
+import se.blick.app.domain.model.JourneyRole
 import se.blick.app.domain.usecase.countdownMinutes
 import se.blick.app.domain.usecase.isDepartureCurrent
 import se.blick.app.locale.withAppLocale
@@ -467,17 +468,19 @@ private fun LineBadge(text: String, color: LineBadgeColor, textSize: TextUnit) {
  * For any [RoutineWidgetContent] other than [RoutineWidgetContent.Journeys] (a LINE_DIRECTION
  * routine, or no active routine at all), [model] is returned completely unchanged.
  *
- * Evaluates [RoutineWidgetContent.Journeys.fastest] and [RoutineWidgetContent.Journeys.alternative]
+ * Evaluates [RoutineWidgetContent.Journeys.primary] and [RoutineWidgetContent.Journeys.secondary]
  * in that existing order via [isDepartureCurrent]:
  * - both current: [model] is returned unchanged.
- * - only [RoutineWidgetContent.Journeys.fastest] current: the alternative is dropped (becomes
- *   null) — never rendered as a secondary journey once it's no longer genuinely valid.
- * - only [RoutineWidgetContent.Journeys.alternative] current: it is PROMOTED into the `fastest`
+ * - only [RoutineWidgetContent.Journeys.primary] current: the secondary row is dropped (becomes
+ *   null) — never rendered as a second journey once it's no longer genuinely valid.
+ * - only [RoutineWidgetContent.Journeys.secondary] current: it is PROMOTED into the `primary`
  *   slot — used for the primary countdown/arrival AND for [RoutineWidgetModel.lineDesignation]/
  *   [RoutineWidgetModel.transportMode] (the header's own line badge), which otherwise still
- *   describe the original, now-expired fastest row (they are set once, at
+ *   describe the original, now-expired primary row (they are set once, at
  *   [decideJourneysWidgetState]'s own write time, and never independently re-derived by anything
- *   downstream) — and is never ALSO shown a second time as its own alternative.
+ *   downstream) — and is never ALSO shown a second time as its own secondary row. Its own
+ *   [WidgetJourneyRow.role] (NEXT or ALTERNATIVE) travels with it unchanged — promotion never
+ *   rewrites a journey's real backend meaning to PRIMARY.
  * - neither current: falls back to [RoutineWidgetContent.Unavailable], with
  *   [RoutineWidgetModel.lineDesignation] cleared to `null` so the header stops rendering a line
  *   badge at all rather than keep showing an expired journey's one over an "unavailable" body.
@@ -489,7 +492,7 @@ private fun LineBadge(text: String, color: LineBadgeColor, textSize: TextUnit) {
 internal fun resolveEffectiveModel(model: RoutineWidgetModel, now: java.time.Instant): RoutineWidgetModel {
     val content = model.content
     if (content !is RoutineWidgetContent.Journeys) return model
-    val current = listOfNotNull(content.fastest, content.alternative).filter { isDepartureCurrent(now, it.departureTime) }
+    val current = listOfNotNull(content.primary, content.secondary).filter { isDepartureCurrent(now, it.departureTime) }
     val primary = current.firstOrNull()
         ?: return model.copy(content = RoutineWidgetContent.Unavailable, lineDesignation = null)
     return model.copy(
@@ -532,42 +535,51 @@ private fun JourneyMainContent(
     // Final render-time eligibility check, using the same isDepartureCurrent building block every
     // other exact-journey consumer shares (see that function's own doc), against the SAME `now`
     // ActiveRoutineContent already resolved this exact row with (see resolveEffectiveModel) --
-    // never re-read here. In normal operation `content.fastest` is therefore already guaranteed
+    // never re-read here. In normal operation `content.primary` is therefore already guaranteed
     // current by construction; this stays a defensive backstop rather than assuming that
-    // guarantee holds regardless of caller. An expired fastest row is never rendered as "0 min" --
+    // guarantee holds regardless of caller. An expired primary row is never rendered as "0 min" --
     // it falls back to the same "unavailable" body text RoutineWidgetContent.Unavailable already
     // uses elsewhere in this file.
-    if (!isDepartureCurrent(now, content.fastest.departureTime)) {
+    if (!isDepartureCurrent(now, content.primary.departureTime)) {
         BodyText(context.getString(R.string.notification_unavailable), tier)
         return
     }
     // countdownMinutes, never a floor-based Duration.toMinutes().coerceAtLeast(0) -- see
     // RoutineDetailsScreen's identical JourneyComparisonSection comment for why. Safe to call
     // unconditionally now: the guard above already refused to reach this line for an expired
-    // fastest departure.
-    val fastestMinutes = countdownMinutes(now, content.fastest.departureTime)
+    // primary departure.
+    val primaryMinutes = countdownMinutes(now, content.primary.departureTime)
     val arrivalFormatter = java.time.format.DateTimeFormatter.ofPattern("HH:mm").withZone(java.time.ZoneId.systemDefault())
     Column(modifier = GlanceModifier.fillMaxWidth()) {
         Text(
-            context.getString(R.string.widget_countdown_minutes_format, fastestMinutes),
+            context.getString(R.string.widget_countdown_minutes_format, primaryMinutes),
             maxLines = 1,
             style = TextStyle(fontWeight = FontWeight.Bold, fontSize = tier.countdownSize, color = onBackgroundColor()),
         )
         Text(
-            context.getString(R.string.widget_journey_arrival, arrivalFormatter.format(content.fastest.arrivalTime)),
+            context.getString(R.string.widget_journey_arrival, arrivalFormatter.format(content.primary.arrivalTime)),
             maxLines = 1,
             style = TextStyle(fontSize = tier.secondarySize, color = onSurfaceVariantColor()),
         )
-        // Same final render-time check applied to the alternative independently -- an expired
-        // alternative is simply omitted (the fastest row above is unaffected), never shown as 0 min.
-        if (!compact) content.alternative
+        // Same final render-time check applied to the secondary row independently -- an expired
+        // one is simply omitted (the primary row above is unaffected), never shown as 0 min.
+        if (!compact) content.secondary
             ?.takeIf { isDepartureCurrent(now, it.departureTime) }
-            ?.let { alternative ->
-                val alternativeMinutes = countdownMinutes(now, alternative.departureTime)
+            ?.let { secondary ->
+                val secondaryMinutes = countdownMinutes(now, secondary.departureTime)
+                // Backend-authoritative role decides the wording -- NEXT (the same route
+                // family's own next departure) reads like a plain continuation of the primary
+                // row, while ALTERNATIVE visibly says so, since it's a genuinely different way
+                // to travel, not just "another one of these." See this row's own R.string docs.
+                val stringRes = if (secondary.role == JourneyRole.ALTERNATIVE) {
+                    R.string.widget_journey_alternative
+                } else {
+                    R.string.widget_journey_next
+                }
                 Spacer(modifier = GlanceModifier.height(8.dp))
                 Text(
-                    context.getString(R.string.widget_journey_alternative, alternative.lineDesignation.orEmpty(), alternativeMinutes,
-                        arrivalFormatter.format(alternative.arrivalTime)),
+                    context.getString(stringRes, secondary.lineDesignation.orEmpty(), secondaryMinutes,
+                        arrivalFormatter.format(secondary.arrivalTime)),
                     maxLines = 1,
                     style = TextStyle(fontSize = tier.secondarySize, color = onSurfaceVariantColor()),
                 )

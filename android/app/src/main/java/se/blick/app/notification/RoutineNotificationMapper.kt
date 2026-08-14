@@ -109,5 +109,6 @@ object RoutineNotificationMapper {
         minutesRemaining = countdownMinutes(now, effectiveTime),
         isRealTime = isRealTime,
         isCancelled = isCancelled,
+        journeyRole = journeyRole,
     )
 }

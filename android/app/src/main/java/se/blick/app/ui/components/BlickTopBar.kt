@@ -24,21 +24,28 @@ import se.blick.app.R
  * [se.blick.app.ui.screens.routinecreate.RoutineCreateScreen]. Never shows a step label or
  * progress bar -- see [BlickWizardHeader] for the routine-creation wizard's own variant of this
  * same visual language (shared [MaterialTheme.typography.titleLarge] title style).
+ *
+ * [title] is nullable -- null renders just `[←]` with no title text at all, for a screen whose
+ * content already identifies itself right below the bar (see
+ * [se.blick.app.ui.screens.routinedetails.RoutineDetailsScreen]'s own call site) and has no
+ * need for a second, generic label above it.
  */
 @Composable
 fun BlickTopBar(
-    title: String,
+    title: String?,
     onBack: (() -> Unit)? = null,
     actions: @Composable RowScope.() -> Unit = {},
 ) {
     TopAppBar(
         title = {
-            Text(
-                text = title,
-                style = MaterialTheme.typography.titleLarge,
-                maxLines = 2,
-                overflow = TextOverflow.Ellipsis,
-            )
+            if (title != null) {
+                Text(
+                    text = title,
+                    style = MaterialTheme.typography.titleLarge,
+                    maxLines = 2,
+                    overflow = TextOverflow.Ellipsis,
+                )
+            }
         },
         navigationIcon = {
             // Omitted (rather than disabled) when there's nothing to go back to -- only

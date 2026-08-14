@@ -44,7 +44,6 @@
     <string name="action_cancel">Avbryt</string>
     <string name="action_retry">Försök igen</string>
 
-    <string name="routine_details_title">Rutin</string>
     <string name="routine_details_info_heading">Rutindetaljer</string>
     <string name="routine_details_mode_label">Transportmedel</string>
     <string name="routine_details_line_label">Linje</string>
@@ -59,7 +58,6 @@
     <string name="routine_details_status_disabled">Inaktiverad</string>
     <string name="routine_details_status_paused_today">Pausad idag</string>
     <string name="routine_details_departures_heading">Nästa avgångar</string>
-    <string name="routine_details_journeys_heading">Snabbaste resorna</string>
     <string name="routine_details_journeys_unavailable">Kunde inte jämföra resor just nu.</string>
     <string name="routine_details_no_journeys">Inga resor hittades just nu.</string>
     <string name="routine_details_transport_change">Ändra färdmedel</string>
@@ -68,12 +66,16 @@
     <string name="routine_details_transport_one_required">Välj minst ett färdmedel.</string>
     <string name="routine_details_transport_update_failed">Kunde inte uppdatera färdmedlen. Försök igen.</string>
     <string name="journey_fastest">SNABBAST</string>
+    <string name="journey_next">NÄSTA</string>
     <string name="journey_alternative">ALTERNATIV</string>
     <string name="journey_departure_in">om %1$d min</string>
     <string name="journey_direct">Direkt</string>
+    <string name="journey_with_changes">Med byten</string>
+    <string name="journey_no_direct_available">Ingen direktresa tillgänglig</string>
     <string name="journey_changes">%1$d byten</string>
     <string name="journey_arrives">Ankomst %1$s</string>
     <string name="journey_later">%1$d min senare</string>
+    <string name="journey_duration_minutes">%1$d min</string>
     <string name="journey_tap_details">Tryck för hela resan</string>
     <string name="journey_mode_metro">Tunnelbana</string>
     <string name="journey_mode_commuter_rail">Pendeltåg</string>
@@ -198,6 +200,8 @@
     <string name="notification_departure_status_format">%1$d min · %2$s</string>
     <string name="notification_next_departure_format">Nästa om %1$d min</string>
     <string name="notification_next_departure_cancelled">Nästa · Inställd</string>
+    <string name="notification_alternative_departure_format">Alternativ om %1$d min</string>
+    <string name="notification_alternative_departure_cancelled">Alternativ · Inställd</string>
     <string name="notification_loading">Uppdaterar avgångar…</string>
     <string name="notification_last_checked_format">Senast kontrollerat: %1$s</string>
     <string name="notification_offline">Kunde inte nå servern. Kan inte uppdatera dina avgångar just nu.</string>
@@ -236,6 +240,7 @@
     <string name="widget_countdown_minutes_format">%1$d min</string>
     <string name="widget_next_departure_format">Nästa om %1$d min</string>
     <string name="widget_journey_arrival">Ankomst %1$s</string>
-    <string name="widget_journey_alternative">%1$s · om %2$d min · ankomst %3$s</string>
+    <string name="widget_journey_next">%1$s · om %2$d min · ankomst %3$s</string>
+    <string name="widget_journey_alternative">Alternativ: %1$s · om %2$d min · ankomst %3$s</string>
     <string name="widget_stale_indicator">Inaktuell</string>
 </resources>

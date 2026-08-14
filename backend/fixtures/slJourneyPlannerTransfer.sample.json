@@ -13,6 +13,7 @@
             "id": "9025001000002012",
             "name": "Slussen, Stockholm",
             "type": "platform",
+            "parent": { "id": "9021001000002000", "name": "Slussen, Stockholm", "type": "stop" },
             "departureTimePlanned": "2026-08-10T16:29:30Z",
             "departureTimeEstimated": "2026-08-10T16:29:24Z"
           },
@@ -20,6 +21,7 @@
             "id": "9025001000003012",
             "name": "Tekniska högskolan, Stockholm",
             "type": "platform",
+            "parent": { "id": "9021001003011000", "name": "Tekniska högskolan, Stockholm", "type": "stop" },
             "arrivalTimePlanned": "2026-08-10T16:38:48Z",
             "arrivalTimeEstimated": "2026-08-10T16:38:00Z"
           },
@@ -29,7 +31,25 @@
             "product": { "id": 8, "class": 2, "name": "Tunnelbana" },
             "destination": { "name": "Mörby centrum", "type": "stop" }
           },
-          "properties": { "tripId": "9015001001420708" }
+          "properties": { "tripId": "9015001001420708" },
+          "stopSequence": [
+            {
+              "id": "9025001000002012",
+              "name": "Slussen, Stockholm",
+              "type": "platform",
+              "parent": { "id": "9021001000002000", "name": "Slussen, Stockholm", "type": "stop" },
+              "departureTimePlanned": "2026-08-10T16:29:30Z",
+              "departureTimeEstimated": "2026-08-10T16:29:24Z"
+            },
+            {
+              "id": "9025001000003012",
+              "name": "Tekniska högskolan, Stockholm",
+              "type": "platform",
+              "parent": { "id": "9021001003011000", "name": "Tekniska högskolan, Stockholm", "type": "stop" },
+              "arrivalTimePlanned": "2026-08-10T16:38:48Z",
+              "arrivalTimeEstimated": "2026-08-10T16:38:00Z"
+            }
+          ]
         },
         {
           "infos": [],
@@ -60,6 +80,7 @@
             "id": "9025001000003111",
             "name": "Stockholms östra, Stockholm",
             "type": "platform",
+            "parent": { "id": "9021001003001000", "name": "Stockholms östra, Stockholm", "type": "stop" },
             "departureTimePlanned": "2026-08-10T16:47:00Z",
             "departureTimeEstimated": "2026-08-10T16:47:00Z"
           },
@@ -67,6 +88,7 @@
             "id": "9025001000009662",
             "name": "Åkersberga, Österåker",
             "type": "platform",
+            "parent": { "id": "9021001000009600", "name": "Åkersberga, Österåker", "type": "stop" },
             "arrivalTimePlanned": "2026-08-10T17:26:00Z",
             "arrivalTimeEstimated": "2026-08-10T17:26:00Z"
           },
@@ -76,7 +98,25 @@
             "product": { "id": 9, "class": 4, "name": "Spårvagn" },
             "destination": { "name": "Österskär", "type": "stop" }
           },
-          "properties": { "tripId": "9015001002808030" }
+          "properties": { "tripId": "9015001002808030" },
+          "stopSequence": [
+            {
+              "id": "9025001000003111",
+              "name": "Stockholms östra, Stockholm",
+              "type": "platform",
+              "parent": { "id": "9021001003001000", "name": "Stockholms östra, Stockholm", "type": "stop" },
+              "departureTimePlanned": "2026-08-10T16:47:00Z",
+              "departureTimeEstimated": "2026-08-10T16:47:00Z"
+            },
+            {
+              "id": "9025001000009662",
+              "name": "Åkersberga, Österåker",
+              "type": "platform",
+              "parent": { "id": "9021001000009600", "name": "Åkersberga, Österåker", "type": "stop" },
+              "arrivalTimePlanned": "2026-08-10T17:26:00Z",
+              "arrivalTimeEstimated": "2026-08-10T17:26:00Z"
+            }
+          ]
         }
       ]
     }

@@ -369,6 +369,7 @@ class RoutineCreateViewModelTest {
             originId: String,
             destinationId: String,
             allowedTransportModes: Set<TransportMode>,
+            searchUntil: Instant?,
         ): List<JourneyPlan> = emptyList()
     }
 

@@ -1,5 +1,6 @@
 package se.blick.app.widget
 
+import se.blick.app.domain.model.JourneyRole
 import se.blick.app.domain.model.TransportMode
 import java.time.Instant
 
@@ -84,7 +85,16 @@ sealed interface RoutineWidgetContent {
      * of being left showing [Loading] forever.
      */
     data object NotificationsUnavailable : RoutineWidgetContent
-    data class Journeys(val fastest: WidgetJourneyRow, val alternative: WidgetJourneyRow?) : RoutineWidgetContent
+
+    /** [primary] is always shown in the main countdown slot; [secondary], when present, is the
+     * second departure line below it — semantically NEXT (the same route family's own next
+     * departure) or ALTERNATIVE (a different, genuinely useful route), never assumed to be one
+     * or the other from its mere presence here. Named `primary`/`secondary` rather than the
+     * previous `fastest`/`alternative`: [secondary] is frequently NEXT, not an alternative at
+     * all, and calling it that internally regardless of its real [WidgetJourneyRow.role] was
+     * itself misleading. See [WidgetJourneyRow.role] — backend-authoritative, carried alongside
+     * every other field and never re-derived from list position. */
+    data class Journeys(val primary: WidgetJourneyRow, val secondary: WidgetJourneyRow?) : RoutineWidgetContent
 }
 
 data class WidgetJourneyRow(
@@ -94,6 +104,14 @@ data class WidgetJourneyRow(
     val arrivalTime: Instant,
     val transferCount: Int,
     val isRealtime: Boolean,
+    /** Backend-authoritative (see [se.blick.app.domain.model.JourneyRole]'s own doc) — never
+     * inferred from this row's position within [RoutineWidgetContent.Journeys]. Travels
+     * unchanged through [resolveEffectiveModel]'s own render-time promotion (a NEXT or
+     * ALTERNATIVE row promoted into the [RoutineWidgetContent.Journeys.primary] slot keeps its
+     * own real role rather than being silently treated as PRIMARY), so a consumer that cares
+     * (e.g. debugging, or a future primary-slot label) always sees this journey's genuine
+     * backend meaning. */
+    val role: JourneyRole,
 )
 
 data class WidgetDepartureRow(

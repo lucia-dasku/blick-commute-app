@@ -14,6 +14,7 @@ import org.robolectric.annotation.Config
 import se.blick.app.data.local.room.BlickDatabase
 import se.blick.app.data.local.room.RoutineEntity
 import se.blick.app.data.local.room.StaleSnapshotEntity
+import se.blick.app.domain.model.JourneyRole
 import se.blick.app.domain.model.TransportMode
 import se.blick.app.domain.usecase.DepartureIdentity
 import se.blick.app.domain.usecase.LiveDeparturesSnapshot
@@ -76,7 +77,7 @@ class RoomStaleSnapshotRepositoryTest {
 
     private val identity = DepartureIdentity(siteId = 9145, lineId = 14, directionCode = 1, transportMode = TransportMode.METRO)
 
-    private fun sampleSnapshot() = LiveDeparturesSnapshot(
+    private fun sampleSnapshot(role: JourneyRole? = null) = LiveDeparturesSnapshot(
         departures = listOf(
             PreparedDeparture(
                 departureId = "d1",
@@ -93,6 +94,7 @@ class RoomStaleSnapshotRepositoryTest {
                 journeyState = "EXPECTED",
                 predictionState = null,
                 tripDeviations = emptyList(),
+                journeyRole = role,
             ),
         ),
         fetchedAt = Instant.parse("2026-07-27T05:00:00Z"),
@@ -126,6 +128,91 @@ class RoomStaleSnapshotRepositoryTest {
         val result = repository.get("r1", identity)
 
         assertEquals(snapshot, result)
+    }
+
+    // ---- journeyRole: backend-authoritative, must survive a stale-snapshot round-trip
+    // exactly, never silently dropped or defaulted to PRIMARY (see StaleSnapshotMappers.kt's
+    // own doc) ----
+
+    @Test
+    fun `a PRIMARY journeyRole round-trips through save and get unchanged`() = runTest {
+        val db = openDatabase()
+        db.routineDao().upsert(routineEntity())
+        val repository = RoomStaleSnapshotRepository(db.staleSnapshotDao())
+        val snapshot = sampleSnapshot(role = JourneyRole.PRIMARY)
+
+        repository.save("r1", identity, snapshot)
+        val result = repository.get("r1", identity)
+
+        assertEquals(JourneyRole.PRIMARY, result?.departures?.single()?.journeyRole)
+    }
+
+    @Test
+    fun `a NEXT journeyRole round-trips through save and get unchanged`() = runTest {
+        val db = openDatabase()
+        db.routineDao().upsert(routineEntity())
+        val repository = RoomStaleSnapshotRepository(db.staleSnapshotDao())
+        val snapshot = sampleSnapshot(role = JourneyRole.NEXT)
+
+        repository.save("r1", identity, snapshot)
+        val result = repository.get("r1", identity)
+
+        assertEquals(JourneyRole.NEXT, result?.departures?.single()?.journeyRole)
+    }
+
+    @Test
+    fun `an ALTERNATIVE journeyRole round-trips through save and get unchanged`() = runTest {
+        val db = openDatabase()
+        db.routineDao().upsert(routineEntity())
+        val repository = RoomStaleSnapshotRepository(db.staleSnapshotDao())
+        val snapshot = sampleSnapshot(role = JourneyRole.ALTERNATIVE)
+
+        repository.save("r1", identity, snapshot)
+        val result = repository.get("r1", identity)
+
+        assertEquals(JourneyRole.ALTERNATIVE, result?.departures?.single()?.journeyRole)
+    }
+
+    @Test
+    fun `a snapshot persisted before journeyRole existed still loads, with a null role rather than failing`() = runTest {
+        val db = openDatabase()
+        db.routineDao().upsert(routineEntity())
+        // No "journeyRole" key at all -- exactly what an app version predating this field
+        // would have written. kotlinx.serialization fills the missing key with
+        // StaleDepartureRow's own declared default (null) rather than failing to decode.
+        val legacyJson = """
+            [{"departureId":"d1","lineDesignation":"14","direction":"T-Centralen","destination":"T-Centralen",
+            "scheduledTimeEpochMilli":${Instant.parse("2026-07-27T05:05:00Z").toEpochMilli()},"expectedTimeEpochMilli":null,
+            "effectiveTimeEpochMilli":${Instant.parse("2026-07-27T05:05:00Z").toEpochMilli()},"minutesRemaining":5,
+            "isRealTime":false,"isCancelled":false,"state":"EXPECTED","journeyState":"EXPECTED","predictionState":null}]
+        """.trimIndent()
+        insertRawRow(db, "r1", legacyJson)
+        val repository = RoomStaleSnapshotRepository(db.staleSnapshotDao())
+
+        val result = repository.get("r1", identity)
+
+        assertNotNull("a legacy row (missing journeyRole entirely) must still load, not be treated as corrupted", result)
+        assertNull(result?.departures?.single()?.journeyRole)
+    }
+
+    @Test
+    fun `a malformed stored journeyRole value fails closed to null, never silently becoming PRIMARY`() = runTest {
+        val db = openDatabase()
+        db.routineDao().upsert(routineEntity())
+        val corruptRoleJson = """
+            [{"departureId":"d1","lineDesignation":"14","direction":"T-Centralen","destination":"T-Centralen",
+            "scheduledTimeEpochMilli":${Instant.parse("2026-07-27T05:05:00Z").toEpochMilli()},"expectedTimeEpochMilli":null,
+            "effectiveTimeEpochMilli":${Instant.parse("2026-07-27T05:05:00Z").toEpochMilli()},"minutesRemaining":5,
+            "isRealTime":false,"isCancelled":false,"state":"EXPECTED","journeyState":"EXPECTED","predictionState":null,
+            "journeyRole":"NOT_A_REAL_ROLE"}]
+        """.trimIndent()
+        insertRawRow(db, "r1", corruptRoleJson)
+        val repository = RoomStaleSnapshotRepository(db.staleSnapshotDao())
+
+        val result = repository.get("r1", identity)
+
+        assertNotNull("a malformed role value must not corrupt decoding of the row as a whole", result)
+        assertNull(result?.departures?.single()?.journeyRole)
     }
 
     @Test

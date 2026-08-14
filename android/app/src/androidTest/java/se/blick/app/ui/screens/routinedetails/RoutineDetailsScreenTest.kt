@@ -29,6 +29,7 @@ import se.blick.app.domain.model.DisruptionMessage
 import se.blick.app.domain.model.DisruptionPriority
 import se.blick.app.domain.model.JourneyLeg
 import se.blick.app.domain.model.JourneyPlan
+import se.blick.app.domain.model.JourneyRole
 import se.blick.app.domain.model.RoutineType
 import se.blick.app.domain.model.TransportMode
 import se.blick.app.domain.usecase.DisruptionsState
@@ -339,6 +340,248 @@ class RoutineDetailsScreenTest {
         composeRule.onNodeWithText("in 5 min").assertDoesNotExist()
     }
 
+    // ---- Journeys section: route heading, Direct/With changes filters, per-card duration ----
+
+    private fun exactDestinationRoutine(origin: String = "Fruängen", destination: String = "Mariatorget") =
+        sampleRoutine().copy(
+            type = RoutineType.EXACT_DESTINATION,
+            transportMode = TransportMode.UNKNOWN,
+            lineId = null,
+            lineDesignation = null,
+            directionCode = null,
+            destinationLabel = null,
+            journeyOriginId = "origin-id",
+            journeyOriginName = origin,
+            journeyDestinationId = "destination-id",
+            journeyDestinationName = destination,
+        )
+
+    private fun journeyWithTransfers(
+        id: String,
+        lineDesignation: String,
+        transferCount: Int,
+        departure: Instant,
+        durationMinutes: Long,
+        role: JourneyRole = JourneyRole.PRIMARY,
+    ): JourneyPlan {
+        val arrival = departure.plusSeconds(durationMinutes * 60)
+        val leg = JourneyLeg(
+            transportMode = TransportMode.METRO,
+            lineDesignation = lineDesignation,
+            direction = "Direction",
+            originName = "Origin",
+            destinationName = "Destination",
+            departureTime = departure,
+            arrivalTime = arrival,
+            isRealtime = true,
+            disruptions = emptyList(),
+        )
+        return JourneyPlan(
+            journeyId = id,
+            originName = "Origin",
+            destinationName = "Destination",
+            departureTime = departure,
+            arrivalTime = arrival,
+            transferCount = transferCount,
+            firstLeg = leg,
+            legs = listOf(leg),
+            disruptions = emptyList(),
+            role = role,
+        )
+    }
+
+    @Test
+    fun exactDestinationRoutine_journeysHeadingShowsTheRouteInsteadOfAGenericLabel() {
+        val now = Instant.parse("2026-08-13T08:00:00Z")
+        val journey = journeyWithTransfers("j1", "14", transferCount = 0, departure = now.plusSeconds(300), durationMinutes = 20)
+
+        setContent(
+            disruptionsState = DisruptionsState.NoDisruptions,
+            routine = exactDestinationRoutine(origin = "Slussen", destination = "Fruängen"),
+            journeys = listOf(journey),
+            now = now,
+        )
+
+        // Appears twice on screen -- once as this section's own heading (what this test
+        // targets), once more in the pre-existing Route detail row further down (unrelated and
+        // deliberately untouched) -- assert on the count rather than a single node, which would
+        // otherwise fail on the ambiguous match.
+        composeRule.onAllNodesWithText("Slussen → Fruängen").assertCountEquals(2)
+    }
+
+    @Test
+    fun bothFiltersAreSelectedByDefault_showingBothDirectAndWithChangesJourneys() {
+        val now = Instant.parse("2026-08-13T08:00:00Z")
+        val direct = journeyWithTransfers("direct", "14", transferCount = 0, departure = now.plusSeconds(300), durationMinutes = 20)
+        val withChanges = journeyWithTransfers("changes", "40", transferCount = 1, departure = now.plusSeconds(600), durationMinutes = 30)
+
+        setContent(
+            disruptionsState = DisruptionsState.NoDisruptions,
+            routine = exactDestinationRoutine(),
+            journeys = listOf(direct, withChanges),
+            now = now,
+        )
+
+        composeRule.onNodeWithText("14").assertExists()
+        composeRule.onNodeWithText("40").assertExists()
+    }
+
+    @Test
+    fun deselectingWithChanges_leavesOnlyDirectJourneysVisible() {
+        val now = Instant.parse("2026-08-13T08:00:00Z")
+        val direct = journeyWithTransfers("direct", "14", transferCount = 0, departure = now.plusSeconds(300), durationMinutes = 20)
+        val withChanges = journeyWithTransfers("changes", "40", transferCount = 1, departure = now.plusSeconds(600), durationMinutes = 30)
+
+        setContent(
+            disruptionsState = DisruptionsState.NoDisruptions,
+            routine = exactDestinationRoutine(),
+            journeys = listOf(direct, withChanges),
+            now = now,
+        )
+
+        composeRule.onNodeWithText(composeRule.activity.getString(R.string.journey_with_changes)).performClick()
+
+        composeRule.onNodeWithText("14").assertExists()
+        composeRule.onNodeWithText("40").assertDoesNotExist()
+    }
+
+    @Test
+    fun directOnlyWithNoDirectJourneyAvailable_showsTheNoDirectMessage() {
+        val now = Instant.parse("2026-08-13T08:00:00Z")
+        val withChanges = journeyWithTransfers("changes", "40", transferCount = 1, departure = now.plusSeconds(600), durationMinutes = 30)
+
+        setContent(
+            disruptionsState = DisruptionsState.NoDisruptions,
+            routine = exactDestinationRoutine(),
+            journeys = listOf(withChanges),
+            now = now,
+        )
+
+        composeRule.onNodeWithText(composeRule.activity.getString(R.string.journey_with_changes)).performClick()
+
+        composeRule.onNodeWithText(composeRule.activity.getString(R.string.journey_no_direct_available)).assertExists()
+        composeRule.onNodeWithText("40").assertDoesNotExist()
+    }
+
+    @Test
+    fun deselectingDirect_leavesOnlyWithChangesJourneysVisible() {
+        val now = Instant.parse("2026-08-13T08:00:00Z")
+        val direct = journeyWithTransfers("direct", "14", transferCount = 0, departure = now.plusSeconds(300), durationMinutes = 20)
+        val withChanges = journeyWithTransfers("changes", "40", transferCount = 1, departure = now.plusSeconds(600), durationMinutes = 30)
+
+        setContent(
+            disruptionsState = DisruptionsState.NoDisruptions,
+            routine = exactDestinationRoutine(),
+            journeys = listOf(direct, withChanges),
+            now = now,
+        )
+
+        composeRule.onNodeWithText(composeRule.activity.getString(R.string.journey_direct)).performClick()
+
+        composeRule.onNodeWithText("40").assertExists()
+        composeRule.onNodeWithText("14").assertDoesNotExist()
+    }
+
+    @Test
+    fun tappingTheOnlySelectedFilterIsANoOp_atLeastOneStaysSelected() {
+        val now = Instant.parse("2026-08-13T08:00:00Z")
+        val direct = journeyWithTransfers("direct", "14", transferCount = 0, departure = now.plusSeconds(300), durationMinutes = 20)
+
+        setContent(
+            disruptionsState = DisruptionsState.NoDisruptions,
+            routine = exactDestinationRoutine(),
+            journeys = listOf(direct),
+            now = now,
+        )
+
+        // Deselect "With changes" first, leaving only Direct selected -- then try to deselect
+        // Direct too. If that succeeded, the direct journey itself would disappear.
+        composeRule.onNodeWithText(composeRule.activity.getString(R.string.journey_with_changes)).performClick()
+        composeRule.onNodeWithText(composeRule.activity.getString(R.string.journey_direct)).performClick()
+
+        composeRule.onNodeWithText("14").assertExists()
+    }
+
+    @Test
+    fun eachCardShowsItsOwnTotalJourneyDuration() {
+        val now = Instant.parse("2026-08-13T08:00:00Z")
+        val journey = journeyWithTransfers("j1", "14", transferCount = 0, departure = now.plusSeconds(300), durationMinutes = 26)
+
+        setContent(
+            disruptionsState = DisruptionsState.NoDisruptions,
+            routine = exactDestinationRoutine(),
+            journeys = listOf(journey),
+            now = now,
+        )
+
+        val durationText = composeRule.activity.getString(R.string.journey_duration_minutes, 26)
+        composeRule.onNodeWithText("⏱ $durationText").assertExists()
+    }
+
+    // ---- Role-based card labels (PRIMARY/NEXT/ALTERNATIVE) -- labelled from each journey's own
+    // role, never list position, so the Direct/With-changes filters above can never leave a
+    // misleadingly-labelled card on screen ----
+
+    @Test
+    fun theSecondRegularDeparture_isLabelledNextNotAlternative() {
+        val now = Instant.parse("2026-08-13T08:00:00Z")
+        val primary = journeyWithTransfers("primary", "14", transferCount = 0, departure = now.plusSeconds(300), durationMinutes = 20, role = JourneyRole.PRIMARY)
+        val next = journeyWithTransfers("next", "14", transferCount = 0, departure = now.plusSeconds(900), durationMinutes = 20, role = JourneyRole.NEXT)
+
+        setContent(
+            disruptionsState = DisruptionsState.NoDisruptions,
+            routine = exactDestinationRoutine(),
+            journeys = listOf(primary, next),
+            now = now,
+        )
+
+        composeRule.onNodeWithText(composeRule.activity.getString(R.string.journey_fastest)).assertExists()
+        composeRule.onNodeWithText(composeRule.activity.getString(R.string.journey_next)).assertExists()
+        composeRule.onNodeWithText(composeRule.activity.getString(R.string.journey_alternative)).assertDoesNotExist()
+    }
+
+    @Test
+    fun aGenuineGapFillingAlternative_showsAllThreeCardsWithTheirOwnLabels() {
+        val now = Instant.parse("2026-08-13T08:00:00Z")
+        val primary = journeyWithTransfers("primary", "14", transferCount = 0, departure = now.plusSeconds(300), durationMinutes = 20, role = JourneyRole.PRIMARY)
+        val alternative = journeyWithTransfers("alt", "40", transferCount = 1, departure = now.plusSeconds(900), durationMinutes = 25, role = JourneyRole.ALTERNATIVE)
+        val next = journeyWithTransfers("next", "14", transferCount = 0, departure = now.plusSeconds(3600), durationMinutes = 20, role = JourneyRole.NEXT)
+
+        setContent(
+            disruptionsState = DisruptionsState.NoDisruptions,
+            routine = exactDestinationRoutine(),
+            journeys = listOf(primary, alternative, next),
+            now = now,
+        )
+
+        composeRule.onNodeWithText(composeRule.activity.getString(R.string.journey_fastest)).assertExists()
+        composeRule.onNodeWithText(composeRule.activity.getString(R.string.journey_alternative)).assertExists()
+        composeRule.onNodeWithText(composeRule.activity.getString(R.string.journey_next)).assertExists()
+    }
+
+    @Test
+    fun filteringToWithChangesOnly_leavesTheAlternativeCardCorrectlyLabelled_notFastest() {
+        // Regression test for "filtering cannot cause misleading role labels": a direct PRIMARY
+        // plus a transfer ALTERNATIVE, filtered down to With-changes-only, leaves the
+        // ALTERNATIVE as the sole (and therefore first-shown) card -- it must still say
+        // "ALTERNATIVE", never default to "FASTEST" purely because it's now first on screen.
+        val now = Instant.parse("2026-08-13T08:00:00Z")
+        val primary = journeyWithTransfers("primary", "14", transferCount = 0, departure = now.plusSeconds(300), durationMinutes = 20, role = JourneyRole.PRIMARY)
+        val alternative = journeyWithTransfers("alt", "40", transferCount = 1, departure = now.plusSeconds(900), durationMinutes = 25, role = JourneyRole.ALTERNATIVE)
+
+        setContent(
+            disruptionsState = DisruptionsState.NoDisruptions,
+            routine = exactDestinationRoutine(),
+            journeys = listOf(primary, alternative),
+            now = now,
+        )
+
+        composeRule.onNodeWithText(composeRule.activity.getString(R.string.journey_direct)).performClick()
+
+        composeRule.onNodeWithText(composeRule.activity.getString(R.string.journey_alternative)).assertExists()
+        composeRule.onNodeWithText(composeRule.activity.getString(R.string.journey_fastest)).assertDoesNotExist()
+    }
+
     @Test
     fun noRelevantDisruptions_theWholeSectionIsHidden() {
         setContent(DisruptionsState.NoDisruptions)
@@ -539,7 +782,11 @@ class RoutineDetailsScreenTest {
 
         val routeLabel = composeRule.activity.getString(R.string.routine_details_route_label)
         composeRule.onNodeWithText(routeLabel).performScrollTo().assertExists()
-        composeRule.onNodeWithText("Fruängen → Mariatorget").assertExists()
+        // Appears twice on screen for an exact-destination routine -- once here in this Route
+        // detail row, once more as the journeys section's own heading further up (see
+        // JourneyComparisonSection's call site) -- assert on the count rather than a single
+        // node, which would otherwise fail on the ambiguous match.
+        composeRule.onAllNodesWithText("Fruängen → Mariatorget").assertCountEquals(2)
 
         val directionLabel = composeRule.activity.getString(R.string.routine_details_direction_label)
         composeRule.onNodeWithText(directionLabel).assertDoesNotExist()

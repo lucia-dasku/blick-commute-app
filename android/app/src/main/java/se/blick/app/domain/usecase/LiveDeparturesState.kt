@@ -1,5 +1,6 @@
 package se.blick.app.domain.usecase
 
+import se.blick.app.domain.model.JourneyRole
 import se.blick.app.domain.model.TripDeviation
 import java.time.Instant
 
@@ -27,6 +28,15 @@ data class PreparedDeparture(
     val journeyState: String,
     val predictionState: String?,
     val tripDeviations: List<TripDeviation>,
+    /** Backend-authoritative (see [JourneyRole]'s own doc) — populated ONLY by the
+     * exact-destination journey path (see
+     * [se.blick.app.scheduling.toExactJourneyNotificationProjection]'s own `toPreparedDeparture`);
+     * always `null` for a real [se.blick.app.domain.model.Departure]-derived row (the
+     * LINE_DIRECTION path), which has no such concept. Exists purely so
+     * [se.blick.app.notification.RoutineNotificationMapper] can carry it through into
+     * [se.blick.app.notification.NotificationDepartureRow] without this generic, widely-shared
+     * type itself gaining any journey-specific behaviour beyond storing the value. */
+    val journeyRole: JourneyRole? = null,
 )
 
 /**

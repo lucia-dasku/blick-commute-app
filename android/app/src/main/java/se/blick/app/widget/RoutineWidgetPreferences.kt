@@ -5,7 +5,9 @@ import androidx.datastore.preferences.core.Preferences
 import androidx.datastore.preferences.core.booleanPreferencesKey
 import androidx.datastore.preferences.core.longPreferencesKey
 import androidx.datastore.preferences.core.stringPreferencesKey
+import se.blick.app.domain.model.JourneyRole
 import se.blick.app.domain.model.TransportMode
+import se.blick.app.domain.model.toJourneyRole
 import se.blick.app.domain.model.toTransportMode
 import java.time.Instant
 
@@ -37,16 +39,25 @@ private object WidgetKeys {
     val FOLLOWING_MINUTES = longPreferencesKey("followingMinutes")
     val FOLLOWING_IS_REAL_TIME = booleanPreferencesKey("followingIsRealTime")
     val FOLLOWING_IS_CANCELLED = booleanPreferencesKey("followingIsCancelled")
-    val JOURNEY_FASTEST_DEPARTURE = longPreferencesKey("journeyFastestDeparture")
-    val JOURNEY_FASTEST_ARRIVAL = longPreferencesKey("journeyFastestArrival")
-    val JOURNEY_FASTEST_CHANGES = longPreferencesKey("journeyFastestChanges")
-    val JOURNEY_FASTEST_REALTIME = booleanPreferencesKey("journeyFastestRealtime")
-    val JOURNEY_ALTERNATIVE_DEPARTURE = longPreferencesKey("journeyAlternativeDeparture")
-    val JOURNEY_ALTERNATIVE_ARRIVAL = longPreferencesKey("journeyAlternativeArrival")
-    val JOURNEY_ALTERNATIVE_CHANGES = longPreferencesKey("journeyAlternativeChanges")
-    val JOURNEY_ALTERNATIVE_REALTIME = booleanPreferencesKey("journeyAlternativeRealtime")
-    val JOURNEY_ALTERNATIVE_LINE = stringPreferencesKey("journeyAlternativeLine")
-    val JOURNEY_ALTERNATIVE_MODE = stringPreferencesKey("journeyAlternativeMode")
+    // Kotlin identifiers renamed to match RoutineWidgetContent.Journeys's own primary/secondary
+    // naming (see that class's own doc); the underlying string literals are left exactly as
+    // they were so a widget instance's already-persisted state keeps decoding correctly
+    // across this app update rather than silently reverting to NoActiveCommute for one cycle.
+    val JOURNEY_PRIMARY_DEPARTURE = longPreferencesKey("journeyFastestDeparture")
+    val JOURNEY_PRIMARY_ARRIVAL = longPreferencesKey("journeyFastestArrival")
+    val JOURNEY_PRIMARY_CHANGES = longPreferencesKey("journeyFastestChanges")
+    val JOURNEY_PRIMARY_REALTIME = booleanPreferencesKey("journeyFastestRealtime")
+    /** New in this version — absent entirely on state persisted by an older app version; see
+     * [readJourneyRole]'s own doc for how that's handled on read. */
+    val JOURNEY_PRIMARY_ROLE = stringPreferencesKey("journeyPrimaryRole")
+    val JOURNEY_SECONDARY_DEPARTURE = longPreferencesKey("journeyAlternativeDeparture")
+    val JOURNEY_SECONDARY_ARRIVAL = longPreferencesKey("journeyAlternativeArrival")
+    val JOURNEY_SECONDARY_CHANGES = longPreferencesKey("journeyAlternativeChanges")
+    val JOURNEY_SECONDARY_REALTIME = booleanPreferencesKey("journeyAlternativeRealtime")
+    val JOURNEY_SECONDARY_LINE = stringPreferencesKey("journeyAlternativeLine")
+    val JOURNEY_SECONDARY_MODE = stringPreferencesKey("journeyAlternativeMode")
+    /** New in this version — see [JOURNEY_PRIMARY_ROLE]'s own doc. */
+    val JOURNEY_SECONDARY_ROLE = stringPreferencesKey("journeySecondaryRole")
 }
 
 private enum class ContentType { NO_ACTIVE_COMMUTE, LOADING, LIVE, STALE, NO_UPCOMING, OFFLINE, UNAVAILABLE, NOTIFICATIONS_UNAVAILABLE, JOURNEYS }
@@ -89,27 +100,29 @@ internal fun RoutineWidgetUiState.writeInto(prefs: MutablePreferences) {
                     prefs[WidgetKeys.CONTENT_TYPE] = ContentType.NOTIFICATIONS_UNAVAILABLE.name
                 is RoutineWidgetContent.Journeys -> {
                     prefs[WidgetKeys.CONTENT_TYPE] = ContentType.JOURNEYS.name
-                    prefs.writeJourney(content.fastest, alternative = false)
-                    content.alternative?.let { prefs.writeJourney(it, alternative = true) }
+                    prefs.writeJourney(content.primary, isSecondary = false)
+                    content.secondary?.let { prefs.writeJourney(it, isSecondary = true) }
                 }
             }
         }
     }
 }
 
-private fun MutablePreferences.writeJourney(row: WidgetJourneyRow, alternative: Boolean) {
-    if (!alternative) {
-        this[WidgetKeys.JOURNEY_FASTEST_DEPARTURE] = row.departureTime.toEpochMilli()
-        this[WidgetKeys.JOURNEY_FASTEST_ARRIVAL] = row.arrivalTime.toEpochMilli()
-        this[WidgetKeys.JOURNEY_FASTEST_CHANGES] = row.transferCount.toLong()
-        this[WidgetKeys.JOURNEY_FASTEST_REALTIME] = row.isRealtime
+private fun MutablePreferences.writeJourney(row: WidgetJourneyRow, isSecondary: Boolean) {
+    if (!isSecondary) {
+        this[WidgetKeys.JOURNEY_PRIMARY_DEPARTURE] = row.departureTime.toEpochMilli()
+        this[WidgetKeys.JOURNEY_PRIMARY_ARRIVAL] = row.arrivalTime.toEpochMilli()
+        this[WidgetKeys.JOURNEY_PRIMARY_CHANGES] = row.transferCount.toLong()
+        this[WidgetKeys.JOURNEY_PRIMARY_REALTIME] = row.isRealtime
+        this[WidgetKeys.JOURNEY_PRIMARY_ROLE] = row.role.name
     } else {
-        this[WidgetKeys.JOURNEY_ALTERNATIVE_DEPARTURE] = row.departureTime.toEpochMilli()
-        this[WidgetKeys.JOURNEY_ALTERNATIVE_ARRIVAL] = row.arrivalTime.toEpochMilli()
-        this[WidgetKeys.JOURNEY_ALTERNATIVE_CHANGES] = row.transferCount.toLong()
-        this[WidgetKeys.JOURNEY_ALTERNATIVE_REALTIME] = row.isRealtime
-        row.lineDesignation?.let { this[WidgetKeys.JOURNEY_ALTERNATIVE_LINE] = it }
-        this[WidgetKeys.JOURNEY_ALTERNATIVE_MODE] = row.transportMode.name
+        this[WidgetKeys.JOURNEY_SECONDARY_DEPARTURE] = row.departureTime.toEpochMilli()
+        this[WidgetKeys.JOURNEY_SECONDARY_ARRIVAL] = row.arrivalTime.toEpochMilli()
+        this[WidgetKeys.JOURNEY_SECONDARY_CHANGES] = row.transferCount.toLong()
+        this[WidgetKeys.JOURNEY_SECONDARY_REALTIME] = row.isRealtime
+        row.lineDesignation?.let { this[WidgetKeys.JOURNEY_SECONDARY_LINE] = it }
+        this[WidgetKeys.JOURNEY_SECONDARY_MODE] = row.transportMode.name
+        this[WidgetKeys.JOURNEY_SECONDARY_ROLE] = row.role.name
     }
 }
 
@@ -161,23 +174,28 @@ internal fun Preferences.toWidgetUiState(): RoutineWidgetUiState {
         ContentType.UNAVAILABLE -> RoutineWidgetContent.Unavailable
         ContentType.NOTIFICATIONS_UNAVAILABLE -> RoutineWidgetContent.NotificationsUnavailable
         ContentType.JOURNEYS -> {
-            val fastestDeparture = this[WidgetKeys.JOURNEY_FASTEST_DEPARTURE] ?: return RoutineWidgetUiState.NoActiveCommute
-            val fastestArrival = this[WidgetKeys.JOURNEY_FASTEST_ARRIVAL] ?: return RoutineWidgetUiState.NoActiveCommute
-            val fastest = WidgetJourneyRow(
-                lineDesignation, transportMode, Instant.ofEpochMilli(fastestDeparture), Instant.ofEpochMilli(fastestArrival),
-                (this[WidgetKeys.JOURNEY_FASTEST_CHANGES] ?: 0L).toInt(), this[WidgetKeys.JOURNEY_FASTEST_REALTIME] ?: false,
+            val primaryDeparture = this[WidgetKeys.JOURNEY_PRIMARY_DEPARTURE] ?: return RoutineWidgetUiState.NoActiveCommute
+            val primaryArrival = this[WidgetKeys.JOURNEY_PRIMARY_ARRIVAL] ?: return RoutineWidgetUiState.NoActiveCommute
+            val primary = WidgetJourneyRow(
+                lineDesignation, transportMode, Instant.ofEpochMilli(primaryDeparture), Instant.ofEpochMilli(primaryArrival),
+                (this[WidgetKeys.JOURNEY_PRIMARY_CHANGES] ?: 0L).toInt(), this[WidgetKeys.JOURNEY_PRIMARY_REALTIME] ?: false,
+                readJourneyRole(WidgetKeys.JOURNEY_PRIMARY_ROLE, default = JourneyRole.PRIMARY),
             )
-            val alternative = this[WidgetKeys.JOURNEY_ALTERNATIVE_DEPARTURE]?.let { departure ->
+            val secondary = this[WidgetKeys.JOURNEY_SECONDARY_DEPARTURE]?.let { departure ->
                 WidgetJourneyRow(
-                    this[WidgetKeys.JOURNEY_ALTERNATIVE_LINE],
-                    this[WidgetKeys.JOURNEY_ALTERNATIVE_MODE]?.toTransportMode() ?: TransportMode.UNKNOWN,
+                    this[WidgetKeys.JOURNEY_SECONDARY_LINE],
+                    this[WidgetKeys.JOURNEY_SECONDARY_MODE]?.toTransportMode() ?: TransportMode.UNKNOWN,
                     Instant.ofEpochMilli(departure),
-                    Instant.ofEpochMilli(this[WidgetKeys.JOURNEY_ALTERNATIVE_ARRIVAL] ?: return@let null),
-                    (this[WidgetKeys.JOURNEY_ALTERNATIVE_CHANGES] ?: 0L).toInt(),
-                    this[WidgetKeys.JOURNEY_ALTERNATIVE_REALTIME] ?: false,
+                    Instant.ofEpochMilli(this[WidgetKeys.JOURNEY_SECONDARY_ARRIVAL] ?: return@let null),
+                    (this[WidgetKeys.JOURNEY_SECONDARY_CHANGES] ?: 0L).toInt(),
+                    this[WidgetKeys.JOURNEY_SECONDARY_REALTIME] ?: false,
+                    // NEXT, not ALTERNATIVE, is the more common real outcome of the backend's
+                    // own selection algorithm -- the safer default for the rare case of a
+                    // secondary row persisted by a version predating this field.
+                    readJourneyRole(WidgetKeys.JOURNEY_SECONDARY_ROLE, default = JourneyRole.NEXT),
                 )
             }
-            RoutineWidgetContent.Journeys(fastest, alternative)
+            RoutineWidgetContent.Journeys(primary, secondary)
         }
         ContentType.NO_ACTIVE_COMMUTE -> return RoutineWidgetUiState.NoActiveCommute
     }
@@ -194,6 +212,20 @@ internal fun Preferences.toWidgetUiState(): RoutineWidgetUiState {
         ),
     )
 }
+
+/** Widget state is transient, best-effort, render-only data — unlike
+ * [se.blick.app.data.repository.RemoteJourneyRepository]'s own fail-closed
+ * [se.blick.app.domain.model.toJourneyRole] (which drops a whole journey rather than ever
+ * inventing a role for a live API response), a missing or malformed role in ALREADY-PERSISTED
+ * widget state is not a live correctness concern: it only happens for state written by an app
+ * version predating this field, or in the unlikely event of datastore corruption, and the
+ * worker's own ~30-second refresh loop overwrites it with a freshly role-tagged value again
+ * almost immediately regardless. Falls back to [default] rather than dropping the row
+ * entirely, which would otherwise regress an upgrading user straight to
+ * [RoutineWidgetUiState.NoActiveCommute] for one refresh cycle over what is, at worst, a
+ * cosmetic NEXT/ALTERNATIVE wording mismatch (see [BlickRoutineWidget]'s own rendering). */
+private fun Preferences.readJourneyRole(key: Preferences.Key<String>, default: JourneyRole): JourneyRole =
+    this[key].toJourneyRole() ?: default
 
 private fun Preferences.readNext(): WidgetDepartureRow? {
     val line = this[WidgetKeys.NEXT_LINE] ?: return null

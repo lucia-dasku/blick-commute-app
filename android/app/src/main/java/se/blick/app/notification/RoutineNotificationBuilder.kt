@@ -11,6 +11,7 @@ import dagger.hilt.android.qualifiers.ApplicationContext
 import se.blick.app.MainActivity
 import se.blick.app.R
 import se.blick.app.domain.model.DisruptionEffect
+import se.blick.app.domain.model.JourneyRole
 import se.blick.app.locale.withAppLocale
 import se.blick.app.ui.screens.routinedetails.formatDepartureTime
 import javax.inject.Inject
@@ -214,8 +215,20 @@ class RoutineNotificationBuilder @Inject constructor(
             localizedContext.getString(R.string.notification_departure_status_format, row.minutesRemaining, statusText)
         }
 
+    /** ALTERNATIVE (see [JourneyRole]) visibly says so — a genuinely different way to travel,
+     * not just another regular departure; every other role (NEXT, or `null` for an ordinary
+     * LINE_DIRECTION row, which carries no role at all) keeps the existing NEXT wording
+     * unchanged. Cancellation is checked first regardless of role, so a cancelled alternative
+     * is reported as a cancelled alternative, never silently folded into the generic "Next ·
+     * Cancelled" line. */
     private fun nextDepartureLine(row: NotificationDepartureRow): String =
-        if (row.isCancelled) {
+        if (row.journeyRole == JourneyRole.ALTERNATIVE) {
+            if (row.isCancelled) {
+                localizedContext.getString(R.string.notification_alternative_departure_cancelled)
+            } else {
+                localizedContext.getString(R.string.notification_alternative_departure_format, row.minutesRemaining)
+            }
+        } else if (row.isCancelled) {
             localizedContext.getString(R.string.notification_next_departure_cancelled)
         } else {
             localizedContext.getString(R.string.notification_next_departure_format, row.minutesRemaining)

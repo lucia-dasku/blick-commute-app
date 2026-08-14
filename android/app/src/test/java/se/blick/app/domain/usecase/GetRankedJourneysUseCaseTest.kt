@@ -7,6 +7,7 @@ import se.blick.app.data.repository.JourneyRepository
 import se.blick.app.domain.model.JourneyLeg
 import se.blick.app.domain.model.JourneyLocation
 import se.blick.app.domain.model.JourneyPlan
+import se.blick.app.domain.model.JourneyRole
 import se.blick.app.domain.model.TransportMode
 import java.time.Clock
 import java.time.Instant
@@ -20,9 +21,10 @@ class GetRankedJourneysUseCaseTest {
         arrival: String,
         transfers: Int = 0,
         mode: TransportMode = TransportMode.BUS,
+        role: JourneyRole = JourneyRole.PRIMARY,
     ): JourneyPlan {
         val leg = JourneyLeg(mode, "1", "End", "A", "B", Instant.parse(departure), Instant.parse(arrival), true, emptyList())
-        return JourneyPlan(id, "A", "B", Instant.parse(departure), Instant.parse(arrival), transfers, leg, listOf(leg), emptyList())
+        return JourneyPlan(id, "A", "B", Instant.parse(departure), Instant.parse(arrival), transfers, leg, listOf(leg), emptyList(), role)
     }
 
     private fun repositoryOf(vararg journeys: JourneyPlan) = object : JourneyRepository {
@@ -31,6 +33,7 @@ class GetRankedJourneysUseCaseTest {
             originId: String,
             destinationId: String,
             allowedTransportModes: Set<TransportMode>,
+            searchUntil: Instant?,
         ): List<JourneyPlan> = journeys.toList()
     }
 
@@ -62,6 +65,7 @@ class GetRankedJourneysUseCaseTest {
             originId: String,
             destinationId: String,
             allowedTransportModes: Set<TransportMode>,
+            searchUntil: Instant?,
         ): List<JourneyPlan> {
             clock.instant = advanceTo
             return journeys
@@ -110,25 +114,48 @@ class GetRankedJourneysUseCaseTest {
         assertEquals(listOf("exactly-on-time"), result.map { it.journeyId })
     }
 
-    @Test fun `earliest final arrival wins even when it departs later`() {
-        val earlyBusSlow = journey("slow", "2026-08-10T08:02:00Z", "2026-08-10T08:31:00Z")
-        val laterMetroFast = journey("fast", "2026-08-10T08:04:00Z", "2026-08-10T08:23:00Z", mode = TransportMode.METRO)
-        assertEquals(listOf("fast", "slow"), GetRankedJourneysUseCase.rank(listOf(earlyBusSlow, laterMetroFast)).map { it.journeyId })
+    // ---- Trusting the backend's own order and role (see GetRankedJourneysUseCase's own doc):
+    // the backend is now the sole authority on PRIMARY/NEXT/ALTERNATIVE assignment, since only it
+    // has the full upstream candidate set that decision requires -- this use case must preserve
+    // exactly what it sent, never re-derive its own ranking from a short, already-curated list. ----
+
+    @Test fun `journeys are returned in the repository's own order, never re-ranked by arrival time`() = runTest {
+        // Departs first but arrives last -- under the old arrival-based rank(), this would have
+        // been reordered second. The backend's own departure-based ordering (see
+        // backend/src/routes/journeys.ts) must survive untouched.
+        val departsFirstArrivesLast = journey("slow", "2026-08-10T08:02:00Z", "2026-08-10T08:31:00Z", role = JourneyRole.PRIMARY)
+        val departsSecondArrivesFirst = journey(
+            "fast", "2026-08-10T08:04:00Z", "2026-08-10T08:23:00Z", mode = TransportMode.METRO, role = JourneyRole.NEXT,
+        )
+        val useCase = GetRankedJourneysUseCase(
+            repositoryOf(departsFirstArrivesLast, departsSecondArrivesFirst), fixedClock("2026-08-10T07:00:00Z"),
+        )
+
+        val result = useCase("origin", "destination", setOf(TransportMode.BUS, TransportMode.METRO))
+
+        assertEquals(listOf("slow", "fast"), result.map { it.journeyId })
     }
 
-    @Test fun `a later trip using the same transport is not presented as an alternative`() {
-        val first = journey("first", "2026-08-10T08:00:00Z", "2026-08-10T08:20:00Z")
-        val nextBus = journey("next", "2026-08-10T08:05:00Z", "2026-08-10T08:25:00Z")
+    @Test fun `each journey's own role from the backend is preserved unchanged`() = runTest {
+        val primary = journey("primary", "2026-08-10T08:00:00Z", "2026-08-10T08:20:00Z", role = JourneyRole.PRIMARY)
+        val alternative = journey("alternative", "2026-08-10T08:05:00Z", "2026-08-10T08:22:00Z", transfers = 1, role = JourneyRole.ALTERNATIVE)
+        val next = journey("next", "2026-08-10T08:30:00Z", "2026-08-10T08:50:00Z", role = JourneyRole.NEXT)
+        val useCase = GetRankedJourneysUseCase(repositoryOf(primary, alternative, next), fixedClock("2026-08-10T07:00:00Z"))
 
-        assertEquals(listOf("first"), GetRankedJourneysUseCase.rank(listOf(first, nextBus)).map { it.journeyId })
+        val result = useCase("origin", "destination", setOf(TransportMode.BUS))
+
+        assertEquals(listOf(JourneyRole.PRIMARY, JourneyRole.ALTERNATIVE, JourneyRole.NEXT), result.map { it.role })
     }
 
-    @Test fun `direct and transfer journeys retain full legs`() {
+    @Test fun `direct and transfer journeys retain full legs`() = runTest {
         val direct = journey("direct", "2026-08-10T08:00:00Z", "2026-08-10T08:20:00Z")
-        val transfer = journey("transfer", "2026-08-10T08:01:00Z", "2026-08-10T08:19:00Z", transfers = 1)
-        val ranked = GetRankedJourneysUseCase.rank(listOf(direct, transfer))
-        assertEquals(1, ranked.first().transferCount)
-        assertEquals(1, ranked.first().legs.size)
+        val transfer = journey("transfer", "2026-08-10T08:01:00Z", "2026-08-10T08:19:00Z", transfers = 1, role = JourneyRole.NEXT)
+        val useCase = GetRankedJourneysUseCase(repositoryOf(direct, transfer), fixedClock("2026-08-10T07:00:00Z"))
+
+        val result = useCase("origin", "destination", setOf(TransportMode.BUS))
+
+        assertEquals(1, result.last().transferCount)
+        assertEquals(1, result.last().legs.size)
     }
 
     @Test fun `selected transport modes are forwarded to journey planning`() = runTest {
@@ -140,6 +167,7 @@ class GetRankedJourneysUseCaseTest {
                 originId: String,
                 destinationId: String,
                 allowedTransportModes: Set<TransportMode>,
+                searchUntil: Instant?,
             ): List<JourneyPlan> {
                 receivedModes = allowedTransportModes
                 return listOf(result)
@@ -153,6 +181,51 @@ class GetRankedJourneysUseCaseTest {
         )
 
         assertEquals(setOf(TransportMode.TRAIN, TransportMode.BUS), receivedModes)
+    }
+
+    @Test fun `searchUntil is forwarded to the repository unchanged`() = runTest {
+        var receivedSearchUntil: Instant? = null
+        val result = journey("train", "2026-08-10T08:00:00Z", "2026-08-10T08:20:00Z")
+        val repository = object : JourneyRepository {
+            override suspend fun searchLocations(query: String): List<JourneyLocation> = emptyList()
+            override suspend fun getJourneys(
+                originId: String,
+                destinationId: String,
+                allowedTransportModes: Set<TransportMode>,
+                searchUntil: Instant?,
+            ): List<JourneyPlan> {
+                receivedSearchUntil = searchUntil
+                return listOf(result)
+            }
+        }
+        val windowEnd = Instant.parse("2026-08-10T09:00:00Z")
+
+        GetRankedJourneysUseCase(repository, fixedClock("2026-08-10T07:00:00Z"))("origin", "destination", setOf(TransportMode.BUS), windowEnd)
+
+        assertEquals(windowEnd, receivedSearchUntil)
+    }
+
+    @Test fun `searchUntil defaults to null for a caller with no boundary to offer`() = runTest {
+        var receivedSearchUntil: Instant? = Instant.parse("2026-08-10T09:00:00Z")
+        val result = journey("train", "2026-08-10T08:00:00Z", "2026-08-10T08:20:00Z")
+        val repository = object : JourneyRepository {
+            override suspend fun searchLocations(query: String): List<JourneyLocation> = emptyList()
+            override suspend fun getJourneys(
+                originId: String,
+                destinationId: String,
+                allowedTransportModes: Set<TransportMode>,
+                searchUntil: Instant?,
+            ): List<JourneyPlan> {
+                receivedSearchUntil = searchUntil
+                return listOf(result)
+            }
+        }
+
+        // No searchUntil argument supplied at all -- mirrors a caller that hasn't been
+        // updated to compute one yet.
+        GetRankedJourneysUseCase(repository, fixedClock("2026-08-10T07:00:00Z"))("origin", "destination", setOf(TransportMode.BUS))
+
+        assertEquals(null, receivedSearchUntil)
     }
 
     // ---- Defensive filtering (2026-08-10 22:12 production incident: a bus that arrived at

@@ -1,6 +1,7 @@
 package se.blick.app.notification
 
 import se.blick.app.domain.model.DisruptionEffect
+import se.blick.app.domain.model.JourneyRole
 import java.time.Instant
 
 /**
@@ -108,4 +109,11 @@ data class NotificationDepartureRow(
     val minutesRemaining: Long,
     val isRealTime: Boolean,
     val isCancelled: Boolean,
+    /** Backend-authoritative (see [JourneyRole]'s own doc), copied unchanged from
+     * [se.blick.app.domain.usecase.PreparedDeparture.journeyRole] by [RoutineNotificationMapper] —
+     * always `null` for an ordinary LINE_DIRECTION departure row, which has no such concept.
+     * [RoutineNotificationBuilder]'s own second-row wording (the existing NEXT phrasing, or a
+     * visibly different ALTERNATIVE one) depends on this; every other rendering decision in
+     * that class ignores it. */
+    val journeyRole: JourneyRole? = null,
 )

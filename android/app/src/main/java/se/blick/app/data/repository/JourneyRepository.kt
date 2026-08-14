@@ -7,16 +7,21 @@ import se.blick.app.domain.model.JourneyLocation
 import se.blick.app.domain.model.JourneyPlan
 import se.blick.app.domain.model.JOURNEY_TRANSPORT_MODE_OPTIONS
 import se.blick.app.domain.model.TransportMode
+import se.blick.app.domain.model.toJourneyRole
 import se.blick.app.domain.model.toTransportMode
 import java.time.Instant
 import javax.inject.Inject
 
 interface JourneyRepository {
     suspend fun searchLocations(query: String): List<JourneyLocation>
+    /** [searchUntil] bounds how far forward the backend's own targeted NEXT/ALTERNATIVE
+     * acquisition may search — see [se.blick.app.domain.usecase.GetRankedJourneysUseCase]'s own
+     * doc. Null when the caller has no genuine routine-occurrence boundary to offer. */
     suspend fun getJourneys(
         originId: String,
         destinationId: String,
         allowedTransportModes: Set<TransportMode>,
+        searchUntil: Instant? = null,
     ): List<JourneyPlan>
 }
 
@@ -28,15 +33,23 @@ class RemoteJourneyRepository @Inject constructor(private val apiClient: BlickAp
         originId: String,
         destinationId: String,
         allowedTransportModes: Set<TransportMode>,
+        searchUntil: Instant?,
     ) = apiClient.getJourneys(
         originId,
         destinationId,
         JOURNEY_TRANSPORT_MODE_OPTIONS.filter(allowedTransportModes::contains).joinToString(",") { it.name },
-    ).journeys.map { dto ->
+        searchUntil?.toString(),
+    ).journeys.mapNotNull { dto ->
+            // Fail closed, never invent a role -- see toJourneyRole's own doc. A single
+            // malformed entry is dropped rather than failing the whole response: the
+            // remaining, validly-roled journeys are still genuinely useful to show, and
+            // dropping one entry from a list never corrupts the relative order of the rest.
+            val role = dto.role.toJourneyRole() ?: return@mapNotNull null
             JourneyPlan(
                 dto.journeyId, dto.originName, dto.destinationName,
                 Instant.parse(dto.departureTime), Instant.parse(dto.arrivalTime), dto.transferCount,
                 dto.firstLeg.toDomain(), dto.legs.map(JourneyLegDto::toDomain), dto.disruptions,
+                role,
             )
     }
 }

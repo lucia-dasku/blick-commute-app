@@ -552,7 +552,10 @@ class RoutineActiveWindowWorker @AssistedInject constructor(
                     val destination = current.journeyDestinationId
                     if (origin != null && destination != null && getRankedJourneys != null) {
                         try {
-                            getRankedJourneys(origin, destination, current.allowedJourneyTransportModes)
+                            // windowEnd is this occurrence's own real active-window end -- see
+                            // GetRankedJourneysUseCase's own searchUntil doc for why the backend
+                            // needs this real boundary rather than searching unboundedly.
+                            getRankedJourneys(origin, destination, current.allowedJourneyTransportModes, windowEnd.toInstant())
                         } catch (e: CancellationException) {
                             throw e
                         } catch (_: Exception) {
@@ -577,7 +580,7 @@ class RoutineActiveWindowWorker @AssistedInject constructor(
                 // the widget can never disagree about whether the same journey is still current.
                 val exactProjectionNow = clock.instant()
                 val journeyPlans = (rawJourneyPlans ?: emptyList()).filterCurrentJourneys(exactProjectionNow)
-                val exactProjection = journeyPlans.firstOrNull()?.toFirstLegNotificationProjection(current, exactProjectionNow)
+                val exactProjection = journeyPlans.toExactJourneyNotificationProjection(current, exactProjectionNow)
                 val departuresState = if (current.type == RoutineType.EXACT_DESTINATION) {
                     exactProjection?.departuresState ?: if (rawJourneyPlans == null) {
                         LiveDeparturesState.Unavailable
@@ -945,33 +948,56 @@ class RoutineActiveWindowWorker @AssistedInject constructor(
     }
 }
 
-/** Projects only the fastest journey's first public-transport leg into the existing simple
- * notification model. Final destination, competing journeys and final arrival deliberately do
- * not enter this projection. */
+/** Projects up to the two most actionable journeys' own first public-transport legs into the
+ * existing simple notification model. Final destination, competing journeys and final arrival
+ * deliberately do not enter this projection. */
 internal data class ExactJourneyNotificationProjection(
     val routine: CommuteRoutine,
     val departuresState: LiveDeparturesState,
 )
 
 /**
- * Returns `null` — refusing to project this journey into a live notification at all — when
- * [isCurrentJourney] considers it no longer current at [now] (already departed, even by one
- * millisecond, or over the two-change limit), rather than clamping its departure to [now] to
- * make an already-departed journey look current. That clamp was the root cause of a real
- * production incident: a bus that had already arrived (and a metro that had already arrived
+ * Returns `null` — refusing to project anything into a live notification at all — when [this]
+ * contains no journey [isCurrentJourney] still considers current at [now] (already departed,
+ * even by one millisecond, or over the two-change limit), rather than clamping a departure to
+ * [now] to make an already-departed journey look current. That clamp was the root cause of a
+ * real production incident: a bus that had already arrived (and a metro that had already arrived
  * after it) kept being shown as "FASTEST"/"alternative" with a "0 min" countdown well after both
  * had actually departed. The caller ([RoutineActiveWindowWorker.doWork]) already re-filters the
  * whole journey list against this exact same [now] before ever calling this function — see that
  * call site's own doc — but this check stays here too rather than trusting that upstream
  * guarantee alone, exactly like every other defensive check in this worker.
+ *
+ * Selects at most the first two still-current journeys, in [this]'s own order — the backend
+ * already places them in PRIMARY → ALTERNATIVE? → NEXT chronological order (see
+ * backend/src/routes/journeys.ts's own doc), so WHICH two journeys are picked never needs to
+ * inspect [se.blick.app.domain.model.JourneyRole] itself: normally PRIMARY + NEXT, or PRIMARY +
+ * ALTERNATIVE during a qualifying gap. Each selected journey's own real role IS still carried
+ * along via [JourneyPlan.role] -> [PreparedDeparture.journeyRole] though (see
+ * [toPreparedDeparture]) — [se.blick.app.notification.RoutineNotificationBuilder]'s own second
+ * row wording (NEXT vs ALTERNATIVE) depends on it, even though the SELECTION here remains purely
+ * positional.
  */
-internal fun JourneyPlan.toFirstLegNotificationProjection(
+internal fun List<JourneyPlan>.toExactJourneyNotificationProjection(
     routine: CommuteRoutine,
     now: Instant,
 ): ExactJourneyNotificationProjection? {
-    if (!isCurrentJourney(now)) return null
+    val current = filter { it.isCurrentJourney(now) }
+    val primary = current.firstOrNull() ?: return null
+    val departures = current.take(2).map { it.toPreparedDeparture(now) }
+    return ExactJourneyNotificationProjection(
+        routine = routine.copy(
+            lineDesignation = primary.firstLeg.lineDesignation,
+            transportMode = primary.firstLeg.transportMode,
+            destinationLabel = primary.firstLeg.direction ?: primary.firstLeg.destinationName,
+        ),
+        departuresState = LiveDeparturesState.Live(LiveDeparturesSnapshot(departures, now)),
+    )
+}
+
+private fun JourneyPlan.toPreparedDeparture(now: Instant): PreparedDeparture {
     val firstLegDeparture = effectiveFirstDeparture()
-    val departure = PreparedDeparture(
+    return PreparedDeparture(
         departureId = journeyId,
         lineDesignation = firstLeg.lineDesignation.orEmpty(),
         direction = firstLeg.direction,
@@ -983,7 +1009,7 @@ internal fun JourneyPlan.toFirstLegNotificationProjection(
         // that function's own doc for the ceiling rule this depends on (a departure under a
         // minute away must read "1 min", never floored to "0 min", while one exactly at `now`
         // reads "0 min"). No coerceAtLeast(0) is needed here to hide a negative duration: the
-        // guard above already refuses to reach this line at all for an expired departure.
+        // caller already filters to only still-current journeys before this is ever called.
         minutesRemaining = countdownMinutes(now, firstLegDeparture),
         isRealTime = firstLeg.isRealtime,
         isCancelled = false,
@@ -991,13 +1017,6 @@ internal fun JourneyPlan.toFirstLegNotificationProjection(
         journeyState = "NORMAL",
         predictionState = null,
         tripDeviations = emptyList(),
-    )
-    return ExactJourneyNotificationProjection(
-        routine = routine.copy(
-            lineDesignation = firstLeg.lineDesignation,
-            transportMode = firstLeg.transportMode,
-            destinationLabel = firstLeg.direction ?: firstLeg.destinationName,
-        ),
-        departuresState = LiveDeparturesState.Live(LiveDeparturesSnapshot(listOf(departure), now)),
+        journeyRole = role,
     )
 }

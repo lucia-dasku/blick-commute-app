@@ -7,6 +7,7 @@ import org.junit.Test
 import se.blick.app.domain.model.CommuteRoutine
 import se.blick.app.domain.model.JourneyLeg
 import se.blick.app.domain.model.JourneyPlan
+import se.blick.app.domain.model.JourneyRole
 import se.blick.app.domain.model.RoutineType
 import se.blick.app.domain.model.TransportMode
 import se.blick.app.notification.RoutineNotificationContent
@@ -63,7 +64,7 @@ class ExactJourneyNotificationProjectionTest {
             disruptions = listOf("Later-leg disruption"),
         )
 
-        val projection = checkNotNull(plan.toFirstLegNotificationProjection(routine, now)) {
+        val projection = checkNotNull(listOf(plan).toExactJourneyNotificationProjection(routine, now)) {
             "This journey has not departed yet -- a projection was expected"
         }
         val model = RoutineNotificationMapper.map(projection.routine, projection.departuresState, now)
@@ -137,7 +138,7 @@ class ExactJourneyNotificationProjectionTest {
         val now = Instant.parse("2026-08-10T07:05:20Z")
         val (routine, plan) = boundaryPlan(departure)
 
-        assertNull(plan.toFirstLegNotificationProjection(routine, now))
+        assertNull(listOf(plan).toExactJourneyNotificationProjection(routine, now))
     }
 
     @Test
@@ -146,7 +147,7 @@ class ExactJourneyNotificationProjectionTest {
         val now = departure
         val (routine, plan) = boundaryPlan(departure)
 
-        val projection = checkNotNull(plan.toFirstLegNotificationProjection(routine, now)) {
+        val projection = checkNotNull(listOf(plan).toExactJourneyNotificationProjection(routine, now)) {
             "A departure exactly at now must still produce a projection"
         }
         val model = RoutineNotificationMapper.map(projection.routine, projection.departuresState, now)
@@ -162,12 +163,99 @@ class ExactJourneyNotificationProjectionTest {
         val departure = now.plusSeconds(25)
         val (routine, plan) = boundaryPlan(departure)
 
-        val projection = checkNotNull(plan.toFirstLegNotificationProjection(routine, now)) {
+        val projection = checkNotNull(listOf(plan).toExactJourneyNotificationProjection(routine, now)) {
             "This journey has not departed yet -- a projection was expected"
         }
         val model = RoutineNotificationMapper.map(projection.routine, projection.departuresState, now)
         val row = (model.content as RoutineNotificationContent.Live).departures.single()
 
         assertEquals(1L, row.minutesRemaining)
+    }
+
+    // ---- Two-row projection: the notification infrastructure supports two departure rows, and
+    // an exact-destination routine must now actually use both -- see this file's own doc. ----
+
+    @Test
+    fun `exposes two departures when two journeys are current -- not just the first`() {
+        val now = Instant.parse("2026-08-10T07:00:00Z")
+        val (routine, primaryPlan) = boundaryPlan(Instant.parse("2026-08-10T07:05:00Z"))
+        val (_, nextPlan) = boundaryPlan(Instant.parse("2026-08-10T07:20:00Z"))
+        val secondPlan = nextPlan.copy(journeyId = "journey-next")
+
+        val projection = checkNotNull(listOf(primaryPlan, secondPlan).toExactJourneyNotificationProjection(routine, now)) {
+            "Two current journeys were supplied -- a projection was expected"
+        }
+        val model = RoutineNotificationMapper.map(projection.routine, projection.departuresState, now)
+        val rows = (model.content as RoutineNotificationContent.Live).departures
+
+        assertEquals(2, rows.size)
+        assertEquals(5L, rows[0].minutesRemaining)
+        assertEquals(20L, rows[1].minutesRemaining)
+    }
+
+    @Test
+    fun `a third journey is never projected -- only the first two current ones are`() {
+        val now = Instant.parse("2026-08-10T07:00:00Z")
+        val (routine, first) = boundaryPlan(Instant.parse("2026-08-10T07:05:00Z"))
+        val second = boundaryPlan(Instant.parse("2026-08-10T07:20:00Z")).second.copy(journeyId = "journey-second")
+        val third = boundaryPlan(Instant.parse("2026-08-10T07:40:00Z")).second.copy(journeyId = "journey-third")
+
+        val projection = checkNotNull(listOf(first, second, third).toExactJourneyNotificationProjection(routine, now))
+        val model = RoutineNotificationMapper.map(projection.routine, projection.departuresState, now)
+        val rows = (model.content as RoutineNotificationContent.Live).departures
+
+        assertEquals(2, rows.size)
+        assertEquals(listOf(5L, 20L), rows.map { it.minutesRemaining })
+    }
+
+    @Test
+    fun `an expired first journey is skipped so the still-current second one is projected alone`() {
+        val now = Instant.parse("2026-08-10T07:05:20Z")
+        val (routine, expired) = boundaryPlan(Instant.parse("2026-08-10T07:05:00Z"))
+        val current = boundaryPlan(Instant.parse("2026-08-10T07:20:00Z")).second.copy(journeyId = "journey-current")
+
+        val projection = checkNotNull(listOf(expired, current).toExactJourneyNotificationProjection(routine, now)) {
+            "The second journey is still current -- a projection was expected"
+        }
+        val model = RoutineNotificationMapper.map(projection.routine, projection.departuresState, now)
+        val rows = (model.content as RoutineNotificationContent.Live).departures
+
+        assertEquals(1, rows.size)
+        assertEquals(15L, rows[0].minutesRemaining)
+    }
+
+    // ---- journeyRole flows end-to-end: JourneyPlan.role -> toPreparedDeparture ->
+    // RoutineNotificationMapper -> NotificationDepartureRow.journeyRole -- see
+    // toExactJourneyNotificationProjection's own doc on why selection stays positional while
+    // each row's own role is still carried through unchanged. ----
+
+    @Test
+    fun `a PRIMARY plus NEXT pair carries each journey's own real role through to its notification row`() {
+        val now = Instant.parse("2026-08-10T07:00:00Z")
+        val (routine, primaryPlan) = boundaryPlan(Instant.parse("2026-08-10T07:05:00Z"))
+        val (_, nextPlan) = boundaryPlan(Instant.parse("2026-08-10T07:20:00Z"))
+        val second = nextPlan.copy(journeyId = "journey-next", role = JourneyRole.NEXT)
+
+        val projection = checkNotNull(listOf(primaryPlan, second).toExactJourneyNotificationProjection(routine, now))
+        val model = RoutineNotificationMapper.map(projection.routine, projection.departuresState, now)
+        val rows = (model.content as RoutineNotificationContent.Live).departures
+
+        assertEquals(JourneyRole.PRIMARY, rows[0].journeyRole)
+        assertEquals(JourneyRole.NEXT, rows[1].journeyRole)
+    }
+
+    @Test
+    fun `a PRIMARY plus ALTERNATIVE pair carries ALTERNATIVE through to the second notification row`() {
+        val now = Instant.parse("2026-08-10T07:00:00Z")
+        val (routine, primaryPlan) = boundaryPlan(Instant.parse("2026-08-10T07:05:00Z"))
+        val (_, altPlan) = boundaryPlan(Instant.parse("2026-08-10T07:20:00Z"))
+        val second = altPlan.copy(journeyId = "journey-alt", role = JourneyRole.ALTERNATIVE)
+
+        val projection = checkNotNull(listOf(primaryPlan, second).toExactJourneyNotificationProjection(routine, now))
+        val model = RoutineNotificationMapper.map(projection.routine, projection.departuresState, now)
+        val rows = (model.content as RoutineNotificationContent.Live).departures
+
+        assertEquals(JourneyRole.PRIMARY, rows[0].journeyRole)
+        assertEquals(JourneyRole.ALTERNATIVE, rows[1].journeyRole)
     }
 }

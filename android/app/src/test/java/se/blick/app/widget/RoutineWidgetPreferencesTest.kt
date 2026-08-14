@@ -1,9 +1,11 @@
 package se.blick.app.widget
 
 import androidx.datastore.preferences.core.mutablePreferencesOf
+import androidx.datastore.preferences.core.stringPreferencesKey
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertNull
 import org.junit.Test
+import se.blick.app.domain.model.JourneyRole
 import se.blick.app.domain.model.TransportMode
 import java.time.Instant
 
@@ -207,36 +209,112 @@ class RoutineWidgetPreferencesTest {
     }
 
     @Test
-    fun `exact-destination fastest and alternative journeys round-trip for compact and large layouts`() {
-        val fastest = WidgetJourneyRow(
+    fun `exact-destination primary and secondary journeys round-trip for compact and large layouts`() {
+        val primary = WidgetJourneyRow(
             lineDesignation = "14",
             transportMode = TransportMode.METRO,
             departureTime = Instant.parse("2026-08-10T07:03:00Z"),
             arrivalTime = Instant.parse("2026-08-10T07:31:00Z"),
             transferCount = 0,
             isRealtime = true,
+            role = JourneyRole.PRIMARY,
         )
-        val alternative = WidgetJourneyRow(
+        val secondary = WidgetJourneyRow(
             lineDesignation = "4",
             transportMode = TransportMode.BUS,
             departureTime = Instant.parse("2026-08-10T07:06:00Z"),
             arrivalTime = Instant.parse("2026-08-10T07:36:00Z"),
             transferCount = 1,
             isRealtime = false,
+            role = JourneyRole.ALTERNATIVE,
         )
         val model = RoutineWidgetModel(
             routineId = "exact-1",
             routineName = "To work",
             stationName = "Fruangen",
             directionLabel = "Slussen",
-            content = RoutineWidgetContent.Journeys(fastest, alternative),
-            lineDesignation = fastest.lineDesignation,
-            transportMode = fastest.transportMode,
+            content = RoutineWidgetContent.Journeys(primary, secondary),
+            lineDesignation = primary.lineDesignation,
+            transportMode = primary.transportMode,
         )
 
         val restored = roundTrip(RoutineWidgetUiState.ActiveRoutine(model)) as RoutineWidgetUiState.ActiveRoutine
 
         assertEquals(model, restored.model)
-        assertEquals(RoutineWidgetContent.Journeys(fastest, alternative), restored.model.content)
+        assertEquals(RoutineWidgetContent.Journeys(primary, secondary), restored.model.content)
+    }
+
+    // ---- WidgetJourneyRow.role -- backend-authoritative, must survive persistence exactly,
+    // never re-derived or defaulted once genuinely written ----
+
+    @Test
+    fun `the primary row's role round-trips exactly`() {
+        val primary = WidgetJourneyRow(
+            "14", TransportMode.METRO, Instant.parse("2026-08-10T07:03:00Z"), Instant.parse("2026-08-10T07:31:00Z"),
+            0, isRealtime = true, role = JourneyRole.PRIMARY,
+        )
+        val model = RoutineWidgetModel("exact-1", "To work", "Fruangen", "Slussen", RoutineWidgetContent.Journeys(primary, null))
+
+        val restored = roundTrip(RoutineWidgetUiState.ActiveRoutine(model)) as RoutineWidgetUiState.ActiveRoutine
+
+        assertEquals(JourneyRole.PRIMARY, (restored.model.content as RoutineWidgetContent.Journeys).primary.role)
+    }
+
+    @Test
+    fun `a NEXT secondary role round-trips as NEXT, not ALTERNATIVE`() {
+        val primary = WidgetJourneyRow(
+            "14", TransportMode.METRO, Instant.parse("2026-08-10T07:03:00Z"), Instant.parse("2026-08-10T07:31:00Z"),
+            0, isRealtime = true, role = JourneyRole.PRIMARY,
+        )
+        val next = WidgetJourneyRow(
+            "14", TransportMode.METRO, Instant.parse("2026-08-10T07:33:00Z"), Instant.parse("2026-08-10T08:01:00Z"),
+            0, isRealtime = false, role = JourneyRole.NEXT,
+        )
+        val model = RoutineWidgetModel("exact-1", "To work", "Fruangen", "Slussen", RoutineWidgetContent.Journeys(primary, next))
+
+        val restored = roundTrip(RoutineWidgetUiState.ActiveRoutine(model)) as RoutineWidgetUiState.ActiveRoutine
+
+        assertEquals(JourneyRole.NEXT, (restored.model.content as RoutineWidgetContent.Journeys).secondary?.role)
+    }
+
+    @Test
+    fun `an ALTERNATIVE secondary role round-trips as ALTERNATIVE, not NEXT`() {
+        val primary = WidgetJourneyRow(
+            "14", TransportMode.METRO, Instant.parse("2026-08-10T07:03:00Z"), Instant.parse("2026-08-10T07:31:00Z"),
+            0, isRealtime = true, role = JourneyRole.PRIMARY,
+        )
+        val alternative = WidgetJourneyRow(
+            "4", TransportMode.BUS, Instant.parse("2026-08-10T07:06:00Z"), Instant.parse("2026-08-10T07:36:00Z"),
+            1, isRealtime = false, role = JourneyRole.ALTERNATIVE,
+        )
+        val model = RoutineWidgetModel("exact-1", "To work", "Fruangen", "Slussen", RoutineWidgetContent.Journeys(primary, alternative))
+
+        val restored = roundTrip(RoutineWidgetUiState.ActiveRoutine(model)) as RoutineWidgetUiState.ActiveRoutine
+
+        assertEquals(JourneyRole.ALTERNATIVE, (restored.model.content as RoutineWidgetContent.Journeys).secondary?.role)
+    }
+
+    @Test
+    fun `a secondary role persisted by a version predating this field defaults to NEXT on read, never crashes`() {
+        val prefs = mutablePreferencesOf()
+        val primary = WidgetJourneyRow(
+            "14", TransportMode.METRO, Instant.parse("2026-08-10T07:03:00Z"), Instant.parse("2026-08-10T07:31:00Z"),
+            0, isRealtime = true, role = JourneyRole.PRIMARY,
+        )
+        val alternative = WidgetJourneyRow(
+            "4", TransportMode.BUS, Instant.parse("2026-08-10T07:06:00Z"), Instant.parse("2026-08-10T07:36:00Z"),
+            1, isRealtime = false, role = JourneyRole.ALTERNATIVE,
+        )
+        val model = RoutineWidgetModel("exact-1", "To work", "Fruangen", "Slussen", RoutineWidgetContent.Journeys(primary, alternative))
+        RoutineWidgetUiState.ActiveRoutine(model).writeInto(prefs)
+        // Simulate a pre-upgrade write: the role keys were never present at all.
+        prefs.remove(stringPreferencesKey("journeyPrimaryRole"))
+        prefs.remove(stringPreferencesKey("journeySecondaryRole"))
+
+        val restored = prefs.toPreferences().toWidgetUiState() as RoutineWidgetUiState.ActiveRoutine
+        val content = restored.model.content as RoutineWidgetContent.Journeys
+
+        assertEquals(JourneyRole.PRIMARY, content.primary.role)
+        assertEquals(JourneyRole.NEXT, content.secondary?.role)
     }
 }

@@ -1,10 +1,13 @@
 import { describe, expect, it } from "vitest";
 import {
+  floorToStockholmRequestMinute,
   getStockholmOffsetMinutesAt,
   InvalidStockholmTimestampError,
   isInvalidStockholmTimestampError,
   naiveStockholmLocalToIso,
+  nextStockholmRequestMinute,
   resolveStockholmLocalTime,
+  toItdDateTime,
 } from "../src/lib/stockholmTime.js";
 
 describe("stockholmTime", () => {
@@ -164,6 +167,132 @@ describe("stockholmTime", () => {
         InvalidStockholmTimestampError,
       );
       expect(() => resolveStockholmLocalTime("2026-07-04", reference)).toThrow(InvalidStockholmTimestampError);
+    });
+  });
+
+  describe("toItdDateTime", () => {
+    it("formats a normal winter (CET, UTC+1) instant deterministically", () => {
+      const { itdDate, itdTime } = toItdDateTime(new Date("2026-01-15T10:00:00Z"));
+      expect(itdDate).toBe("20260115");
+      expect(itdTime).toBe("1100");
+    });
+
+    it("formats a normal summer (CEST, UTC+2) instant deterministically", () => {
+      const { itdDate, itdTime } = toItdDateTime(new Date("2026-07-15T10:00:00Z"));
+      expect(itdDate).toBe("20260715");
+      expect(itdTime).toBe("1200");
+    });
+
+    it("reflects the 2026 spring-forward transition (CET -> CEST)", () => {
+      // EU spring transition 2026: last Sunday of March = 2026-03-29 -- at 01:00 UTC,
+      // clocks jump from 02:00 CET straight to 03:00 CEST.
+      const justBefore = toItdDateTime(new Date("2026-03-29T00:59:00Z"));
+      const justAfter = toItdDateTime(new Date("2026-03-29T01:00:00Z"));
+      expect(justBefore.itdTime).toBe("0159");
+      expect(justAfter.itdTime).toBe("0300");
+    });
+
+    it("reflects the 2026 autumn transition (CEST -> CET)", () => {
+      // EU autumn transition 2026: last Sunday of October = 2026-10-25 -- at 01:00 UTC,
+      // local 02:00-02:59 CEST is followed by a second pass through 02:00-02:59, now CET.
+      const justBefore = toItdDateTime(new Date("2026-10-25T00:59:00Z"));
+      const justAfter = toItdDateTime(new Date("2026-10-25T01:00:00Z"));
+      expect(justBefore.itdTime).toBe("0259");
+      expect(justAfter.itdTime).toBe("0200");
+    });
+
+    it("drops seconds rather than rounding into a false minute -- itd_time's own precision is whole minutes", () => {
+      const { itdTime } = toItdDateTime(new Date("2026-01-15T10:00:59Z"));
+      expect(itdTime).toBe("1100");
+    });
+  });
+
+  describe("floorToStockholmRequestMinute", () => {
+    it("floors seconds away within a normal winter (CET) minute", () => {
+      const floored = floorToStockholmRequestMinute(new Date("2026-01-15T10:00:45Z"));
+      expect(floored.toISOString()).toBe("2026-01-15T10:00:00.000Z");
+    });
+
+    it("floors seconds away within a normal summer (CEST) minute", () => {
+      const floored = floorToStockholmRequestMinute(new Date("2026-07-15T10:00:45Z"));
+      expect(floored.toISOString()).toBe("2026-07-15T10:00:00.000Z");
+    });
+
+    it("is idempotent on an instant already at the start of its own minute", () => {
+      const floored = floorToStockholmRequestMinute(new Date("2026-01-15T10:00:00Z"));
+      expect(floored.toISOString()).toBe("2026-01-15T10:00:00.000Z");
+    });
+
+    it("floors correctly for the instant immediately after the 2026 spring-forward gap", () => {
+      // 2026-03-29T01:00:30Z is local 03:00:30 CEST -- the gap (02:00-02:59 local) never
+      // occurred, so this is an ordinary, unambiguous instant to floor.
+      const floored = floorToStockholmRequestMinute(new Date("2026-03-29T01:00:30Z"));
+      expect(floored.toISOString()).toBe("2026-03-29T01:00:00.000Z");
+    });
+
+    it("floors an instant during the FIRST (CEST) pass of the 2026 autumn duplicated hour to its own occurrence", () => {
+      // 2026-10-25T00:30:45Z is local 02:30:45 CEST -- the first of the two times local
+      // 02:30 occurs. Flooring must stay within this SAME occurrence, never jump to the
+      // second (CET) pass an hour later.
+      const floored = floorToStockholmRequestMinute(new Date("2026-10-25T00:30:45Z"));
+      expect(floored.toISOString()).toBe("2026-10-25T00:30:00.000Z");
+    });
+
+    it("floors an instant during the SECOND (CET) pass of the 2026 autumn duplicated hour to its own occurrence", () => {
+      // 2026-10-25T01:30:45Z is ALSO local 02:30:45, but the second (CET) pass, one real
+      // hour later than the CEST one above -- flooring must resolve to THIS occurrence.
+      const floored = floorToStockholmRequestMinute(new Date("2026-10-25T01:30:45Z"));
+      expect(floored.toISOString()).toBe("2026-10-25T01:30:00.000Z");
+    });
+  });
+
+  describe("nextStockholmRequestMinute", () => {
+    it("advances to exactly one minute later from an exact-minute instant", () => {
+      const next = nextStockholmRequestMinute(new Date("2026-01-15T10:00:00Z"));
+      expect(next.toISOString()).toBe("2026-01-15T10:01:00.000Z");
+    });
+
+    it("floors seconds away before advancing, rather than adding 60 raw seconds", () => {
+      // From 10:00:45 -- a naive +60s would land on 10:01:45. The correct request-minute
+      // successor is 10:01:00, since itd_time can only ever represent whole minutes.
+      const next = nextStockholmRequestMinute(new Date("2026-01-15T10:00:45Z"));
+      expect(next.toISOString()).toBe("2026-01-15T10:01:00.000Z");
+    });
+
+    it("rolls over the local Stockholm day at 23:59 -> 00:00", () => {
+      // Local 2026-01-15T23:59:00 CET (UTC+1) is 2026-01-15T22:59:00Z. The next request
+      // minute is local 2026-01-16T00:00:00 -- a genuine calendar-day rollover, not just a
+      // UTC one (which would also roll over here, but for the wrong reason).
+      const next = nextStockholmRequestMinute(new Date("2026-01-15T22:59:00Z"));
+      expect(next.toISOString()).toBe("2026-01-15T23:00:00.000Z");
+      const { itdDate, itdTime } = toItdDateTime(next);
+      expect(itdDate).toBe("20260116");
+      expect(itdTime).toBe("0000");
+    });
+
+    it("skips straight over the non-existent 2026 spring-forward hour", () => {
+      // Local 01:59 CET (last minute before the gap) is 2026-03-29T00:59:00Z. The next
+      // representable local minute is 03:00 CEST -- local 02:00-02:59 never happened.
+      const next = nextStockholmRequestMinute(new Date("2026-03-29T00:59:00Z"));
+      const { itdTime } = toItdDateTime(next);
+      expect(itdTime).toBe("0300");
+    });
+
+    it("advances from the first (CEST) pass of the 2026 autumn duplicated hour into its second (CET) pass", () => {
+      // Local 02:59 CEST (last minute of the first pass) is 2026-10-25T00:59:00Z. The next
+      // real minute is local 02:00 again -- now CET, the second pass through the fold.
+      const next = nextStockholmRequestMinute(new Date("2026-10-25T00:59:00Z"));
+      expect(next.toISOString()).toBe("2026-10-25T01:00:00.000Z");
+      const { itdTime } = toItdDateTime(next);
+      expect(itdTime).toBe("0200");
+    });
+
+    it("advances out of the 2026 autumn duplicated hour once the second (CET) pass ends", () => {
+      // Local 02:59 CET (last minute of the SECOND pass) is 2026-10-25T01:59:00Z. The next
+      // real minute is local 03:00 CET, past the fold entirely.
+      const next = nextStockholmRequestMinute(new Date("2026-10-25T01:59:00Z"));
+      const { itdTime } = toItdDateTime(next);
+      expect(itdTime).toBe("0300");
     });
   });
 

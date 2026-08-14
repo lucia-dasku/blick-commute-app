@@ -2909,12 +2909,21 @@ class RoutineActiveWindowWorkerTest {
      * production code has no suspension point between GetRankedJourneysUseCase's own post-response
      * `now` read and the worker's subsequent one for a shared TickingClock to advance across. */
     private class FakeJourneyRepository(private val journeys: List<JourneyPlan>) : JourneyRepository {
+        /** Captures whatever `searchUntil` the worker's own call actually supplied — most tests
+         * in this section don't care, but see "passes windowEnd as searchUntil" below. */
+        var receivedSearchUntil: Instant? = null
+            private set
+
         override suspend fun searchLocations(query: String): List<JourneyLocation> = emptyList()
         override suspend fun getJourneys(
             originId: String,
             destinationId: String,
             allowedTransportModes: Set<TransportMode>,
-        ): List<JourneyPlan> = journeys
+            searchUntil: Instant?,
+        ): List<JourneyPlan> {
+            receivedSearchUntil = searchUntil
+            return journeys
+        }
     }
 
     @Test
@@ -3018,6 +3027,68 @@ class RoutineActiveWindowWorkerTest {
         assertEquals(notificationDeparture.minutesRemaining, countdownMinutes(nowAtUpdate, upcomingJourney.departureTime))
     }
 
+    @Test
+    fun `the worker's notification exposes two departures when two journeys survive filtering, not just the first`() = runTest {
+        val clock = TickingClock(Instant.parse("2026-07-27T05:00:00Z"), zone) // 07:00 local, Monday
+        val exactRoutine = exactDestinationRoutine()
+        val repository = ScriptedRoutineRepository(clock) { exactRoutine }
+        val useCaseClock = Clock.fixed(Instant.parse("2026-07-27T05:00:30Z"), zone)
+        // The backend already places these in PRIMARY -> NEXT chronological order (see
+        // backend/src/routes/journeys.ts's own doc) -- the worker's own notification projection
+        // must expose both, not only the first, now that the notification infrastructure's
+        // second departure row is actually used for an exact-destination routine.
+        val primary = exactJourney("primary", Instant.parse("2026-07-27T05:05:00Z"), lineDesignation = "14")
+        val next = exactJourney("next", Instant.parse("2026-07-27T05:20:00Z"), lineDesignation = "17")
+        val getRankedJourneys = GetRankedJourneysUseCase(FakeJourneyRepository(listOf(primary, next)), useCaseClock)
+        val notifier = RecordingNotifier()
+        val widgetUpdater = RecordingWidgetUpdater()
+
+        val worker = buildWorker(
+            exactRoutine.id,
+            repository,
+            GetLiveDeparturesUseCase(FakeDepartureRepository { error("unused for an exact-destination routine") }, clock),
+            notifier,
+            RecordingScheduler(),
+            clock,
+            widgetUpdater = widgetUpdater,
+            getRankedJourneys = getRankedJourneys,
+        )
+        worker.doWork()
+
+        val liveContent = notifier.shown.map { it.content }.filterIsInstance<RoutineNotificationContent.Live>()
+        assertTrue("expected the notification to show a live result", liveContent.isNotEmpty())
+        val departures = liveContent.first().departures
+        assertEquals(2, departures.size)
+        assertEquals("14", departures[0].lineDesignation)
+        assertEquals("17", departures[1].lineDesignation)
+    }
+
+    @Test
+    fun `the worker passes this occurrence's own windowEnd as searchUntil, never an invented horizon`() = runTest {
+        val clock = TickingClock(Instant.parse("2026-07-27T05:00:00Z"), zone) // 07:00 local, Monday
+        // endTime = 07:02 local -- exactDestinationRoutine()'s own default.
+        val exactRoutine = exactDestinationRoutine()
+        val repository = ScriptedRoutineRepository(clock) { exactRoutine }
+        val journeyRepository = FakeJourneyRepository(listOf(exactJourney("primary", Instant.parse("2026-07-27T05:01:00Z"))))
+        val getRankedJourneys = GetRankedJourneysUseCase(journeyRepository, Clock.fixed(clock.instant(), zone))
+
+        val worker = buildWorker(
+            exactRoutine.id,
+            repository,
+            GetLiveDeparturesUseCase(FakeDepartureRepository { error("unused for an exact-destination routine") }, clock),
+            RecordingNotifier(),
+            RecordingScheduler(),
+            clock,
+            widgetUpdater = RecordingWidgetUpdater(),
+            getRankedJourneys = getRankedJourneys,
+        )
+        worker.doWork()
+
+        // 07:02 local (this occurrence's own configured endTime) = 05:02:00Z, the same
+        // Europe/Stockholm summer offset the "07:00 local" clock start above already uses.
+        assertEquals(Instant.parse("2026-07-27T05:02:00Z"), journeyRepository.receivedSearchUntil)
+    }
+
     /** Always throws -- models a genuine search failure (network/backend error), as opposed to
      * [FakeJourneyRepository] succeeding with a list that later turns out empty or expired. */
     private class ThrowingJourneyRepository : JourneyRepository {
@@ -3026,6 +3097,7 @@ class RoutineActiveWindowWorkerTest {
             originId: String,
             destinationId: String,
             allowedTransportModes: Set<TransportMode>,
+            searchUntil: Instant?,
         ): List<JourneyPlan> = throw IOException("SL Journey Planner unavailable")
     }
 

@@ -20,6 +20,11 @@ interface BlickApiClient {
         throw UnsupportedOperationException("Purchase verification is not implemented by this test client")
     suspend fun searchJourneyLocations(query: String): JourneyLocationSearchDto =
         throw UnsupportedOperationException("Journey location search is not implemented by this test client")
-    suspend fun getJourneys(originId: String, destinationId: String, transportModes: String): JourneysResponseDto =
+    /** [searchUntil] is an ISO-8601 instant (see [java.time.Instant.toString]) bounding how far
+     * forward the backend's own targeted NEXT/ALTERNATIVE acquisition may search — see
+     * [se.blick.app.domain.usecase.GetRankedJourneysUseCase]'s own doc. Null when the caller has
+     * no genuine routine-occurrence boundary to offer; the backend then answers from its initial
+     * acquisition alone rather than inventing a search horizon. */
+    suspend fun getJourneys(originId: String, destinationId: String, transportModes: String, searchUntil: String? = null): JourneysResponseDto =
         throw UnsupportedOperationException("Journey search is not implemented by this test client")
 }

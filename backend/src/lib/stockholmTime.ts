@@ -245,3 +245,59 @@ export function naiveStockholmLocalToIso(
   const wall = formatStockholmWallClock(resolved.instant.getTime());
   return { iso: `${wall}${formatOffsetSuffix(resolved.offsetMinutes)}`, anomaly: resolved.anomaly };
 }
+
+/**
+ * Formats a real instant as SL Journey Planner's own `itd_date` (YYYYMMDD) / `itd_time`
+ * (HHMM) request parameters — see `backend/src/services/slJourneyPlannerClient.ts`'s own
+ * doc. Resolved against Europe/Stockholm wall-clock time using the exact same DST-aware
+ * formatter as the rest of this file, never the Vercel server process's own local
+ * timezone — critical since SL traffic is entirely Stockholm-based regardless of where
+ * the backend happens to be running. `itd_time`'s own documented precision is whole
+ * minutes (HHMM), so this deliberately drops seconds rather than rounding them into a
+ * false minute boundary.
+ */
+export function toItdDateTime(instant: Date): { itdDate: string; itdTime: string } {
+  const wall = formatStockholmWallClock(instant.getTime()); // "YYYY-MM-DDTHH:mm:ss"
+  return {
+    itdDate: wall.slice(0, 4) + wall.slice(5, 7) + wall.slice(8, 10),
+    itdTime: wall.slice(11, 13) + wall.slice(14, 16),
+  };
+}
+
+/**
+ * The instant representing the START of [instant]'s own Europe/Stockholm "request minute" —
+ * the coarsest instant that still serializes to the exact same `itd_date`/`itd_time` as
+ * [instant] itself (see `toItdDateTime`). SL's own request precision is whole minutes; a
+ * journey departing at 18:35:40 is just as reachable by an `itd_time=1835` request as one
+ * departing at 18:35:00, so a candidate acquisition anchored at a known departure must search
+ * from the START of that departure's own minute, never from the departure's exact second (see
+ * `backend/src/services/candidateCollector.ts`'s own doc on why this matters). Reuses
+ * `resolveStockholmLocalTime` — the same DST-safe local-time resolver every other Stockholm
+ * timestamp in this codebase goes through — passing [instant] itself as the disambiguation
+ * reference, since flooring [instant]'s own minute must always resolve to the specific
+ * occurrence [instant] itself belongs to, even during the autumn duplicated hour.
+ */
+export function floorToStockholmRequestMinute(instant: Date): Date {
+  const { itdDate, itdTime } = toItdDateTime(instant);
+  const naiveLocal =
+    `${itdDate.slice(0, 4)}-${itdDate.slice(4, 6)}-${itdDate.slice(6, 8)}` +
+    `T${itdTime.slice(0, 2)}:${itdTime.slice(2, 4)}:00`;
+  return resolveStockholmLocalTime(naiveLocal, instant).instant;
+}
+
+/**
+ * The start of the NEXT representable Europe/Stockholm request minute strictly after
+ * [instant]'s own — i.e. one real minute past `floorToStockholmRequestMinute(instant)`, itself
+ * re-floored to its own minute start. The re-floor is normally a no-op (a whole real minute
+ * added to an exact minute boundary lands on another exact minute boundary even across a DST
+ * transition, since Europe/Stockholm's own transitions are whole-hour shifts) but costs nothing
+ * and removes any need to trust that reasoning implicitly. Used to advance a candidate
+ * acquisition's search cursor past a batch's own latest departure — see
+ * `backend/src/services/candidateCollector.ts`'s own doc — never by an arbitrary raw-seconds
+ * step that could straddle two different request minutes without actually covering either one
+ * from its own start.
+ */
+export function nextStockholmRequestMinute(instant: Date): Date {
+  const flooredMillis = floorToStockholmRequestMinute(instant).getTime();
+  return floorToStockholmRequestMinute(new Date(flooredMillis + 60_000));
+}
