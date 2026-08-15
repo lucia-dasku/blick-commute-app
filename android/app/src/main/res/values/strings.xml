@@ -71,13 +71,14 @@
     <string name="routine_details_transport_dialog_body">Blick will only offer journeys whose public-transport legs use your selected types. Walking transfers are always allowed.</string>
     <string name="routine_details_transport_one_required">Select at least one transport type.</string>
     <string name="routine_details_transport_update_failed">Couldn\'t update transport choices. Try again.</string>
+    <string name="routine_details_changes_preference_update_failed">Couldn\'t update journey preference. Try again.</string>
     <string name="journey_fastest">FASTEST</string>
     <string name="journey_next">NEXT</string>
     <string name="journey_alternative">ALTERNATIVE</string>
     <string name="journey_departure_in">in %1$d min</string>
     <string name="journey_direct">Direct</string>
     <string name="journey_with_changes">With changes</string>
-    <string name="journey_no_direct_available">No direct journey available</string>
+    <string name="journey_no_direct_available">No direct journey available. Turn on With changes to see other routes.</string>
     <string name="journey_changes">%1$d changes</string>
     <string name="journey_arrives">Arrives %1$s</string>
     <string name="journey_later">%1$d min later</string>
@@ -330,12 +331,19 @@
          two resources concatenated at render time ("Next in 16 min"). -->
     <string name="widget_countdown_minutes_format">%1$d min</string>
     <string name="widget_next_departure_format">Next in %1$d min</string>
-    <string name="widget_journey_arrival">Arrives %1$s</string>
-    <!-- Second exact-journey row when it is NEXT: the same route family's own next departure. -->
-    <string name="widget_journey_next">%1$s · in %2$d min · arrives %3$s</string>
-    <!-- Second exact-journey row when it is ALTERNATIVE: a genuinely different route — visibly
-         labelled so it's never mistaken for just another regular departure. -->
-    <string name="widget_journey_alternative">Alternative: %1$s · in %2$d min · arrives %3$s</string>
+    <!-- Direct/Both/With-changes layout: the "Next"/"Alternative" row label, paired with a plain
+         widget_countdown_minutes_format value in a two-column row — see BlickRoutineWidget.kt's
+         own JourneyMainContent doc. Distinct from journey_next/journey_alternative (ALL CAPS card
+         labels used elsewhere) to match this widget's own Title Case convention. -->
+    <string name="widget_journey_next_label">Next</string>
+    <string name="widget_journey_alternative_label">Alternative</string>
+    <!-- Both/With-changes layout only: the primary journey's own arrival time plus its change
+         count — shown instead of "Direct" whenever the journey actually has one or more
+         changes. -->
+    <plurals name="widget_journey_arrive_with_changes">
+        <item quantity="one">Arrive %1$s • %2$d change</item>
+        <item quantity="other">Arrive %1$s • %2$d changes</item>
+    </plurals>
     <!-- A short, always-visible header marker for RoutineWidgetContent.Stale — shown
          regardless of compact/full layout or whether any stale departure is still upcoming, see
          StaleIndicator's own doc for why this is the one guaranteed place a stale-data warning

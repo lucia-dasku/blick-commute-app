@@ -7,6 +7,7 @@ import org.junit.Assert.assertFalse
 import org.junit.Assert.assertNull
 import org.junit.Assert.assertTrue
 import org.junit.Test
+import se.blick.app.domain.model.ExactDestinationChangesPreference
 import se.blick.app.domain.model.JourneyRole
 import se.blick.app.domain.model.TransportMode
 import java.time.Instant
@@ -149,12 +150,16 @@ class BlickRoutineWidgetTest {
         role = role,
     )
 
-    private fun journeysModel(primary: WidgetJourneyRow, secondary: WidgetJourneyRow?) = RoutineWidgetModel(
+    private fun journeysModel(
+        primary: WidgetJourneyRow,
+        secondary: WidgetJourneyRow?,
+        changesPreference: ExactDestinationChangesPreference = ExactDestinationChangesPreference.BOTH,
+    ) = RoutineWidgetModel(
         routineId = "r1",
         routineName = "Airport commute",
         stationName = "Fruängen",
         directionLabel = "Arlanda",
-        content = RoutineWidgetContent.Journeys(primary, secondary),
+        content = RoutineWidgetContent.Journeys(primary, secondary, changesPreference),
         lineDesignation = primary.lineDesignation,
         transportMode = primary.transportMode,
     )
@@ -251,6 +256,57 @@ class BlickRoutineWidgetTest {
         val resolved = resolveEffectiveModel(model, resolveNow)
 
         assertEquals(RoutineWidgetContent.Journeys(primary, null), resolved.content)
+    }
+
+    // ---- changesPreference: must survive resolveEffectiveModel's own re-wrapping of the content
+    // exactly as-is -- the routine's real persisted preference, never silently reset to the
+    // field's own BOTH default on every render (a real regression caught by these two tests). ----
+
+    @Test
+    fun `changesPreference survives unchanged when both primary and secondary are current`() {
+        val primary = journeyRow(resolveNow.plusSeconds(60))
+        val secondary = journeyRow(resolveNow.plusSeconds(120), role = JourneyRole.NEXT)
+        val model = journeysModel(primary, secondary, ExactDestinationChangesPreference.DIRECT_ONLY)
+
+        val resolved = resolveEffectiveModel(model, resolveNow)
+
+        assertEquals(ExactDestinationChangesPreference.DIRECT_ONLY, (resolved.content as RoutineWidgetContent.Journeys).changesPreference)
+    }
+
+    @Test
+    fun `changesPreference survives unchanged when the secondary row is promoted into the primary slot`() {
+        val expiredPrimary = journeyRow(resolveNow.minusSeconds(1))
+        val secondary = journeyRow(resolveNow.plusSeconds(120), role = JourneyRole.NEXT)
+        val model = journeysModel(expiredPrimary, secondary, ExactDestinationChangesPreference.WITH_CHANGES_ONLY)
+
+        val resolved = resolveEffectiveModel(model, resolveNow)
+
+        assertEquals(ExactDestinationChangesPreference.WITH_CHANGES_ONLY, (resolved.content as RoutineWidgetContent.Journeys).changesPreference)
+    }
+
+    // ---- legBadgesOrFallback: falls back to a single header-derived badge only when legBadges
+    // itself is genuinely empty (state persisted by a version predating that field). ----
+
+    @Test
+    fun `legBadgesOrFallback returns the real per-leg badges unchanged when present`() {
+        val badges = listOf(WidgetJourneyLegBadge("14", TransportMode.METRO), WidgetJourneyLegBadge("40", TransportMode.BUS))
+        val row = journeyRow(resolveNow, lineDesignation = "14").copy(legBadges = badges)
+
+        assertEquals(badges, row.legBadgesOrFallback())
+    }
+
+    @Test
+    fun `legBadgesOrFallback falls back to a single badge built from lineDesignation-slash-transportMode when empty`() {
+        val row = journeyRow(resolveNow, lineDesignation = "14", transportMode = TransportMode.METRO)
+
+        assertEquals(listOf(WidgetJourneyLegBadge("14", TransportMode.METRO)), row.legBadgesOrFallback())
+    }
+
+    @Test
+    fun `legBadgesOrFallback is empty, never a single meaningless badge, when lineDesignation itself is null`() {
+        val row = journeyRow(resolveNow, lineDesignation = null)
+
+        assertEquals(emptyList<WidgetJourneyLegBadge>(), row.legBadgesOrFallback())
     }
 
     @Test

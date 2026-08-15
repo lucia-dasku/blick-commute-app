@@ -22,6 +22,7 @@ import se.blick.app.data.local.datastore.AppSettingsDataStore
 import se.blick.app.data.repository.RoutineRepository
 import se.blick.app.data.repository.StaleSnapshotRepository
 import se.blick.app.domain.model.CommuteRoutine
+import se.blick.app.domain.model.ExactDestinationChangesPreference
 import se.blick.app.domain.model.JourneyPlan
 import se.blick.app.domain.model.JOURNEY_TRANSPORT_MODE_OPTIONS
 import se.blick.app.domain.model.RoutineType
@@ -133,6 +134,12 @@ data class RoutineDetailsUiState(
     val journeysEvaluatedAt: Instant = Instant.EPOCH,
     val isUpdatingJourneyTransportModes: Boolean = false,
     val journeyTransportModesUpdateFailed: Boolean = false,
+    /** Guards [RoutineDetailsViewModel.updateChangesPreference] against an overlapping second
+     * tap, and reports a failed persist so the chips can revert to whatever is actually stored —
+     * see that function's own doc, mirroring [isUpdatingJourneyTransportModes]/
+     * [journeyTransportModesUpdateFailed]'s identical role for the transport-mode allow-list. */
+    val isUpdatingChangesPreference: Boolean = false,
+    val changesPreferenceUpdateFailed: Boolean = false,
 )
 
 /**
@@ -479,6 +486,65 @@ class RoutineDetailsViewModel @Inject constructor(
                 throw e
             } catch (e: Exception) {
                 Log.e(LOG_TAG, "Journey modes were saved but rescheduling ${routine.id} failed", e)
+                _uiState.update { it.copy(schedulingFailed = true) }
+            }
+            runWidgetUpdateSafely { routineWidgetUpdater.reconcile() }
+        }
+    }
+
+    /**
+     * Persists the exact-destination routine's Direct/Both/With-changes preference (see
+     * [ExactDestinationChangesPreference]'s own doc), then refreshes every consumer from the
+     * same stored routine — the identical shape as [updateJourneyTransportModes] just above.
+     * [RoutineDetailsScreen]'s own [JourneyFilterRow] chips never hold their own selection state
+     * — [uiState]'s `routine.changesPreference` is the single source of truth they read, and this
+     * is the only place that value ever changes, so a failed persist below leaves the chips
+     * showing exactly whatever is still actually stored, never an optimistic value that silently
+     * reverts. Reloading [journeys][loadDepartures] immediately after a successful persist is what
+     * propagates the new preference into the next fetch — see [GetRankedJourneysUseCase]'s own
+     * `changesPreference` doc for why this use case (and the backend behind it) is the sole
+     * authority on which journeys are eligible under it, never a purely client-side filter.
+     */
+    fun updateChangesPreference(preference: ExactDestinationChangesPreference) {
+        val state = _uiState.value
+        val routine = state.routine ?: return
+        if (routine.type != RoutineType.EXACT_DESTINATION || state.isUpdatingChangesPreference ||
+            preference == routine.changesPreference
+        ) return
+
+        val updated = routine.copy(changesPreference = preference)
+        _uiState.update {
+            it.copy(isUpdatingChangesPreference = true, changesPreferenceUpdateFailed = false)
+        }
+        viewModelScope.launch {
+            try {
+                routineRepository.save(updated)
+            } catch (e: CancellationException) {
+                _uiState.update { it.copy(isUpdatingChangesPreference = false) }
+                throw e
+            } catch (e: Exception) {
+                Log.e(LOG_TAG, "Failed to update changes preference for ${routine.id}", e)
+                _uiState.update {
+                    it.copy(isUpdatingChangesPreference = false, changesPreferenceUpdateFailed = true)
+                }
+                return@launch
+            }
+
+            _uiState.update {
+                it.copy(
+                    routine = updated,
+                    isUpdatingChangesPreference = false,
+                    changesPreferenceUpdateFailed = false,
+                    schedulingFailed = false,
+                )
+            }
+            loadDepartures(updated, RefreshTrigger.MANUAL)
+            try {
+                routineScheduler.scheduleActivation(updated)
+            } catch (e: CancellationException) {
+                throw e
+            } catch (e: Exception) {
+                Log.e(LOG_TAG, "Changes preference was saved but rescheduling ${routine.id} failed", e)
                 _uiState.update { it.copy(schedulingFailed = true) }
             }
             runWidgetUpdateSafely { routineWidgetUpdater.reconcile() }
@@ -893,7 +959,7 @@ class RoutineDetailsViewModel @Inject constructor(
         val searchUntil = currentSearchUntil(routine)
         departuresJob = viewModelScope.launch {
             try {
-                val journeys = useCase(originId, destinationId, routine.allowedJourneyTransportModes, searchUntil)
+                val journeys = useCase(originId, destinationId, routine.allowedJourneyTransportModes, searchUntil, routine.changesPreference)
                 // Captured AFTER the use case returns, never before -- see
                 // RoutineDetailsUiState.journeysEvaluatedAt's own doc. Stored in the SAME update as
                 // `journeys` so both land in a single StateFlow emission: this timestamp changing is

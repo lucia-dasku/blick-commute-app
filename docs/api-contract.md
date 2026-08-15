@@ -23,7 +23,7 @@ Resolves a user-entered stop/location through Journey Planner Stop Finder and re
 global identifiers plus display names. Android must persist these identifiers; SL Transport's
 numeric site IDs are not assumed to be compatible.
 
-### `GET /api/v1/journeys?originId=&destinationId=&transportModes=METRO,TRAIN,BUS&searchUntil=`
+### `GET /api/v1/journeys?originId=&destinationId=&transportModes=METRO,TRAIN,BUS&searchUntil=&changesPreference=`
 
 Calls Journey Planner Trips, normalizes complete legs (first public transport mode/line,
 departure and final arrival, transfer count, realtime flags, stop names, disruptions, and each
@@ -34,9 +34,14 @@ defaults to all regular modes for backward compatibility and rejects empty or un
 selections. `searchUntil` (an ISO-8601 instant) bounds how far forward the backend's own targeted
 acquisition may search for NEXT/ALTERNATIVE; a malformed value is a validation error, but an
 absent one is not — it means "answer from the initial acquisition alone", never an invented search
-horizon. Upstream timeout/network/schema failures retain the existing error-envelope behavior.
-Responses are public-cacheable for 30 seconds so app/detail/widget consumers do not independently
-amplify upstream traffic.
+horizon. `changesPreference` (`DIRECT_ONLY` | `BOTH` | `WITH_CHANGES_ONLY`, defaulting to `BOTH`)
+narrows the whole eligible candidate pool BEFORE PRIMARY/NEXT/ALTERNATIVE selection — see
+`backend/src/services/candidateCollector.ts`'s own `JourneyChangesPreference` doc — so a
+`DIRECT_ONLY` response's roles are always genuinely direct, never a mixed selection with
+disallowed rows merely hidden afterward; an unrecognized value is a validation error. Upstream
+timeout/network/schema failures retain the existing error-envelope behavior. Responses are
+public-cacheable for 30 seconds so app/detail/widget consumers do not independently amplify
+upstream traffic.
 
 Each returned journey carries a `role` of `PRIMARY`, `NEXT`, or `ALTERNATIVE` — Android renders
 off this field and never infers a role from list position (see `backend/src/routes/journeys.ts`'s

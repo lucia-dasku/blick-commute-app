@@ -3,7 +3,13 @@ import { AppError } from "../lib/errors.js";
 import { successEnvelope } from "../models/common.js";
 import { buildRoutePattern, type RoutePattern } from "../domain/routePattern.js";
 import { selectAlternative, selectNext, selectPrimary } from "../domain/journeyRoles.js";
-import { CandidateCollector, MAX_CHANGES, type NormalizedJourney } from "../services/candidateCollector.js";
+import {
+  CandidateCollector,
+  MAX_CHANGES,
+  requestMaxChanges,
+  type JourneyChangesPreference,
+  type NormalizedJourney,
+} from "../services/candidateCollector.js";
 import { floorToStockholmRequestMinute } from "../lib/stockholmTime.js";
 import {
   journeyTransportModes,
@@ -39,6 +45,20 @@ function parseSearchUntil(value: string | undefined): Date | null {
   const parsed = new Date(value);
   if (Number.isNaN(parsed.getTime())) throw new AppError("VALIDATION_ERROR", "Query parameter 'searchUntil' is invalid");
   return parsed;
+}
+
+/** The routine's persisted Direct/Both/With-changes preference (see
+ * `CandidateCollector`'s own `JourneyChangesPreference` doc) — an ABSENT value defaults to
+ * `"BOTH"`, the pre-existing unfiltered behavior, for backward compatibility with any caller
+ * that predates this parameter; a value that WAS supplied but isn't one of the three known
+ * ones is a validation error, exactly like `requestedTransportModes`'s own handling. */
+function parseChangesPreference(value: string | undefined): JourneyChangesPreference {
+  if (value == null) return "BOTH";
+  const normalized = value.trim().toUpperCase();
+  if (normalized !== "DIRECT_ONLY" && normalized !== "BOTH" && normalized !== "WITH_CHANGES_ONLY") {
+    throw new AppError("VALIDATION_ERROR", "Query parameter 'changesPreference' is invalid");
+  }
+  return normalized;
 }
 
 export type JourneyRole = "PRIMARY" | "NEXT" | "ALTERNATIVE";
@@ -117,6 +137,12 @@ interface AcquisitionResult {
   nextCalls: number;
   /** Same accounting as [nextCalls], for ALTERNATIVE_INTERVAL_DISCOVERY. */
   alternativeCalls: number;
+  /** Real SL requests spent on the `WITH_CHANGES_ONLY`-only bounded forward search for an
+   * initial PRIMARY, when the initial batch's own eligible pool came back empty — see
+   * `resolveSelection`'s own doc. Always zero for `BOTH`/`DIRECT_ONLY` requests, and zero for
+   * `WITH_CHANGES_ONLY` too whenever the initial batch already contained an eligible
+   * candidate. */
+  primaryDiscoveryCalls: number;
   /** How many times the acquisition loop discovered that its CURRENT PRIMARY was no
    * longer the current PRIMARY (a different journeyId) partway through a targeted search,
    * and had to abandon that search and retarget — see `resolveSelection`'s own doc. Zero
@@ -199,16 +225,49 @@ function sameTarget(a: PrimaryTarget, b: PrimaryTarget): boolean {
  * number of times this can retarget is itself bounded by the same shared budget every real
  * request already draws from. Once that budget is exhausted, every further search becomes a
  * no-op and the loop settles within at most one more pass.
+ *
+ * ## PRIMARY_DISCOVERY (`WITH_CHANGES_ONLY` only)
+ *
+ * Runs BEFORE the loop above, and only when [collector]'s pool is still empty after the
+ * initial batch — i.e. `deriveSelection` found no PRIMARY at all yet. SL has no "minimum
+ * changes" request parameter (see `requestMaxChanges`'s own doc), so under
+ * `WITH_CHANGES_ONLY` an initial batch containing only direct journeys is NOT proof that no
+ * with-changes journey exists — it may simply be that SL's own top-3 best-match picks
+ * happened to all be direct, with a perfectly good 1-2-change journey one request further
+ * out. This reuses the exact same bounded, deduplicated, budget-shared `acquireUntil`
+ * machinery NEXT_DISCOVERY below already relies on — anchored at the request's own
+ * `requestedAt` instant, searching the full allowed mode set (there is no PRIMARY yet to
+ * narrow to), satisfied the moment the shared pool contains anything at all (every entry in
+ * it is already both current and `changesPreference`-eligible, per
+ * `CandidateCollector.fetchBatch`'s own upsert gate) — and fails closed exactly like
+ * NEXT_DISCOVERY when there is no `searchUntil` boundary to search within, rather than
+ * inventing one. The very first `acquireUntil` fetch this issues targets the SAME
+ * (bucket, options) the initial batch already queried, so it is recognized as a genuine
+ * duplicate and skipped at no budget cost — see `CandidateCollector.fetchBatch`'s own
+ * `probeKey` doc — before cursor advancement moves on to genuinely new territory. Once this
+ * either finds something or gives up, `selection` is re-derived once more and the loop below
+ * proceeds completely normally from whatever it settled on — no special-casing needed beyond
+ * this one preliminary phase.
  */
 async function resolveSelection(
   collector: CandidateCollector,
   transportModes: readonly JourneyTransportMode[],
   searchUntil: Date | null,
+  changesPreference: JourneyChangesPreference,
+  requestedAt: Date,
 ): Promise<AcquisitionResult> {
   let selection = deriveSelection(collector.pool);
   let nextCalls = 0;
   let alternativeCalls = 0;
+  let primaryDiscoveryCalls = 0;
   let primaryRetargets = 0;
+
+  if (changesPreference === "WITH_CHANGES_ONLY" && selection.primary == null && searchUntil != null && !collector.budgetExhausted) {
+    const callsBefore = collector.batchesUsedSoFar;
+    await collector.acquireUntil({ transportModes, maxChanges: MAX_CHANGES }, requestedAt, searchUntil, (pool) => pool.length > 0);
+    primaryDiscoveryCalls = collector.batchesUsedSoFar - callsBefore;
+    selection = deriveSelection(collector.pool);
+  }
 
   while (selection.primary != null) {
     const primary = selection.primary;
@@ -247,7 +306,7 @@ async function resolveSelection(
     if (!collector.budgetExhausted) {
       const callsBefore = collector.batchesUsedSoFar;
       await collector.acquireUntil(
-        { transportModes, maxChanges: MAX_CHANGES },
+        { transportModes, maxChanges: requestMaxChanges(changesPreference) },
         floorToStockholmRequestMinute(new Date(primary.departureTime)),
         () => new Date((selection.next ?? initialNext).departureTime),
         (pool) => {
@@ -270,7 +329,7 @@ async function resolveSelection(
     break; // PRIMARY and NEXT both stable -- the ALTERNATIVE search ran its full course
   }
 
-  return { selection, nextCalls, alternativeCalls, primaryRetargets };
+  return { selection, nextCalls, alternativeCalls, primaryDiscoveryCalls, primaryRetargets };
 }
 
 /** The structured event this route emits once per request, purely for measuring real-world
@@ -281,11 +340,17 @@ export interface JourneyAcquisitionMetrics {
   event: "journey_acquisition_metrics";
   /** Total real SL requests this one `/journeys` request spent, across the initial batch
    * and every acquisition phase/retarget — always `initialCalls + nextCalls +
-   * alternativeCalls`, kept as its own field so a consumer never has to re-derive it. */
+   * alternativeCalls + primaryDiscoveryCalls`, kept as its own field so a consumer never has
+   * to re-derive it. */
   slCalls: number;
   initialCalls: number;
   nextCalls: number;
   alternativeCalls: number;
+  /** See `resolveSelection`'s own PRIMARY_DISCOVERY doc — real SL requests spent on the
+   * `WITH_CHANGES_ONLY`-only bounded forward search for an initial PRIMARY. Zero for every
+   * other case, including a `WITH_CHANGES_ONLY` request whose initial batch already
+   * contained an eligible candidate. */
+  primaryDiscoveryCalls: number;
   /** Equivalent to `primaryRetargets > 0` — kept as its own boolean since "did this happen
    * at all" and "how many times" are usually aggregated differently downstream. */
   primaryChanged: boolean;
@@ -433,6 +498,34 @@ function toPublicJourney(journey: RankableNormalizedJourney, role: JourneyRole) 
  * is emitted once per request via the injectable `emitMetrics` — real SL call volume before
  * release is otherwise invisible, since none of this acquisition behaviour is observable
  * from the public response shape.
+ *
+ * ## Changes preference
+ *
+ * `changesPreference` (see `parseChangesPreference`/`CandidateCollector`'s own
+ * `JourneyChangesPreference` doc) narrows the ENTIRE eligible candidate pool — applied inside
+ * `CandidateCollector.fetchBatch`, the single choke point every batch from every acquisition
+ * phase upserts through — to only zero-change journeys (`DIRECT_ONLY`), only journeys requiring
+ * at least one change (`WITH_CHANGES_ONLY`), or every eligible journey regardless of transfer
+ * count (`BOTH`, the default). Because the filter applies before PRIMARY/NEXT/ALTERNATIVE are
+ * ever selected, not after, a `DIRECT_ONLY` request's PRIMARY/NEXT/ALTERNATIVE are always
+ * genuinely direct — never a mixed-preference selection with disallowed rows merely hidden from
+ * the response afterward.
+ *
+ * That pool-level filter alone is not sufficient by itself, though: SL only ever returns up to
+ * 3 best-match trips per request, with no notion of `changesPreference` at all, so an unfiltered
+ * request can let 3 disallowed candidates fill every slot and silently crowd a genuinely
+ * eligible one out of the response entirely before Blick's own filter ever sees it. Two
+ * complementary fixes close that gap, one per direction:
+ * - `DIRECT_ONLY` narrows the REQUEST itself — see `requestMaxChanges` — asking SL for
+ *   `maxChanges: 0` everywhere (the initial batch, NEXT_DISCOVERY, and ALTERNATIVE_INTERVAL_DISCOVERY
+ *   alike), so SL's own top-3 are already confined to the space Blick wants and can never be
+ *   crowded out by a transfer journey that was never eligible to begin with.
+ * - `WITH_CHANGES_ONLY` cannot be narrowed the same way — SL has no "minimum changes" request
+ *   parameter — so instead, when the initial batch's own eligible pool comes back empty,
+ *   `resolveSelection`'s own PRIMARY_DISCOVERY phase (see that function's own doc) probes
+ *   forward, reusing the exact same bounded cursor/dedup/budget machinery NEXT_DISCOVERY
+ *   already relies on, until either an eligible candidate is found or the search genuinely
+ *   runs out of room (`searchUntil`, or the shared request budget).
  */
 export function createJourneyRoutes(
   client: SlJourneyPlannerClient,
@@ -454,17 +547,27 @@ export function createJourneyRoutes(
     const destinationId = required(c.req.query("destinationId"), "destinationId");
     const transportModes = requestedTransportModes(c.req.query("transportModes"));
     const searchUntil = parseSearchUntil(c.req.query("searchUntil"));
+    const changesPreference = parseChangesPreference(c.req.query("changesPreference"));
     if (originId === destinationId) throw new AppError("VALIDATION_ERROR", "Origin and destination must differ");
 
     // One timestamp for the whole request: every eligibility check and acquisition anchor
     // below is measured against this same instant, never a freshly re-read wall clock.
     const requestedAt = now();
-    const collector = new CandidateCollector(client, originId, destinationId, requestedAt.getTime());
+    const collector = new CandidateCollector(client, originId, destinationId, requestedAt.getTime(), changesPreference);
 
-    await collector.fetchBatch({ transportModes, maxChanges: MAX_CHANGES, departureAt: requestedAt });
+    // requestMaxChanges(changesPreference), not the bare MAX_CHANGES ceiling -- see that
+    // function's own doc for why DIRECT_ONLY must narrow this very first request to
+    // maxChanges: 0 rather than asking broadly and filtering the response afterward.
+    await collector.fetchBatch({ transportModes, maxChanges: requestMaxChanges(changesPreference), departureAt: requestedAt });
     const initialCalls = collector.batchesUsedSoFar;
 
-    const { selection, nextCalls, alternativeCalls, primaryRetargets } = await resolveSelection(collector, transportModes, searchUntil);
+    const { selection, nextCalls, alternativeCalls, primaryDiscoveryCalls, primaryRetargets } = await resolveSelection(
+      collector,
+      transportModes,
+      searchUntil,
+      changesPreference,
+      requestedAt,
+    );
 
     const alternative =
       selection.primary != null && selection.next != null
@@ -484,6 +587,7 @@ export function createJourneyRoutes(
       initialCalls,
       nextCalls,
       alternativeCalls,
+      primaryDiscoveryCalls,
       primaryChanged: primaryRetargets > 0,
       primaryRetargets,
       budgetExhausted: collector.budgetExhausted,

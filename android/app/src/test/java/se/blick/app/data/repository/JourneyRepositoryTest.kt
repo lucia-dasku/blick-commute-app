@@ -12,6 +12,7 @@ import se.blick.app.data.remote.dto.JourneyPlanDto
 import se.blick.app.data.remote.dto.JourneysResponseDto
 import se.blick.app.data.remote.dto.StopSearchResponseDto
 import se.blick.app.domain.model.DEFAULT_JOURNEY_TRANSPORT_MODES
+import se.blick.app.domain.model.ExactDestinationChangesPreference
 import se.blick.app.domain.model.JourneyRole
 
 /**
@@ -51,7 +52,13 @@ class JourneyRepositoryTest {
         override suspend fun getDepartures(siteId: Long, forecastMinutes: Int?): DeparturesResponseDto = throw NotImplementedError("unused")
         override suspend fun getDisruptions(siteId: Long, lineId: Long?, transportMode: String?): DisruptionsResponseDto =
             throw NotImplementedError("unused")
-        override suspend fun getJourneys(originId: String, destinationId: String, transportModes: String, searchUntil: String?) = response
+        override suspend fun getJourneys(
+            originId: String,
+            destinationId: String,
+            transportModes: String,
+            searchUntil: String?,
+            changesPreference: String,
+        ) = response
     }
 
     private suspend fun mapped(vararg journeys: JourneyPlanDto) =
@@ -104,5 +111,48 @@ class JourneyRepositoryTest {
         val result = mapped(dto("primary", "PRIMARY"), dto("malformed", "not-a-role"), dto("next", "NEXT"))
 
         assertEquals(listOf("primary", "next"), result.map { it.journeyId })
+    }
+
+    // ---- changesPreference: forwarded to the API client as its own enum name, never inspected
+    // or acted on by RemoteJourneyRepository itself -- the backend is the sole authority on which
+    // journeys are eligible under a given preference. ----
+
+    private class CapturingApiClient(private val response: JourneysResponseDto) : BlickApiClient {
+        var receivedChangesPreference: String? = null
+            private set
+        override suspend fun searchStops(query: String): StopSearchResponseDto = throw NotImplementedError("unused")
+        override suspend fun getDepartures(siteId: Long, forecastMinutes: Int?): DeparturesResponseDto = throw NotImplementedError("unused")
+        override suspend fun getDisruptions(siteId: Long, lineId: Long?, transportMode: String?): DisruptionsResponseDto =
+            throw NotImplementedError("unused")
+        override suspend fun getJourneys(
+            originId: String,
+            destinationId: String,
+            transportModes: String,
+            searchUntil: String?,
+            changesPreference: String,
+        ): JourneysResponseDto {
+            receivedChangesPreference = changesPreference
+            return response
+        }
+    }
+
+    @Test
+    fun `changesPreference is forwarded to the API client as its own enum name`() = runTest {
+        val client = CapturingApiClient(JourneysResponseDto("2026-08-10T07:00:00Z", emptyList()))
+
+        RemoteJourneyRepository(client).getJourneys(
+            "origin", "destination", DEFAULT_JOURNEY_TRANSPORT_MODES, null, ExactDestinationChangesPreference.WITH_CHANGES_ONLY,
+        )
+
+        assertEquals("WITH_CHANGES_ONLY", client.receivedChangesPreference)
+    }
+
+    @Test
+    fun `changesPreference defaults to BOTH for a caller predating this parameter`() = runTest {
+        val client = CapturingApiClient(JourneysResponseDto("2026-08-10T07:00:00Z", emptyList()))
+
+        RemoteJourneyRepository(client).getJourneys("origin", "destination", DEFAULT_JOURNEY_TRANSPORT_MODES)
+
+        assertEquals("BOTH", client.receivedChangesPreference)
     }
 }

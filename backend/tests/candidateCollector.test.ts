@@ -1,5 +1,11 @@
 import { describe, expect, it, vi } from "vitest";
-import { CandidateCollector, isEligibleJourney, MAX_ACQUISITION_BATCHES, MAX_CHANGES } from "../src/services/candidateCollector.js";
+import {
+  CandidateCollector,
+  isEligibleJourney,
+  matchesChangesPreference,
+  MAX_ACQUISITION_BATCHES,
+  MAX_CHANGES,
+} from "../src/services/candidateCollector.js";
 import type { RawJourneyPlannerJourney, SlJourneyPlannerClient, TripsRequest } from "../src/services/slJourneyPlannerClient.js";
 
 function rawJourney(id: string, departure: string, arrival: string, interchanges = 0, mode: "metro" | "bus" = "metro"): RawJourneyPlannerJourney {
@@ -61,6 +67,28 @@ describe("isEligibleJourney", () => {
 
   it(`accepts a journey with exactly ${MAX_CHANGES} changes`, () => {
     expect(isEligibleJourney({ departureTime: "2026-08-10T08:00:00Z", transferCount: MAX_CHANGES }, REQUESTED_AT_MILLIS)).toBe(true);
+  });
+});
+
+describe("matchesChangesPreference", () => {
+  it("BOTH admits a direct journey", () => {
+    expect(matchesChangesPreference(0, "BOTH")).toBe(true);
+  });
+
+  it("BOTH admits a with-changes journey", () => {
+    expect(matchesChangesPreference(2, "BOTH")).toBe(true);
+  });
+
+  it("DIRECT_ONLY admits only a zero-change journey", () => {
+    expect(matchesChangesPreference(0, "DIRECT_ONLY")).toBe(true);
+    expect(matchesChangesPreference(1, "DIRECT_ONLY")).toBe(false);
+    expect(matchesChangesPreference(2, "DIRECT_ONLY")).toBe(false);
+  });
+
+  it("WITH_CHANGES_ONLY admits only a journey requiring at least one change", () => {
+    expect(matchesChangesPreference(0, "WITH_CHANGES_ONLY")).toBe(false);
+    expect(matchesChangesPreference(1, "WITH_CHANGES_ONLY")).toBe(true);
+    expect(matchesChangesPreference(2, "WITH_CHANGES_ONLY")).toBe(true);
   });
 });
 
@@ -241,6 +269,63 @@ describe("CandidateCollector.fetchBatch", () => {
 
     // A distinct later query, not the identical one repeated -- see the upsert tests'
     // own comment above.
+    await collector.fetchBatch({ ...BASE_OPTIONS, departureAt: new Date("2026-08-10T07:01:00Z") });
+    expect(collector.pool).toEqual([]);
+  });
+});
+
+// ---- changesPreference gating: applied at the exact same fetchBatch choke point as
+// isEligibleJourney (see CandidateCollector's own constructor doc) -- these prove the
+// collector's own shared pool itself is narrowed, not merely a later filter over an
+// otherwise-unfiltered pool. ----
+
+describe("CandidateCollector changesPreference gating", () => {
+  it("defaults to BOTH (unfiltered) when the constructor argument is omitted, for callers predating this parameter", async () => {
+    const { client } = scriptedClient([
+      [rawJourney("direct", "2026-08-10T08:00:00Z", "2026-08-10T08:20:00Z", 0), rawJourney("with-changes", "2026-08-10T08:00:00Z", "2026-08-10T08:20:00Z", 1, "bus")],
+    ]);
+    const collector = new CandidateCollector(client, ORIGIN, DESTINATION, REQUESTED_AT_MILLIS);
+
+    await collector.fetchBatch({ ...BASE_OPTIONS, departureAt: new Date("2026-08-10T07:00:00Z") });
+
+    expect(collector.pool.map((j) => j.journeyId).sort()).toEqual(["direct", "with-changes"]);
+  });
+
+  it("DIRECT_ONLY removes a with-changes journey from the pool at fetchBatch time, not merely from a later response filter", async () => {
+    const { client } = scriptedClient([
+      [rawJourney("direct", "2026-08-10T08:00:00Z", "2026-08-10T08:20:00Z", 0), rawJourney("with-changes", "2026-08-10T08:00:00Z", "2026-08-10T08:20:00Z", 1, "bus")],
+    ]);
+    const collector = new CandidateCollector(client, ORIGIN, DESTINATION, REQUESTED_AT_MILLIS, "DIRECT_ONLY");
+
+    await collector.fetchBatch({ ...BASE_OPTIONS, departureAt: new Date("2026-08-10T07:00:00Z") });
+
+    expect(collector.pool.map((j) => j.journeyId)).toEqual(["direct"]);
+  });
+
+  it("WITH_CHANGES_ONLY removes a direct journey from the pool at fetchBatch time", async () => {
+    const { client } = scriptedClient([
+      [rawJourney("direct", "2026-08-10T08:00:00Z", "2026-08-10T08:20:00Z", 0), rawJourney("with-changes", "2026-08-10T08:00:00Z", "2026-08-10T08:20:00Z", 1, "bus")],
+    ]);
+    const collector = new CandidateCollector(client, ORIGIN, DESTINATION, REQUESTED_AT_MILLIS, "WITH_CHANGES_ONLY");
+
+    await collector.fetchBatch({ ...BASE_OPTIONS, departureAt: new Date("2026-08-10T07:00:00Z") });
+
+    expect(collector.pool.map((j) => j.journeyId)).toEqual(["with-changes"]);
+  });
+
+  it("a journeyId that becomes preference-ineligible on a later realtime update is REMOVED from the pool, exactly like an eligibility loss", async () => {
+    const { client } = scriptedClient([
+      [rawJourney("x", "2026-08-10T08:00:00Z", "2026-08-10T08:20:00Z", 0)],
+      // Same journeyId, upserted with a realtime-updated transfer count that now requires a
+      // change -- must be evicted from a DIRECT_ONLY pool, the same as any other upsert
+      // that makes an already-known entry no longer eligible.
+      [rawJourney("x", "2026-08-10T08:00:00Z", "2026-08-10T08:20:00Z", 1)],
+    ]);
+    const collector = new CandidateCollector(client, ORIGIN, DESTINATION, REQUESTED_AT_MILLIS, "DIRECT_ONLY");
+
+    await collector.fetchBatch({ ...BASE_OPTIONS, departureAt: new Date("2026-08-10T07:00:00Z") });
+    expect(collector.pool.map((j) => j.journeyId)).toEqual(["x"]);
+
     await collector.fetchBatch({ ...BASE_OPTIONS, departureAt: new Date("2026-08-10T07:01:00Z") });
     expect(collector.pool).toEqual([]);
   });

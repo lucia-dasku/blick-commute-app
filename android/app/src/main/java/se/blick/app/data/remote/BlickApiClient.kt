@@ -24,7 +24,16 @@ interface BlickApiClient {
      * forward the backend's own targeted NEXT/ALTERNATIVE acquisition may search — see
      * [se.blick.app.domain.usecase.GetRankedJourneysUseCase]'s own doc. Null when the caller has
      * no genuine routine-occurrence boundary to offer; the backend then answers from its initial
-     * acquisition alone rather than inventing a search horizon. */
-    suspend fun getJourneys(originId: String, destinationId: String, transportModes: String, searchUntil: String? = null): JourneysResponseDto =
+     * acquisition alone rather than inventing a search horizon. [changesPreference] is one of
+     * [se.blick.app.domain.model.ExactDestinationChangesPreference]'s own names
+     * ("DIRECT_ONLY"/"BOTH"/"WITH_CHANGES_ONLY"), defaulting to "BOTH" — see
+     * `backend/src/routes/journeys.ts`'s own `changesPreference` query parameter doc. */
+    suspend fun getJourneys(
+        originId: String,
+        destinationId: String,
+        transportModes: String,
+        searchUntil: String? = null,
+        changesPreference: String = "BOTH",
+    ): JourneysResponseDto =
         throw UnsupportedOperationException("Journey search is not implemented by this test client")
 }

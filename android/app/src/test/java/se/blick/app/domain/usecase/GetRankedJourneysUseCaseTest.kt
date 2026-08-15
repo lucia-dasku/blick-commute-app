@@ -4,6 +4,7 @@ import kotlinx.coroutines.test.runTest
 import org.junit.Assert.assertEquals
 import org.junit.Test
 import se.blick.app.data.repository.JourneyRepository
+import se.blick.app.domain.model.ExactDestinationChangesPreference
 import se.blick.app.domain.model.JourneyLeg
 import se.blick.app.domain.model.JourneyLocation
 import se.blick.app.domain.model.JourneyPlan
@@ -34,6 +35,7 @@ class GetRankedJourneysUseCaseTest {
             destinationId: String,
             allowedTransportModes: Set<TransportMode>,
             searchUntil: Instant?,
+            changesPreference: ExactDestinationChangesPreference,
         ): List<JourneyPlan> = journeys.toList()
     }
 
@@ -66,6 +68,7 @@ class GetRankedJourneysUseCaseTest {
             destinationId: String,
             allowedTransportModes: Set<TransportMode>,
             searchUntil: Instant?,
+            changesPreference: ExactDestinationChangesPreference,
         ): List<JourneyPlan> {
             clock.instant = advanceTo
             return journeys
@@ -168,6 +171,7 @@ class GetRankedJourneysUseCaseTest {
                 destinationId: String,
                 allowedTransportModes: Set<TransportMode>,
                 searchUntil: Instant?,
+                changesPreference: ExactDestinationChangesPreference,
             ): List<JourneyPlan> {
                 receivedModes = allowedTransportModes
                 return listOf(result)
@@ -193,6 +197,7 @@ class GetRankedJourneysUseCaseTest {
                 destinationId: String,
                 allowedTransportModes: Set<TransportMode>,
                 searchUntil: Instant?,
+                changesPreference: ExactDestinationChangesPreference,
             ): List<JourneyPlan> {
                 receivedSearchUntil = searchUntil
                 return listOf(result)
@@ -215,6 +220,7 @@ class GetRankedJourneysUseCaseTest {
                 destinationId: String,
                 allowedTransportModes: Set<TransportMode>,
                 searchUntil: Instant?,
+                changesPreference: ExactDestinationChangesPreference,
             ): List<JourneyPlan> {
                 receivedSearchUntil = searchUntil
                 return listOf(result)
@@ -226,6 +232,57 @@ class GetRankedJourneysUseCaseTest {
         GetRankedJourneysUseCase(repository, fixedClock("2026-08-10T07:00:00Z"))("origin", "destination", setOf(TransportMode.BUS))
 
         assertEquals(null, receivedSearchUntil)
+    }
+
+    // ---- changesPreference: forwarded to the repository unchanged, never inspected or acted
+    // on by this use case itself (see this class's own doc) -- the backend is the sole authority
+    // on which journeys are eligible under a given preference. ----
+
+    @Test fun `changesPreference is forwarded to the repository unchanged`() = runTest {
+        var receivedPreference: ExactDestinationChangesPreference? = null
+        val result = journey("train", "2026-08-10T08:00:00Z", "2026-08-10T08:20:00Z")
+        val repository = object : JourneyRepository {
+            override suspend fun searchLocations(query: String): List<JourneyLocation> = emptyList()
+            override suspend fun getJourneys(
+                originId: String,
+                destinationId: String,
+                allowedTransportModes: Set<TransportMode>,
+                searchUntil: Instant?,
+                changesPreference: ExactDestinationChangesPreference,
+            ): List<JourneyPlan> {
+                receivedPreference = changesPreference
+                return listOf(result)
+            }
+        }
+
+        GetRankedJourneysUseCase(repository, fixedClock("2026-08-10T07:00:00Z"))(
+            "origin", "destination", setOf(TransportMode.BUS), null, ExactDestinationChangesPreference.DIRECT_ONLY,
+        )
+
+        assertEquals(ExactDestinationChangesPreference.DIRECT_ONLY, receivedPreference)
+    }
+
+    @Test fun `changesPreference defaults to BOTH for a caller predating this parameter`() = runTest {
+        var receivedPreference: ExactDestinationChangesPreference? = null
+        val result = journey("train", "2026-08-10T08:00:00Z", "2026-08-10T08:20:00Z")
+        val repository = object : JourneyRepository {
+            override suspend fun searchLocations(query: String): List<JourneyLocation> = emptyList()
+            override suspend fun getJourneys(
+                originId: String,
+                destinationId: String,
+                allowedTransportModes: Set<TransportMode>,
+                searchUntil: Instant?,
+                changesPreference: ExactDestinationChangesPreference,
+            ): List<JourneyPlan> {
+                receivedPreference = changesPreference
+                return listOf(result)
+            }
+        }
+
+        // No changesPreference argument supplied at all.
+        GetRankedJourneysUseCase(repository, fixedClock("2026-08-10T07:00:00Z"))("origin", "destination", setOf(TransportMode.BUS))
+
+        assertEquals(ExactDestinationChangesPreference.BOTH, receivedPreference)
     }
 
     // ---- Defensive filtering (2026-08-10 22:12 production incident: a bus that arrived at

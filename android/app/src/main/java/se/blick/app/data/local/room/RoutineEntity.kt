@@ -35,4 +35,6 @@ data class RoutineEntity(
     val journeyDestinationId: String? = null,
     val journeyDestinationName: String? = null,
     val allowedJourneyTransportModes: String = "METRO,TRAIN,BUS,TRAM,FERRY",
+    /** See [se.blick.app.domain.model.ExactDestinationChangesPreference]'s own doc. */
+    val changesPreference: String = "BOTH",
 )

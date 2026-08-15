@@ -1,6 +1,7 @@
 package se.blick.app.domain.usecase
 
 import se.blick.app.data.repository.JourneyRepository
+import se.blick.app.domain.model.ExactDestinationChangesPreference
 import se.blick.app.domain.model.JourneyPlan
 import se.blick.app.domain.model.TransportMode
 import java.time.Clock
@@ -48,14 +49,23 @@ class GetRankedJourneysUseCase @Inject constructor(
      * only when a caller genuinely has no such boundary (e.g. [se.blick.app.scheduling.NextOccurrence.None]) —
      * the backend then answers from its own initial acquisition alone rather than searching
      * unboundedly, and defaults to null here so callers that don't have one yet keep compiling.
+     *
+     * [changesPreference] is the routine's own persisted [ExactDestinationChangesPreference] —
+     * forwarded to [repository.getJourneys] unchanged, never inspected or acted on here: this use
+     * case still only re-filters for currency (see this class's own doc), never re-ranking or
+     * re-deriving eligibility itself, since the backend is the sole authority on which journeys
+     * are eligible under a given preference. Defaults to [ExactDestinationChangesPreference.BOTH]
+     * — the pre-existing, unfiltered behavior — so a caller predating this parameter keeps
+     * compiling and behaving unchanged.
      */
     suspend operator fun invoke(
         originId: String,
         destinationId: String,
         allowedTransportModes: Set<TransportMode>,
         searchUntil: Instant? = null,
+        changesPreference: ExactDestinationChangesPreference = ExactDestinationChangesPreference.BOTH,
     ): List<JourneyPlan> {
-        val journeys = repository.getJourneys(originId, destinationId, allowedTransportModes, searchUntil)
+        val journeys = repository.getJourneys(originId, destinationId, allowedTransportModes, searchUntil, changesPreference)
         val now = clock.instant()
         return journeys.filterCurrentJourneys(now)
     }

@@ -1,8 +1,10 @@
 package se.blick.app.ui.screens.routinedetails
 
 import org.junit.Assert.assertEquals
+import org.junit.Assert.assertFalse
 import org.junit.Assert.assertTrue
 import org.junit.Test
+import se.blick.app.domain.model.ExactDestinationChangesPreference
 import se.blick.app.locale.effectiveBlickLocale
 import java.time.DayOfWeek
 import java.time.Instant
@@ -186,5 +188,71 @@ class RoutineDetailsFormattingTest {
             "expected Swedish weekday abbreviations, distinct from the English 'Mon, Wed, Fri'",
             result != "Mon, Wed, Fri",
         )
+    }
+
+    // ---- ExactDestinationChangesPreference chip mapping/toggling -- both chips being
+    // unselected is never a valid outcome (see toggleDirect/toggleWithChanges's own doc): tapping
+    // the only currently-selected chip must be a no-op, never leave neither selected. ----
+
+    @Test
+    fun `includesDirect and includesWithChanges reflect DIRECT_ONLY as Direct-only selected`() {
+        assertTrue(ExactDestinationChangesPreference.DIRECT_ONLY.includesDirect())
+        assertFalse(ExactDestinationChangesPreference.DIRECT_ONLY.includesWithChanges())
+    }
+
+    @Test
+    fun `includesDirect and includesWithChanges reflect BOTH as both selected`() {
+        assertTrue(ExactDestinationChangesPreference.BOTH.includesDirect())
+        assertTrue(ExactDestinationChangesPreference.BOTH.includesWithChanges())
+    }
+
+    @Test
+    fun `includesDirect and includesWithChanges reflect WITH_CHANGES_ONLY as With-changes-only selected`() {
+        assertFalse(ExactDestinationChangesPreference.WITH_CHANGES_ONLY.includesDirect())
+        assertTrue(ExactDestinationChangesPreference.WITH_CHANGES_ONLY.includesWithChanges())
+    }
+
+    @Test
+    fun `toggleDirect on DIRECT_ONLY is a no-op -- the only selected chip can never be turned off`() {
+        assertEquals(ExactDestinationChangesPreference.DIRECT_ONLY, ExactDestinationChangesPreference.DIRECT_ONLY.toggleDirect())
+    }
+
+    @Test
+    fun `toggleWithChanges on WITH_CHANGES_ONLY is a no-op -- the only selected chip can never be turned off`() {
+        assertEquals(ExactDestinationChangesPreference.WITH_CHANGES_ONLY, ExactDestinationChangesPreference.WITH_CHANGES_ONLY.toggleWithChanges())
+    }
+
+    @Test
+    fun `toggleDirect on BOTH turns Direct off, leaving WITH_CHANGES_ONLY`() {
+        assertEquals(ExactDestinationChangesPreference.WITH_CHANGES_ONLY, ExactDestinationChangesPreference.BOTH.toggleDirect())
+    }
+
+    @Test
+    fun `toggleWithChanges on BOTH turns With-changes off, leaving DIRECT_ONLY`() {
+        assertEquals(ExactDestinationChangesPreference.DIRECT_ONLY, ExactDestinationChangesPreference.BOTH.toggleWithChanges())
+    }
+
+    @Test
+    fun `toggleDirect on WITH_CHANGES_ONLY turns Direct on, reaching BOTH`() {
+        assertEquals(ExactDestinationChangesPreference.BOTH, ExactDestinationChangesPreference.WITH_CHANGES_ONLY.toggleDirect())
+    }
+
+    @Test
+    fun `toggleWithChanges on DIRECT_ONLY turns With-changes on, reaching BOTH`() {
+        assertEquals(ExactDestinationChangesPreference.BOTH, ExactDestinationChangesPreference.DIRECT_ONLY.toggleWithChanges())
+    }
+
+    @Test
+    fun `every toggle sequence always leaves at least one chip selected, for every starting preference`() {
+        for (preference in ExactDestinationChangesPreference.entries) {
+            assertTrue(
+                "toggleDirect() from $preference must leave at least one chip selected",
+                preference.toggleDirect().let { it.includesDirect() || it.includesWithChanges() },
+            )
+            assertTrue(
+                "toggleWithChanges() from $preference must leave at least one chip selected",
+                preference.toggleWithChanges().let { it.includesDirect() || it.includesWithChanges() },
+            )
+        }
     }
 }

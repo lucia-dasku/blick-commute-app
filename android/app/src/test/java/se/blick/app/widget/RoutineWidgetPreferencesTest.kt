@@ -5,6 +5,7 @@ import androidx.datastore.preferences.core.stringPreferencesKey
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertNull
 import org.junit.Test
+import se.blick.app.domain.model.ExactDestinationChangesPreference
 import se.blick.app.domain.model.JourneyRole
 import se.blick.app.domain.model.TransportMode
 import java.time.Instant
@@ -316,5 +317,105 @@ class RoutineWidgetPreferencesTest {
 
         assertEquals(JourneyRole.PRIMARY, content.primary.role)
         assertEquals(JourneyRole.NEXT, content.secondary?.role)
+    }
+
+    // ---- changesPreference -- the single source of truth BlickRoutineWidget's own
+    // Direct/Both/With-changes layout selection reads (see RoutineWidgetContent.Journeys's own
+    // doc); must survive persistence exactly, never re-derived or defaulted once genuinely
+    // written. ----
+
+    @Test
+    fun `changesPreference round-trips exactly for each of the three values`() {
+        val primary = WidgetJourneyRow(
+            "14", TransportMode.METRO, Instant.parse("2026-08-10T07:03:00Z"), Instant.parse("2026-08-10T07:31:00Z"),
+            0, isRealtime = true, role = JourneyRole.PRIMARY,
+        )
+        for (preference in ExactDestinationChangesPreference.entries) {
+            val model = RoutineWidgetModel("exact-1", "To work", "Fruangen", "Slussen", RoutineWidgetContent.Journeys(primary, null, preference))
+
+            val restored = roundTrip(RoutineWidgetUiState.ActiveRoutine(model)) as RoutineWidgetUiState.ActiveRoutine
+
+            assertEquals(preference, (restored.model.content as RoutineWidgetContent.Journeys).changesPreference)
+        }
+    }
+
+    @Test
+    fun `a changesPreference persisted by a version predating this field defaults to BOTH on read, never crashes`() {
+        val prefs = mutablePreferencesOf()
+        val primary = WidgetJourneyRow(
+            "14", TransportMode.METRO, Instant.parse("2026-08-10T07:03:00Z"), Instant.parse("2026-08-10T07:31:00Z"),
+            0, isRealtime = true, role = JourneyRole.PRIMARY,
+        )
+        val model = RoutineWidgetModel(
+            "exact-1", "To work", "Fruangen", "Slussen",
+            RoutineWidgetContent.Journeys(primary, null, ExactDestinationChangesPreference.WITH_CHANGES_ONLY),
+        )
+        RoutineWidgetUiState.ActiveRoutine(model).writeInto(prefs)
+        // Simulate a pre-upgrade write: the key was never present at all.
+        prefs.remove(stringPreferencesKey("journeyChangesPreference"))
+
+        val restored = prefs.toPreferences().toWidgetUiState() as RoutineWidgetUiState.ActiveRoutine
+
+        assertEquals(ExactDestinationChangesPreference.BOTH, (restored.model.content as RoutineWidgetContent.Journeys).changesPreference)
+    }
+
+    // ---- legBadges -- one badge per public-transport leg, round-tripped in order. ----
+
+    @Test
+    fun `legBadges round-trips in order for a multi-leg primary and secondary`() {
+        val primaryBadges = listOf(WidgetJourneyLegBadge("14", TransportMode.METRO), WidgetJourneyLegBadge("40", TransportMode.BUS))
+        val secondaryBadges = listOf(WidgetJourneyLegBadge("17", TransportMode.METRO))
+        val primary = WidgetJourneyRow(
+            "14", TransportMode.METRO, Instant.parse("2026-08-10T07:03:00Z"), Instant.parse("2026-08-10T07:31:00Z"),
+            1, isRealtime = true, role = JourneyRole.PRIMARY, legBadges = primaryBadges,
+        )
+        val secondary = WidgetJourneyRow(
+            "17", TransportMode.METRO, Instant.parse("2026-08-10T07:33:00Z"), Instant.parse("2026-08-10T08:01:00Z"),
+            0, isRealtime = false, role = JourneyRole.NEXT, legBadges = secondaryBadges,
+        )
+        val model = RoutineWidgetModel("exact-1", "To work", "Fruangen", "Slussen", RoutineWidgetContent.Journeys(primary, secondary))
+
+        val restored = roundTrip(RoutineWidgetUiState.ActiveRoutine(model)) as RoutineWidgetUiState.ActiveRoutine
+        val content = restored.model.content as RoutineWidgetContent.Journeys
+
+        assertEquals(primaryBadges, content.primary.legBadges)
+        assertEquals(secondaryBadges, content.secondary?.legBadges)
+    }
+
+    @Test
+    fun `an empty legBadges round-trips as empty, not a stale leftover from a previous state`() {
+        val prefs = mutablePreferencesOf()
+        val withBadges = WidgetJourneyRow(
+            "14", TransportMode.METRO, Instant.parse("2026-08-10T07:03:00Z"), Instant.parse("2026-08-10T07:31:00Z"),
+            1, isRealtime = true, role = JourneyRole.PRIMARY,
+            legBadges = listOf(WidgetJourneyLegBadge("14", TransportMode.METRO), WidgetJourneyLegBadge("40", TransportMode.BUS)),
+        )
+        RoutineWidgetUiState.ActiveRoutine(
+            RoutineWidgetModel("exact-1", "To work", "Fruangen", "Slussen", RoutineWidgetContent.Journeys(withBadges, null)),
+        ).writeInto(prefs)
+
+        val withoutBadges = withBadges.copy(legBadges = emptyList())
+        RoutineWidgetUiState.ActiveRoutine(
+            RoutineWidgetModel("exact-1", "To work", "Fruangen", "Slussen", RoutineWidgetContent.Journeys(withoutBadges, null)),
+        ).writeInto(prefs)
+
+        val restored = prefs.toPreferences().toWidgetUiState() as RoutineWidgetUiState.ActiveRoutine
+        assertEquals(emptyList<WidgetJourneyLegBadge>(), (restored.model.content as RoutineWidgetContent.Journeys).primary.legBadges)
+    }
+
+    @Test
+    fun `legBadges persisted by a version predating this field decodes to empty, never crashes`() {
+        val prefs = mutablePreferencesOf()
+        val primary = WidgetJourneyRow(
+            "14", TransportMode.METRO, Instant.parse("2026-08-10T07:03:00Z"), Instant.parse("2026-08-10T07:31:00Z"),
+            0, isRealtime = true, role = JourneyRole.PRIMARY,
+        )
+        RoutineWidgetUiState.ActiveRoutine(
+            RoutineWidgetModel("exact-1", "To work", "Fruangen", "Slussen", RoutineWidgetContent.Journeys(primary, null)),
+        ).writeInto(prefs)
+        prefs.remove(stringPreferencesKey("journeyPrimaryLegBadges"))
+
+        val restored = prefs.toPreferences().toWidgetUiState() as RoutineWidgetUiState.ActiveRoutine
+        assertEquals(emptyList<WidgetJourneyLegBadge>(), (restored.model.content as RoutineWidgetContent.Journeys).primary.legBadges)
     }
 }

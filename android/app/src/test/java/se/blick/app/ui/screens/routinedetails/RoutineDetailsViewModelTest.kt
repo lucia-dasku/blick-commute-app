@@ -34,6 +34,7 @@ import se.blick.app.domain.model.DeparturesResult
 import se.blick.app.domain.model.Disruption
 import se.blick.app.domain.model.DisruptionMessage
 import se.blick.app.domain.model.DisruptionPriority
+import se.blick.app.domain.model.ExactDestinationChangesPreference
 import se.blick.app.domain.model.Journey
 import se.blick.app.domain.model.JourneyLeg
 import se.blick.app.domain.model.JourneyLocation
@@ -569,6 +570,116 @@ class RoutineDetailsViewModelTest {
         assertEquals(setOf(TransportMode.TRAIN, TransportMode.BUS), vm.uiState.value.routine?.allowedJourneyTransportModes)
         assertEquals(setOf(TransportMode.TRAIN, TransportMode.BUS), scheduler.scheduledRoutines.last().allowedJourneyTransportModes)
         assertFalse(vm.uiState.value.journeyTransportModesUpdateFailed)
+    }
+
+    // ---- Direct/Both/With-changes preference: the same persist-refresh-reschedule shape as
+    // updateJourneyTransportModes above, mirrored for updateChangesPreference. ----
+
+    @Test
+    fun `updating changes preference persists refreshes and reschedules the same routine`() = runTest(dispatcher) {
+        val routine = sampleRoutine().copy(
+            type = RoutineType.EXACT_DESTINATION,
+            transportMode = TransportMode.UNKNOWN,
+            journeyOriginId = "origin-id",
+            journeyOriginName = "Fruängen",
+            journeyDestinationId = "destination-id",
+            journeyDestinationName = "Mariatorget",
+        )
+        val repository = FakeRoutineRepository(routine)
+        val scheduler = FakeRoutineScheduler()
+        val vm = viewModel(routine = routine, routines = repository, scheduler = scheduler)
+        dispatcher.scheduler.advanceUntilIdle()
+
+        vm.updateChangesPreference(ExactDestinationChangesPreference.DIRECT_ONLY)
+        dispatcher.scheduler.advanceUntilIdle()
+
+        assertEquals(ExactDestinationChangesPreference.DIRECT_ONLY, repository.getById(routine.id)?.changesPreference)
+        assertEquals(ExactDestinationChangesPreference.DIRECT_ONLY, vm.uiState.value.routine?.changesPreference)
+        assertEquals(ExactDestinationChangesPreference.DIRECT_ONLY, scheduler.scheduledRoutines.last().changesPreference)
+        assertFalse(vm.uiState.value.changesPreferenceUpdateFailed)
+        assertFalse(vm.uiState.value.isUpdatingChangesPreference)
+    }
+
+    @Test
+    fun `changes preference survives a freshly-constructed ViewModel against the same repository, simulating reopening the screen`() =
+        runTest(dispatcher) {
+            val routine = sampleRoutine().copy(
+                type = RoutineType.EXACT_DESTINATION,
+                transportMode = TransportMode.UNKNOWN,
+                journeyOriginId = "origin-id",
+                journeyOriginName = "Fruängen",
+                journeyDestinationId = "destination-id",
+                journeyDestinationName = "Mariatorget",
+            )
+            // A SHARED repository instance passed to two separately-constructed ViewModels --
+            // see FakeStaleSnapshotRepository's own doc for why this is how these tests
+            // simulate "the screen was closed and reopened" (or the process killed and
+            // recreated): a fresh ViewModel instance has no in-memory field of its own left
+            // over, so it can only see this value if it was genuinely durably persisted.
+            val repository = FakeRoutineRepository(routine)
+            val firstScreen = viewModel(routine = routine, routines = repository)
+            dispatcher.scheduler.advanceUntilIdle()
+            firstScreen.updateChangesPreference(ExactDestinationChangesPreference.WITH_CHANGES_ONLY)
+            dispatcher.scheduler.advanceUntilIdle()
+
+            val reopenedScreen = viewModel(routine = routine, routines = repository)
+            dispatcher.scheduler.advanceUntilIdle()
+
+            assertEquals(ExactDestinationChangesPreference.WITH_CHANGES_ONLY, reopenedScreen.uiState.value.routine?.changesPreference)
+        }
+
+    @Test
+    fun `a routine left at the default BOTH changes preference reads BOTH after reopening, with no update ever made`() = runTest(dispatcher) {
+        val routine = sampleRoutine().copy(
+            type = RoutineType.EXACT_DESTINATION,
+            transportMode = TransportMode.UNKNOWN,
+            journeyOriginId = "origin-id",
+            journeyOriginName = "Fruängen",
+            journeyDestinationId = "destination-id",
+            journeyDestinationName = "Mariatorget",
+        )
+        val repository = FakeRoutineRepository(routine)
+        val vm = viewModel(routine = routine, routines = repository)
+        dispatcher.scheduler.advanceUntilIdle()
+
+        assertEquals(ExactDestinationChangesPreference.BOTH, vm.uiState.value.routine?.changesPreference)
+    }
+
+    @Test
+    fun `updateChangesPreference is a no-op for a LINE_DIRECTION routine`() = runTest(dispatcher) {
+        val routine = sampleRoutine().copy(type = RoutineType.LINE_DIRECTION)
+        val repository = FakeRoutineRepository(routine)
+        val scheduler = FakeRoutineScheduler()
+        val vm = viewModel(routine = routine, routines = repository, scheduler = scheduler)
+        dispatcher.scheduler.advanceUntilIdle()
+
+        vm.updateChangesPreference(ExactDestinationChangesPreference.DIRECT_ONLY)
+        dispatcher.scheduler.advanceUntilIdle()
+
+        assertEquals(ExactDestinationChangesPreference.BOTH, repository.getById(routine.id)?.changesPreference)
+        assertTrue("expected no reschedule for a no-op update", scheduler.scheduledRoutines.isEmpty())
+    }
+
+    @Test
+    fun `updateChangesPreference is a no-op when the requested value already matches the stored one`() = runTest(dispatcher) {
+        val routine = sampleRoutine().copy(
+            type = RoutineType.EXACT_DESTINATION,
+            transportMode = TransportMode.UNKNOWN,
+            journeyOriginId = "origin-id",
+            journeyOriginName = "Fruängen",
+            journeyDestinationId = "destination-id",
+            journeyDestinationName = "Mariatorget",
+            changesPreference = ExactDestinationChangesPreference.DIRECT_ONLY,
+        )
+        val repository = FakeRoutineRepository(routine)
+        val scheduler = FakeRoutineScheduler()
+        val vm = viewModel(routine = routine, routines = repository, scheduler = scheduler)
+        dispatcher.scheduler.advanceUntilIdle()
+
+        vm.updateChangesPreference(ExactDestinationChangesPreference.DIRECT_ONLY)
+        dispatcher.scheduler.advanceUntilIdle()
+
+        assertTrue("expected no reschedule for a no-op update", scheduler.scheduledRoutines.isEmpty())
     }
 
     @Test
@@ -2472,15 +2583,19 @@ class RoutineDetailsViewModelTest {
         var callCount = 0
         var receivedSearchUntil: Instant? = null
             private set
+        var receivedChangesPreference: ExactDestinationChangesPreference? = null
+            private set
         override suspend fun searchLocations(query: String): List<JourneyLocation> = emptyList()
         override suspend fun getJourneys(
             originId: String,
             destinationId: String,
             allowedTransportModes: Set<TransportMode>,
             searchUntil: Instant?,
+            changesPreference: ExactDestinationChangesPreference,
         ): List<JourneyPlan> {
             callCount++
             receivedSearchUntil = searchUntil
+            receivedChangesPreference = changesPreference
             return journeys
         }
     }

@@ -42,10 +42,12 @@ import androidx.glance.text.Text
 import androidx.glance.text.TextStyle
 import androidx.glance.unit.ColorProvider
 import se.blick.app.R
+import se.blick.app.domain.model.ExactDestinationChangesPreference
 import se.blick.app.domain.model.JourneyRole
 import se.blick.app.domain.usecase.countdownMinutes
 import se.blick.app.domain.usecase.isDepartureCurrent
 import se.blick.app.locale.withAppLocale
+import java.time.format.DateTimeFormatter
 
 /**
  * The home-screen widget's [GlanceAppWidget]. Deliberately holds no departure-fetching, timing,
@@ -358,7 +360,15 @@ private fun ActiveRoutineContent(context: Context, model: RoutineWidgetModel, no
                 // exactly "{line} → {destination}", i.e. the same information the header below
                 // already shows via the line badge + destination text, duplicated as plain text
                 // right above it. Dropped entirely rather than only in compact mode.
-                WidgetHeader(model, tier, routeText, isStale)
+                //
+                // showLineBadge = false for Journeys: JourneyCompositionRow (see
+                // WidgetContentBody/JourneyMainContent) already shows this exact same primary
+                // line as its own first badge -- for a direct journey that's the routine's ONLY
+                // badge, so showing it a second time up here would be a plain duplicate; for a
+                // with-changes journey it would also misleadingly suggest only the FIRST leg's
+                // line matters. Every other content state keeps the header's own single badge
+                // exactly as before -- it is that state's only line indicator.
+                WidgetHeader(model, tier, routeText, isStale, showLineBadge = model.content !is RoutineWidgetContent.Journeys)
                 Spacer(modifier = GlanceModifier.height(if (compact) 6.dp else 12.dp))
                 WidgetContentBody(context, model, compact, tier, now)
             }
@@ -370,11 +380,13 @@ private fun ActiveRoutineContent(context: Context, model: RoutineWidgetModel, no
 }
 
 @Composable
-private fun WidgetHeader(model: RoutineWidgetModel, tier: WidgetSizeTier, routeText: String, isStale: Boolean) {
+private fun WidgetHeader(model: RoutineWidgetModel, tier: WidgetSizeTier, routeText: String, isStale: Boolean, showLineBadge: Boolean = true) {
     Row(modifier = GlanceModifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
-        model.lineDesignation?.let { line ->
-            LineBadge(line, LineBadgeColorMapping.colorFor(model.transportMode, line), tier.badgeSize)
-            Spacer(modifier = GlanceModifier.width(8.dp))
+        if (showLineBadge) {
+            model.lineDesignation?.let { line ->
+                LineBadge(line, LineBadgeColorMapping.colorFor(model.transportMode, line), tier.badgeSize)
+                Spacer(modifier = GlanceModifier.width(8.dp))
+            }
         }
         Text(
             text = routeText,
@@ -496,7 +508,10 @@ internal fun resolveEffectiveModel(model: RoutineWidgetModel, now: java.time.Ins
     val primary = current.firstOrNull()
         ?: return model.copy(content = RoutineWidgetContent.Unavailable, lineDesignation = null)
     return model.copy(
-        content = RoutineWidgetContent.Journeys(primary, current.getOrNull(1)),
+        // content.changesPreference carried through unchanged -- omitting it here would silently
+        // fall back to its own default (BOTH) on every single render, discarding whatever the
+        // routine's real persisted preference was regardless of what was actually written.
+        content = RoutineWidgetContent.Journeys(primary, current.getOrNull(1), content.changesPreference),
         lineDesignation = primary.lineDesignation,
         transportMode = primary.transportMode,
     )
@@ -524,6 +539,28 @@ private fun WidgetContentBody(context: Context, model: RoutineWidgetModel, compa
     }
 }
 
+/**
+ * Renders one of three layouts, switched ONLY on [RoutineWidgetContent.Journeys.changesPreference]
+ * — the routine's own persisted Direct/Both/With-changes choice — never inferred from
+ * [content.primary][RoutineWidgetContent.Journeys.primary]'s own [WidgetJourneyRow.transferCount]:
+ * a [ExactDestinationChangesPreference.BOTH] routine and a
+ * [ExactDestinationChangesPreference.WITH_CHANGES_ONLY] one can both be showing a journey with the
+ * exact same transfer count, and only the stored preference tells them apart (see that field's own
+ * doc). [JourneyCompositionRow] additionally reads [WidgetJourneyRow.transferCount] itself, but
+ * only to decide "Direct" vs. "Arrive HH:mm · N change(s)" WORDING for the ACTUAL journey shown —
+ * under [ExactDestinationChangesPreference.DIRECT_ONLY]/[ExactDestinationChangesPreference.WITH_CHANGES_ONLY]
+ * this is never ambiguous, since the backend never returns a journey outside that preference's own
+ * eligible set in the first place (see `backend/src/services/candidateCollector.ts`'s own
+ * `JourneyChangesPreference` doc) — it only ever matters for [ExactDestinationChangesPreference.BOTH],
+ * where a direct PRIMARY still reads "Direct" rather than the arguably-nonsensical "0 changes".
+ *
+ * A left-aligned vertical stack: the big countdown, then [JourneyCompositionRow] (line badge(s),
+ * "Direct" or "Arrive HH:mm · N change(s)", and — [ExactDestinationChangesPreference.WITH_CHANGES_ONLY]
+ * only — the small green "With changes" label), then — outside [compact] heights only, exactly
+ * like the plain-departures [DepartureMainContent]'s own secondary row — a [WidgetDivider] and
+ * [NextJourneyRow]. The disruption strip stays entirely outside this function (see
+ * [ActiveRoutineContent]'s own [DisruptionStrip]), unaffected by any of this.
+ */
 @Composable
 private fun JourneyMainContent(
     context: Context,
@@ -549,43 +586,133 @@ private fun JourneyMainContent(
     // unconditionally now: the guard above already refused to reach this line for an expired
     // primary departure.
     val primaryMinutes = countdownMinutes(now, content.primary.departureTime)
-    val arrivalFormatter = java.time.format.DateTimeFormatter.ofPattern("HH:mm").withZone(java.time.ZoneId.systemDefault())
+    val arrivalFormatter = DateTimeFormatter.ofPattern("HH:mm").withZone(java.time.ZoneId.systemDefault())
     Column(modifier = GlanceModifier.fillMaxWidth()) {
         Text(
             context.getString(R.string.widget_countdown_minutes_format, primaryMinutes),
             maxLines = 1,
             style = TextStyle(fontWeight = FontWeight.Bold, fontSize = tier.countdownSize, color = onBackgroundColor()),
         )
-        Text(
-            context.getString(R.string.widget_journey_arrival, arrivalFormatter.format(content.primary.arrivalTime)),
-            maxLines = 1,
-            style = TextStyle(fontSize = tier.secondarySize, color = onSurfaceVariantColor()),
-        )
+        Spacer(modifier = GlanceModifier.height(4.dp))
+        JourneyCompositionRow(context, content.primary, content.changesPreference, arrivalFormatter, tier)
+
         // Same final render-time check applied to the secondary row independently -- an expired
-        // one is simply omitted (the primary row above is unaffected), never shown as 0 min.
-        if (!compact) content.secondary
-            ?.takeIf { isDepartureCurrent(now, it.departureTime) }
-            ?.let { secondary ->
-                val secondaryMinutes = countdownMinutes(now, secondary.departureTime)
-                // Backend-authoritative role decides the wording -- NEXT (the same route
-                // family's own next departure) reads like a plain continuation of the primary
-                // row, while ALTERNATIVE visibly says so, since it's a genuinely different way
-                // to travel, not just "another one of these." See this row's own R.string docs.
-                val stringRes = if (secondary.role == JourneyRole.ALTERNATIVE) {
-                    R.string.widget_journey_alternative
-                } else {
-                    R.string.widget_journey_next
-                }
-                Spacer(modifier = GlanceModifier.height(8.dp))
+        // one is simply omitted (the primary row above is unaffected), never shown as 0 min. Never
+        // shown in compact mode -- see DepartureMainContent's own identical rule for why there's
+        // no room for it (or its own divider) there.
+        val secondary = if (compact) null else content.secondary?.takeIf { isDepartureCurrent(now, it.departureTime) }
+        if (secondary != null) {
+            Spacer(modifier = GlanceModifier.height(10.dp))
+            WidgetDivider()
+            Spacer(modifier = GlanceModifier.height(10.dp))
+            NextJourneyRow(context, secondary, now, tier)
+        }
+    }
+}
+
+/** [primary]'s own composition: one badge per public-transport leg (see [legBadgesOrFallback]),
+ * side by side, then either the fixed "Direct" label (a zero-change journey) or the journey's own
+ * arrival time plus change count, correctly pluralized ("1 change"/"2 changes") -- see this
+ * function's own caller doc for exactly why this wording is driven by [primary]'s own
+ * [WidgetJourneyRow.transferCount] while the green "With changes" label below it is driven ONLY by
+ * [changesPreference]. */
+@Composable
+private fun JourneyCompositionRow(
+    context: Context,
+    primary: WidgetJourneyRow,
+    changesPreference: ExactDestinationChangesPreference,
+    arrivalFormatter: DateTimeFormatter,
+    tier: WidgetSizeTier,
+) {
+    val badges = primary.legBadgesOrFallback()
+    Column(modifier = GlanceModifier.fillMaxWidth()) {
+        Row(verticalAlignment = Alignment.CenterVertically) {
+            badges.forEachIndexed { index, badge ->
+                LineBadge(badge.lineDesignation, LineBadgeColorMapping.colorFor(badge.transportMode, badge.lineDesignation), tier.badgeSize)
+                if (index != badges.lastIndex) Spacer(modifier = GlanceModifier.width(4.dp))
+            }
+            if (primary.transferCount == 0) {
+                Spacer(modifier = GlanceModifier.width(8.dp))
                 Text(
-                    context.getString(stringRes, secondary.lineDesignation.orEmpty(), secondaryMinutes,
-                        arrivalFormatter.format(secondary.arrivalTime)),
+                    context.getString(R.string.journey_direct),
                     maxLines = 1,
                     style = TextStyle(fontSize = tier.secondarySize, color = onSurfaceVariantColor()),
                 )
             }
+        }
+        if (primary.transferCount > 0) {
+            Spacer(modifier = GlanceModifier.height(4.dp))
+            Text(
+                context.resources.getQuantityString(
+                    R.plurals.widget_journey_arrive_with_changes,
+                    primary.transferCount,
+                    arrivalFormatter.format(primary.arrivalTime),
+                    primary.transferCount,
+                ),
+                maxLines = 1,
+                style = TextStyle(fontSize = tier.secondarySize, color = onSurfaceVariantColor()),
+            )
+        }
+        if (changesPreference == ExactDestinationChangesPreference.WITH_CHANGES_ONLY) {
+            Spacer(modifier = GlanceModifier.height(2.dp))
+            Text(
+                context.getString(R.string.journey_with_changes),
+                maxLines = 1,
+                style = TextStyle(fontWeight = FontWeight.Bold, fontSize = tier.statusSize, color = ColorProvider(LINE_BADGE_GREEN)),
+            )
+        }
     }
 }
+
+/** The second journey row: a two-column "Next"/"Alternative" label and a plain countdown value
+ * (reusing [R.string.widget_countdown_minutes_format], the exact same format the primary countdown
+ * above uses). Backend-authoritative role decides the label -- NEXT (the same route family's own
+ * next departure) reads as a plain continuation of the primary row, while ALTERNATIVE visibly says
+ * so, since it's a genuinely different way to travel, not just "another one of these" -- never
+ * assumed from list position. */
+@Composable
+private fun NextJourneyRow(context: Context, secondary: WidgetJourneyRow, now: java.time.Instant, tier: WidgetSizeTier) {
+    val secondaryMinutes = countdownMinutes(now, secondary.departureTime)
+    val labelRes = if (secondary.role == JourneyRole.ALTERNATIVE) {
+        R.string.widget_journey_alternative_label
+    } else {
+        R.string.widget_journey_next_label
+    }
+    Row(modifier = GlanceModifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
+        Text(
+            context.getString(labelRes),
+            maxLines = 1,
+            modifier = GlanceModifier.defaultWeight(),
+            style = TextStyle(fontSize = tier.secondarySize, color = onSurfaceVariantColor()),
+        )
+        Text(
+            context.getString(R.string.widget_countdown_minutes_format, secondaryMinutes),
+            maxLines = 1,
+            style = TextStyle(fontSize = tier.secondarySize, color = onSurfaceVariantColor()),
+        )
+    }
+}
+
+/** A thin, full-width hairline separating [JourneyCompositionRow] from [NextJourneyRow] — see the
+ * supplied design. [GlanceTheme.colors.outline] rather than a lower-contrast "variant" role:
+ * Glance's own [androidx.glance.color.ColorProviders] has no `outlineVariant` accessor (unlike
+ * full Material3 [androidx.compose.material3.ColorScheme]), so this reuses the same outline color
+ * [StatusFooter]'s own "Scheduled" dot already does — at 1dp height, still reads as a subtle
+ * separator, not a heavy rule. */
+@Composable
+private fun WidgetDivider() {
+    Box(modifier = GlanceModifier.fillMaxWidth().height(1.dp).background(GlanceTheme.colors.outline)) {}
+}
+
+/** [WidgetJourneyRow.legBadges] when non-empty, falling back to a single badge built from
+ * [WidgetJourneyRow.lineDesignation]/[WidgetJourneyRow.transportMode] for state persisted by a
+ * version predating [WidgetJourneyRow.legBadges] — never zero badges for a journey that plainly
+ * has a line. Empty only when [WidgetJourneyRow.lineDesignation] itself is null, matching how a
+ * missing header line badge is already handled elsewhere in this file (see [WidgetHeader]'s own
+ * `model.lineDesignation?.let { ... }`). `internal`, not `private`, so it's directly unit-testable
+ * — see `BlickRoutineWidgetTest`. */
+internal fun WidgetJourneyRow.legBadgesOrFallback(): List<WidgetJourneyLegBadge> =
+    legBadges.ifEmpty { listOfNotNull(lineDesignation?.let { WidgetJourneyLegBadge(it, transportMode) }) }
 
 /** A clean, left-aligned vertical stack: the big "6 min" countdown, then — outside [compact]
  * heights only, where there simply isn't room — the following departure's own countdown and

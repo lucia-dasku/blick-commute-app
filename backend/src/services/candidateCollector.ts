@@ -21,6 +21,55 @@ export function isEligibleJourney(journey: { departureTime: string; transferCoun
   return Date.parse(journey.departureTime) >= requestedAtMillis && journey.transferCount <= MAX_CHANGES;
 }
 
+/** A routine's persisted Direct/Both/With-changes preference (see
+ * `android/app/src/main/java/se/blick/app/domain/model/CommuteRoutine.kt`'s own
+ * `changesPreference` field) — the caller-supplied counterpart to `MAX_CHANGES`: that constant
+ * is a fixed product-wide ceiling, while this is a per-request, per-routine choice of WHICH
+ * transferCounts within that ceiling are eligible at all. `BOTH` is the pre-existing, unfiltered
+ * behavior. */
+export type JourneyChangesPreference = "DIRECT_ONLY" | "BOTH" | "WITH_CHANGES_ONLY";
+
+/** Whether `transferCount` is eligible under `preference` — `DIRECT_ONLY` admits only a
+ * zero-change journey, `WITH_CHANGES_ONLY` admits only one requiring at least one change, and
+ * `BOTH` admits everything (subject to `isEligibleJourney`'s own separate `MAX_CHANGES` ceiling,
+ * never re-checked here). A pure, minute predicate so [CandidateCollector] can apply it at the
+ * exact same choke point `isEligibleJourney` already gates entry to the shared candidate pool at
+ * — see [CandidateCollector.fetchBatch]'s own doc for why filtering there, before PRIMARY/NEXT/
+ * ALTERNATIVE are ever selected from that pool, is what keeps the selected roles themselves
+ * correct for the preference, rather than merely hiding disallowed rows from an otherwise
+ * unfiltered selection after the fact. */
+export function matchesChangesPreference(transferCount: number, preference: JourneyChangesPreference): boolean {
+  switch (preference) {
+    case "DIRECT_ONLY":
+      return transferCount === 0;
+    case "WITH_CHANGES_ONLY":
+      return transferCount >= 1;
+    case "BOTH":
+      return true;
+  }
+}
+
+/** The `max_changes` ceiling to actually REQUEST from SL for [preference] — distinct from, and
+ * complementary to, `matchesChangesPreference`'s own pool-level filter above, which still
+ * applies unconditionally regardless of this value (defense in depth, exactly like
+ * `isEligibleJourney`'s own `MAX_CHANGES` re-check). SL Journey Planner only ever returns up to
+ * 3 best-match trips per request (`calc_number_of_trips` — see journeys.ts's own doc); asking
+ * broadly (up to `MAX_CHANGES`) and filtering the response afterward lets SL's own "best match"
+ * picks — which have no notion of Blick's `changesPreference` at all — fill all 3 slots with
+ * journeys requiring changes, silently crowding a genuinely eligible direct journey out of the
+ * batch entirely before Blick's own filter ever gets a chance to see it (e.g. three transfer
+ * journeys plus a fourth, later direct one: an unfiltered request only ever learns about the
+ * first three). `DIRECT_ONLY` therefore narrows the REQUEST itself to `maxChanges: 0`, so SL's
+ * own top-3 are already constrained to the space Blick actually wants and can never be crowded
+ * out this way. `WITH_CHANGES_ONLY` and `BOTH` both still request the full `MAX_CHANGES`
+ * ceiling — SL has no "minimum changes" request parameter, so a with-changes-only search cannot
+ * be narrowed the same way at the request level; see journeys.ts's own bounded
+ * PRIMARY-discovery doc for how that preference is instead handled, by continuing to search
+ * forward rather than by asking SL differently. */
+export function requestMaxChanges(preference: JourneyChangesPreference): number {
+  return preference === "DIRECT_ONLY" ? 0 : MAX_CHANGES;
+}
+
 /** A purely operational safety backstop against a pathological SL response pattern (e.g.
  * repeatedly advancing by the minimum step without ever satisfying the caller) — NOT a
  * product/ranking threshold. `searchUntil`, NEXT's own departure as ALTERNATIVE's own
@@ -127,6 +176,10 @@ export class CandidateCollector {
     private readonly originId: string,
     private readonly destinationId: string,
     private readonly requestedAtMillis: number,
+    /** Defaults to `"BOTH"` (unfiltered, the pre-existing behavior) so every existing call site
+     * that predates this parameter — direct construction in tests included — keeps compiling
+     * and behaving exactly as before. */
+    private readonly changesPreference: JourneyChangesPreference = "BOTH",
   ) {}
 
   /** The full accumulated candidate pool, across every batch this instance has ever
@@ -163,12 +216,16 @@ export class CandidateCollector {
    * representation (SL's realtime data wins over whatever was known before — see this
    * class's own doc) rather than being ignored as a duplicate. A journeyId whose LATEST
    * representation is no longer eligible (see `isEligibleJourney` — already departed
-   * relative to this request, or now exceeds MAX_CHANGES) is instead REMOVED from the pool
-   * entirely: keeping a stale, once-eligible representation around after fresher data shows
-   * it no longer qualifies would be exactly the kind of staleness this upsert model exists
-   * to prevent. A journeyId SL simply doesn't mention again is left untouched — no news is
-   * not the same as bad news, and the last known representation remains the best available
-   * one.
+   * relative to this request, or now exceeds MAX_CHANGES — AND `matchesChangesPreference`,
+   * gating on `this.changesPreference`) is instead REMOVED from the pool entirely: keeping a
+   * stale, once-eligible representation around after fresher data shows it no longer
+   * qualifies would be exactly the kind of staleness this upsert model exists to prevent.
+   * Gating `changesPreference` at this exact choke point — never as a later filter over an
+   * already-selected PRIMARY/NEXT/ALTERNATIVE — is what keeps those roles themselves correct
+   * for the preference: a `DIRECT_ONLY` pool can never even contain a with-changes journey for
+   * `selectPrimary`/`selectNext`/`selectAlternative` to (mis)select from in the first place. A
+   * journeyId SL simply doesn't mention again is left untouched — no news is not the same as
+   * bad news, and the last known representation remains the best available one.
    *
    * Before sending anything, checks whether this EXACT query (see `probeKey`'s own doc) has
    * already been made on this instance — if so, the request is skipped entirely (see
@@ -221,7 +278,7 @@ export class CandidateCollector {
     }
 
     for (const journey of normalized) {
-      if (isEligibleJourney(journey, this.requestedAtMillis)) {
+      if (isEligibleJourney(journey, this.requestedAtMillis) && matchesChangesPreference(journey.transferCount, this.changesPreference)) {
         this.candidatesById.set(journey.journeyId, journey);
       } else {
         this.candidatesById.delete(journey.journeyId);

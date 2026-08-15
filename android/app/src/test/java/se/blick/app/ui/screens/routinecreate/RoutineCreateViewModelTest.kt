@@ -30,6 +30,7 @@ import se.blick.app.data.repository.JourneyRepository
 import se.blick.app.data.repository.RoutineRepository
 import se.blick.app.data.repository.StopRepository
 import se.blick.app.domain.model.CommuteRoutine
+import se.blick.app.domain.model.ExactDestinationChangesPreference
 import se.blick.app.domain.model.JourneyLocation
 import se.blick.app.domain.model.JourneyPlan
 import se.blick.app.domain.model.RoutineType
@@ -370,6 +371,7 @@ class RoutineCreateViewModelTest {
             destinationId: String,
             allowedTransportModes: Set<TransportMode>,
             searchUntil: Instant?,
+            changesPreference: ExactDestinationChangesPreference,
         ): List<JourneyPlan> = emptyList()
     }
 

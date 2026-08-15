@@ -38,6 +38,7 @@ import se.blick.app.domain.model.Departure
 import se.blick.app.domain.model.Disruption
 import se.blick.app.domain.model.DisruptionMessage
 import se.blick.app.domain.model.DisruptionPriority
+import se.blick.app.domain.model.ExactDestinationChangesPreference
 import se.blick.app.domain.model.Journey
 import se.blick.app.domain.model.JourneyLeg
 import se.blick.app.domain.model.JourneyLocation
@@ -2914,14 +2915,22 @@ class RoutineActiveWindowWorkerTest {
         var receivedSearchUntil: Instant? = null
             private set
 
+        /** Captures whatever `changesPreference` the worker's own call actually supplied — most
+         * tests in this section don't care, but see "passes the routine's own changesPreference"
+         * below. */
+        var receivedChangesPreference: ExactDestinationChangesPreference? = null
+            private set
+
         override suspend fun searchLocations(query: String): List<JourneyLocation> = emptyList()
         override suspend fun getJourneys(
             originId: String,
             destinationId: String,
             allowedTransportModes: Set<TransportMode>,
             searchUntil: Instant?,
+            changesPreference: ExactDestinationChangesPreference,
         ): List<JourneyPlan> {
             receivedSearchUntil = searchUntil
+            receivedChangesPreference = changesPreference
             return journeys
         }
     }
@@ -3089,6 +3098,97 @@ class RoutineActiveWindowWorkerTest {
         assertEquals(Instant.parse("2026-07-27T05:02:00Z"), journeyRepository.receivedSearchUntil)
     }
 
+    @Test
+    fun `the worker passes the routine's own persisted changesPreference to GetRankedJourneysUseCase, re-read fresh every tick`() = runTest {
+        val clock = TickingClock(Instant.parse("2026-07-27T05:00:00Z"), zone) // 07:00 local, Monday
+        val exactRoutine = exactDestinationRoutine().copy(changesPreference = ExactDestinationChangesPreference.DIRECT_ONLY)
+        val repository = ScriptedRoutineRepository(clock) { exactRoutine }
+        val journeyRepository = FakeJourneyRepository(listOf(exactJourney("primary", Instant.parse("2026-07-27T05:01:00Z"))))
+        val getRankedJourneys = GetRankedJourneysUseCase(journeyRepository, Clock.fixed(clock.instant(), zone))
+
+        val worker = buildWorker(
+            exactRoutine.id,
+            repository,
+            GetLiveDeparturesUseCase(FakeDepartureRepository { error("unused for an exact-destination routine") }, clock),
+            RecordingNotifier(),
+            RecordingScheduler(),
+            clock,
+            widgetUpdater = RecordingWidgetUpdater(),
+            getRankedJourneys = getRankedJourneys,
+        )
+        worker.doWork()
+
+        // Never the field's own default (BOTH) -- the worker's own `current` re-read each tick
+        // (see doWork's own doc) is what carries this persisted choice through, not a value
+        // baked into the WorkRequest at schedule time.
+        assertEquals(ExactDestinationChangesPreference.DIRECT_ONLY, journeyRepository.receivedChangesPreference)
+    }
+
+    // ---- Notification/widget faithfully project whatever journeys the repository (the backend,
+    // in production) returns -- neither surface independently re-filters or re-ranks by
+    // transferCount itself (see toExactJourneyNotificationProjection's own doc): the backend is
+    // the sole authority on which journeys are eligible for a given changesPreference (see
+    // GetRankedJourneysUseCase's own doc), so these tests model that contract by simply supplying
+    // already-preference-appropriate journeys and proving both surfaces show them unmodified,
+    // never trusting a second, independent Android-side filter to also apply. ----
+
+    @Test
+    fun `DIRECT_ONLY -- a direct journey the repository returns reaches both the notification and the widget unmodified`() = runTest {
+        val clock = TickingClock(Instant.parse("2026-07-27T05:00:00Z"), zone) // 07:00 local, Monday
+        val exactRoutine = exactDestinationRoutine().copy(changesPreference = ExactDestinationChangesPreference.DIRECT_ONLY)
+        val repository = ScriptedRoutineRepository(clock) { exactRoutine }
+        val useCaseClock = Clock.fixed(Instant.parse("2026-07-27T05:00:30Z"), zone)
+        val direct = exactJourney("direct", Instant.parse("2026-07-27T05:05:00Z"))
+        val getRankedJourneys = GetRankedJourneysUseCase(FakeJourneyRepository(listOf(direct)), useCaseClock)
+        val notifier = RecordingNotifier()
+        val widgetUpdater = RecordingWidgetUpdater()
+
+        val worker = buildWorker(
+            exactRoutine.id, repository,
+            GetLiveDeparturesUseCase(FakeDepartureRepository { error("unused for an exact-destination routine") }, clock),
+            notifier, RecordingScheduler(), clock, widgetUpdater = widgetUpdater, getRankedJourneys = getRankedJourneys,
+        )
+        worker.doWork()
+
+        val liveContent = notifier.shown.map { it.content }.filterIsInstance<RoutineNotificationContent.Live>()
+        assertTrue("expected the notification to show the direct journey live", liveContent.isNotEmpty())
+        assertEquals(listOf("14"), liveContent.first().departures.map { it.lineDesignation })
+        assertTrue("expected at least one updateWithJourneys call", widgetUpdater.journeysUpdateCalls.isNotEmpty())
+        assertEquals(listOf("direct"), widgetUpdater.journeysUpdateCalls.first().first.map { it.journeyId })
+    }
+
+    @Test
+    fun `WITH_CHANGES_ONLY -- a with-changes journey the repository returns reaches both the notification and the widget unmodified`() = runTest {
+        val clock = TickingClock(Instant.parse("2026-07-27T05:00:00Z"), zone) // 07:00 local, Monday
+        val exactRoutine = exactDestinationRoutine().copy(changesPreference = ExactDestinationChangesPreference.WITH_CHANGES_ONLY)
+        val repository = ScriptedRoutineRepository(clock) { exactRoutine }
+        val useCaseClock = Clock.fixed(Instant.parse("2026-07-27T05:00:30Z"), zone)
+        val departure = Instant.parse("2026-07-27T05:05:00Z")
+        val leg = JourneyLeg(TransportMode.METRO, "14", "Direction", "Fruängen", "Slussen", departure, departure.plusSeconds(300), true, emptyList())
+        val withChanges = JourneyPlan(
+            "with-changes", "Fruängen", "Arlanda", departure, departure.plusSeconds(1800),
+            transferCount = 1, firstLeg = leg, legs = listOf(leg), disruptions = emptyList(),
+        )
+        val getRankedJourneys = GetRankedJourneysUseCase(FakeJourneyRepository(listOf(withChanges)), useCaseClock)
+        val notifier = RecordingNotifier()
+        val widgetUpdater = RecordingWidgetUpdater()
+
+        val worker = buildWorker(
+            exactRoutine.id, repository,
+            GetLiveDeparturesUseCase(FakeDepartureRepository { error("unused for an exact-destination routine") }, clock),
+            notifier, RecordingScheduler(), clock, widgetUpdater = widgetUpdater, getRankedJourneys = getRankedJourneys,
+        )
+        worker.doWork()
+
+        val liveContent = notifier.shown.map { it.content }.filterIsInstance<RoutineNotificationContent.Live>()
+        assertTrue("expected the notification to show the with-changes journey live", liveContent.isNotEmpty())
+        assertEquals(listOf("14"), liveContent.first().departures.map { it.lineDesignation })
+        assertTrue("expected at least one updateWithJourneys call", widgetUpdater.journeysUpdateCalls.isNotEmpty())
+        val (journeysAtUpdate, _) = widgetUpdater.journeysUpdateCalls.first()
+        assertEquals(listOf("with-changes"), journeysAtUpdate.map { it.journeyId })
+        assertEquals(1, journeysAtUpdate.single().transferCount)
+    }
+
     /** Always throws -- models a genuine search failure (network/backend error), as opposed to
      * [FakeJourneyRepository] succeeding with a list that later turns out empty or expired. */
     private class ThrowingJourneyRepository : JourneyRepository {
@@ -3098,6 +3198,7 @@ class RoutineActiveWindowWorkerTest {
             destinationId: String,
             allowedTransportModes: Set<TransportMode>,
             searchUntil: Instant?,
+            changesPreference: ExactDestinationChangesPreference,
         ): List<JourneyPlan> = throw IOException("SL Journey Planner unavailable")
     }
 

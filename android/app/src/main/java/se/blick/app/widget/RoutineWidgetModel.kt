@@ -1,5 +1,6 @@
 package se.blick.app.widget
 
+import se.blick.app.domain.model.ExactDestinationChangesPreference
 import se.blick.app.domain.model.JourneyRole
 import se.blick.app.domain.model.TransportMode
 import java.time.Instant
@@ -93,9 +94,33 @@ sealed interface RoutineWidgetContent {
      * previous `fastest`/`alternative`: [secondary] is frequently NEXT, not an alternative at
      * all, and calling it that internally regardless of its real [WidgetJourneyRow.role] was
      * itself misleading. See [WidgetJourneyRow.role] — backend-authoritative, carried alongside
-     * every other field and never re-derived from list position. */
-    data class Journeys(val primary: WidgetJourneyRow, val secondary: WidgetJourneyRow?) : RoutineWidgetContent
+     * every other field and never re-derived from list position.
+     *
+     * [changesPreference] is the routine's own persisted [ExactDestinationChangesPreference] at
+     * the moment this content was written — the single source of truth [BlickRoutineWidget]
+     * switches its Direct/Both/With-changes layout on. Deliberately carried here rather than
+     * re-derived from [primary]'s own [WidgetJourneyRow.transferCount]: a
+     * [ExactDestinationChangesPreference.BOTH] routine showing a with-changes journey and a
+     * [ExactDestinationChangesPreference.WITH_CHANGES_ONLY] one showing the very same journey
+     * render IDENTICALLY except for the small green "With changes" label — that distinction only
+     * exists in the stored preference, never in the journey data itself. Defaults to
+     * [ExactDestinationChangesPreference.BOTH] (the pre-existing, unfiltered layout) so state
+     * persisted by a version predating this field decodes safely — see
+     * [se.blick.app.domain.model.toExactDestinationChangesPreference]'s own doc, which
+     * [RoutineWidgetPreferences.kt]'s decode reuses directly. */
+    data class Journeys(
+        val primary: WidgetJourneyRow,
+        val secondary: WidgetJourneyRow?,
+        val changesPreference: ExactDestinationChangesPreference = ExactDestinationChangesPreference.BOTH,
+    ) : RoutineWidgetContent
 }
+
+/** One leg's own line badge — [lineDesignation] is never null here (unlike
+ * [WidgetJourneyRow.lineDesignation], the first leg's own designation kept for the header badge):
+ * [RoutineWidgetJourneysMapper] only ever includes a leg that has one, silently dropping a walking
+ * transfer leg (which has none) rather than rendering an empty/meaningless badge for it — see that
+ * mapper's own doc. */
+data class WidgetJourneyLegBadge(val lineDesignation: String, val transportMode: TransportMode)
 
 data class WidgetJourneyRow(
     val lineDesignation: String?,
@@ -112,6 +137,13 @@ data class WidgetJourneyRow(
      * (e.g. debugging, or a future primary-slot label) always sees this journey's genuine
      * backend meaning. */
     val role: JourneyRole,
+    /** One badge per public-transport leg, in journey order — e.g. `["14", "40"]` for a
+     * one-change journey — for the Both/With-changes layouts' own "relevant line badge(s)" row
+     * (see [BlickRoutineWidget]'s own doc). Empty for state persisted by a version predating this
+     * field; render-time falls back to a single badge built from [lineDesignation]/[transportMode]
+     * in that case — see [legBadgesOrFallback]'s own doc — never zero badges for a journey that
+     * plainly has a line. */
+    val legBadges: List<WidgetJourneyLegBadge> = emptyList(),
 )
 
 data class WidgetDepartureRow(

@@ -65,13 +65,14 @@
     <string name="routine_details_transport_dialog_body">Blick visar bara resor där kollektivtrafikens delsträckor använder dina valda färdmedel. Gångbyten är alltid tillåtna.</string>
     <string name="routine_details_transport_one_required">Välj minst ett färdmedel.</string>
     <string name="routine_details_transport_update_failed">Kunde inte uppdatera färdmedlen. Försök igen.</string>
+    <string name="routine_details_changes_preference_update_failed">Kunde inte uppdatera reseinställningen. Försök igen.</string>
     <string name="journey_fastest">SNABBAST</string>
     <string name="journey_next">NÄSTA</string>
     <string name="journey_alternative">ALTERNATIV</string>
     <string name="journey_departure_in">om %1$d min</string>
     <string name="journey_direct">Direkt</string>
     <string name="journey_with_changes">Med byten</string>
-    <string name="journey_no_direct_available">Ingen direktresa tillgänglig</string>
+    <string name="journey_no_direct_available">Ingen direktresa tillgänglig. Slå på Med byten för att se andra resvägar.</string>
     <string name="journey_changes">%1$d byten</string>
     <string name="journey_arrives">Ankomst %1$s</string>
     <string name="journey_later">%1$d min senare</string>
@@ -239,8 +240,11 @@
     <string name="widget_notifications_unavailable">Slå på aviseringar för att se live-avgångar här.</string>
     <string name="widget_countdown_minutes_format">%1$d min</string>
     <string name="widget_next_departure_format">Nästa om %1$d min</string>
-    <string name="widget_journey_arrival">Ankomst %1$s</string>
-    <string name="widget_journey_next">%1$s · om %2$d min · ankomst %3$s</string>
-    <string name="widget_journey_alternative">Alternativ: %1$s · om %2$d min · ankomst %3$s</string>
+    <string name="widget_journey_next_label">Nästa</string>
+    <string name="widget_journey_alternative_label">Alternativ</string>
+    <plurals name="widget_journey_arrive_with_changes">
+        <item quantity="one">Ankomst %1$s • %2$d byte</item>
+        <item quantity="other">Ankomst %1$s • %2$d byten</item>
+    </plurals>
     <string name="widget_stale_indicator">Inaktuell</string>
 </resources>

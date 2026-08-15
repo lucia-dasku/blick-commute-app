@@ -5,8 +5,10 @@ import androidx.datastore.preferences.core.Preferences
 import androidx.datastore.preferences.core.booleanPreferencesKey
 import androidx.datastore.preferences.core.longPreferencesKey
 import androidx.datastore.preferences.core.stringPreferencesKey
+import se.blick.app.domain.model.ExactDestinationChangesPreference
 import se.blick.app.domain.model.JourneyRole
 import se.blick.app.domain.model.TransportMode
+import se.blick.app.domain.model.toExactDestinationChangesPreference
 import se.blick.app.domain.model.toJourneyRole
 import se.blick.app.domain.model.toTransportMode
 import java.time.Instant
@@ -58,7 +60,38 @@ private object WidgetKeys {
     val JOURNEY_SECONDARY_MODE = stringPreferencesKey("journeyAlternativeMode")
     /** New in this version — see [JOURNEY_PRIMARY_ROLE]'s own doc. */
     val JOURNEY_SECONDARY_ROLE = stringPreferencesKey("journeySecondaryRole")
+    /** New in this version — absent entirely on state persisted by an older app version; see
+     * [se.blick.app.domain.model.toExactDestinationChangesPreference]'s own
+     * [ExactDestinationChangesPreference.BOTH] fallback for how that's handled on read. */
+    val JOURNEY_CHANGES_PREFERENCE = stringPreferencesKey("journeyChangesPreference")
+    /** Encoded per-leg line badges (see [encodeLegBadges]'s own doc) — new in this version;
+     * absent entirely on state persisted by an older app version, or for a `Journeys` row that
+     * genuinely has none. */
+    val JOURNEY_PRIMARY_LEG_BADGES = stringPreferencesKey("journeyPrimaryLegBadges")
+    val JOURNEY_SECONDARY_LEG_BADGES = stringPreferencesKey("journeySecondaryLegBadges")
 }
+
+/** Encodes [this] as `"14:METRO|40:BUS"` — pipe-separated leg entries, each a colon-separated
+ * `lineDesignation:transportMode` pair, in journey order. [Preferences] has no native list/struct
+ * type (only flat primitives, plus an unordered `Set<String>` unsuited to this ordered,
+ * paired data — see [androidx.datastore.preferences.core.stringSetPreferencesKey]), so this
+ * mirrors [se.blick.app.data.local.room.RoutineMappers.kt]'s own comma-joined
+ * `allowedJourneyTransportModes` encoding: a real SL line designation never itself contains `:`
+ * or `|`, exactly like a [TransportMode] enum name never contains a comma. */
+private fun List<WidgetJourneyLegBadge>.encodeLegBadges(): String = joinToString("|") { "${it.lineDesignation}:${it.transportMode.name}" }
+
+/** The exact inverse of [encodeLegBadges] — a null/blank/malformed value (absent key, a version
+ * predating this field, or unlikely datastore corruption) decodes to an empty list rather than
+ * throwing; [legBadgesOrFallback] is what render time falls back to a single header-derived badge
+ * with in that case, never zero badges for a journey that plainly has a line. */
+private fun String?.decodeLegBadges(): List<WidgetJourneyLegBadge> =
+    this?.takeIf(String::isNotEmpty)
+        ?.split("|")
+        ?.mapNotNull { entry ->
+            val parts = entry.split(":", limit = 2)
+            if (parts.size != 2 || parts[0].isEmpty()) null else WidgetJourneyLegBadge(parts[0], parts[1].toTransportMode())
+        }
+        .orEmpty()
 
 private enum class ContentType { NO_ACTIVE_COMMUTE, LOADING, LIVE, STALE, NO_UPCOMING, OFFLINE, UNAVAILABLE, NOTIFICATIONS_UNAVAILABLE, JOURNEYS }
 
@@ -100,6 +133,7 @@ internal fun RoutineWidgetUiState.writeInto(prefs: MutablePreferences) {
                     prefs[WidgetKeys.CONTENT_TYPE] = ContentType.NOTIFICATIONS_UNAVAILABLE.name
                 is RoutineWidgetContent.Journeys -> {
                     prefs[WidgetKeys.CONTENT_TYPE] = ContentType.JOURNEYS.name
+                    prefs[WidgetKeys.JOURNEY_CHANGES_PREFERENCE] = content.changesPreference.name
                     prefs.writeJourney(content.primary, isSecondary = false)
                     content.secondary?.let { prefs.writeJourney(it, isSecondary = true) }
                 }
@@ -115,6 +149,7 @@ private fun MutablePreferences.writeJourney(row: WidgetJourneyRow, isSecondary: 
         this[WidgetKeys.JOURNEY_PRIMARY_CHANGES] = row.transferCount.toLong()
         this[WidgetKeys.JOURNEY_PRIMARY_REALTIME] = row.isRealtime
         this[WidgetKeys.JOURNEY_PRIMARY_ROLE] = row.role.name
+        if (row.legBadges.isNotEmpty()) this[WidgetKeys.JOURNEY_PRIMARY_LEG_BADGES] = row.legBadges.encodeLegBadges()
     } else {
         this[WidgetKeys.JOURNEY_SECONDARY_DEPARTURE] = row.departureTime.toEpochMilli()
         this[WidgetKeys.JOURNEY_SECONDARY_ARRIVAL] = row.arrivalTime.toEpochMilli()
@@ -123,6 +158,7 @@ private fun MutablePreferences.writeJourney(row: WidgetJourneyRow, isSecondary: 
         row.lineDesignation?.let { this[WidgetKeys.JOURNEY_SECONDARY_LINE] = it }
         this[WidgetKeys.JOURNEY_SECONDARY_MODE] = row.transportMode.name
         this[WidgetKeys.JOURNEY_SECONDARY_ROLE] = row.role.name
+        if (row.legBadges.isNotEmpty()) this[WidgetKeys.JOURNEY_SECONDARY_LEG_BADGES] = row.legBadges.encodeLegBadges()
     }
 }
 
@@ -180,6 +216,7 @@ internal fun Preferences.toWidgetUiState(): RoutineWidgetUiState {
                 lineDesignation, transportMode, Instant.ofEpochMilli(primaryDeparture), Instant.ofEpochMilli(primaryArrival),
                 (this[WidgetKeys.JOURNEY_PRIMARY_CHANGES] ?: 0L).toInt(), this[WidgetKeys.JOURNEY_PRIMARY_REALTIME] ?: false,
                 readJourneyRole(WidgetKeys.JOURNEY_PRIMARY_ROLE, default = JourneyRole.PRIMARY),
+                this[WidgetKeys.JOURNEY_PRIMARY_LEG_BADGES].decodeLegBadges(),
             )
             val secondary = this[WidgetKeys.JOURNEY_SECONDARY_DEPARTURE]?.let { departure ->
                 WidgetJourneyRow(
@@ -193,9 +230,10 @@ internal fun Preferences.toWidgetUiState(): RoutineWidgetUiState {
                     // own selection algorithm -- the safer default for the rare case of a
                     // secondary row persisted by a version predating this field.
                     readJourneyRole(WidgetKeys.JOURNEY_SECONDARY_ROLE, default = JourneyRole.NEXT),
+                    this[WidgetKeys.JOURNEY_SECONDARY_LEG_BADGES].decodeLegBadges(),
                 )
             }
-            RoutineWidgetContent.Journeys(primary, secondary)
+            RoutineWidgetContent.Journeys(primary, secondary, this[WidgetKeys.JOURNEY_CHANGES_PREFERENCE].toExactDestinationChangesPreference())
         }
         ContentType.NO_ACTIVE_COMMUTE -> return RoutineWidgetUiState.NoActiveCommute
     }

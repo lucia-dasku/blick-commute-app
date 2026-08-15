@@ -71,6 +71,7 @@ import se.blick.app.BuildConfig
 import se.blick.app.R
 import se.blick.app.domain.model.CommuteRoutine
 import se.blick.app.domain.model.Disruption
+import se.blick.app.domain.model.ExactDestinationChangesPreference
 import se.blick.app.domain.usecase.DisruptionsState
 import se.blick.app.domain.usecase.LiveDeparturesState
 import se.blick.app.domain.usecase.PreparedDeparture
@@ -178,6 +179,9 @@ fun RoutineDetailsScreen(
                 isUpdatingJourneyTransportModes = uiState.isUpdatingJourneyTransportModes,
                 journeyTransportModesUpdateFailed = uiState.journeyTransportModesUpdateFailed,
                 onUpdateJourneyTransportModes = viewModel::updateJourneyTransportModes,
+                isUpdatingChangesPreference = uiState.isUpdatingChangesPreference,
+                changesPreferenceUpdateFailed = uiState.changesPreferenceUpdateFailed,
+                onUpdateChangesPreference = viewModel::updateChangesPreference,
                 onRefresh = viewModel::refresh,
                 onEdit = { onEdit(routine.id) },
                 isTogglingEnabled = uiState.isTogglingEnabled,
@@ -241,7 +245,15 @@ private fun exactDestinationRouteLabel(routine: CommuteRoutine) =
     "${routine.journeyOriginName ?: routine.siteName} → ${routine.journeyDestinationName.orEmpty()}"
 
 @Composable
-private fun JourneyComparisonSection(journeys: List<JourneyPlan>, unavailable: Boolean, now: Instant) {
+private fun JourneyComparisonSection(
+    journeys: List<JourneyPlan>,
+    unavailable: Boolean,
+    now: Instant,
+    changesPreference: ExactDestinationChangesPreference,
+    isUpdatingChangesPreference: Boolean,
+    changesPreferenceUpdateFailed: Boolean,
+    onChangesPreferenceChange: (ExactDestinationChangesPreference) -> Unit,
+) {
     // Render-time eligibility filter: a journey that was still current when fetched can have
     // since departed by the time this composable actually renders (a fresh 30-second fetch, or
     // simply a later recomposition of an already-fetched list). Filtering here, before deciding
@@ -250,12 +262,16 @@ private fun JourneyComparisonSection(journeys: List<JourneyPlan>, unavailable: B
     // countdown -- countdownMinutes below is therefore never called with a past departure.
     val currentJourneys = journeys.filterCurrentJourneys(now)
 
-    // Local, transient UI state -- not persisted on the ViewModel, exactly like each card's own
-    // `expanded` below: which journeys are currently visible is a pure display filter over
-    // `currentJourneys`, not something any other part of the app needs to read. Both default to
-    // selected so the initial view is unfiltered -- identical to `currentJourneys` unfiltered.
-    var showDirect by remember { mutableStateOf(true) }
-    var showWithChanges by remember { mutableStateOf(true) }
+    // The PERSISTED routine preference is the single source of truth for which chips read
+    // selected -- see ExactDestinationChangesPreference's own doc. This filter is otherwise
+    // redundant with the backend's own preference-narrowed eligible pool (see
+    // GetRankedJourneysUseCase/backend/src/services/candidateCollector.ts's own doc) once a fresh
+    // fetch reflecting a just-changed preference has landed, but is kept as the same defensive,
+    // render-time re-filter this section already applied for currency above -- and gives
+    // immediate visual feedback for the brief window between tapping a chip and that fresh fetch
+    // actually completing, rather than showing a stale, no-longer-matching journey until then.
+    val showDirect = changesPreference.includesDirect()
+    val showWithChanges = changesPreference.includesWithChanges()
     val filteredJourneys = currentJourneys.filter { journey ->
         (showDirect && journey.transferCount == 0) || (showWithChanges && journey.transferCount > 0)
     }
@@ -264,22 +280,42 @@ private fun JourneyComparisonSection(journeys: List<JourneyPlan>, unavailable: B
         JourneyFilterRow(
             showDirect = showDirect,
             showWithChanges = showWithChanges,
-            // Toggling off the only currently-selected filter is a no-op rather than leaving
-            // both unselected -- an intentionally unreachable "nothing selected" state would
-            // just show the plain no-journeys message below for no discoverable reason, a dead
-            // end no tap could recover from except turning the OTHER filter on first.
-            onToggleDirect = { if (showWithChanges || !showDirect) showDirect = !showDirect },
-            onToggleWithChanges = { if (showDirect || !showWithChanges) showWithChanges = !showWithChanges },
+            // Disabled (not just ignored) while a write is in flight -- the ViewModel's own
+            // isUpdatingChangesPreference guard already refuses an overlapping second write (see
+            // RoutineDetailsViewModel.updateChangesPreference's own doc), but a still-tappable
+            // chip that silently no-ops reads as broken rather than busy.
+            enabled = !isUpdatingChangesPreference,
+            // toggleDirect/toggleWithChanges already refuse to leave both chips unselected
+            // (returning the unchanged preference instead) -- see their own doc.
+            onToggleDirect = { onChangesPreferenceChange(changesPreference.toggleDirect()) },
+            onToggleWithChanges = { onChangesPreferenceChange(changesPreference.toggleWithChanges()) },
         )
+        // Same inline error idiom as JourneyTransportModesRow's own updateFailed text below --
+        // routine.changesPreference (what showDirect/showWithChanges above are still derived
+        // from) is left exactly as last persisted on a failed write, never an optimistic value,
+        // so this is purely an explanation of why the chips didn't move, with a normal retry tap
+        // available immediately (updateChangesPreference clears this flag on the next attempt).
+        if (changesPreferenceUpdateFailed) {
+            Text(
+                stringResource(R.string.routine_details_changes_preference_update_failed),
+                color = MaterialTheme.colorScheme.error,
+                style = MaterialTheme.typography.bodySmall,
+            )
+        }
+        // DIRECT_ONLY with nothing eligible to show -- either the backend's own preference-
+        // narrowed search (see candidateCollector.ts's requestMaxChanges) genuinely found no
+        // direct journey, or (the brief window between tapping a chip and that fresh fetch
+        // landing) currentJourneys still holds a since-superseded batch this render-time filter
+        // now excludes -- gets a distinct, actionable message instead of the generic no-journeys
+        // one below: the user has actively asked for direct-only, and there is a concrete
+        // suggestion to offer (with changes might help), never a claim that one definitely
+        // exists.
+        val directOnlyEmpty = (currentJourneys.isEmpty() || filteredJourneys.isEmpty()) &&
+            changesPreference == ExactDestinationChangesPreference.DIRECT_ONLY
         when {
             unavailable -> Text(stringResource(R.string.routine_details_journeys_unavailable), color = MaterialTheme.colorScheme.error)
+            directOnlyEmpty -> Text(stringResource(R.string.journey_no_direct_available))
             currentJourneys.isEmpty() -> Text(stringResource(R.string.routine_details_no_journeys))
-            // Only Direct is selected and filtering down to it left nothing -- a distinct,
-            // specific message from the generic no-journeys one below, since the user has
-            // actively asked for direct-only and there is a concrete, actionable fact to state
-            // (changes are available; direct is not), not just "nothing found".
-            filteredJourneys.isEmpty() && showDirect && !showWithChanges ->
-                Text(stringResource(R.string.journey_no_direct_available))
             filteredJourneys.isEmpty() -> Text(stringResource(R.string.routine_details_no_journeys))
             else -> Column(verticalArrangement = Arrangement.spacedBy(12.dp)) {
                 val fastestArrival = filteredJourneys.first().arrivalTime
@@ -374,6 +410,7 @@ private fun JourneyComparisonSection(journeys: List<JourneyPlan>, unavailable: B
 private fun JourneyFilterRow(
     showDirect: Boolean,
     showWithChanges: Boolean,
+    enabled: Boolean,
     onToggleDirect: () -> Unit,
     onToggleWithChanges: () -> Unit,
 ) {
@@ -381,6 +418,7 @@ private fun JourneyFilterRow(
         FilterChip(
             selected = showDirect,
             onClick = onToggleDirect,
+            enabled = enabled,
             label = { Text(stringResource(R.string.journey_direct)) },
             leadingIcon = if (showDirect) {
                 { Icon(Icons.Filled.Check, contentDescription = null, modifier = Modifier.size(FilterChipDefaults.IconSize)) }
@@ -389,6 +427,7 @@ private fun JourneyFilterRow(
         FilterChip(
             selected = showWithChanges,
             onClick = onToggleWithChanges,
+            enabled = enabled,
             label = { Text(stringResource(R.string.journey_with_changes)) },
             leadingIcon = if (showWithChanges) {
                 { Icon(Icons.Filled.Check, contentDescription = null, modifier = Modifier.size(FilterChipDefaults.IconSize)) }
@@ -425,6 +464,9 @@ internal fun RoutineDetailsContent(
     isUpdatingJourneyTransportModes: Boolean = false,
     journeyTransportModesUpdateFailed: Boolean = false,
     onUpdateJourneyTransportModes: (Set<TransportMode>) -> Unit = {},
+    isUpdatingChangesPreference: Boolean = false,
+    changesPreferenceUpdateFailed: Boolean = false,
+    onUpdateChangesPreference: (ExactDestinationChangesPreference) -> Unit = {},
     onRefresh: () -> Unit,
     onEdit: () -> Unit,
     isTogglingEnabled: Boolean,
@@ -501,7 +543,15 @@ internal fun RoutineDetailsContent(
         Spacer(Modifier.height(12.dp))
 
         if (routine.type == RoutineType.EXACT_DESTINATION) {
-            JourneyComparisonSection(journeys, journeysUnavailable, now)
+            JourneyComparisonSection(
+                journeys = journeys,
+                unavailable = journeysUnavailable,
+                now = now,
+                changesPreference = routine.changesPreference,
+                isUpdatingChangesPreference = isUpdatingChangesPreference,
+                changesPreferenceUpdateFailed = changesPreferenceUpdateFailed,
+                onChangesPreferenceChange = onUpdateChangesPreference,
+            )
         } else {
             DeparturesSection(departuresState, routine.transportMode, locale, onRefresh)
         }

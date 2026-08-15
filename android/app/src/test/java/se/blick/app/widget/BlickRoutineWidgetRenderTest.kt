@@ -11,6 +11,7 @@ import org.robolectric.RobolectricTestRunner
 import org.robolectric.RuntimeEnvironment
 import org.robolectric.annotation.Config
 import se.blick.app.R
+import se.blick.app.domain.model.ExactDestinationChangesPreference
 import se.blick.app.domain.model.JourneyRole
 import se.blick.app.domain.model.TransportMode
 import java.time.Instant
@@ -21,10 +22,11 @@ import java.time.format.DateTimeFormatter
  * Renders [BlickWidgetContent] — the exact composable [BlickRoutineWidget.provideGlance] calls —
  * through Glance's own real unit-test rendering pipeline ([runGlanceAppWidgetUnitTest]), so these
  * prove what the widget actually draws, not a re-implementation of [resolveEffectiveModel]'s own
- * selection rules. [BlickRoutineWidgetTest] already covers [resolveEffectiveModel] as a pure
- * function in isolation; this file is the complementary proof that [ActiveRoutineContent] (via
- * [BlickWidgetContent]) truly calls it and that both the header badge and the body agree on
- * whatever it resolves — see [resolveEffectiveModel]'s own doc for the full 4-case matrix.
+ * selection rules or [JourneyMainContent]'s own layout-selection logic. [BlickRoutineWidgetTest]
+ * already covers [resolveEffectiveModel] and [legBadgesOrFallback] as pure functions in isolation;
+ * this file is the complementary proof that [ActiveRoutineContent] (via [BlickWidgetContent]) truly
+ * calls them and that the header badge, body, and [RoutineWidgetContent.Journeys.changesPreference]
+ * all agree on what actually renders.
  *
  * A non-compact size (see [isCompactLayout]'s own thresholds) is used throughout so the
  * secondary row is never dropped for being compact, only for genuinely having expired or been
@@ -50,41 +52,47 @@ class BlickRoutineWidgetRenderTest {
         lineDesignation: String,
         transportMode: TransportMode = TransportMode.BUS,
         role: JourneyRole = JourneyRole.PRIMARY,
+        transferCount: Int = 0,
+        legBadges: List<WidgetJourneyLegBadge> = emptyList(),
     ) = WidgetJourneyRow(
         lineDesignation = lineDesignation,
         transportMode = transportMode,
         departureTime = departureTime,
         arrivalTime = departureTime.plusSeconds(600),
-        transferCount = 0,
+        transferCount = transferCount,
         isRealtime = true,
         role = role,
+        legBadges = legBadges,
     )
 
-    private fun activeRoutineState(primary: WidgetJourneyRow, secondary: WidgetJourneyRow?) =
-        RoutineWidgetUiState.ActiveRoutine(
-            RoutineWidgetModel(
-                routineId = "r1",
-                routineName = "Airport commute",
-                stationName = "Fruängen",
-                directionLabel = "Arlanda",
-                content = RoutineWidgetContent.Journeys(primary, secondary),
-                lineDesignation = primary.lineDesignation,
-                transportMode = primary.transportMode,
-            ),
-        )
+    private fun activeRoutineState(
+        primary: WidgetJourneyRow,
+        secondary: WidgetJourneyRow?,
+        changesPreference: ExactDestinationChangesPreference = ExactDestinationChangesPreference.BOTH,
+    ) = RoutineWidgetUiState.ActiveRoutine(
+        RoutineWidgetModel(
+            routineId = "r1",
+            routineName = "Airport commute",
+            stationName = "Fruängen",
+            directionLabel = "Arlanda",
+            content = RoutineWidgetContent.Journeys(primary, secondary, changesPreference),
+            lineDesignation = primary.lineDesignation,
+            transportMode = primary.transportMode,
+        ),
+    )
 
     private fun countdownText(minutes: Long) = context.getString(R.string.widget_countdown_minutes_format, minutes)
-
-    private fun arrivalText(row: WidgetJourneyRow) =
-        context.getString(R.string.widget_journey_arrival, arrivalFormatter.format(row.arrivalTime))
-
-    private fun nextText(row: WidgetJourneyRow, minutes: Long) = context.getString(
-        R.string.widget_journey_next, row.lineDesignation.orEmpty(), minutes, arrivalFormatter.format(row.arrivalTime),
+    private fun directText() = context.getString(R.string.journey_direct)
+    private fun withChangesText() = context.getString(R.string.journey_with_changes)
+    private fun nextLabelText() = context.getString(R.string.widget_journey_next_label)
+    private fun alternativeLabelText() = context.getString(R.string.widget_journey_alternative_label)
+    private fun arriveWithChangesText(arrival: Instant, changes: Int) = context.resources.getQuantityString(
+        R.plurals.widget_journey_arrive_with_changes, changes, arrivalFormatter.format(arrival), changes,
     )
 
-    private fun alternativeText(row: WidgetJourneyRow, minutes: Long) = context.getString(
-        R.string.widget_journey_alternative, row.lineDesignation.orEmpty(), minutes, arrivalFormatter.format(row.arrivalTime),
-    )
+    // ---- resolveEffectiveModel: the same 4-case matrix BlickRoutineWidgetTest proves as a pure
+    // function -- this is the complementary proof that ActiveRoutineContent truly calls it and
+    // renders whatever it resolves to, using the new JourneyCompositionRow/NextJourneyRow layout. ----
 
     @Test
     fun `both primary and secondary current -- header shows primary's line, both countdowns render`() =
@@ -96,8 +104,9 @@ class BlickRoutineWidgetRenderTest {
             provideComposable { BlickWidgetContent(activeRoutineState(primary, next), now) }
 
             onNode(hasText("14")).assertExists()
-            onNode(hasText(countdownText(5))).assertExists()
-            onNode(hasText(nextText(next, 7))).assertExists()
+            onNode(hasTextEqualTo(countdownText(5))).assertExists()
+            onNode(hasTextEqualTo(nextLabelText())).assertExists()
+            onNode(hasTextEqualTo(countdownText(7))).assertExists()
         }
 
     @Test
@@ -110,8 +119,8 @@ class BlickRoutineWidgetRenderTest {
             provideComposable { BlickWidgetContent(activeRoutineState(primary, expiredSecondary), now) }
 
             onNode(hasText("14")).assertExists()
-            onNode(hasText(countdownText(5))).assertExists()
-            onNode(hasText(nextText(expiredSecondary, 0))).assertDoesNotExist()
+            onNode(hasTextEqualTo(countdownText(5))).assertExists()
+            onNode(hasTextEqualTo(nextLabelText())).assertDoesNotExist()
         }
 
     @Test
@@ -126,11 +135,13 @@ class BlickRoutineWidgetRenderTest {
             // Header badge follows the promoted row, not the original (now-expired) primary.
             onNode(hasText("14")).assertDoesNotExist()
             onNode(hasText("57")).assertExists()
-            // The promoted row drives the PRIMARY countdown/arrival format, not the secondary
-            // NEXT one -- there is nothing left to demote it under.
-            onNode(hasText(countdownText(7))).assertExists()
-            onNode(hasText(arrivalText(next))).assertExists()
-            onNode(hasText(nextText(next, 7))).assertDoesNotExist()
+            // The promoted row drives the PRIMARY countdown/composition, not the secondary NEXT
+            // one -- there is nothing left to demote it under, and it is direct (transferCount=0
+            // by this file's own journeyRow default), so it reads "Direct", not a Next/Alternative
+            // row.
+            onNode(hasTextEqualTo(countdownText(7))).assertExists()
+            onNode(hasText(directText())).assertExists()
+            onNode(hasTextEqualTo(nextLabelText())).assertDoesNotExist()
         }
 
     @Test
@@ -138,9 +149,9 @@ class BlickRoutineWidgetRenderTest {
         runGlanceAppWidgetUnitTest {
             setContext(context)
             setAppWidgetSize(DpSize(300.dp, 200.dp))
-            // Different (both expired) departure/arrival instants -- so the two arrival-text
-            // absence assertions below are genuinely independent checks, not the same string
-            // asked about twice.
+            // Different (both expired) departure instants -- so the two countdown-absence
+            // assertions below are genuinely independent checks, not the same string asked
+            // about twice.
             val expiredPrimary = journeyRow(now.minusSeconds(1), lineDesignation = "14")
             val expiredSecondary = journeyRow(now.minusSeconds(90), lineDesignation = "57", role = JourneyRole.NEXT)
             provideComposable { BlickWidgetContent(activeRoutineState(expiredPrimary, expiredSecondary), now) }
@@ -148,19 +159,113 @@ class BlickRoutineWidgetRenderTest {
             onNode(hasText(context.getString(R.string.notification_unavailable))).assertExists()
             onNode(hasText("14")).assertDoesNotExist()
             onNode(hasText("57")).assertDoesNotExist()
-            // Neither row is rendered as a live "0 min" countdown, and neither expired journey's
-            // own arrival time leaks through under the Unavailable body text.
-            onNode(hasText(countdownText(0))).assertDoesNotExist()
-            onNode(hasText(arrivalText(expiredPrimary))).assertDoesNotExist()
-            onNode(hasText(arrivalText(expiredSecondary))).assertDoesNotExist()
+            // Neither row is rendered as a live "0 min" countdown.
+            onNode(hasTextEqualTo(countdownText(0))).assertDoesNotExist()
+        }
+
+    // ---- Direct/Both/With-changes: switched ONLY on RoutineWidgetContent.Journeys.changesPreference
+    // -- the persisted routine preference -- never inferred from the journey's own transferCount
+    // (see JourneyMainContent's own doc). ----
+
+    @Test
+    fun `DIRECT_ONLY renders a single line badge and the Direct label, never an Arrive-with-changes line`() =
+        runGlanceAppWidgetUnitTest {
+            setContext(context)
+            setAppWidgetSize(DpSize(300.dp, 200.dp))
+            val primary = journeyRow(now.plusSeconds(540), lineDesignation = "14", transportMode = TransportMode.METRO)
+            val next = journeyRow(now.plusSeconds(1140), lineDesignation = "14", transportMode = TransportMode.METRO, role = JourneyRole.NEXT)
+            provideComposable {
+                BlickWidgetContent(activeRoutineState(primary, next, ExactDestinationChangesPreference.DIRECT_ONLY), now)
+            }
+
+            onNode(hasTextEqualTo(countdownText(9))).assertExists()
+            onNode(hasText("14")).assertExists()
+            onNode(hasText(directText())).assertExists()
+            onNode(hasText(withChangesText())).assertDoesNotExist()
+            onNode(hasTextEqualTo(nextLabelText())).assertExists()
+            onNode(hasTextEqualTo(countdownText(19))).assertExists()
+        }
+
+    @Test
+    fun `BOTH renders multiple line badges and the Arrive-with-changes line, with no With-changes label`() =
+        runGlanceAppWidgetUnitTest {
+            setContext(context)
+            setAppWidgetSize(DpSize(300.dp, 200.dp))
+            val arrival = now.plusSeconds(1800)
+            val primary = journeyRow(
+                now.plusSeconds(300), lineDesignation = "14", transportMode = TransportMode.METRO,
+                transferCount = 1, legBadges = listOf(WidgetJourneyLegBadge("14", TransportMode.METRO), WidgetJourneyLegBadge("40", TransportMode.BUS)),
+            ).copy(arrivalTime = arrival)
+            val next = journeyRow(now.plusSeconds(720), lineDesignation = "14", role = JourneyRole.NEXT)
+            provideComposable { BlickWidgetContent(activeRoutineState(primary, next, ExactDestinationChangesPreference.BOTH), now) }
+
+            onNode(hasTextEqualTo(countdownText(5))).assertExists()
+            onNode(hasText("14")).assertExists()
+            onNode(hasText("40")).assertExists()
+            onNode(hasText(directText())).assertDoesNotExist()
+            onNode(hasText(arriveWithChangesText(arrival, 1))).assertExists()
+            onNode(hasText(withChangesText())).assertDoesNotExist()
+            onNode(hasTextEqualTo(nextLabelText())).assertExists()
+            onNode(hasTextEqualTo(countdownText(12))).assertExists()
+        }
+
+    @Test
+    fun `WITH_CHANGES_ONLY renders the same journey layout as BOTH, plus the small green With-changes label`() =
+        runGlanceAppWidgetUnitTest {
+            setContext(context)
+            setAppWidgetSize(DpSize(300.dp, 200.dp))
+            val arrival = now.plusSeconds(1800)
+            val primary = journeyRow(
+                now.plusSeconds(300), lineDesignation = "14", transportMode = TransportMode.METRO,
+                transferCount = 1, legBadges = listOf(WidgetJourneyLegBadge("14", TransportMode.METRO), WidgetJourneyLegBadge("40", TransportMode.BUS)),
+            ).copy(arrivalTime = arrival)
+            val next = journeyRow(now.plusSeconds(720), lineDesignation = "14", role = JourneyRole.NEXT)
+            provideComposable {
+                BlickWidgetContent(activeRoutineState(primary, next, ExactDestinationChangesPreference.WITH_CHANGES_ONLY), now)
+            }
+
+            onNode(hasTextEqualTo(countdownText(5))).assertExists()
+            onNode(hasText("14")).assertExists()
+            onNode(hasText("40")).assertExists()
+            onNode(hasText(arriveWithChangesText(arrival, 1))).assertExists()
+            // The one visible difference from the otherwise-identical BOTH rendering above.
+            onNode(hasText(withChangesText())).assertExists()
+        }
+
+    @Test
+    fun `WITH_CHANGES_ONLY correctly pluralizes a two-change journey`() =
+        runGlanceAppWidgetUnitTest {
+            setContext(context)
+            setAppWidgetSize(DpSize(300.dp, 200.dp))
+            val arrival = now.plusSeconds(2400)
+            val primary = journeyRow(now.plusSeconds(300), lineDesignation = "14", transferCount = 2).copy(arrivalTime = arrival)
+            provideComposable {
+                BlickWidgetContent(activeRoutineState(primary, null, ExactDestinationChangesPreference.WITH_CHANGES_ONLY), now)
+            }
+
+            onNode(hasText(arriveWithChangesText(arrival, 2))).assertExists()
+            // Never the singular wording for a two-change journey.
+            onNode(hasText(arriveWithChangesText(arrival, 1))).assertDoesNotExist()
+        }
+
+    @Test
+    fun `a preference-less (defaulted BOTH) direct primary reads Direct, not zero changes`() =
+        runGlanceAppWidgetUnitTest {
+            setContext(context)
+            setAppWidgetSize(DpSize(300.dp, 200.dp))
+            val primary = journeyRow(now.plusSeconds(300), lineDesignation = "14")
+            // changesPreference deliberately omitted -- defaults to BOTH, matching state
+            // persisted by a version predating this field.
+            provideComposable { BlickWidgetContent(activeRoutineState(primary, null), now) }
+
+            onNode(hasText(directText())).assertExists()
         }
 
     // ---- Backend-authoritative role decides the second row's own wording -- never assumed from
-    // list position, and never the same string for both cases (see JourneyMainContent's own
-    // doc). ----
+    // list position, and never the same label for both cases, under any of the three preferences. ----
 
     @Test
-    fun `a NEXT-role secondary row renders with the existing NEXT wording, not the Alternative one`() =
+    fun `a NEXT-role secondary row renders the Next label, not Alternative`() =
         runGlanceAppWidgetUnitTest {
             setContext(context)
             setAppWidgetSize(DpSize(300.dp, 200.dp))
@@ -168,16 +273,12 @@ class BlickRoutineWidgetRenderTest {
             val next = journeyRow(now.plusSeconds(420), lineDesignation = "14", role = JourneyRole.NEXT)
             provideComposable { BlickWidgetContent(activeRoutineState(primary, next), now) }
 
-            // hasTextEqualTo, not the substring-matching hasText: widget_journey_alternative is
-            // deliberately "Alternative: " + widget_journey_next's own format, so the NEXT text
-            // is always a substring of the ALTERNATIVE one -- only an exact-text check can tell
-            // the two apart here.
-            onNode(hasTextEqualTo(nextText(next, 7))).assertExists()
-            onNode(hasTextEqualTo(alternativeText(next, 7))).assertDoesNotExist()
+            onNode(hasTextEqualTo(nextLabelText())).assertExists()
+            onNode(hasTextEqualTo(alternativeLabelText())).assertDoesNotExist()
         }
 
     @Test
-    fun `an ALTERNATIVE-role secondary row visibly renders as an alternative, not the plain NEXT wording`() =
+    fun `an ALTERNATIVE-role secondary row visibly renders the Alternative label, not Next`() =
         runGlanceAppWidgetUnitTest {
             setContext(context)
             setAppWidgetSize(DpSize(300.dp, 200.dp))
@@ -185,7 +286,71 @@ class BlickRoutineWidgetRenderTest {
             val alternative = journeyRow(now.plusSeconds(420), lineDesignation = "57", role = JourneyRole.ALTERNATIVE)
             provideComposable { BlickWidgetContent(activeRoutineState(primary, alternative), now) }
 
-            onNode(hasTextEqualTo(alternativeText(alternative, 7))).assertExists()
-            onNode(hasTextEqualTo(nextText(alternative, 7))).assertDoesNotExist()
+            onNode(hasTextEqualTo(alternativeLabelText())).assertExists()
+            onNode(hasTextEqualTo(nextLabelText())).assertDoesNotExist()
+        }
+
+    @Test
+    fun `DIRECT_ONLY still shows an ALTERNATIVE-role secondary as Alternative, not Next`() =
+        runGlanceAppWidgetUnitTest {
+            setContext(context)
+            setAppWidgetSize(DpSize(300.dp, 200.dp))
+            // A direct-only routine's ALTERNATIVE is still a genuinely different (but still
+            // direct) route -- see backend/src/services/candidateCollector.ts's own doc: the
+            // preference only ever excludes journeys WITH changes, never ALTERNATIVE itself.
+            val primary = journeyRow(now.plusSeconds(300), lineDesignation = "14", transportMode = TransportMode.METRO)
+            val alternative = journeyRow(now.plusSeconds(420), lineDesignation = "4", transportMode = TransportMode.BUS, role = JourneyRole.ALTERNATIVE)
+            provideComposable {
+                BlickWidgetContent(activeRoutineState(primary, alternative, ExactDestinationChangesPreference.DIRECT_ONLY), now)
+            }
+
+            onNode(hasTextEqualTo(alternativeLabelText())).assertExists()
+            onNode(hasTextEqualTo(nextLabelText())).assertDoesNotExist()
+        }
+
+    // ---- Robustness: longer station names, up to two changes, and two-digit countdowns must
+    // not break the layout or these key text elements. ----
+
+    @Test
+    fun `a long destination name, two changes, and a two-digit countdown all render without dropping key text`() =
+        runGlanceAppWidgetUnitTest {
+            setContext(context)
+            setAppWidgetSize(DpSize(300.dp, 200.dp))
+            val arrival = now.plusSeconds(3600)
+            val primary = journeyRow(
+                now.plusSeconds(4260), lineDesignation = "42X", transportMode = TransportMode.TRAIN, transferCount = 2,
+                legBadges = listOf(
+                    WidgetJourneyLegBadge("42X", TransportMode.TRAIN),
+                    WidgetJourneyLegBadge("4", TransportMode.BUS),
+                    WidgetJourneyLegBadge("19", TransportMode.METRO),
+                ),
+            ).copy(arrivalTime = arrival)
+            val next = journeyRow(now.plusSeconds(6600), lineDesignation = "42X", role = JourneyRole.NEXT)
+            val state = RoutineWidgetUiState.ActiveRoutine(
+                RoutineWidgetModel(
+                    routineId = "r1",
+                    routineName = "Long commute",
+                    stationName = "Kungsträdgården",
+                    directionLabel = "Mörby centrum via Universitetet and Näckrosdammen",
+                    content = RoutineWidgetContent.Journeys(primary, next, ExactDestinationChangesPreference.WITH_CHANGES_ONLY),
+                    lineDesignation = primary.lineDesignation,
+                    transportMode = primary.transportMode,
+                ),
+            )
+            provideComposable { BlickWidgetContent(state, now) }
+
+            // 71-minute primary countdown -- a genuine two-digit value.
+            onNode(hasTextEqualTo(countdownText(71))).assertExists()
+            // hasTextEqualTo, not the substring-matching hasText: "4" is itself a substring of
+            // the "42X" badge's own text, so a substring search for "4" would ambiguously match
+            // both badges.
+            onNode(hasTextEqualTo("42X")).assertExists()
+            onNode(hasTextEqualTo("4")).assertExists()
+            onNode(hasTextEqualTo("19")).assertExists()
+            onNode(hasText(arriveWithChangesText(arrival, 2))).assertExists()
+            onNode(hasText(withChangesText())).assertExists()
+            onNode(hasTextEqualTo(nextLabelText())).assertExists()
+            // 110-minute secondary countdown.
+            onNode(hasTextEqualTo(countdownText(110))).assertExists()
         }
 }

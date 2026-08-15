@@ -1,5 +1,6 @@
 package se.blick.app.ui.screens.routinedetails
 
+import se.blick.app.domain.model.ExactDestinationChangesPreference
 import java.time.DayOfWeek
 import java.time.Instant
 import java.time.LocalTime
@@ -50,4 +51,39 @@ fun formatTimeRange(start: LocalTime, end: LocalTime, locale: Locale): String {
 fun formatDepartureTime(instant: Instant, locale: Locale, zone: ZoneId = ZoneId.systemDefault()): String {
     val formatter = DateTimeFormatter.ofLocalizedTime(FormatStyle.SHORT).withLocale(locale).withZone(zone)
     return formatter.format(instant)
+}
+
+/**
+ * [ExactDestinationChangesPreference] as two independently-toggleable chip states — the Direct /
+ * With changes [JourneyFilterRow] shows — rather than a bare three-way enum: [includesDirect]
+ * mirrors the "Direct" chip's own selected state, [includesWithChanges] the "With changes" chip's.
+ * [WITH_CHANGES_ONLY][ExactDestinationChangesPreference.WITH_CHANGES_ONLY] is the only value where
+ * Direct reads unselected; [DIRECT_ONLY][ExactDestinationChangesPreference.DIRECT_ONLY] the only
+ * one where With changes does — [BOTH][ExactDestinationChangesPreference.BOTH] selects both.
+ */
+fun ExactDestinationChangesPreference.includesDirect(): Boolean = this != ExactDestinationChangesPreference.WITH_CHANGES_ONLY
+
+fun ExactDestinationChangesPreference.includesWithChanges(): Boolean = this != ExactDestinationChangesPreference.DIRECT_ONLY
+
+/**
+ * The preference that results from tapping the "Direct" chip while [this] is the currently
+ * persisted preference — a no-op (returns [this] unchanged) when Direct is the ONLY currently-
+ * selected option ([ExactDestinationChangesPreference.DIRECT_ONLY]), since both chips being
+ * unselected is never a valid state: an intentionally unreachable "nothing selected" preference
+ * would just leave no journeys eligible for no discoverable reason, a dead end no tap could
+ * recover from except turning the OTHER chip on first. See [toggleWithChanges] for the same rule
+ * on the other chip.
+ */
+fun ExactDestinationChangesPreference.toggleDirect(): ExactDestinationChangesPreference = when (this) {
+    ExactDestinationChangesPreference.DIRECT_ONLY -> ExactDestinationChangesPreference.DIRECT_ONLY
+    ExactDestinationChangesPreference.BOTH -> ExactDestinationChangesPreference.WITH_CHANGES_ONLY
+    ExactDestinationChangesPreference.WITH_CHANGES_ONLY -> ExactDestinationChangesPreference.BOTH
+}
+
+/** The preference that results from tapping the "With changes" chip — see [toggleDirect]'s own
+ * doc for the identical both-chips-off guard, mirrored here for [ExactDestinationChangesPreference.WITH_CHANGES_ONLY]. */
+fun ExactDestinationChangesPreference.toggleWithChanges(): ExactDestinationChangesPreference = when (this) {
+    ExactDestinationChangesPreference.DIRECT_ONLY -> ExactDestinationChangesPreference.BOTH
+    ExactDestinationChangesPreference.BOTH -> ExactDestinationChangesPreference.DIRECT_ONLY
+    ExactDestinationChangesPreference.WITH_CHANGES_ONLY -> ExactDestinationChangesPreference.WITH_CHANGES_ONLY
 }

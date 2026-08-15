@@ -555,7 +555,15 @@ class RoutineActiveWindowWorker @AssistedInject constructor(
                             // windowEnd is this occurrence's own real active-window end -- see
                             // GetRankedJourneysUseCase's own searchUntil doc for why the backend
                             // needs this real boundary rather than searching unboundedly.
-                            getRankedJourneys(origin, destination, current.allowedJourneyTransportModes, windowEnd.toInstant())
+                            // current.changesPreference -- re-read fresh from this tick's own
+                            // routine lookup above, never a value captured once at schedule time,
+                            // so a preference change picked up between ticks (see
+                            // RoutineDetailsViewModel.updateChangesPreference) takes effect on the
+                            // very next tick without any dedicated refresh path.
+                            getRankedJourneys(
+                                origin, destination, current.allowedJourneyTransportModes,
+                                windowEnd.toInstant(), current.changesPreference,
+                            )
                         } catch (e: CancellationException) {
                             throw e
                         } catch (_: Exception) {

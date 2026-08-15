@@ -49,6 +49,7 @@ interface RetrofitBlickApiService {
         @Query("destinationId") destinationId: String,
         @Query("transportModes") transportModes: String,
         @Query("searchUntil") searchUntil: String?,
+        @Query("changesPreference") changesPreference: String,
     ): SuccessEnvelopeDto<JourneysResponseDto>
 }
 
@@ -63,6 +64,6 @@ class RetrofitBlickApiClient(
     override suspend fun verifyPurchase(productId: String, purchaseToken: String) =
         service.verifyPurchase(PurchaseVerificationRequestDto(productId, purchaseToken)).data
     override suspend fun searchJourneyLocations(query: String) = service.searchJourneyLocations(query).data
-    override suspend fun getJourneys(originId: String, destinationId: String, transportModes: String, searchUntil: String?) =
-        service.getJourneys(originId, destinationId, transportModes, searchUntil).data
+    override suspend fun getJourneys(originId: String, destinationId: String, transportModes: String, searchUntil: String?, changesPreference: String) =
+        service.getJourneys(originId, destinationId, transportModes, searchUntil, changesPreference).data
 }

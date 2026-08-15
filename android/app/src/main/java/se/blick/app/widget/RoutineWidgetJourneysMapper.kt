@@ -48,6 +48,7 @@ internal fun decideJourneysWidgetState(
             journey.transferCount,
             journey.firstLeg.isRealtime,
             journey.role,
+            journey.legs.mapNotNull { leg -> leg.lineDesignation?.let { WidgetJourneyLegBadge(it, leg.transportMode) } },
         )
     }
     val primary = rows.firstOrNull() ?: return RoutineWidgetUiState.ActiveRoutine(
@@ -60,7 +61,8 @@ internal fun decideJourneysWidgetState(
     return RoutineWidgetUiState.ActiveRoutine(
         RoutineWidgetModel(
             routine.id, routine.name, routine.journeyOriginName ?: routine.siteName,
-            routine.journeyDestinationName, RoutineWidgetContent.Journeys(primary, rows.getOrNull(1)),
+            routine.journeyDestinationName,
+            RoutineWidgetContent.Journeys(primary, rows.getOrNull(1), routine.changesPreference),
             primary.lineDesignation, primary.transportMode,
         ),
     )

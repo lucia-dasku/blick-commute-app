@@ -5,6 +5,7 @@ import org.junit.Assert.assertNull
 import org.junit.Assert.assertTrue
 import org.junit.Test
 import se.blick.app.domain.model.CommuteRoutine
+import se.blick.app.domain.model.ExactDestinationChangesPreference
 import se.blick.app.domain.model.JourneyLeg
 import se.blick.app.domain.model.JourneyPlan
 import se.blick.app.domain.model.JourneyRole
@@ -24,7 +25,7 @@ class RoutineWidgetJourneysMapperTest {
 
     private val now = Instant.parse("2026-08-10T22:12:00Z")
 
-    private fun routine() = CommuteRoutine(
+    private fun routine(changesPreference: ExactDestinationChangesPreference = ExactDestinationChangesPreference.BOTH) = CommuteRoutine(
         id = "r1",
         name = "Airport commute",
         siteId = 9145,
@@ -42,6 +43,7 @@ class RoutineWidgetJourneysMapperTest {
         journeyOriginName = "Fruängen",
         journeyDestinationId = "destination-id",
         journeyDestinationName = "Arlanda",
+        changesPreference = changesPreference,
     )
 
     private fun journey(
@@ -51,6 +53,7 @@ class RoutineWidgetJourneysMapperTest {
         lineDesignation: String? = "14",
         transfers: Int = 0,
         role: JourneyRole = JourneyRole.PRIMARY,
+        legs: List<JourneyLeg>? = null,
     ): JourneyPlan {
         val leg = JourneyLeg(
             TransportMode.METRO, lineDesignation, "Direction", "Fruängen", "Arlanda",
@@ -58,7 +61,7 @@ class RoutineWidgetJourneysMapperTest {
         )
         return JourneyPlan(
             id, "Fruängen", "Arlanda", topLevelDeparture, topLevelDeparture.plusSeconds(600),
-            transfers, leg, listOf(leg), emptyList(), role,
+            transfers, leg, legs ?: listOf(leg), emptyList(), role,
         )
     }
 
@@ -186,5 +189,74 @@ class RoutineWidgetJourneysMapperTest {
         assertEquals("1", content.primary.lineDesignation)
         assertEquals("2", content.secondary?.lineDesignation)
         assertEquals(JourneyRole.ALTERNATIVE, content.secondary?.role)
+    }
+
+    // ---- changesPreference: copied from the routine's own persisted field onto the produced
+    // Journeys content -- the single source of truth BlickRoutineWidget's own layout selection
+    // reads (see RoutineWidgetContent.Journeys's own doc). ----
+
+    @Test fun `changesPreference is copied from the routine onto the produced Journeys content`() {
+        val primary = journey("primary", now.plusSeconds(60), now.plusSeconds(60))
+
+        val state = decideJourneysWidgetState(routine(ExactDestinationChangesPreference.DIRECT_ONLY), listOf(primary), now)
+
+        val content = ((state as RoutineWidgetUiState.ActiveRoutine).model.content) as RoutineWidgetContent.Journeys
+        assertEquals(ExactDestinationChangesPreference.DIRECT_ONLY, content.changesPreference)
+    }
+
+    @Test fun `a routine with the default BOTH changes preference produces Journeys content with BOTH`() {
+        val primary = journey("primary", now.plusSeconds(60), now.plusSeconds(60))
+
+        val state = decideJourneysWidgetState(routine(), listOf(primary), now)
+
+        val content = ((state as RoutineWidgetUiState.ActiveRoutine).model.content) as RoutineWidgetContent.Journeys
+        assertEquals(ExactDestinationChangesPreference.BOTH, content.changesPreference)
+    }
+
+    // ---- legBadges: one badge per public-transport leg, in order -- for BlickRoutineWidget's
+    // own "relevant line badge(s)" row on a with-changes journey. ----
+
+    @Test fun `legBadges carries one badge per leg, in order, for a multi-leg journey`() {
+        val legs = listOf(
+            JourneyLeg(TransportMode.METRO, "14", "Direction", "Fruängen", "Slussen", now.plusSeconds(60), now.plusSeconds(300), true, emptyList()),
+            JourneyLeg(TransportMode.BUS, "40", "Direction", "Slussen", "Arlanda", now.plusSeconds(360), now.plusSeconds(660), true, emptyList()),
+        )
+        val primary = journey("primary", now.plusSeconds(60), now.plusSeconds(60), transfers = 1, legs = legs)
+
+        val state = decideJourneysWidgetState(routine(), listOf(primary), now)
+
+        val content = ((state as RoutineWidgetUiState.ActiveRoutine).model.content) as RoutineWidgetContent.Journeys
+        assertEquals(
+            listOf(WidgetJourneyLegBadge("14", TransportMode.METRO), WidgetJourneyLegBadge("40", TransportMode.BUS)),
+            content.primary.legBadges,
+        )
+    }
+
+    @Test fun `a walking transfer leg (null lineDesignation) is excluded from legBadges`() {
+        val legs = listOf(
+            JourneyLeg(TransportMode.METRO, "14", "Direction", "Fruängen", "Slussen", now.plusSeconds(60), now.plusSeconds(300), true, emptyList()),
+            // A walking leg: no transportation/line at all -- see normalizeJourney.ts's own
+            // "WALK" doc.
+            JourneyLeg(TransportMode.UNKNOWN, null, null, "Slussen", "Slussen", now.plusSeconds(300), now.plusSeconds(360), false, emptyList()),
+            JourneyLeg(TransportMode.BUS, "40", "Direction", "Slussen", "Arlanda", now.plusSeconds(360), now.plusSeconds(660), true, emptyList()),
+        )
+        val primary = journey("primary", now.plusSeconds(60), now.plusSeconds(60), transfers = 1, legs = legs)
+
+        val state = decideJourneysWidgetState(routine(), listOf(primary), now)
+
+        val content = ((state as RoutineWidgetUiState.ActiveRoutine).model.content) as RoutineWidgetContent.Journeys
+        assertEquals(
+            listOf(WidgetJourneyLegBadge("14", TransportMode.METRO), WidgetJourneyLegBadge("40", TransportMode.BUS)),
+            content.primary.legBadges,
+        )
+    }
+
+    @Test fun `a direct single-leg journey produces exactly one legBadge`() {
+        val primary = journey("primary", now.plusSeconds(60), now.plusSeconds(60), lineDesignation = "14")
+
+        val state = decideJourneysWidgetState(routine(), listOf(primary), now)
+
+        val content = ((state as RoutineWidgetUiState.ActiveRoutine).model.content) as RoutineWidgetContent.Journeys
+        assertEquals(listOf(WidgetJourneyLegBadge("14", TransportMode.METRO)), content.primary.legBadges)
     }
 }

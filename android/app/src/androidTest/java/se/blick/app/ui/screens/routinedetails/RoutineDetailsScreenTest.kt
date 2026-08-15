@@ -8,6 +8,8 @@ import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.test.assertCountEquals
+import androidx.compose.ui.test.assertIsEnabled
+import androidx.compose.ui.test.assertIsNotEnabled
 import androidx.compose.ui.test.junit4.v2.createAndroidComposeRule
 import androidx.compose.ui.test.onAllNodesWithText
 import androidx.compose.ui.test.onNodeWithContentDescription
@@ -27,6 +29,7 @@ import se.blick.app.domain.model.CommuteRoutine
 import se.blick.app.domain.model.Disruption
 import se.blick.app.domain.model.DisruptionMessage
 import se.blick.app.domain.model.DisruptionPriority
+import se.blick.app.domain.model.ExactDestinationChangesPreference
 import se.blick.app.domain.model.JourneyLeg
 import se.blick.app.domain.model.JourneyPlan
 import se.blick.app.domain.model.JourneyRole
@@ -114,11 +117,20 @@ class RoutineDetailsScreenTest {
         journeys: List<JourneyPlan> = emptyList(),
         now: Instant = Instant.now(),
         onUpdateJourneyTransportModes: (Set<TransportMode>) -> Unit = {},
+        isUpdatingChangesPreference: Boolean = false,
+        changesPreferenceUpdateFailed: Boolean = false,
     ) {
         composeRule.setContent {
+            // Mirrors production: RoutineDetailsScreen's own uiState.routine is the single
+            // source of truth the Direct/With-changes chips read and write through
+            // onUpdateChangesPreference (see JourneyComparisonSection's own doc) -- held here as
+            // recomposable state, seeded from the [routine] parameter, so a chip tap in these
+            // tests visibly changes what's rendered exactly like a real ViewModel-backed screen
+            // would, rather than silently becoming an inert tap against a fixed routine value.
+            var currentRoutine by remember { mutableStateOf(routine) }
             RoutineDetailsContent(
                 modifier = Modifier,
-                routine = routine,
+                routine = currentRoutine,
                 isPausedToday = isPausedToday,
                 departuresState = departuresState,
                 isRefreshing = false,
@@ -126,6 +138,9 @@ class RoutineDetailsScreenTest {
                 journeys = journeys,
                 now = now,
                 onUpdateJourneyTransportModes = onUpdateJourneyTransportModes,
+                isUpdatingChangesPreference = isUpdatingChangesPreference,
+                changesPreferenceUpdateFailed = changesPreferenceUpdateFailed,
+                onUpdateChangesPreference = { currentRoutine = currentRoutine.copy(changesPreference = it) },
                 onRefresh = {},
                 onEdit = {},
                 isTogglingEnabled = false,
@@ -500,6 +515,140 @@ class RoutineDetailsScreenTest {
         composeRule.onNodeWithText(composeRule.activity.getString(R.string.journey_direct)).performClick()
 
         composeRule.onNodeWithText("14").assertExists()
+    }
+
+    // ---- Preference-update UI state: RoutineDetailsViewModel.isUpdatingChangesPreference /
+    // changesPreferenceUpdateFailed guard the write itself (see that function's own doc), but the
+    // chips must also visibly reflect an in-flight write and a failed one, not just silently
+    // reject an overlapping tap. ----
+
+    @Test
+    fun whileAChangesPreferenceUpdateIsInFlight_bothFilterChipsAreDisabled() {
+        val now = Instant.parse("2026-08-13T08:00:00Z")
+        val direct = journeyWithTransfers("direct", "14", transferCount = 0, departure = now.plusSeconds(300), durationMinutes = 20)
+
+        setContent(
+            disruptionsState = DisruptionsState.NoDisruptions,
+            routine = exactDestinationRoutine(),
+            journeys = listOf(direct),
+            now = now,
+            isUpdatingChangesPreference = true,
+        )
+
+        composeRule.onNodeWithText(composeRule.activity.getString(R.string.journey_direct)).assertIsNotEnabled()
+        composeRule.onNodeWithText(composeRule.activity.getString(R.string.journey_with_changes)).assertIsNotEnabled()
+    }
+
+    @Test
+    fun onceAChangesPreferenceUpdateFinishes_theFilterChipsAreEnabledAgain() {
+        val now = Instant.parse("2026-08-13T08:00:00Z")
+        val direct = journeyWithTransfers("direct", "14", transferCount = 0, departure = now.plusSeconds(300), durationMinutes = 20)
+
+        setContent(
+            disruptionsState = DisruptionsState.NoDisruptions,
+            routine = exactDestinationRoutine(),
+            journeys = listOf(direct),
+            now = now,
+            isUpdatingChangesPreference = false,
+        )
+
+        composeRule.onNodeWithText(composeRule.activity.getString(R.string.journey_direct)).assertIsEnabled()
+        composeRule.onNodeWithText(composeRule.activity.getString(R.string.journey_with_changes)).assertIsEnabled()
+    }
+
+    @Test
+    fun changesPreferenceUpdateFailed_showsALocalizedErrorBelowTheChips() {
+        val now = Instant.parse("2026-08-13T08:00:00Z")
+        val direct = journeyWithTransfers("direct", "14", transferCount = 0, departure = now.plusSeconds(300), durationMinutes = 20)
+
+        setContent(
+            disruptionsState = DisruptionsState.NoDisruptions,
+            routine = exactDestinationRoutine(),
+            journeys = listOf(direct),
+            now = now,
+            changesPreferenceUpdateFailed = true,
+        )
+
+        composeRule.onNodeWithText(
+            composeRule.activity.getString(R.string.routine_details_changes_preference_update_failed),
+        ).assertExists()
+    }
+
+    @Test
+    fun noChangesPreferenceFailure_theErrorIsNotShown() {
+        val now = Instant.parse("2026-08-13T08:00:00Z")
+        val direct = journeyWithTransfers("direct", "14", transferCount = 0, departure = now.plusSeconds(300), durationMinutes = 20)
+
+        setContent(
+            disruptionsState = DisruptionsState.NoDisruptions,
+            routine = exactDestinationRoutine(),
+            journeys = listOf(direct),
+            now = now,
+            changesPreferenceUpdateFailed = false,
+        )
+
+        composeRule.onNodeWithText(
+            composeRule.activity.getString(R.string.routine_details_changes_preference_update_failed),
+        ).assertDoesNotExist()
+    }
+
+    // ---- The persisted routine preference is the single source of truth for the chips' own
+    // INITIAL selection, not merely what a tap changes it to -- see
+    // se.blick.app.domain.model.ExactDestinationChangesPreference's own doc. Previously
+    // impossible to observe: the pre-persistence design always started both chips selected
+    // regardless of any per-routine value, since none existed. ----
+
+    @Test
+    fun aRoutinePersistedAsDirectOnly_startsWithOnlyDirectJourneysVisible_noTapNeeded() {
+        val now = Instant.parse("2026-08-13T08:00:00Z")
+        val direct = journeyWithTransfers("direct", "14", transferCount = 0, departure = now.plusSeconds(300), durationMinutes = 20)
+        val withChanges = journeyWithTransfers("changes", "40", transferCount = 1, departure = now.plusSeconds(600), durationMinutes = 30)
+
+        setContent(
+            disruptionsState = DisruptionsState.NoDisruptions,
+            routine = exactDestinationRoutine().copy(changesPreference = ExactDestinationChangesPreference.DIRECT_ONLY),
+            journeys = listOf(direct, withChanges),
+            now = now,
+        )
+
+        composeRule.onNodeWithText("14").assertExists()
+        composeRule.onNodeWithText("40").assertDoesNotExist()
+    }
+
+    @Test
+    fun aRoutinePersistedAsDirectOnly_withGenuinelyNoJourneysFound_showsTheNoDirectMessageNotTheGenericOne() {
+        // A successful fetch that simply found nothing (currentJourneys itself empty, not just
+        // filtered down to empty) previously fell straight into the generic "no journeys" branch
+        // regardless of preference -- DIRECT_ONLY must get the same specific, actionable message
+        // as the filtered-down case above, not the generic one.
+        val now = Instant.parse("2026-08-13T08:00:00Z")
+
+        setContent(
+            disruptionsState = DisruptionsState.NoDisruptions,
+            routine = exactDestinationRoutine().copy(changesPreference = ExactDestinationChangesPreference.DIRECT_ONLY),
+            journeys = emptyList(),
+            now = now,
+        )
+
+        composeRule.onNodeWithText(composeRule.activity.getString(R.string.journey_no_direct_available)).assertExists()
+        composeRule.onNodeWithText(composeRule.activity.getString(R.string.routine_details_no_journeys)).assertDoesNotExist()
+    }
+
+    @Test
+    fun aRoutinePersistedAsWithChangesOnly_startsWithOnlyWithChangesJourneysVisible_noTapNeeded() {
+        val now = Instant.parse("2026-08-13T08:00:00Z")
+        val direct = journeyWithTransfers("direct", "14", transferCount = 0, departure = now.plusSeconds(300), durationMinutes = 20)
+        val withChanges = journeyWithTransfers("changes", "40", transferCount = 1, departure = now.plusSeconds(600), durationMinutes = 30)
+
+        setContent(
+            disruptionsState = DisruptionsState.NoDisruptions,
+            routine = exactDestinationRoutine().copy(changesPreference = ExactDestinationChangesPreference.WITH_CHANGES_ONLY),
+            journeys = listOf(direct, withChanges),
+            now = now,
+        )
+
+        composeRule.onNodeWithText("40").assertExists()
+        composeRule.onNodeWithText("14").assertDoesNotExist()
     }
 
     @Test

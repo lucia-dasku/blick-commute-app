@@ -2,7 +2,7 @@ import { describe, expect, it } from "vitest";
 import { Hono } from "hono";
 import { createJourneyRoutes, type JourneyAcquisitionMetrics } from "../src/routes/journeys.js";
 import { onError } from "../src/middleware/errorHandler.js";
-import { MAX_ACQUISITION_BATCHES } from "../src/services/candidateCollector.js";
+import { MAX_ACQUISITION_BATCHES, MAX_CHANGES } from "../src/services/candidateCollector.js";
 import type { RawJourneyPlannerJourney, SlJourneyPlannerClient, TripsRequest } from "../src/services/slJourneyPlannerClient.js";
 import type { SuccessEnvelope } from "./testHelpers.js";
 
@@ -1267,7 +1267,17 @@ describe("journey routes", () => {
       expect(serialized).not.toContain("distinctive-journey-id-xyz");
       // Counts and booleans only -- no station names, stop ids, or journey payloads.
       expect(Object.keys(spy.events[0]!).sort()).toEqual(
-        ["alternativeCalls", "budgetExhausted", "event", "initialCalls", "nextCalls", "primaryChanged", "primaryRetargets", "slCalls"].sort(),
+        [
+          "alternativeCalls",
+          "budgetExhausted",
+          "event",
+          "initialCalls",
+          "nextCalls",
+          "primaryChanged",
+          "primaryDiscoveryCalls",
+          "primaryRetargets",
+          "slCalls",
+        ].sort(),
       );
     });
 
@@ -1296,6 +1306,393 @@ describe("journey routes", () => {
       const response = await createJourneyRoutes(client, FIXED_NOW).request("/?originId=origin&destinationId=destination");
 
       expect(response.status).toBe(200);
+    });
+  });
+
+  // ---- changesPreference: DIRECT_ONLY / BOTH / WITH_CHANGES_ONLY narrow the WHOLE eligible
+  // candidate pool inside CandidateCollector.fetchBatch, before PRIMARY/NEXT/ALTERNATIVE are
+  // ever selected (see createJourneyRoutes's own "Changes preference" doc) -- so these tests
+  // prove real re-ranking over a genuinely smaller eligible set, never a fixed BOTH-ranked
+  // result with disallowed rows merely hidden from the response afterward. ----
+
+  describe("changesPreference", () => {
+    it("rejects an unrecognized changesPreference value", async () => {
+      const client: SlJourneyPlannerClient = {
+        async searchStops() {
+          return [];
+        },
+        async trips() {
+          return [];
+        },
+      };
+      const app = new Hono();
+      app.onError(onError);
+      app.route("/", createJourneyRoutes(client, FIXED_NOW));
+
+      const response = await app.request("/?originId=origin&destinationId=destination&changesPreference=NONSENSE");
+      expect(response.status).toBe(400);
+    });
+
+    it("an absent changesPreference behaves exactly like an explicit BOTH", async () => {
+      const world = [
+        { id: "fast-with-changes", departure: "2026-08-10T18:35:00Z", arrival: "2026-08-10T18:38:00Z", interchanges: 1, mode: "bus" as const },
+        { id: "direct-slower", departure: "2026-08-10T18:36:00Z", arrival: "2026-08-10T18:45:00Z", interchanges: 0, mode: "metro" as const },
+      ];
+      const { client: absentClient } = worldClient(world);
+      const { client: bothClient } = worldClient(world);
+
+      const absentResponse = await createJourneyRoutes(absentClient, FIXED_NOW).request("/?originId=origin&destinationId=destination");
+      const bothResponse = await createJourneyRoutes(bothClient, FIXED_NOW).request(
+        "/?originId=origin&destinationId=destination&changesPreference=BOTH",
+      );
+      const absentBody = (await absentResponse.json()) as SuccessEnvelope<JourneyResponse>;
+      const bothBody = (await bothResponse.json()) as SuccessEnvelope<JourneyResponse>;
+
+      expect(bothBody.data.journeys.map((journey) => journey.journeyId)).toEqual(
+        absentBody.data.journeys.map((journey) => journey.journeyId),
+      );
+      // The earliest-arrival journey overall wins PRIMARY regardless of its own transfer
+      // count -- BOTH (explicit or defaulted) never narrows the pool at all.
+      expect(absentBody.data.journeys[0]!.journeyId).toBe("fast-with-changes");
+    });
+
+    it("DIRECT_ONLY excludes a with-changes journey from PRIMARY selection entirely, promoting the genuinely best direct one instead", async () => {
+      const { client } = worldClient([
+        // Earliest arrival overall, but requires a change -- must never win PRIMARY, or
+        // appear anywhere in the response, under DIRECT_ONLY.
+        { id: "fast-with-changes", departure: "2026-08-10T18:35:00Z", arrival: "2026-08-10T18:38:00Z", interchanges: 1, mode: "bus" },
+        { id: "direct-slower", departure: "2026-08-10T18:36:00Z", arrival: "2026-08-10T18:45:00Z", interchanges: 0, mode: "metro" },
+      ]);
+
+      const response = await createJourneyRoutes(client, FIXED_NOW).request(
+        "/?originId=origin&destinationId=destination&changesPreference=DIRECT_ONLY",
+      );
+      const body = (await response.json()) as SuccessEnvelope<JourneyResponse>;
+
+      // The direct journey is correctly promoted to PRIMARY -- proof this is a genuinely
+      // smaller pool being re-ranked, not a BOTH-ranked result with the disallowed row
+      // merely hidden afterward (which would have left "fast-with-changes" as PRIMARY, or
+      // removed it from an otherwise BOTH-shaped list leaving no PRIMARY at all).
+      expect(body.data.journeys.map((journey) => journey.journeyId)).toEqual(["direct-slower"]);
+      expect(body.data.journeys[0]!.role).toBe("PRIMARY");
+      expect(body.data.journeys[0]!.transferCount).toBe(0);
+      expect(body.data.journeys.every((journey) => journey.transferCount === 0)).toBe(true);
+    });
+
+    it("DIRECT_ONLY with no direct journey available in the world returns nothing, never a with-changes fallback", async () => {
+      const { client } = worldClient([
+        { id: "only-option", departure: "2026-08-10T18:35:00Z", arrival: "2026-08-10T18:38:00Z", interchanges: 1, mode: "bus" },
+      ]);
+
+      const response = await createJourneyRoutes(client, FIXED_NOW).request(
+        "/?originId=origin&destinationId=destination&changesPreference=DIRECT_ONLY",
+      );
+      const body = (await response.json()) as SuccessEnvelope<JourneyResponse>;
+
+      expect(body.data.journeys).toEqual([]);
+    });
+
+    it("DIRECT_ONLY correctly derives NEXT from the direct-only pool, skipping a closer-departing with-changes candidate", async () => {
+      const { client } = worldClient([
+        { id: "primary", departure: "2026-08-10T18:35:00Z", arrival: "2026-08-10T18:38:00Z", interchanges: 0, mode: "metro" },
+        // Departs before the genuine direct NEXT and would otherwise win NEXT (earliest
+        // compatible departure) -- must never be selected under DIRECT_ONLY.
+        { id: "closer-with-changes", departure: "2026-08-10T18:40:00Z", arrival: "2026-08-10T18:55:00Z", interchanges: 1, mode: "bus" },
+        { id: "direct-next", departure: "2026-08-10T18:50:00Z", arrival: "2026-08-10T19:05:00Z", interchanges: 0, mode: "metro" },
+      ]);
+
+      const response = await createJourneyRoutes(client, FIXED_NOW).request(
+        "/?originId=origin&destinationId=destination&changesPreference=DIRECT_ONLY&searchUntil=2026-08-10T20:00:00Z",
+      );
+      const body = (await response.json()) as SuccessEnvelope<JourneyResponse>;
+
+      expect(body.data.journeys.map((journey) => journey.journeyId)).toEqual(["primary", "direct-next"]);
+      expect(body.data.journeys.map((journey) => journey.role)).toEqual(["PRIMARY", "NEXT"]);
+    });
+
+    it("DIRECT_ONLY excludes a route-incompatible with-changes journey that would otherwise qualify as ALTERNATIVE", async () => {
+      const { client } = worldClient([
+        { id: "primary", departure: "2026-08-10T18:35:00Z", arrival: "2026-08-10T18:38:00Z", interchanges: 0, mode: "metro" },
+        { id: "next", departure: "2026-08-10T18:45:00Z", arrival: "2026-08-10T18:55:00Z", interchanges: 0, mode: "metro" },
+        // Departs strictly between primary/next and arrives strictly before next -- the
+        // exact ALTERNATIVE eligibility window (see the equivalent BOTH-mode test above),
+        // but requires a change, so DIRECT_ONLY must never let it through.
+        { id: "alt-with-changes", departure: "2026-08-10T18:40:00Z", arrival: "2026-08-10T18:50:00Z", interchanges: 1, mode: "bus" },
+      ]);
+
+      const response = await createJourneyRoutes(client, FIXED_NOW).request(
+        "/?originId=origin&destinationId=destination&changesPreference=DIRECT_ONLY",
+      );
+      const body = (await response.json()) as SuccessEnvelope<JourneyResponse>;
+
+      expect(body.data.journeys.map((journey) => journey.journeyId)).toEqual(["primary", "next"]);
+      expect(body.data.journeys.map((journey) => journey.role)).toEqual(["PRIMARY", "NEXT"]);
+    });
+
+    it("WITH_CHANGES_ONLY excludes a direct journey from PRIMARY selection entirely, promoting the genuinely best with-changes one instead", async () => {
+      const { client } = worldClient([
+        // Earliest arrival overall, but direct -- must never win PRIMARY, or appear
+        // anywhere in the response, under WITH_CHANGES_ONLY.
+        { id: "fast-direct", departure: "2026-08-10T18:35:00Z", arrival: "2026-08-10T18:38:00Z", interchanges: 0, mode: "metro" },
+        { id: "slower-with-changes", departure: "2026-08-10T18:36:00Z", arrival: "2026-08-10T18:45:00Z", interchanges: 1, mode: "bus" },
+      ]);
+
+      const response = await createJourneyRoutes(client, FIXED_NOW).request(
+        "/?originId=origin&destinationId=destination&changesPreference=WITH_CHANGES_ONLY",
+      );
+      const body = (await response.json()) as SuccessEnvelope<JourneyResponse>;
+
+      expect(body.data.journeys.map((journey) => journey.journeyId)).toEqual(["slower-with-changes"]);
+      expect(body.data.journeys[0]!.role).toBe("PRIMARY");
+      expect(body.data.journeys[0]!.transferCount).toBe(1);
+      expect(body.data.journeys.every((journey) => journey.transferCount >= 1)).toBe(true);
+    });
+
+    it("WITH_CHANGES_ONLY with no with-changes journey available in the world returns nothing, never a direct fallback", async () => {
+      const { client } = worldClient([
+        { id: "only-option", departure: "2026-08-10T18:35:00Z", arrival: "2026-08-10T18:38:00Z", interchanges: 0, mode: "metro" },
+      ]);
+
+      const response = await createJourneyRoutes(client, FIXED_NOW).request(
+        "/?originId=origin&destinationId=destination&changesPreference=WITH_CHANGES_ONLY",
+      );
+      const body = (await response.json()) as SuccessEnvelope<JourneyResponse>;
+
+      expect(body.data.journeys).toEqual([]);
+    });
+
+    it("WITH_CHANGES_ONLY still enforces the existing MAX_CHANGES=2 ceiling", async () => {
+      const { client } = worldClient([
+        { id: "three-changes", departure: "2026-08-10T18:35:00Z", arrival: "2026-08-10T18:38:00Z", interchanges: 3, mode: "bus" },
+        { id: "two-changes", departure: "2026-08-10T18:36:00Z", arrival: "2026-08-10T18:45:00Z", interchanges: 2, mode: "bus" },
+      ]);
+
+      const response = await createJourneyRoutes(client, FIXED_NOW).request(
+        "/?originId=origin&destinationId=destination&changesPreference=WITH_CHANGES_ONLY",
+      );
+      const body = (await response.json()) as SuccessEnvelope<JourneyResponse>;
+
+      expect(body.data.journeys.map((journey) => journey.journeyId)).toEqual(["two-changes"]);
+    });
+  });
+
+  // ---- Candidate crowd-out regressions: SL only ever returns up to 3 best-match trips per
+  // request, with no notion of changesPreference at all -- an unfiltered request can let 3
+  // disallowed candidates fill every slot and silently crowd a genuinely eligible one out of
+  // the batch entirely before Blick's own pool-level filter ever sees it. See
+  // createJourneyRoutes's own "Changes preference" doc for the two complementary fixes these
+  // tests prove: DIRECT_ONLY narrows the SL REQUEST itself (requestMaxChanges), while
+  // WITH_CHANGES_ONLY (which cannot be narrowed the same way -- SL has no "minimum changes"
+  // parameter) instead keeps searching forward via resolveSelection's own PRIMARY_DISCOVERY
+  // phase. ----
+
+  describe("candidate crowd-out regressions", () => {
+    describe("DIRECT_ONLY", () => {
+      it("requests max_changes=0 from SL for the initial batch", async () => {
+        const { client, requests } = worldClient([
+          { id: "direct", departure: "2026-08-10T08:00:00Z", arrival: "2026-08-10T08:20:00Z", interchanges: 0 },
+        ]);
+
+        await createJourneyRoutes(client, FIXED_NOW).request("/?originId=origin&destinationId=destination&changesPreference=DIRECT_ONLY");
+
+        expect(requests[0]!.maxChanges).toBe(0);
+      });
+
+      it("discovers a direct journey crowded out of SL's own top-3 by three earlier transfer journeys, never letting a transfer journey leak into the result", async () => {
+        const { client, requests } = worldClient([
+          // Under an UNFILTERED (maxChanges=2) request these three -- all earlier-departing
+          // than "direct" -- would be exactly SL's own top-3 best-match picks, crowding
+          // "direct" out of the batch entirely before Blick's own filter ever saw it. This
+          // is the production example from this fix's own bug report.
+          { id: "transfer-1", departure: "2026-08-10T18:35:00Z", arrival: "2026-08-10T18:50:00Z", interchanges: 1, mode: "bus" },
+          { id: "transfer-2", departure: "2026-08-10T18:36:00Z", arrival: "2026-08-10T18:51:00Z", interchanges: 1, mode: "bus" },
+          { id: "transfer-3", departure: "2026-08-10T18:37:00Z", arrival: "2026-08-10T18:52:00Z", interchanges: 1, mode: "bus" },
+          { id: "direct", departure: "2026-08-10T18:40:00Z", arrival: "2026-08-10T18:55:00Z", interchanges: 0, mode: "metro" },
+        ]);
+
+        const response = await createJourneyRoutes(client, FIXED_NOW).request(
+          "/?originId=origin&destinationId=destination&changesPreference=DIRECT_ONLY",
+        );
+        const body = (await response.json()) as SuccessEnvelope<JourneyResponse>;
+
+        // Proof this genuinely exercises max_changes=0, not merely a lucky ranking: had the
+        // request asked broadly, worldClient's own top-3-by-departure would have been
+        // transfer-1/2/3, exactly the crowd-out this fix prevents.
+        expect(requests[0]!.maxChanges).toBe(0);
+        expect(body.data.journeys.map((journey) => journey.journeyId)).toEqual(["direct"]);
+        expect(body.data.journeys[0]!.role).toBe("PRIMARY");
+        expect(body.data.journeys.every((journey) => journey.transferCount === 0)).toBe(true);
+        for (const id of ["transfer-1", "transfer-2", "transfer-3"]) {
+          expect(body.data.journeys.map((journey) => journey.journeyId)).not.toContain(id);
+        }
+      });
+
+      it("a later direct journey becomes NEXT once the crowded-out PRIMARY is correctly discovered, with every request (initial and targeted) asking for max_changes=0", async () => {
+        const { client, requests } = worldClient([
+          { id: "transfer-1", departure: "2026-08-10T18:35:00Z", arrival: "2026-08-10T18:50:00Z", interchanges: 1, mode: "bus" },
+          { id: "transfer-2", departure: "2026-08-10T18:36:00Z", arrival: "2026-08-10T18:51:00Z", interchanges: 1, mode: "bus" },
+          { id: "transfer-3", departure: "2026-08-10T18:37:00Z", arrival: "2026-08-10T18:52:00Z", interchanges: 1, mode: "bus" },
+          { id: "direct-primary", departure: "2026-08-10T18:40:00Z", arrival: "2026-08-10T18:55:00Z", interchanges: 0, mode: "metro" },
+          { id: "direct-next", departure: "2026-08-10T18:55:00Z", arrival: "2026-08-10T19:10:00Z", interchanges: 0, mode: "metro" },
+        ]);
+
+        const response = await createJourneyRoutes(client, FIXED_NOW).request(
+          "/?originId=origin&destinationId=destination&changesPreference=DIRECT_ONLY&searchUntil=2026-08-10T20:00:00Z",
+        );
+        const body = (await response.json()) as SuccessEnvelope<JourneyResponse>;
+
+        expect(body.data.journeys.map((journey) => journey.journeyId)).toEqual(["direct-primary", "direct-next"]);
+        expect(body.data.journeys.map((journey) => journey.role)).toEqual(["PRIMARY", "NEXT"]);
+        expect(body.data.journeys.every((journey) => journey.transferCount === 0)).toBe(true);
+        expect(requests.length).toBeGreaterThan(1);
+        expect(requests.every((request) => request.maxChanges === 0)).toBe(true);
+      });
+
+      it("never lets a transfer journey qualify as ALTERNATIVE -- the ALTERNATIVE search itself also requests max_changes=0", async () => {
+        const { client, requests } = worldClient([
+          { id: "primary", departure: "2026-08-10T18:35:00Z", arrival: "2026-08-10T18:38:00Z", interchanges: 0, mode: "metro" },
+          { id: "next", departure: "2026-08-10T18:45:00Z", arrival: "2026-08-10T18:55:00Z", interchanges: 0, mode: "metro" },
+          // Departs strictly between primary/next and arrives strictly before next -- the
+          // exact ALTERNATIVE eligibility window -- but requires a change, so it must never
+          // be returned by SL for this search at all under DIRECT_ONLY.
+          { id: "alt-with-changes", departure: "2026-08-10T18:40:00Z", arrival: "2026-08-10T18:50:00Z", interchanges: 1, mode: "bus" },
+        ]);
+
+        const response = await createJourneyRoutes(client, FIXED_NOW).request(
+          "/?originId=origin&destinationId=destination&changesPreference=DIRECT_ONLY",
+        );
+        const body = (await response.json()) as SuccessEnvelope<JourneyResponse>;
+
+        expect(body.data.journeys.map((journey) => journey.journeyId)).toEqual(["primary", "next"]);
+        expect(body.data.journeys.map((journey) => journey.role)).toEqual(["PRIMARY", "NEXT"]);
+        expect(requests.every((request) => request.maxChanges === 0)).toBe(true);
+      });
+    });
+
+    describe("WITH_CHANGES_ONLY", () => {
+      it("continues bounded discovery and finds a with-changes journey when the initial batch's top-3 SL results are all direct, across multiple direct-only batches", async () => {
+        const { client, requests } = worldClient([
+          // Three direct decoys, each earlier-departing than the eligible with-changes
+          // journey -- crowds it out of not just the initial batch, but a SECOND forward
+          // probe too (see this test's own request-count assertion below), before a third
+          // probe finally narrows past all three.
+          { id: "direct-1", departure: "2026-08-10T18:35:00Z", arrival: "2026-08-10T18:50:00Z", interchanges: 0, mode: "metro" },
+          { id: "direct-2", departure: "2026-08-10T18:36:00Z", arrival: "2026-08-10T18:51:00Z", interchanges: 0, mode: "metro" },
+          { id: "direct-3", departure: "2026-08-10T18:37:00Z", arrival: "2026-08-10T18:52:00Z", interchanges: 0, mode: "metro" },
+          { id: "with-changes", departure: "2026-08-10T18:40:00Z", arrival: "2026-08-10T19:10:00Z", interchanges: 1, mode: "bus" },
+        ]);
+        const spy = metricsSpy();
+
+        const response = await createJourneyRoutes(client, FIXED_NOW, spy.emit).request(
+          "/?originId=origin&destinationId=destination&changesPreference=WITH_CHANGES_ONLY&searchUntil=2026-08-10T20:00:00Z",
+        );
+        const body = (await response.json()) as SuccessEnvelope<JourneyResponse>;
+
+        expect(body.data.journeys.map((journey) => journey.journeyId)).toEqual(["with-changes"]);
+        expect(body.data.journeys[0]!.role).toBe("PRIMARY");
+        expect(body.data.journeys.every((journey) => journey.transferCount >= 1)).toBe(true);
+        for (const id of ["direct-1", "direct-2", "direct-3"]) {
+          expect(body.data.journeys.map((journey) => journey.journeyId)).not.toContain(id);
+        }
+        // The bounded PRIMARY-discovery search genuinely ran and spent real budget finding
+        // it -- this did not come from the initial batch alone.
+        expect(spy.events[0]!.primaryDiscoveryCalls).toBeGreaterThan(0);
+        // Every request up through the one that actually found "with-changes" (the initial
+        // batch plus PRIMARY_DISCOVERY's own targeted ones) asked SL for the full
+        // MAX_CHANGES ceiling (2), never 0 -- unlike DIRECT_ONLY, WITH_CHANGES_ONLY cannot
+        // narrow the request itself, only keep searching until the response contains
+        // something eligible. (The NEXT_DISCOVERY search that follows, once "with-changes"
+        // itself becomes PRIMARY, correctly narrows to ITS OWN transferCount of 1 instead --
+        // unrelated, pre-existing, same-route-family targeting, not asserted on here.)
+        const discoveryRequests = requests.slice(0, spy.events[0]!.initialCalls + spy.events[0]!.primaryDiscoveryCalls);
+        expect(discoveryRequests.every((request) => request.maxChanges === 2)).toBe(true);
+        // Genuinely multiple real batches were needed (never a single lucky one), and no two
+        // ever repeat the exact same request-minute bucket -- PRIMARY_DISCOVERY's own first
+        // probe (requestedAt's bucket) is a genuine duplicate of the initial batch and is
+        // skipped rather than counted here.
+        expect(requests.length).toBeGreaterThan(2);
+        const buckets = requests.map((request) => request.departureAt.getTime());
+        expect(new Set(buckets).size).toBe(buckets.length);
+      });
+
+      it("the search horizon is exhausted with no with-changes journey anywhere -- a legitimate empty result, never a crash or a direct fallback", async () => {
+        const { client } = worldClient([
+          { id: "direct-only", departure: "2026-08-10T18:35:00Z", arrival: "2026-08-10T18:50:00Z", interchanges: 0, mode: "metro" },
+        ]);
+
+        const response = await createJourneyRoutes(client, FIXED_NOW).request(
+          "/?originId=origin&destinationId=destination&changesPreference=WITH_CHANGES_ONLY&searchUntil=2026-08-10T19:00:00Z",
+        );
+        const body = (await response.json()) as SuccessEnvelope<JourneyResponse>;
+
+        expect(body.data.journeys).toEqual([]);
+      });
+
+      it("fails closed with no PRIMARY-discovery search at all when there is no searchUntil boundary to search within", async () => {
+        const { client, requests } = worldClient([
+          { id: "direct-only", departure: "2026-08-10T18:35:00Z", arrival: "2026-08-10T18:50:00Z", interchanges: 0, mode: "metro" },
+        ]);
+
+        const response = await createJourneyRoutes(client, FIXED_NOW).request(
+          "/?originId=origin&destinationId=destination&changesPreference=WITH_CHANGES_ONLY",
+        );
+        const body = (await response.json()) as SuccessEnvelope<JourneyResponse>;
+
+        expect(body.data.journeys).toEqual([]);
+        // Only the one, single initial request -- never an unbounded forward search invented
+        // in the absence of a real boundary, mirroring NEXT_DISCOVERY's own identical rule.
+        expect(requests).toHaveLength(1);
+      });
+
+      it("PRIMARY-discovery terminates safely once the shared request budget is exhausted, never finding a with-changes journey that doesn't exist", async () => {
+        let callCount = 0;
+        const client: SlJourneyPlannerClient = {
+          async searchStops() {
+            return [];
+          },
+          async trips(request) {
+            callCount++;
+            // Every response is a genuine, always-advancing DIRECT journey -- real forward
+            // progress every time (never a repeated or genuinely empty response, so only
+            // the shared budget can end this search), and never a with-changes one, so this
+            // world genuinely has nothing WITH_CHANGES_ONLY could ever find.
+            const departure = new Date(request.departureAt.getTime() + 60_000);
+            return [rawJourney(`direct-${callCount}`, departure.toISOString(), "2026-08-15T00:00:00Z", 0, "metro")];
+          },
+        };
+        const spy = metricsSpy();
+
+        const response = await createJourneyRoutes(client, FIXED_NOW, spy.emit).request(
+          "/?originId=origin&destinationId=destination&changesPreference=WITH_CHANGES_ONLY&searchUntil=2026-08-20T00:00:00Z",
+        );
+        const body = (await response.json()) as SuccessEnvelope<JourneyResponse>;
+
+        expect(body.data.journeys).toEqual([]);
+        expect(callCount).toBe(MAX_ACQUISITION_BATCHES);
+        expect(spy.events[0]!.slCalls).toBe(MAX_ACQUISITION_BATCHES);
+        expect(spy.events[0]!.budgetExhausted).toBe(true);
+      });
+    });
+
+    describe("BOTH", () => {
+      it("existing PRIMARY/NEXT/ALTERNATIVE selection is unaffected by this fix -- requestMaxChanges(BOTH) is still exactly MAX_CHANGES", async () => {
+        const { client, requests } = worldClient([
+          { id: "metro-1835", departure: "2026-08-10T18:35:00Z", arrival: "2026-08-10T18:38:00Z", mode: "metro" },
+          { id: "detour-1836", departure: "2026-08-10T18:36:00Z", arrival: "2026-08-10T18:50:00Z", interchanges: 1, mode: "bus" },
+          { id: "metro-1839", departure: "2026-08-10T18:39:00Z", arrival: "2026-08-10T18:42:00Z", mode: "metro" },
+        ]);
+
+        const response = await createJourneyRoutes(client, FIXED_NOW).request(
+          "/?originId=origin&destinationId=destination&changesPreference=BOTH",
+        );
+        const body = (await response.json()) as SuccessEnvelope<JourneyResponse>;
+
+        // Same outcome as the equivalent unfiltered (no changesPreference at all) test above:
+        // the later, faster, simpler metro Pareto-dominates the one-change detour outright.
+        expect(body.data.journeys.map((journey) => journey.journeyId)).toEqual(["metro-1835", "metro-1839"]);
+        expect(body.data.journeys.map((journey) => journey.role)).toEqual(["PRIMARY", "NEXT"]);
+        expect(requests[0]!.maxChanges).toBe(MAX_CHANGES);
+      });
     });
   });
 });

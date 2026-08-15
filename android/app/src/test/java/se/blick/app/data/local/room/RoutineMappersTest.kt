@@ -1,6 +1,7 @@
 package se.blick.app.data.local.room
 
 import se.blick.app.domain.model.CommuteRoutine
+import se.blick.app.domain.model.ExactDestinationChangesPreference
 import se.blick.app.domain.model.TransportMode
 import java.time.DayOfWeek
 import java.time.LocalDate
@@ -97,5 +98,59 @@ class RoutineMappersTest {
         )
 
         assertEquals(setOf(TransportMode.TRAIN, TransportMode.BUS), routine.toEntity().toDomain().allowedJourneyTransportModes)
+    }
+
+    @Test
+    fun `a new exact-destination routine defaults to BOTH changes preference`() {
+        val routine = CommuteRoutine(
+            name = "Airport commute",
+            siteId = 1,
+            siteName = "Origin",
+            transportMode = TransportMode.UNKNOWN,
+            lineId = null,
+            lineDesignation = null,
+            directionCode = null,
+            destinationLabel = null,
+            activeDays = setOf(DayOfWeek.MONDAY),
+            startTime = LocalTime.of(7, 0),
+            endTime = LocalTime.of(8, 0),
+        )
+
+        assertEquals(ExactDestinationChangesPreference.BOTH, routine.changesPreference)
+        assertEquals(ExactDestinationChangesPreference.BOTH, routine.toEntity().toDomain().changesPreference)
+    }
+
+    @Test
+    fun `every changesPreference value round-trips through the entity exactly`() {
+        for (preference in ExactDestinationChangesPreference.entries) {
+            val routine = CommuteRoutine(
+                id = "pref-${preference.name}",
+                name = "x",
+                siteId = 1,
+                siteName = "x",
+                transportMode = TransportMode.UNKNOWN,
+                lineId = null,
+                lineDesignation = null,
+                directionCode = null,
+                destinationLabel = null,
+                activeDays = setOf(DayOfWeek.MONDAY),
+                startTime = LocalTime.of(7, 0),
+                endTime = LocalTime.of(8, 0),
+                changesPreference = preference,
+            )
+
+            assertEquals(preference, routine.toEntity().toDomain().changesPreference)
+        }
+    }
+
+    @Test
+    fun `an unrecognized persisted changesPreference value defaults to BOTH rather than crashing`() {
+        val entity = CommuteRoutine(
+            name = "x", siteId = 1, siteName = "x", transportMode = TransportMode.UNKNOWN,
+            lineId = null, lineDesignation = null, directionCode = null, destinationLabel = null,
+            activeDays = setOf(DayOfWeek.MONDAY), startTime = LocalTime.of(7, 0), endTime = LocalTime.of(8, 0),
+        ).toEntity().copy(changesPreference = "SOMETHING_UNRECOGNIZED")
+
+        assertEquals(ExactDestinationChangesPreference.BOTH, entity.toDomain().changesPreference)
     }
 }

@@ -2,6 +2,7 @@ package se.blick.app.data.repository
 
 import se.blick.app.data.remote.BlickApiClient
 import se.blick.app.data.remote.dto.JourneyLegDto
+import se.blick.app.domain.model.ExactDestinationChangesPreference
 import se.blick.app.domain.model.JourneyLeg
 import se.blick.app.domain.model.JourneyLocation
 import se.blick.app.domain.model.JourneyPlan
@@ -16,12 +17,16 @@ interface JourneyRepository {
     suspend fun searchLocations(query: String): List<JourneyLocation>
     /** [searchUntil] bounds how far forward the backend's own targeted NEXT/ALTERNATIVE
      * acquisition may search — see [se.blick.app.domain.usecase.GetRankedJourneysUseCase]'s own
-     * doc. Null when the caller has no genuine routine-occurrence boundary to offer. */
+     * doc. Null when the caller has no genuine routine-occurrence boundary to offer.
+     * [changesPreference] — see [ExactDestinationChangesPreference]'s own doc — narrows which
+     * journeys are eligible at all; defaults to [ExactDestinationChangesPreference.BOTH] (the
+     * pre-existing, unfiltered behavior) so a caller predating this parameter is unaffected. */
     suspend fun getJourneys(
         originId: String,
         destinationId: String,
         allowedTransportModes: Set<TransportMode>,
         searchUntil: Instant? = null,
+        changesPreference: ExactDestinationChangesPreference = ExactDestinationChangesPreference.BOTH,
     ): List<JourneyPlan>
 }
 
@@ -34,11 +39,13 @@ class RemoteJourneyRepository @Inject constructor(private val apiClient: BlickAp
         destinationId: String,
         allowedTransportModes: Set<TransportMode>,
         searchUntil: Instant?,
+        changesPreference: ExactDestinationChangesPreference,
     ) = apiClient.getJourneys(
         originId,
         destinationId,
         JOURNEY_TRANSPORT_MODE_OPTIONS.filter(allowedTransportModes::contains).joinToString(",") { it.name },
         searchUntil?.toString(),
+        changesPreference.name,
     ).journeys.mapNotNull { dto ->
             // Fail closed, never invent a role -- see toJourneyRole's own doc. A single
             // malformed entry is dropped rather than failing the whole response: the

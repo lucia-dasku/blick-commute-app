@@ -12,7 +12,7 @@ import androidx.sqlite.db.SupportSQLiteDatabase
         RoutineWorkOwnershipEntity::class,
         RoutineOccurrenceRuntimeEntity::class,
     ],
-    version = 6,
+    version = 7,
     exportSchema = true,
 )
 abstract class BlickDatabase : RoomDatabase() {
@@ -107,5 +107,16 @@ val MIGRATION_5_6: Migration = object : Migration(5, 6) {
             "ALTER TABLE `routines` ADD COLUMN `allowedJourneyTransportModes` TEXT NOT NULL " +
                 "DEFAULT 'METRO,TRAIN,BUS,TRAM,FERRY'",
         )
+    }
+}
+
+/** Adds the per-routine exact-destination Direct/Both/With-changes preference (see
+ * [se.blick.app.domain.model.ExactDestinationChangesPreference]'s own doc). Every existing row —
+ * exact-destination or plain line-direction alike — defaults to `'BOTH'`, the pre-existing
+ * unfiltered journey-eligibility behavior, so this migration changes no routine's observable
+ * behavior by itself. */
+val MIGRATION_6_7: Migration = object : Migration(6, 7) {
+    override fun migrate(db: SupportSQLiteDatabase) {
+        db.execSQL("ALTER TABLE `routines` ADD COLUMN `changesPreference` TEXT NOT NULL DEFAULT 'BOTH'")
     }
 }
