@@ -4,4 +4,7 @@ Thumbs.db
 *.log
 .vscode/
 .idea/
+
+# Local Claude Code instructions/config -- personal, not shared via GitHub.
 .claude/
+CLAUDE.md
