@@ -23,6 +23,7 @@ import se.blick.app.data.repository.RoutineWorkOwnershipRepository
 import se.blick.app.data.repository.StaleSnapshotRepository
 import se.blick.app.domain.model.CommuteRoutine
 import se.blick.app.domain.model.Disruption
+import se.blick.app.domain.model.toPresentation
 import se.blick.app.domain.usecase.DisruptionsState
 import se.blick.app.domain.usecase.GetDisruptionsUseCase
 import se.blick.app.domain.usecase.GetLiveDeparturesUseCase
@@ -48,10 +49,12 @@ import se.blick.app.domain.usecase.GetRankedJourneysUseCase
 import se.blick.app.domain.usecase.LiveDeparturesSnapshot
 import se.blick.app.domain.usecase.PreparedDeparture
 import se.blick.app.domain.usecase.RoutineScheduleOverlapValidator
+import se.blick.app.domain.usecase.compactPresentation
 import se.blick.app.domain.usecase.countdownMinutes
 import se.blick.app.domain.usecase.effectiveFirstDeparture
 import se.blick.app.domain.usecase.filterCurrentJourneys
 import se.blick.app.domain.usecase.isCurrentJourney
+import se.blick.app.domain.usecase.primaryDisruptionNotices
 import se.blick.app.widget.runWidgetUpdateSafely
 import java.time.Clock
 import java.time.Duration
@@ -616,7 +619,21 @@ class RoutineActiveWindowWorker @AssistedInject constructor(
                 }
                 val disruptionAtPost = lastKnownDisruption
                 val notificationRoutine = exactProjection?.routine ?: current
-                val model = RoutineNotificationMapper.map(notificationRoutine, departuresState, now, disruptionAtPost)
+                // EXACT_DESTINATION's own disruption notices arrive as part of THIS SAME
+                // journeyPlans fetch -- no separate fetch to wait for, unlike LINE_DIRECTION's
+                // own lastKnownDisruption/getDisruptions below (untouched by this branch).
+                // Conservatively aggregated (see compactPresentation's own doc: a single
+                // distinct PRIMARY notice's own effect, or the generic DISRUPTION label when
+                // PRIMARY has several genuinely different ones -- never an invented ranking),
+                // and always re-derived from the CURRENT PRIMARY, so a PRIMARY change on a later
+                // tick is reflected automatically with no extra bookkeeping.
+                val exactDisruption = if (current.type == RoutineType.EXACT_DESTINATION) {
+                    journeyPlans.primaryDisruptionNotices().compactPresentation()
+                } else {
+                    null
+                }
+                val notificationDisruption = exactDisruption ?: disruptionAtPost?.toPresentation()
+                val model = RoutineNotificationMapper.map(notificationRoutine, departuresState, now, notificationDisruption)
                 // The real NotificationPostResult is intentionally not surfaced anywhere from
                 // here (there is no UI attached to a background worker to report it to) --
                 // but it is also never used to claim success; showOrUpdate itself already
@@ -631,7 +648,9 @@ class RoutineActiveWindowWorker @AssistedInject constructor(
                 // the notification above already posted successfully this tick.
                 runWidgetUpdateSafely {
                     if (current.type == RoutineType.EXACT_DESTINATION) {
-                        routineWidgetUpdater.updateWithJourneys(current, journeyPlans, now, fetchFailed = rawJourneyPlans == null)
+                        routineWidgetUpdater.updateWithJourneys(
+                            current, journeyPlans, now, fetchFailed = rawJourneyPlans == null, disruption = exactDisruption,
+                        )
                     } else {
                         routineWidgetUpdater.updateWithDepartures(current, departuresState, now, disruptionAtPost)
                     }
@@ -670,7 +689,9 @@ class RoutineActiveWindowWorker @AssistedInject constructor(
                     // reflect the instant it is actually built at, not a timestamp from before
                     // that fetch even started.
                     val nowAfterDisruptionFetch = clock.instant()
-                    routineNotifier.showOrUpdate(RoutineNotificationMapper.map(notificationRoutine, departuresState, nowAfterDisruptionFetch, lastKnownDisruption))
+                    routineNotifier.showOrUpdate(
+                        RoutineNotificationMapper.map(notificationRoutine, departuresState, nowAfterDisruptionFetch, lastKnownDisruption?.toPresentation()),
+                    )
                     // Mirrors the notification's own second, disruption-aware update above --
                     // same tick, same already-fetched departuresState, no separate widget fetch
                     // or timer.

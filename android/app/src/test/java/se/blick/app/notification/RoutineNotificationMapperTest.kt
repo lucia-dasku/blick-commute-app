@@ -9,7 +9,9 @@ import se.blick.app.domain.model.CommuteRoutine
 import se.blick.app.domain.model.Disruption
 import se.blick.app.domain.model.DisruptionEffect
 import se.blick.app.domain.model.DisruptionMessage
+import se.blick.app.domain.model.DisruptionPresentation
 import se.blick.app.domain.model.DisruptionPriority
+import se.blick.app.domain.model.toPresentation
 import se.blick.app.domain.model.JourneyRole
 import se.blick.app.domain.model.TransportMode
 import se.blick.app.domain.usecase.LiveDeparturesSnapshot
@@ -421,7 +423,7 @@ class RoutineNotificationMapperTest {
     @Test
     fun `topDisruption's header and details are carried into the model unchanged`() {
         val d = disruption(header = "Delays on line 14", details = "Expect longer travel times.")
-        val model = RoutineNotificationMapper.map(routine(), LiveDeparturesState.Loading, now, topDisruption = d)
+        val model = RoutineNotificationMapper.map(routine(), LiveDeparturesState.Loading, now, topDisruption = d.toPresentation())
         assertEquals("Delays on line 14", model.disruptionHeadline)
         assertEquals("Expect longer travel times.", model.disruptionDetails)
     }
@@ -429,23 +431,42 @@ class RoutineNotificationMapperTest {
     @Test
     fun `topDisruption's classified effect is carried into the model`() {
         val d = disruption(effect = DisruptionEffect.STATION_ACCESS)
-        val model = RoutineNotificationMapper.map(routine(), LiveDeparturesState.Loading, now, topDisruption = d)
+        val model = RoutineNotificationMapper.map(routine(), LiveDeparturesState.Loading, now, topDisruption = d.toPresentation())
         assertEquals(DisruptionEffect.STATION_ACCESS, model.disruptionEffect)
     }
 
     @Test
     fun `topDisruption's generic DISRUPTION effect is carried into the model just like any other effect`() {
         val d = disruption(effect = DisruptionEffect.DISRUPTION)
-        val model = RoutineNotificationMapper.map(routine(), LiveDeparturesState.Loading, now, topDisruption = d)
+        val model = RoutineNotificationMapper.map(routine(), LiveDeparturesState.Loading, now, topDisruption = d.toPresentation())
         assertEquals(DisruptionEffect.DISRUPTION, model.disruptionEffect)
     }
 
     @Test
     fun `topDisruption is independent of the departures content state`() {
         val d = disruption()
-        val model = RoutineNotificationMapper.map(routine(), LiveDeparturesState.Offline, now, topDisruption = d)
+        val model = RoutineNotificationMapper.map(routine(), LiveDeparturesState.Offline, now, topDisruption = d.toPresentation())
         assertEquals(RoutineNotificationContent.Offline, model.content)
         assertEquals(d.message.header, model.disruptionHeadline)
         assertEquals(d.effect, model.disruptionEffect)
+    }
+
+    // ---- Structured exact-destination notices go through the same shared DisruptionPresentation
+    // shape, never a real header/details/priority/id -- see DisruptionPresentation's own doc. ----
+
+    @Test
+    fun `a structured journey disruption notice's own text and effect are carried into the model, with no details`() {
+        val presentation = DisruptionPresentation(headline = "Hissen är ur funktion.", details = null, effect = DisruptionEffect.ACCESSIBILITY_ISSUE)
+        val model = RoutineNotificationMapper.map(routine(), LiveDeparturesState.Loading, now, topDisruption = presentation)
+        assertEquals("Hissen är ur funktion.", model.disruptionHeadline)
+        assertNull(model.disruptionDetails)
+        assertEquals(DisruptionEffect.ACCESSIBILITY_ISSUE, model.disruptionEffect)
+    }
+
+    @Test
+    fun `Disruption toPresentation adapts a real SL disruption's header, details and effect unchanged`() {
+        val d = disruption(header = "Delays on line 14", details = "Expect longer travel times.", effect = DisruptionEffect.DELAYS)
+        val presentation = d.toPresentation()
+        assertEquals(DisruptionPresentation("Delays on line 14", "Expect longer travel times.", DisruptionEffect.DELAYS), presentation)
     }
 }

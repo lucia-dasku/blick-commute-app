@@ -11,7 +11,9 @@ import kotlinx.coroutines.flow.first
 import se.blick.app.data.repository.RoutineRepository
 import se.blick.app.domain.model.CommuteRoutine
 import se.blick.app.domain.model.Disruption
+import se.blick.app.domain.model.DisruptionPresentation
 import se.blick.app.domain.model.JourneyPlan
+import se.blick.app.domain.model.toPresentation
 import se.blick.app.domain.usecase.LiveDeparturesState
 import se.blick.app.notification.NotificationAvailability
 import se.blick.app.notification.NotificationAvailabilityChecker
@@ -39,6 +41,27 @@ interface RoutineWidgetUpdater {
      * unchanged, the same reasoning as the four-argument [updateWithDepartures] overload's own
      * default body. */
     suspend fun updateWithJourneys(routine: CommuteRoutine, journeys: List<JourneyPlan>, now: Instant, fetchFailed: Boolean = false) {}
+
+    /** Same as the four-argument [updateWithJourneys], plus [disruption] — the current PRIMARY
+     * journey's own disruption presentation, already derived this same worker tick from the
+     * same [journeys] this call already carries (see
+     * [se.blick.app.scheduling.RoutineActiveWindowWorker]'s own doc) — no separate fetch, no
+     * separate timer. Default implementation forwards to the four-argument overload, ignoring
+     * [disruption] — the correct, behaviorally-unchanged choice for any implementation (test
+     * fakes) that doesn't render a disruption strip; only [GlanceRoutineWidgetUpdater] overrides
+     * this meaningfully. A separate overload, not an added parameter on the existing method,
+     * specifically so no existing implementer needs to change at all — the same convention as
+     * [updateWithDepartures]'s own three-argument/four-argument split. */
+    suspend fun updateWithJourneys(
+        routine: CommuteRoutine,
+        journeys: List<JourneyPlan>,
+        now: Instant,
+        fetchFailed: Boolean,
+        disruption: DisruptionPresentation?,
+    ) {
+        updateWithJourneys(routine, journeys, now, fetchFailed)
+    }
+
     /** Called once per [se.blick.app.scheduling.RoutineActiveWindowWorker] loop tick, right
      * after [se.blick.app.notification.RoutineNotifier.showOrUpdate] — reuses the exact
      * [routine]/[departuresState]/[now] already fetched for the notification, via
@@ -165,12 +188,22 @@ class GlanceRoutineWidgetUpdater @Inject constructor(
         applyToAllInstances(decideJourneysWidgetState(routine, journeys, now, fetchFailed))
     }
 
+    override suspend fun updateWithJourneys(
+        routine: CommuteRoutine,
+        journeys: List<JourneyPlan>,
+        now: Instant,
+        fetchFailed: Boolean,
+        disruption: DisruptionPresentation?,
+    ) {
+        applyToAllInstances(decideJourneysWidgetState(routine, journeys, now, fetchFailed, disruption))
+    }
+
     override suspend fun updateWithDepartures(routine: CommuteRoutine, departuresState: LiveDeparturesState, now: Instant) {
         updateWithDepartures(routine, departuresState, now, disruption = null)
     }
 
     override suspend fun updateWithDepartures(routine: CommuteRoutine, departuresState: LiveDeparturesState, now: Instant, disruption: Disruption?) {
-        applyToAllInstances(RoutineWidgetUiState.ActiveRoutine(RoutineWidgetMapper.map(routine, departuresState, now, disruption)))
+        applyToAllInstances(RoutineWidgetUiState.ActiveRoutine(RoutineWidgetMapper.map(routine, departuresState, now, disruption?.toPresentation())))
     }
 
     override suspend fun clear() {

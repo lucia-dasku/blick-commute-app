@@ -1,7 +1,7 @@
 package se.blick.app.widget
 
 import se.blick.app.domain.model.CommuteRoutine
-import se.blick.app.domain.model.Disruption
+import se.blick.app.domain.model.DisruptionPresentation
 import se.blick.app.domain.usecase.LiveDeparturesSnapshot
 import se.blick.app.domain.usecase.LiveDeparturesState
 import se.blick.app.domain.usecase.PreparedDeparture
@@ -23,13 +23,16 @@ object RoutineWidgetMapper {
 
     /**
      * [topDisruption] mirrors [se.blick.app.notification.RoutineNotificationMapper.map]'s own
-     * parameter exactly — the single highest-priority currently-relevant disruption for this
+     * parameter exactly — the single currently-relevant disruption presentation for this
      * routine, if any was fetched successfully this tick (see
      * [se.blick.app.scheduling.RoutineActiveWindowWorker]'s own doc on why departures are always
      * posted before disruptions are ever awaited). Defaults to null for every call site that has
      * no fresh disruption data in hand (reconciliation paths — see [RoutineWidgetReconciler]).
+     * Unlike the notification, the widget's own [BlickRoutineWidget] disruption strip shows
+     * [topDisruption]'s real [DisruptionPresentation.headline] text directly, never only the
+     * classified effect — see [RoutineWidgetModel.disruptionHeadline]'s own doc.
      */
-    fun map(routine: CommuteRoutine, departuresState: LiveDeparturesState, now: Instant, topDisruption: Disruption? = null): RoutineWidgetModel =
+    fun map(routine: CommuteRoutine, departuresState: LiveDeparturesState, now: Instant, topDisruption: DisruptionPresentation? = null): RoutineWidgetModel =
         RoutineWidgetModel(
             routineId = routine.id,
             routineName = routine.name,
@@ -38,7 +41,7 @@ object RoutineWidgetMapper {
             content = departuresState.toWidgetContent(now),
             lineDesignation = routine.lineDesignation,
             transportMode = routine.transportMode,
-            disruptionHeadline = topDisruption?.message?.header,
+            disruptionHeadline = topDisruption?.headline,
         )
 
     /** No [LiveDeparturesState] counterpart exists for this case — see

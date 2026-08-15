@@ -1,7 +1,7 @@
 package se.blick.app.notification
 
 import se.blick.app.domain.model.CommuteRoutine
-import se.blick.app.domain.model.Disruption
+import se.blick.app.domain.model.DisruptionPresentation
 import se.blick.app.domain.usecase.LiveDeparturesSnapshot
 import se.blick.app.domain.usecase.LiveDeparturesState
 import se.blick.app.domain.usecase.PreparedDeparture
@@ -30,19 +30,23 @@ object RoutineNotificationMapper {
     private const val MAX_DEPARTURES = 2
 
     /**
-     * [topDisruption] is the single highest-priority currently-relevant disruption for this
-     * routine, if any was fetched successfully (see [se.blick.app.domain.usecase.GetDisruptionsUseCase]
-     * and [se.blick.app.domain.model.relevantDisruptions] — already priority-ordered before
-     * this mapper ever sees it, so "top" is simply the first element the caller passes in).
-     * Defaults to null so every existing call site (the worker's own `Loading` placeholder
-     * post, the debug notification trigger) keeps compiling without having fetched
-     * disruptions itself.
+     * [topDisruption] is the single currently-relevant disruption presentation for this
+     * routine, if any — for `LINE_DIRECTION` the highest-priority fetched
+     * [se.blick.app.domain.model.Disruption], adapted via
+     * [se.blick.app.domain.model.toPresentation] (see
+     * [se.blick.app.domain.usecase.GetDisruptionsUseCase] and
+     * [se.blick.app.domain.model.relevantDisruptions] — already priority-ordered before this
+     * mapper ever sees it); for `EXACT_DESTINATION`, the current PRIMARY journey's own
+     * conservatively-aggregated notice (see
+     * [se.blick.app.domain.usecase.compactPresentation]). Defaults to null so every existing
+     * call site (the worker's own `Loading` placeholder post, the debug notification trigger
+     * with no disruption selected) keeps compiling without having one in hand.
      */
     fun map(
         routine: CommuteRoutine,
         departuresState: LiveDeparturesState,
         now: Instant,
-        topDisruption: Disruption? = null,
+        topDisruption: DisruptionPresentation? = null,
     ): RoutineNotificationModel =
         RoutineNotificationModel(
             routineId = routine.id,
@@ -50,8 +54,8 @@ object RoutineNotificationMapper {
             lineLabel = routine.lineDesignation,
             directionLabel = routine.destinationLabel,
             content = departuresState.toContent(now),
-            disruptionHeadline = topDisruption?.message?.header,
-            disruptionDetails = topDisruption?.message?.details,
+            disruptionHeadline = topDisruption?.headline,
+            disruptionDetails = topDisruption?.details,
             disruptionEffect = topDisruption?.effect,
         )
 

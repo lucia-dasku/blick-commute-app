@@ -5,6 +5,8 @@ import org.junit.Assert.assertNull
 import org.junit.Assert.assertTrue
 import org.junit.Test
 import se.blick.app.domain.model.CommuteRoutine
+import se.blick.app.domain.model.DisruptionEffect
+import se.blick.app.domain.model.DisruptionPresentation
 import se.blick.app.domain.model.ExactDestinationChangesPreference
 import se.blick.app.domain.model.JourneyLeg
 import se.blick.app.domain.model.JourneyPlan
@@ -258,5 +260,56 @@ class RoutineWidgetJourneysMapperTest {
 
         val content = ((state as RoutineWidgetUiState.ActiveRoutine).model.content) as RoutineWidgetContent.Journeys
         assertEquals(listOf(WidgetJourneyLegBadge("14", TransportMode.METRO)), content.primary.legBadges)
+    }
+
+    // ---- disruption: the current PRIMARY journey's own DisruptionPresentation, already derived
+    // by the caller (RoutineActiveWindowWorker) from this same tick's journeys -- see
+    // RoutineWidgetUpdater.updateWithJourneys's own doc. Only ever set on RoutineWidgetModel's
+    // top-level disruptionHeadline, never re-derives anything from the journeys list itself. ----
+
+    @Test fun `a supplied disruption sets the model's own disruptionHeadline to its real text`() {
+        val primary = journey("primary", now.plusSeconds(60), now.plusSeconds(60))
+        val presentation = DisruptionPresentation(
+            "Hissen är ur funktion.", null, DisruptionEffect.ACCESSIBILITY_ISSUE,
+        )
+
+        val state = decideJourneysWidgetState(routine(), listOf(primary), now, disruption = presentation)
+
+        val model = (state as RoutineWidgetUiState.ActiveRoutine).model
+        assertEquals("Hissen är ur funktion.", model.disruptionHeadline)
+    }
+
+    @Test fun `no disruption argument leaves disruptionHeadline null, matching the existing default`() {
+        val primary = journey("primary", now.plusSeconds(60), now.plusSeconds(60))
+
+        val state = decideJourneysWidgetState(routine(), listOf(primary), now)
+
+        val model = (state as RoutineWidgetUiState.ActiveRoutine).model
+        assertNull(model.disruptionHeadline)
+    }
+
+    @Test fun `a disruption never changes the Direct-Both-With-changes layout selection -- changesPreference is unaffected`() {
+        val primary = journey("primary", now.plusSeconds(60), now.plusSeconds(60))
+        val presentation = DisruptionPresentation(
+            "Hissen är ur funktion.", null, DisruptionEffect.ACCESSIBILITY_ISSUE,
+        )
+
+        val state = decideJourneysWidgetState(
+            routine(ExactDestinationChangesPreference.WITH_CHANGES_ONLY), listOf(primary), now, disruption = presentation,
+        )
+
+        val content = ((state as RoutineWidgetUiState.ActiveRoutine).model.content) as RoutineWidgetContent.Journeys
+        assertEquals(ExactDestinationChangesPreference.WITH_CHANGES_ONLY, content.changesPreference)
+    }
+
+    @Test fun `an empty journeys list never attaches a disruption -- there is no PRIMARY to attach one to`() {
+        val presentation = DisruptionPresentation(
+            "Hissen är ur funktion.", null, DisruptionEffect.ACCESSIBILITY_ISSUE,
+        )
+
+        val state = decideJourneysWidgetState(routine(), emptyList(), now, disruption = presentation)
+
+        val model = (state as RoutineWidgetUiState.ActiveRoutine).model
+        assertNull(model.disruptionHeadline)
     }
 }

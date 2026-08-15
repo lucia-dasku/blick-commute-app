@@ -174,22 +174,9 @@ class RoutineNotificationBuilder @Inject constructor(
 
     /** Maps a classified [DisruptionEffect] to its localized label — fills
      * [R.string.notification_disruption_format]'s `%1$s` (e.g. "Delays"), never the
-     * disruption's own real header/details (see this class's own doc on why). Exhaustive `when`
-     * with no `else`: adding a tenth [DisruptionEffect] value without extending this function is
-     * a compile error here, not a silent runtime omission. */
-    private fun disruptionEffectLabel(effect: DisruptionEffect): String = localizedContext.getString(
-        when (effect) {
-            DisruptionEffect.DELAYS -> R.string.notification_disruption_effect_delays
-            DisruptionEffect.NO_SERVICE -> R.string.notification_disruption_effect_no_service
-            DisruptionEffect.REDUCED_SERVICE -> R.string.notification_disruption_effect_reduced_service
-            DisruptionEffect.ROUTE_CHANGE -> R.string.notification_disruption_effect_route_change
-            DisruptionEffect.STOP_CHANGE -> R.string.notification_disruption_effect_stop_change
-            DisruptionEffect.REPLACEMENT_SERVICE -> R.string.notification_disruption_effect_replacement_service
-            DisruptionEffect.STATION_ACCESS -> R.string.notification_disruption_effect_station_access
-            DisruptionEffect.ACCESSIBILITY_ISSUE -> R.string.notification_disruption_effect_accessibility_issue
-            DisruptionEffect.DISRUPTION -> R.string.notification_disruption_effect_disruption
-        },
-    )
+     * disruption's own real header/details (see this class's own doc on why). */
+    private fun disruptionEffectLabel(effect: DisruptionEffect): String =
+        localizedContext.getString(disruptionEffectLabelRes(effect))
 
     /** Up to two lines: the soonest departure's own countdown+status (or "Cancelled"), then
      * the following departure's own countdown (or "Cancelled") -- omitted entirely when there
@@ -319,4 +306,22 @@ class RoutineNotificationBuilder @Inject constructor(
         }
         manager.createNotificationChannel(channel)
     }
+}
+
+/** The single source of truth for which localized string resource represents a classified
+ * [DisruptionEffect] — used by [RoutineNotificationBuilder]'s own collapsed/expanded body text,
+ * and reused as-is (never a second, duplicated mapping) by the debug effect picker in
+ * `RoutineDetailsScreen` so its chip labels always match the real notification's own wording.
+ * Exhaustive `when` with no `else`: adding a tenth [DisruptionEffect] value without extending
+ * this function is a compile error here, not a silent runtime omission. */
+fun disruptionEffectLabelRes(effect: DisruptionEffect): Int = when (effect) {
+    DisruptionEffect.DELAYS -> R.string.notification_disruption_effect_delays
+    DisruptionEffect.NO_SERVICE -> R.string.notification_disruption_effect_no_service
+    DisruptionEffect.REDUCED_SERVICE -> R.string.notification_disruption_effect_reduced_service
+    DisruptionEffect.ROUTE_CHANGE -> R.string.notification_disruption_effect_route_change
+    DisruptionEffect.STOP_CHANGE -> R.string.notification_disruption_effect_stop_change
+    DisruptionEffect.REPLACEMENT_SERVICE -> R.string.notification_disruption_effect_replacement_service
+    DisruptionEffect.STATION_ACCESS -> R.string.notification_disruption_effect_station_access
+    DisruptionEffect.ACCESSIBILITY_ISSUE -> R.string.notification_disruption_effect_accessibility_issue
+    DisruptionEffect.DISRUPTION -> R.string.notification_disruption_effect_disruption
 }

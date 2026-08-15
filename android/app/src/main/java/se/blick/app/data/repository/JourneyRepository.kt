@@ -1,13 +1,16 @@
 package se.blick.app.data.repository
 
 import se.blick.app.data.remote.BlickApiClient
+import se.blick.app.data.remote.dto.JourneyDisruptionNoticeDto
 import se.blick.app.data.remote.dto.JourneyLegDto
 import se.blick.app.domain.model.ExactDestinationChangesPreference
+import se.blick.app.domain.model.JourneyDisruptionNotice
 import se.blick.app.domain.model.JourneyLeg
 import se.blick.app.domain.model.JourneyLocation
 import se.blick.app.domain.model.JourneyPlan
 import se.blick.app.domain.model.JOURNEY_TRANSPORT_MODE_OPTIONS
 import se.blick.app.domain.model.TransportMode
+import se.blick.app.domain.model.toDisruptionEffect
 import se.blick.app.domain.model.toJourneyRole
 import se.blick.app.domain.model.toTransportMode
 import java.time.Instant
@@ -56,7 +59,7 @@ class RemoteJourneyRepository @Inject constructor(private val apiClient: BlickAp
                 dto.journeyId, dto.originName, dto.destinationName,
                 Instant.parse(dto.departureTime), Instant.parse(dto.arrivalTime), dto.transferCount,
                 dto.firstLeg.toDomain(), dto.legs.map(JourneyLegDto::toDomain), dto.disruptions,
-                role,
+                role, dto.disruptionNotices.map(JourneyDisruptionNoticeDto::toDomain),
             )
     }
 }
@@ -65,3 +68,5 @@ private fun JourneyLegDto.toDomain() = JourneyLeg(
     transportMode.toTransportMode(), lineDesignation, direction, originName, destinationName,
     departureTime?.let(Instant::parse), arrivalTime?.let(Instant::parse), isRealtime, disruptions,
 )
+
+private fun JourneyDisruptionNoticeDto.toDomain() = JourneyDisruptionNotice(text, effect.toDisruptionEffect())

@@ -95,6 +95,7 @@
     <string name="routine_details_minutes_remaining">%1$d min</string>
 
     <string name="routine_details_disruptions_heading">Trafikstörningar kopplade till denna station och linje</string>
+    <string name="routine_details_disruptions_heading_exact_destination">Trafikstörningar på denna resa</string>
     <string name="routine_details_disruptions_unavailable">Kunde inte läsa in trafikstörningar just nu.</string>
     <string name="routine_details_disruption_expand">Visa detaljer om trafikstörning</string>
     <string name="routine_details_disruption_collapse">Dölj detaljer om trafikstörning</string>
@@ -222,6 +223,8 @@
     <string name="notification_action_stop">Stoppa</string>
 
     <string name="debug_notification_section_heading">Felsökning: aviseringstest</string>
+    <string name="debug_disruption_effect_picker_label">Störningseffekt att testa (valfritt)</string>
+    <string name="debug_disruption_effect_real">Verklig</string>
     <string name="debug_show_test_notification">Visa/uppdatera testavisering</string>
     <string name="debug_remove_test_notification">Ta bort testavisering</string>
     <string name="debug_notification_posted">Testavisering skickad.</string>

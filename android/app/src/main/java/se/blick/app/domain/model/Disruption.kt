@@ -39,6 +39,33 @@ data class Disruption(
 )
 
 /**
+ * The small, shared shape [se.blick.app.notification.RoutineNotificationMapper],
+ * [se.blick.app.widget.RoutineWidgetMapper], and Routine Details' own disruption cards actually
+ * consume — deliberately NOT a full [Disruption]: an exact-destination journey's own
+ * [JourneyDisruptionNotice] has no disruption id, version, SL Deviations priority, affected
+ * stop areas, or validity range, and constructing a fake [Disruption] with invented values for
+ * those just to satisfy a mapper that only ever reads `message.header`/`message.details`/`effect`
+ * would be worse than a small, purpose-built type both sources can produce honestly.
+ *
+ * [Disruption]'s own `message.header`/`message.details`/`effect` map onto [headline]/[details]/
+ * [effect] one-for-one for the `LINE_DIRECTION` path (see [toPresentation]); a
+ * [JourneyDisruptionNotice]'s own `text`/`effect` map onto [headline]/[effect] for the
+ * `EXACT_DESTINATION` path, with [details] left null (Journey Planner notices have no separate
+ * longer body the way an SL Deviations message does).
+ */
+data class DisruptionPresentation(
+    val headline: String,
+    val details: String?,
+    val effect: DisruptionEffect,
+)
+
+/** Adapts a real SL Deviations [Disruption] (the `LINE_DIRECTION` path) to the shared
+ * [DisruptionPresentation] shape every disruption consumer now reads from — see that type's own
+ * doc. */
+fun Disruption.toPresentation(): DisruptionPresentation =
+    DisruptionPresentation(headline = message.header, details = message.details, effect = effect)
+
+/**
  * Higher [DisruptionPriority.importance] first, then [DisruptionPriority.influence], then
  * [DisruptionPriority.urgency] — upstream (SL) documents these three fields only as sort
  * hints, with no defined combined ordering or stated direction (see

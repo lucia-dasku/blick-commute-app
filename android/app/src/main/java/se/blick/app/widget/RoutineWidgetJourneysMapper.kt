@@ -1,6 +1,7 @@
 package se.blick.app.widget
 
 import se.blick.app.domain.model.CommuteRoutine
+import se.blick.app.domain.model.DisruptionPresentation
 import se.blick.app.domain.model.JourneyPlan
 import se.blick.app.domain.usecase.effectiveFirstDeparture
 import se.blick.app.domain.usecase.filterCurrentJourneys
@@ -38,6 +39,12 @@ internal fun decideJourneysWidgetState(
     journeys: List<JourneyPlan>,
     now: Instant,
     fetchFailed: Boolean = false,
+    /** The current PRIMARY journey's own disruption presentation, already derived this same
+     * worker tick from the same [journeys] this call already carries — see
+     * [RoutineWidgetUpdater.updateWithJourneys]'s own doc. Only ever attached to the
+     * [RoutineWidgetContent.Journeys] branch below (there is no PRIMARY to attach a disruption to
+     * when [journeys] has nothing current). */
+    disruption: DisruptionPresentation? = null,
 ): RoutineWidgetUiState {
     val rows = journeys.filterCurrentJourneys(now).take(2).map { journey ->
         WidgetJourneyRow(
@@ -64,6 +71,7 @@ internal fun decideJourneysWidgetState(
             routine.journeyDestinationName,
             RoutineWidgetContent.Journeys(primary, rows.getOrNull(1), routine.changesPreference),
             primary.lineDesignation, primary.transportMode,
+            disruptionHeadline = disruption?.headline,
         ),
     )
 }

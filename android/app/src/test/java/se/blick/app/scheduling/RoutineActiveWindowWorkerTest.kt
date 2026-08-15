@@ -36,13 +36,17 @@ import se.blick.app.domain.model.CommuteRoutine
 import se.blick.app.domain.model.DeparturesResult
 import se.blick.app.domain.model.Departure
 import se.blick.app.domain.model.Disruption
+import se.blick.app.domain.model.DisruptionEffect
 import se.blick.app.domain.model.DisruptionMessage
+import se.blick.app.domain.model.DisruptionPresentation
 import se.blick.app.domain.model.DisruptionPriority
+import se.blick.app.domain.model.JourneyDisruptionNotice
 import se.blick.app.domain.model.ExactDestinationChangesPreference
 import se.blick.app.domain.model.Journey
 import se.blick.app.domain.model.JourneyLeg
 import se.blick.app.domain.model.JourneyLocation
 import se.blick.app.domain.model.JourneyPlan
+import se.blick.app.domain.model.JourneyRole
 import se.blick.app.domain.model.LineRef
 import se.blick.app.domain.model.RoutineType
 import se.blick.app.domain.model.StopAreaRef
@@ -401,11 +405,29 @@ class RoutineActiveWindowWorkerTest {
          * element type, so every pre-existing destructuring assertion against it keeps compiling
          * unchanged. */
         val journeysFetchFailedAtUpdate = mutableListOf<Boolean>()
+        /** Every five-argument [updateWithJourneys] call's own [DisruptionPresentation]?
+         * argument, in the same order as [journeysUpdateCalls] — same parallel-list pattern as
+         * [disruptionsAtUpdate] above. The four-argument overload (still called directly by a
+         * `LINE_DIRECTION`-shaped test, or by production code for a routine with no fresh
+         * disruption to attach) never appends here at all — a genuinely missing entry, not a
+         * recorded `null`, so a test can tell "no disruption was ever offered this call" apart
+         * from "null was explicitly passed" if that distinction ever matters. */
+        val journeysDisruptionAtUpdate = mutableListOf<DisruptionPresentation?>()
         var clearCallCount = 0
         var reconcileCallCount = 0
         override suspend fun updateWithJourneys(routine: CommuteRoutine, journeys: List<JourneyPlan>, now: Instant, fetchFailed: Boolean) {
             journeysUpdateCalls += journeys to now
             journeysFetchFailedAtUpdate += fetchFailed
+        }
+        override suspend fun updateWithJourneys(
+            routine: CommuteRoutine,
+            journeys: List<JourneyPlan>,
+            now: Instant,
+            fetchFailed: Boolean,
+            disruption: DisruptionPresentation?,
+        ) {
+            updateWithJourneys(routine, journeys, now, fetchFailed)
+            journeysDisruptionAtUpdate += disruption
         }
         override suspend fun updateWithDepartures(routine: CommuteRoutine, departuresState: LiveDeparturesState, now: Instant) {
             updateWithDepartures(routine, departuresState, now, disruption = null)
@@ -3239,4 +3261,182 @@ class RoutineActiveWindowWorkerTest {
                 widgetUpdater.journeysFetchFailedAtUpdate.isNotEmpty() && widgetUpdater.journeysFetchFailedAtUpdate.all { it },
             )
         }
+
+    // ---- Exact-destination disruption relevance: PRIMARY's own notices reach the notification
+    // and the widget identically, from the same journeyPlans this same tick already fetched --
+    // no separate disruption fetch (getDisruptions is never called for EXACT_DESTINATION, see
+    // the test at the end of this section). NEXT/ALTERNATIVE's own notices must never leak in. ----
+
+    @Test
+    fun `PRIMARY's disruption notice reaches both the notification and the widget`() = runTest {
+        val clock = TickingClock(Instant.parse("2026-07-27T05:00:00Z"), zone) // 07:00 local, Monday
+        val exactRoutine = exactDestinationRoutine()
+        val repository = ScriptedRoutineRepository(clock) { exactRoutine }
+        val useCaseClock = Clock.fixed(Instant.parse("2026-07-27T05:00:30Z"), zone)
+        val notice = JourneyDisruptionNotice("Hissen vid Slussen är ur funktion.", DisruptionEffect.ACCESSIBILITY_ISSUE)
+        val primary = exactJourney("primary", Instant.parse("2026-07-27T05:05:00Z"))
+            .copy(role = JourneyRole.PRIMARY, disruptionNotices = listOf(notice))
+        val getRankedJourneys = GetRankedJourneysUseCase(FakeJourneyRepository(listOf(primary)), useCaseClock)
+        val notifier = RecordingNotifier()
+        val widgetUpdater = RecordingWidgetUpdater()
+
+        val worker = buildWorker(
+            exactRoutine.id, repository,
+            GetLiveDeparturesUseCase(FakeDepartureRepository { error("unused for an exact-destination routine") }, clock),
+            notifier, RecordingScheduler(), clock,
+            widgetUpdater = widgetUpdater, getRankedJourneys = getRankedJourneys,
+        )
+        worker.doWork()
+
+        assertTrue(
+            "expected the notification to carry PRIMARY's own classified effect",
+            notifier.shown.any { it.disruptionEffect == DisruptionEffect.ACCESSIBILITY_ISSUE },
+        )
+        assertTrue(
+            "expected the notification to carry PRIMARY's own real headline text",
+            notifier.shown.any { it.disruptionHeadline == "Hissen vid Slussen är ur funktion." },
+        )
+        assertTrue(
+            "expected the widget to receive the identical DisruptionPresentation the notification used",
+            widgetUpdater.journeysDisruptionAtUpdate.any {
+                it == DisruptionPresentation("Hissen vid Slussen är ur funktion.", null, DisruptionEffect.ACCESSIBILITY_ISSUE)
+            },
+        )
+    }
+
+    @Test
+    fun `a NEXT-only disruption does not replace PRIMARY's own disruption in the notification`() = runTest {
+        val clock = TickingClock(Instant.parse("2026-07-27T05:00:00Z"), zone) // 07:00 local, Monday
+        val exactRoutine = exactDestinationRoutine()
+        val repository = ScriptedRoutineRepository(clock) { exactRoutine }
+        val useCaseClock = Clock.fixed(Instant.parse("2026-07-27T05:00:30Z"), zone)
+        // PRIMARY genuinely has no notices; only NEXT does.
+        val primary = exactJourney("primary", Instant.parse("2026-07-27T05:05:00Z")).copy(role = JourneyRole.PRIMARY)
+        val next = exactJourney("next", Instant.parse("2026-07-27T05:20:00Z"), lineDesignation = "17")
+            .copy(role = JourneyRole.NEXT, disruptionNotices = listOf(JourneyDisruptionNotice("Bussen är omledd.", DisruptionEffect.ROUTE_CHANGE)))
+        val getRankedJourneys = GetRankedJourneysUseCase(FakeJourneyRepository(listOf(primary, next)), useCaseClock)
+        val notifier = RecordingNotifier()
+        val widgetUpdater = RecordingWidgetUpdater()
+
+        val worker = buildWorker(
+            exactRoutine.id, repository,
+            GetLiveDeparturesUseCase(FakeDepartureRepository { error("unused for an exact-destination routine") }, clock),
+            notifier, RecordingScheduler(), clock,
+            widgetUpdater = widgetUpdater, getRankedJourneys = getRankedJourneys,
+        )
+        worker.doWork()
+
+        assertTrue("expected at least the foreground placeholder notification", notifier.shown.isNotEmpty())
+        assertTrue(
+            "NEXT's own notice must never surface as the notification's disruption",
+            notifier.shown.none { it.disruptionEffect == DisruptionEffect.ROUTE_CHANGE },
+        )
+        assertTrue(
+            "expected every notification to have no disruption at all -- PRIMARY genuinely has none",
+            notifier.shown.all { it.disruptionEffect == null },
+        )
+        assertTrue(
+            "NEXT's own notice must never surface in the widget's own disruption either",
+            widgetUpdater.journeysDisruptionAtUpdate.all { it == null },
+        )
+    }
+
+    @Test
+    fun `an ALTERNATIVE-only disruption does not replace PRIMARY's own disruption in the notification`() = runTest {
+        val clock = TickingClock(Instant.parse("2026-07-27T05:00:00Z"), zone) // 07:00 local, Monday
+        val exactRoutine = exactDestinationRoutine()
+        val repository = ScriptedRoutineRepository(clock) { exactRoutine }
+        val useCaseClock = Clock.fixed(Instant.parse("2026-07-27T05:00:30Z"), zone)
+        val primary = exactJourney("primary", Instant.parse("2026-07-27T05:05:00Z")).copy(role = JourneyRole.PRIMARY)
+        val alternative = exactJourney("alt", Instant.parse("2026-07-27T05:10:00Z"), lineDesignation = "40")
+            .copy(
+                role = JourneyRole.ALTERNATIVE,
+                disruptionNotices = listOf(JourneyDisruptionNotice("Ersättningsbuss ersätter tåget.", DisruptionEffect.REPLACEMENT_SERVICE)),
+            )
+        val getRankedJourneys = GetRankedJourneysUseCase(FakeJourneyRepository(listOf(primary, alternative)), useCaseClock)
+        val notifier = RecordingNotifier()
+        val widgetUpdater = RecordingWidgetUpdater()
+
+        val worker = buildWorker(
+            exactRoutine.id, repository,
+            GetLiveDeparturesUseCase(FakeDepartureRepository { error("unused for an exact-destination routine") }, clock),
+            notifier, RecordingScheduler(), clock,
+            widgetUpdater = widgetUpdater, getRankedJourneys = getRankedJourneys,
+        )
+        worker.doWork()
+
+        assertTrue("expected at least the foreground placeholder notification", notifier.shown.isNotEmpty())
+        assertTrue(
+            "ALTERNATIVE's own notice must never surface as the notification's disruption",
+            notifier.shown.none { it.disruptionEffect == DisruptionEffect.REPLACEMENT_SERVICE },
+        )
+        assertTrue(
+            "ALTERNATIVE's own notice must never surface in the widget's own disruption either",
+            widgetUpdater.journeysDisruptionAtUpdate.all { it == null },
+        )
+    }
+
+    @Test
+    fun `multiple genuinely different PRIMARY notices reach the notification as the generic DISRUPTION effect`() = runTest {
+        val clock = TickingClock(Instant.parse("2026-07-27T05:00:00Z"), zone) // 07:00 local, Monday
+        val exactRoutine = exactDestinationRoutine()
+        val repository = ScriptedRoutineRepository(clock) { exactRoutine }
+        val useCaseClock = Clock.fixed(Instant.parse("2026-07-27T05:00:30Z"), zone)
+        val primary = exactJourney("primary", Instant.parse("2026-07-27T05:05:00Z")).copy(
+            role = JourneyRole.PRIMARY,
+            disruptionNotices = listOf(
+                JourneyDisruptionNotice("Hissen är ur funktion.", DisruptionEffect.ACCESSIBILITY_ISSUE),
+                JourneyDisruptionNotice("Bussen är omledd.", DisruptionEffect.ROUTE_CHANGE),
+            ),
+        )
+        val getRankedJourneys = GetRankedJourneysUseCase(FakeJourneyRepository(listOf(primary)), useCaseClock)
+        val notifier = RecordingNotifier()
+        val widgetUpdater = RecordingWidgetUpdater()
+
+        val worker = buildWorker(
+            exactRoutine.id, repository,
+            GetLiveDeparturesUseCase(FakeDepartureRepository { error("unused for an exact-destination routine") }, clock),
+            notifier, RecordingScheduler(), clock,
+            widgetUpdater = widgetUpdater, getRankedJourneys = getRankedJourneys,
+        )
+        worker.doWork()
+
+        // Never an invented "most severe" pick between two genuinely unrelated notices -- the
+        // conservative generic label is correct here, not a guess (see compactPresentation's own
+        // doc).
+        assertTrue(
+            "expected the generic DISRUPTION effect, never one of the two specific ones guessed as more important",
+            notifier.shown.any { it.disruptionEffect == DisruptionEffect.DISRUPTION },
+        )
+        assertTrue(
+            notifier.shown.none { it.disruptionEffect == DisruptionEffect.ACCESSIBILITY_ISSUE || it.disruptionEffect == DisruptionEffect.ROUTE_CHANGE },
+        )
+    }
+
+    @Test
+    fun `getDisruptions -- the LINE_DIRECTION-only SL Deviations path -- is never invoked for an exact-destination routine`() = runTest {
+        val clock = TickingClock(Instant.parse("2026-07-27T05:00:00Z"), zone) // 07:00 local, Monday
+        val exactRoutine = exactDestinationRoutine()
+        val repository = ScriptedRoutineRepository(clock) { exactRoutine }
+        val useCaseClock = Clock.fixed(Instant.parse("2026-07-27T05:00:30Z"), zone)
+        val primary = exactJourney("primary", Instant.parse("2026-07-27T05:05:00Z")).copy(role = JourneyRole.PRIMARY)
+        val getRankedJourneys = GetRankedJourneysUseCase(FakeJourneyRepository(listOf(primary)), useCaseClock)
+        // Doesn't need to guard against being called (see FakeDisruptionRepository's own doc --
+        // GetDisruptionsUseCase never throws regardless) -- callCount itself is the assertion.
+        val disruptionRepository = FakeDisruptionRepository()
+
+        val worker = buildWorker(
+            exactRoutine.id, repository,
+            GetLiveDeparturesUseCase(FakeDepartureRepository { error("unused for an exact-destination routine") }, clock),
+            RecordingNotifier(), RecordingScheduler(), clock,
+            getDisruptions = GetDisruptionsUseCase(disruptionRepository),
+            getRankedJourneys = getRankedJourneys,
+        )
+        worker.doWork()
+
+        // Journey Planner's own disruptionNotices, already part of this same tick's journeys
+        // fetch, is EXACT_DESTINATION's sole source of disruption relevance -- confirming no
+        // additional SL Deviations request is ever made solely for it.
+        assertEquals(0, disruptionRepository.callCount)
+    }
 }

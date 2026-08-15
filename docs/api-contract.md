@@ -108,6 +108,30 @@ A response therefore contains `PRIMARY` alone, `PRIMARY, NEXT`, or `PRIMARY, ALT
 slot, and never more than one upstream request in the common case where PRIMARY and NEXT are both
 already in the initial batch and no alternative exists to find.
 
+#### Journey disruption notices (`disruptionNotices`)
+
+Each journey's `disruptions: string[]` (raw Journey Planner `infos` text, flattened across every
+leg, unchanged) is joined by an additive `disruptionNotices: { text, effect }[]` — the same raw
+text, deduplicated (identical text repeated across legs collapses to one entry, first-occurrence
+order preserved) and classified with the exact same nine-effect classifier `/api/v1/disruptions`
+uses (`classifyEffectFromText` in `backend/src/normalize/classifyDisruptionEffect.ts` — see
+"Disruption effect classification" below), never a second, independent set of rules. Journey
+Planner `infos` have no header/details split the way an SL Deviations message does, so the
+lower-level single-string classifier is called directly on each notice; `"DISRUPTION"` is the
+same conservative fallback for text it cannot confidently categorize. `text` is always SL's own
+unmodified notice — never translated, summarized, or replaced by the classification label.
+
+This exists specifically so an `EXACT_DESTINATION` routine — which has no `siteId`/`lineId` to
+query `/api/v1/disruptions` with, and for which a network-wide Deviations snapshot is the wrong
+relevance scope anyway — can derive its own live disruption relevance directly from the SAME
+`/api/v1/journeys` response it already re-fetches roughly every 30 seconds, from whichever
+journey currently holds the `PRIMARY` role, with no additional upstream request. See the Android
+client's `RoutineActiveWindowWorker` (`android/app/src/main/java/se/blick/app/scheduling/`) for
+exactly how PRIMARY's notices become the ongoing notification's classified summary line, the
+widget's disruption strip, and Routine Details' own disruption cards, and why an
+`EXACT_DESTINATION` routine never calls `/api/v1/disruptions` at all — that endpoint, and
+everything described in §3 below, remains `LINE_DIRECTION`-only.
+
 ## 1. Upstream architecture
 
 The backend talks to two keyless, official SL/Trafiklab APIs:
@@ -352,7 +376,12 @@ notification's expanded view, both backed by a shared, TTL-capped client-side ca
 `docs/Blick_Project_Documentation.md`'s "Current implementation status" for the
 authoritative account). **The lighter-weight embedded `siteDeviations`/`tripDeviations`
 fields are still not read by the Android app** — they remain normalized and present in
-the `/api/v1/departures` response only, with no current consumer.
+the `/api/v1/departures` response only, with no current consumer. A third, separate embedded
+signal — Journey Planner's own per-leg `infos`, normalized into each journey's
+`disruptionNotices` — IS read by the Android app, but only for `EXACT_DESTINATION` routines; see
+"Journey disruption notices (`disruptionNotices`)" above for why that case is structurally
+different (no `siteId`/`lineId` to query `/api/v1/disruptions` with) and deliberately does not
+reuse this endpoint.
 
 #### 3.5 Request validation vs. response compatibility
 

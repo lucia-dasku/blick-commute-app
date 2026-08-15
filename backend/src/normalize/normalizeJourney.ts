@@ -1,4 +1,6 @@
 import type { RawJourneyPlannerJourney, RawJourneyPlannerPlace } from "../services/slJourneyPlannerClient.js";
+import type { DisruptionEffect } from "../models/disruption.js";
+import { classifyEffectFromText } from "./classifyDisruptionEffect.js";
 
 function modeFor(productClass?: number, name?: string): string {
   if (productClass === 0 || productClass === 1) return "TRAIN";
@@ -30,6 +32,45 @@ function disruptionText(infos: unknown[] | undefined): string[] {
   }
   return [];
   });
+}
+
+/**
+ * One Journey Planner disruption notice, classified into the same nine passenger-facing
+ * effects `/api/v1/disruptions` already uses (see `classifyDisruptionEffect.ts`) — `text` is
+ * SL's own unmodified notice string (never translated or reinterpreted), `effect` is Blick's
+ * own local classification of it, never an SL-provided field.
+ */
+export interface JourneyDisruptionNotice {
+  text: string;
+  effect: DisruptionEffect;
+}
+
+/**
+ * Classifies each of [texts] with the EXACT SAME classifier `/api/v1/disruptions` uses
+ * (`classifyEffectFromText` — see that function's own doc) rather than a second, independent
+ * set of rules: Journey Planner `infos` text has no header/details split the way an SL
+ * Deviations message does, so this calls the lower-level, single-string classifier directly,
+ * falling back to the same conservative `"DISRUPTION"` label whenever the text doesn't
+ * confidently match anything specific — a generic classification is always safer than a
+ * confidently wrong one.
+ *
+ * Deduplicates identical notice text (exact string match) before classifying, preserving the
+ * first-occurrence order across [texts] — [texts] itself is already the flatMap of every leg's
+ * own `infos` in leg order (see this journey's own `disruptions` field, built from the same
+ * source), so a notice repeated verbatim on more than one leg (a network-wide notice attached
+ * to every leg, in particular) collapses to one entry here without losing which legs actually
+ * carried real disruption data in the first place — nothing is dropped except a literal repeat
+ * of text already captured.
+ */
+function classifyJourneyDisruptionNotices(texts: readonly string[]): JourneyDisruptionNotice[] {
+  const seen = new Set<string>();
+  const notices: JourneyDisruptionNotice[] = [];
+  for (const text of texts) {
+    if (seen.has(text)) continue;
+    seen.add(text);
+    notices.push({ text, effect: classifyEffectFromText(text) ?? "DISRUPTION" });
+  }
+  return notices;
 }
 
 /** SL's own real, confirmed place-type value for a stop-area itself (as opposed to
@@ -104,6 +145,10 @@ export function normalizeJourney(raw: RawJourneyPlannerJourney) {
   const legTripIds = raw.legs.flatMap((leg) => leg.properties?.tripId == null ? [] : [leg.properties.tripId]);
   const journeyId = raw.tripId ?? [...new Set(legTripIds)].join(":");
   if (!journeyId || !departureTime || !arrivalTime) return undefined;
+  // Computed once and reused by both `disruptions` (raw, unchanged) and `disruptionNotices`
+  // (classified, deduplicated) below -- the same underlying per-leg text, never two
+  // independent extractions that could silently drift apart.
+  const allDisruptionTexts = raw.legs.flatMap((leg) => disruptionText(leg.infos));
   return {
     journeyId,
     originName: first.origin.name,
@@ -150,6 +195,10 @@ export function normalizeJourney(raw: RawJourneyPlannerJourney) {
         stopIds: transportMode === "WALK" ? [] : buildStopIds(leg),
       };
     }),
-    disruptions: raw.legs.flatMap((leg) => disruptionText(leg.infos)),
+    disruptions: allDisruptionTexts,
+    // Additive alongside `disruptions` (see this journey's own doc above on why both exist) --
+    // classified and deduplicated, the source `/api/v1/journeys` consumers use to decide
+    // PRIMARY's own live disruption relevance (see backend/src/routes/journeys.ts's own doc).
+    disruptionNotices: classifyJourneyDisruptionNotices(allDisruptionTexts),
   };
 }

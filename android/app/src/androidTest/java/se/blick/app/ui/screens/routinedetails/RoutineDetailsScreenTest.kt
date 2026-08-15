@@ -27,9 +27,11 @@ import org.junit.runner.RunWith
 import se.blick.app.R
 import se.blick.app.domain.model.CommuteRoutine
 import se.blick.app.domain.model.Disruption
+import se.blick.app.domain.model.DisruptionEffect
 import se.blick.app.domain.model.DisruptionMessage
 import se.blick.app.domain.model.DisruptionPriority
 import se.blick.app.domain.model.ExactDestinationChangesPreference
+import se.blick.app.domain.model.JourneyDisruptionNotice
 import se.blick.app.domain.model.JourneyLeg
 import se.blick.app.domain.model.JourneyPlan
 import se.blick.app.domain.model.JourneyRole
@@ -40,6 +42,7 @@ import se.blick.app.domain.usecase.LiveDeparturesSnapshot
 import se.blick.app.domain.usecase.LiveDeparturesState
 import se.blick.app.domain.usecase.PreparedDeparture
 import se.blick.app.notification.NotificationAvailability
+import se.blick.app.notification.disruptionEffectLabelRes
 
 /**
  * Instrumented Compose test for the "Disruptions" section of [RoutineDetailsContent] — exercises
@@ -1002,5 +1005,205 @@ class RoutineDetailsScreenTest {
 
         composeRule.onAllNodesWithText(composeRule.activity.getString(R.string.routine_details_pause_today_action))
             .assertCountEquals(1)
+    }
+
+    // ---- Exact-destination disruption relevance: the top Disruptions section works from
+    // PRIMARY's own notices, never NEXT's/ALTERNATIVE's, and the existing expanded leg.disruptions
+    // rendering (raw SL text, unrelated to this feature) is unaffected. ----
+
+    @Test
+    fun exactDestinationRoutine_topDisruptionsSection_showsPrimarysOwnNotice() {
+        val now = Instant.parse("2026-08-13T08:00:00Z")
+        val primary = journeyWithTransfers("primary", "14", transferCount = 0, departure = now.plusSeconds(300), durationMinutes = 20)
+            .copy(disruptionNotices = listOf(JourneyDisruptionNotice("Hissen är ur funktion.", DisruptionEffect.ACCESSIBILITY_ISSUE)))
+
+        setContent(
+            disruptionsState = DisruptionsState.NoDisruptions,
+            routine = exactDestinationRoutine(),
+            journeys = listOf(primary),
+            now = now,
+        )
+
+        composeRule.onNodeWithText(
+            composeRule.activity.getString(R.string.routine_details_disruptions_heading_exact_destination),
+        ).assertExists()
+        composeRule.onNodeWithText("⚠️ Hissen är ur funktion.").assertExists()
+    }
+
+    @Test
+    fun exactDestinationRoutine_topDisruptionsSection_hiddenWhenPrimaryHasNoNotices() {
+        val now = Instant.parse("2026-08-13T08:00:00Z")
+        // PRIMARY genuinely has none; only NEXT does -- must never surface here.
+        val primary = journeyWithTransfers("primary", "14", transferCount = 0, departure = now.plusSeconds(300), durationMinutes = 20)
+        val next = journeyWithTransfers("next", "14", transferCount = 0, departure = now.plusSeconds(900), durationMinutes = 20, role = JourneyRole.NEXT)
+            .copy(disruptionNotices = listOf(JourneyDisruptionNotice("Bussen är omledd.", DisruptionEffect.ROUTE_CHANGE)))
+
+        setContent(
+            disruptionsState = DisruptionsState.NoDisruptions,
+            routine = exactDestinationRoutine(),
+            journeys = listOf(primary, next),
+            now = now,
+        )
+
+        composeRule.onNodeWithText(
+            composeRule.activity.getString(R.string.routine_details_disruptions_heading_exact_destination),
+        ).assertDoesNotExist()
+        composeRule.onNodeWithText("⚠️ Bussen är omledd.").assertDoesNotExist()
+    }
+
+    @Test
+    fun exactDestinationRoutine_expandedCard_stillRendersRawLegDisruptionText() {
+        // Regression check: the pre-existing expanded-journey-card leg.disruptions rendering (raw
+        // SL text, a completely different code path from the top Disruptions section above) must
+        // be unaffected by this feature.
+        val now = Instant.parse("2026-08-13T08:00:00Z")
+        val leg = JourneyLeg(
+            transportMode = TransportMode.METRO,
+            lineDesignation = "14",
+            direction = "Direction",
+            originName = "Origin",
+            destinationName = "Destination",
+            departureTime = now.plusSeconds(300),
+            arrivalTime = now.plusSeconds(300 + 1200),
+            isRealtime = true,
+            disruptions = listOf("Lift unavailable at Origin"),
+        )
+        val journey = JourneyPlan(
+            journeyId = "j1",
+            originName = "Origin",
+            destinationName = "Destination",
+            departureTime = now.plusSeconds(300),
+            arrivalTime = now.plusSeconds(300 + 1200),
+            transferCount = 0,
+            firstLeg = leg,
+            legs = listOf(leg),
+            disruptions = listOf("Lift unavailable at Origin"),
+        )
+
+        setContent(
+            disruptionsState = DisruptionsState.NoDisruptions,
+            routine = exactDestinationRoutine(),
+            journeys = listOf(journey),
+            now = now,
+        )
+
+        // Collapsed by default -- tap the card (its own "tap for details" hint) to expand it.
+        composeRule.onNodeWithText(composeRule.activity.getString(R.string.journey_tap_details)).performClick()
+        composeRule.onNodeWithText("Lift unavailable at Origin").assertExists()
+    }
+
+    // ---- Debug disruption-effect picker: chips exist for all nine DisruptionEffect values, and
+    // tapping one then "Show test notification" posts through onShowDebugNotificationForEffect
+    // with that exact effect -- see RoutineDetailsViewModel.showDebugTestNotification's own doc.
+    // (androidTest runs against the debug build type, so BuildConfig.DEBUG is true here, exactly
+    // like a real debug install -- this is not itself testing release-variant absence, which is
+    // a structural, compile-time guarantee -- see DebugDisruptionSampleSource's own doc.) ----
+
+    @Test
+    fun debugDisruptionPicker_showsAChipForEveryEffectPlusTheRealOption() {
+        setContent(DisruptionsState.NoDisruptions)
+
+        composeRule.onNodeWithText(composeRule.activity.getString(R.string.debug_disruption_effect_real))
+            .performScrollTo().assertExists()
+        DisruptionEffect.entries.forEach { effect ->
+            composeRule.onNodeWithText(composeRule.activity.getString(disruptionEffectLabelRes(effect)))
+                .performScrollTo().assertExists()
+        }
+    }
+
+    @Test
+    fun debugDisruptionPicker_selectingAnEffectAndTappingShow_postsThatExactEffect() {
+        val requestedEffects = mutableListOf<DisruptionEffect>()
+        composeRule.setContent {
+            RoutineDetailsContent(
+                modifier = Modifier,
+                routine = sampleRoutine(),
+                isPausedToday = false,
+                departuresState = LiveDeparturesState.Offline,
+                isRefreshing = false,
+                disruptionsState = DisruptionsState.NoDisruptions,
+                now = Instant.now(),
+                onUpdateJourneyTransportModes = {},
+                onRefresh = {},
+                onEdit = {},
+                isTogglingEnabled = false,
+                enabledActionFailed = false,
+                hasSeenNotificationRationale = true,
+                onNotificationRationaleSeen = {},
+                notificationAvailability = NotificationAvailability.Available,
+                onToggleEnabled = {},
+                isTogglingPause = false,
+                pauseActionFailed = false,
+                onPauseToday = {},
+                onResumeToday = {},
+                isDeleting = false,
+                deleteFailed = false,
+                onRequestDelete = {},
+                schedulingFailed = false,
+                isRetryingScheduling = false,
+                onRetryScheduling = {},
+                onShowDebugNotification = { null },
+                onShowDebugNotificationForEffect = { effect -> requestedEffects += effect; null },
+                onRemoveDebugNotification = {},
+                isLiveUpdatePromotable = { false },
+            )
+        }
+
+        val delaysLabel = composeRule.activity.getString(R.string.notification_disruption_effect_delays)
+        val showLabel = composeRule.activity.getString(R.string.debug_show_test_notification)
+        composeRule.onNodeWithText(delaysLabel).performScrollTo().performClick()
+        composeRule.onNodeWithText(showLabel).performScrollTo().performClick()
+
+        assertEquals(listOf(DisruptionEffect.DELAYS), requestedEffects)
+    }
+
+    @Test
+    fun debugDisruptionPicker_reselectingRealAfterAnEffect_postsTheRealDisruptionAgain() {
+        val requestedEffects = mutableListOf<DisruptionEffect>()
+        var realPostCount = 0
+        composeRule.setContent {
+            RoutineDetailsContent(
+                modifier = Modifier,
+                routine = sampleRoutine(),
+                isPausedToday = false,
+                departuresState = LiveDeparturesState.Offline,
+                isRefreshing = false,
+                disruptionsState = DisruptionsState.NoDisruptions,
+                now = Instant.now(),
+                onUpdateJourneyTransportModes = {},
+                onRefresh = {},
+                onEdit = {},
+                isTogglingEnabled = false,
+                enabledActionFailed = false,
+                hasSeenNotificationRationale = true,
+                onNotificationRationaleSeen = {},
+                notificationAvailability = NotificationAvailability.Available,
+                onToggleEnabled = {},
+                isTogglingPause = false,
+                pauseActionFailed = false,
+                onPauseToday = {},
+                onResumeToday = {},
+                isDeleting = false,
+                deleteFailed = false,
+                onRequestDelete = {},
+                schedulingFailed = false,
+                isRetryingScheduling = false,
+                onRetryScheduling = {},
+                onShowDebugNotification = { realPostCount++; null },
+                onShowDebugNotificationForEffect = { effect -> requestedEffects += effect; null },
+                onRemoveDebugNotification = {},
+                isLiveUpdatePromotable = { false },
+            )
+        }
+
+        val delaysLabel = composeRule.activity.getString(R.string.notification_disruption_effect_delays)
+        val realLabel = composeRule.activity.getString(R.string.debug_disruption_effect_real)
+        val showLabel = composeRule.activity.getString(R.string.debug_show_test_notification)
+        composeRule.onNodeWithText(delaysLabel).performScrollTo().performClick()
+        composeRule.onNodeWithText(realLabel).performScrollTo().performClick()
+        composeRule.onNodeWithText(showLabel).performScrollTo().performClick()
+
+        assertEquals(emptyList<DisruptionEffect>(), requestedEffects)
+        assertEquals(1, realPostCount)
     }
 }

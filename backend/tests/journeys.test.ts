@@ -24,6 +24,7 @@ interface JourneyResponse {
     firstLeg: { lineDesignation: string | null };
     legs: Array<{ lineDesignation: string | null; disruptions: string[] }>;
     disruptions: string[];
+    disruptionNotices: Array<{ text: string; effect: string }>;
   }>;
 }
 
@@ -219,6 +220,81 @@ describe("journey routes", () => {
     expect(journey.firstLeg.lineDesignation).toBe("14");
     expect(journey.legs.map((leg) => leg.lineDesignation)).toEqual(["14", "409"]);
     expect(journey.disruptions).toEqual(["Lift unavailable"]);
+    // "Lift unavailable" is English, not Swedish, so none of the classifier's Swedish rules
+    // can confidently match it -- the conservative DISRUPTION fallback is correct here, not a
+    // guess (see classifyDisruptionEffect.ts's own doc).
+    expect(journey.disruptionNotices).toEqual([{ text: "Lift unavailable", effect: "DISRUPTION" }]);
+  });
+
+  describe("disruptionNotices", () => {
+    function transferJourneyWithInfos(firstLegInfos: unknown[], secondLegInfos: unknown[] = []): RawJourneyPlannerJourney {
+      return {
+        tripId: "with-notices",
+        interchanges: 1,
+        legs: [
+          {
+            origin: { id: "origin-stop", name: "T-Centralen", departureTimeEstimated: "2026-08-10T08:04:00Z" },
+            destination: { id: "slussen", name: "Slussen", arrivalTimeEstimated: "2026-08-10T08:09:00Z" },
+            transportation: { disassembledName: "14", product: { class: 2, name: "Tunnelbana" }, destination: { name: "Norsborg" } },
+            infos: firstLegInfos,
+          },
+          {
+            origin: { id: "slussen", name: "Slussen", departureTimePlanned: "2026-08-10T08:14:00Z" },
+            destination: { id: "nacka", name: "Nacka", arrivalTimePlanned: "2026-08-10T08:28:00Z" },
+            transportation: { disassembledName: "409", product: { class: 5, name: "Buss" }, destination: { name: "Nacka" } },
+            infos: secondLegInfos,
+          },
+        ],
+      } as unknown as RawJourneyPlannerJourney;
+    }
+
+    async function journeyFor(raw: RawJourneyPlannerJourney) {
+      const client: SlJourneyPlannerClient = {
+        async searchStops() {
+          return [];
+        },
+        async trips() {
+          return [raw];
+        },
+      };
+      const response = await createJourneyRoutes(client, FIXED_NOW).request("/?originId=origin&destinationId=destination");
+      const body = (await response.json()) as SuccessEnvelope<JourneyResponse>;
+      return body.data.journeys[0]!;
+    }
+
+    it("classifies recognizable Swedish Journey Planner text with the existing classifier", async () => {
+      const journey = await journeyFor(transferJourneyWithInfos([{ content: "Hissen vid Slussen är ur funktion." }]));
+      expect(journey.disruptionNotices).toEqual([
+        { text: "Hissen vid Slussen är ur funktion.", effect: "ACCESSIBILITY_ISSUE" },
+      ]);
+    });
+
+    it("deduplicates identical notice text repeated across legs", async () => {
+      const journey = await journeyFor(
+        transferJourneyWithInfos([{ content: "Trafikinformation: se sl.se." }], [{ content: "Trafikinformation: se sl.se." }]),
+      );
+      expect(journey.disruptionNotices).toEqual([{ text: "Trafikinformation: se sl.se.", effect: "DISRUPTION" }]);
+    });
+
+    it("detects a notice attached only to a later leg", async () => {
+      const journey = await journeyFor(transferJourneyWithInfos([], [{ content: "Bussen är omledd." }]));
+      expect(journey.disruptionNotices).toEqual([{ text: "Bussen är omledd.", effect: "ROUTE_CHANGE" }]);
+    });
+
+    it("preserves multiple genuinely different notices, in leg order", async () => {
+      const journey = await journeyFor(
+        transferJourneyWithInfos([{ content: "Hissen är ur funktion." }], [{ content: "Bussen är omledd." }]),
+      );
+      expect(journey.disruptionNotices).toEqual([
+        { text: "Hissen är ur funktion.", effect: "ACCESSIBILITY_ISSUE" },
+        { text: "Bussen är omledd.", effect: "ROUTE_CHANGE" },
+      ]);
+    });
+
+    it("returns an empty list when no leg carries any disruption info", async () => {
+      const journey = await journeyFor(transferJourneyWithInfos([], []));
+      expect(journey.disruptionNotices).toEqual([]);
+    });
   });
 
   // ---- Expired-journey rejection (2026-08-10 22:12 production incident: a bus that arrived

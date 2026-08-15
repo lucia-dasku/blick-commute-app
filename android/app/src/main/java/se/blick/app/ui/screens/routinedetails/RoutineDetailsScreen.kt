@@ -23,6 +23,7 @@ import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
+import androidx.compose.foundation.horizontalScroll
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.verticalScroll
@@ -71,6 +72,10 @@ import se.blick.app.BuildConfig
 import se.blick.app.R
 import se.blick.app.domain.model.CommuteRoutine
 import se.blick.app.domain.model.Disruption
+import se.blick.app.domain.model.DisruptionEffect
+import se.blick.app.domain.model.DisruptionPresentation
+import se.blick.app.domain.model.toPresentation
+import se.blick.app.notification.disruptionEffectLabelRes
 import se.blick.app.domain.model.ExactDestinationChangesPreference
 import se.blick.app.domain.usecase.DisruptionsState
 import se.blick.app.domain.usecase.LiveDeparturesState
@@ -78,6 +83,7 @@ import se.blick.app.domain.usecase.PreparedDeparture
 import se.blick.app.domain.usecase.countdownMinutes
 import se.blick.app.domain.usecase.effectiveFirstDeparture
 import se.blick.app.domain.usecase.filterCurrentJourneys
+import se.blick.app.domain.usecase.primaryDisruptionNotices
 import se.blick.app.domain.model.TransportMode
 import se.blick.app.domain.model.JourneyPlan
 import se.blick.app.domain.model.JourneyRole
@@ -200,7 +206,13 @@ fun RoutineDetailsScreen(
                 schedulingFailed = uiState.schedulingFailed,
                 isRetryingScheduling = uiState.isRetryingScheduling,
                 onRetryScheduling = viewModel::retryScheduling,
-                onShowDebugNotification = viewModel::showDebugTestNotification,
+                // A lambda, not a bare method reference: showDebugTestNotification's own
+                // debugEffectOverride parameter defaults to null (the real disruption) when
+                // called with no arguments, but a callable reference always reflects the full
+                // declared parameter list regardless of defaults, so `viewModel::showDebugTestNotification`
+                // alone would not type-check against this zero-argument callback.
+                onShowDebugNotification = { viewModel.showDebugTestNotification() },
+                onShowDebugNotificationForEffect = viewModel::showDebugTestNotification,
                 onRemoveDebugNotification = viewModel::removeDebugTestNotification,
                 isLiveUpdatePromotable = viewModel::isLiveUpdatePromotable,
             )
@@ -486,6 +498,7 @@ internal fun RoutineDetailsContent(
     isRetryingScheduling: Boolean,
     onRetryScheduling: () -> Unit,
     onShowDebugNotification: () -> NotificationPostResult?,
+    onShowDebugNotificationForEffect: (DisruptionEffect) -> NotificationPostResult? = { onShowDebugNotification() },
     onRemoveDebugNotification: () -> Unit,
     isLiveUpdatePromotable: () -> Boolean,
 ) {
@@ -493,6 +506,17 @@ internal fun RoutineDetailsContent(
     // Blick's effective English/Svenska presentation locale -- see that function's own doc.
     val locale = currentBlickLocale()
 
+    // EXACT_DESTINATION's own top-section relevance: the CURRENT PRIMARY journey's notices --
+    // never NEXT's or ALTERNATIVE's own (see RoutineActiveWindowWorker's own doc on why PRIMARY
+    // alone decides live relevance) -- so this automatically follows PRIMARY across a refresh,
+    // being a pure derivation from `journeys`/`now`, never cached or held onto separately. Empty
+    // (and therefore this section skipped below, same as LINE_DIRECTION's own NoDisruptions
+    // case) whenever there is no current PRIMARY or it simply has none.
+    val exactDestinationPrimaryNotices = if (routine.type == RoutineType.EXACT_DESTINATION) {
+        journeys.filterCurrentJourneys(now).primaryDisruptionNotices()
+    } else {
+        emptyList()
+    }
     Column(modifier.verticalScroll(rememberScrollState()).padding(16.dp)) {
         // Shown first, above everything else including the routine's own name -- a relevant
         // disruption is the whole reason someone taps the notification or widget to "see more"
@@ -500,13 +524,32 @@ internal fun RoutineDetailsContent(
         // land here), so it must be the first thing visible without any scrolling, not buried
         // below routine details/actions/departures. Skipped entirely once a fetch has actually
         // completed and found nothing relevant: a "Disruptions" heading over an empty/"none"
-        // message is noise once that's confirmed, not useful signal. Loading and Unavailable are
-        // each still shown -- neither one means "no disruptions", just "don't know yet" /
-        // "couldn't check".
-        if (routine.type == RoutineType.LINE_DIRECTION && disruptionsState !is DisruptionsState.NoDisruptions) {
-            Text(stringResource(R.string.routine_details_disruptions_heading), style = MaterialTheme.typography.titleMedium)
+        // message is noise once that's confirmed, not useful signal. For LINE_DIRECTION, Loading
+        // and Unavailable are each still shown -- neither one means "no disruptions", just "don't
+        // know yet" / "couldn't check"; EXACT_DESTINATION has no separate loading/unavailable
+        // state of its own here at all (its notices arrive as part of the same journeys fetch the
+        // departures section below already renders its own loading/failure state for), so it is
+        // gated purely on "PRIMARY currently has at least one notice".
+        val showDisruptionsSection = when (routine.type) {
+            RoutineType.LINE_DIRECTION -> disruptionsState !is DisruptionsState.NoDisruptions
+            RoutineType.EXACT_DESTINATION -> exactDestinationPrimaryNotices.isNotEmpty()
+        }
+        if (showDisruptionsSection) {
+            // "this station and line" (the LINE_DIRECTION heading) does not describe an
+            // exact-destination journey -- a distinct heading, not a rename of the shared one, so
+            // LINE_DIRECTION's own wording stays exactly as it already reads today.
+            val heading = if (routine.type == RoutineType.EXACT_DESTINATION) {
+                R.string.routine_details_disruptions_heading_exact_destination
+            } else {
+                R.string.routine_details_disruptions_heading
+            }
+            Text(stringResource(heading), style = MaterialTheme.typography.titleMedium)
             Spacer(Modifier.height(12.dp))
-            DisruptionsSection(disruptionsState)
+            if (routine.type == RoutineType.EXACT_DESTINATION) {
+                DisruptionsList(exactDestinationPrimaryNotices.map { DisruptionPresentation(it.text, null, it.effect) })
+            } else {
+                DisruptionsSection(disruptionsState)
+            }
             Spacer(Modifier.height(20.dp))
             HorizontalDivider()
             Spacer(Modifier.height(16.dp))
@@ -669,6 +712,7 @@ internal fun RoutineDetailsContent(
             DebugNotificationSection(
                 canShow = departuresState !is LiveDeparturesState.Loading,
                 onShow = onShowDebugNotification,
+                onShowForEffect = onShowDebugNotificationForEffect,
                 onRemove = onRemoveDebugNotification,
                 isLiveUpdatePromotable = isLiveUpdatePromotable,
             )
@@ -698,11 +742,17 @@ internal fun RoutineDetailsContent(
 private fun DebugNotificationSection(
     canShow: Boolean,
     onShow: () -> NotificationPostResult?,
+    onShowForEffect: (DisruptionEffect) -> NotificationPostResult?,
     onRemove: () -> Unit,
     isLiveUpdatePromotable: () -> Boolean,
 ) {
     val context = LocalContext.current
     var resultMessage by remember { mutableStateOf<String?>(null) }
+    // null = the real disruption (whichever one this routine actually has right now, if any) --
+    // the existing, unchanged "Show test notification" behavior. Selecting one of the nine
+    // DisruptionEffect chips below switches to that effect's own synthetic sample instead, for
+    // the classifier tester (see RoutineDetailsViewModel.showDebugTestNotification's own doc).
+    var selectedEffect by remember { mutableStateOf<DisruptionEffect?>(null) }
 
     // Resolved here, in composable scope, rather than via context.getString(...) inside the
     // callbacks below -- LocalContext.current reads don't get invalidated on a Configuration
@@ -713,6 +763,7 @@ private fun DebugNotificationSection(
     val removedMessage = stringResource(R.string.debug_notification_removed)
     val promotedSuffix = stringResource(R.string.debug_notification_promoted_suffix)
     val notPromotedSuffix = stringResource(R.string.debug_notification_not_promoted_suffix)
+    val realDisruptionLabel = stringResource(R.string.debug_disruption_effect_real)
 
     fun messageFor(result: NotificationPostResult?): String {
         val base = result.toDebugMessage(context)
@@ -720,11 +771,13 @@ private fun DebugNotificationSection(
         return base + if (isLiveUpdatePromotable()) promotedSuffix else notPromotedSuffix
     }
 
+    fun showForCurrentSelection(): NotificationPostResult? = selectedEffect?.let(onShowForEffect) ?: onShow()
+
     val permissionLauncher = rememberLauncherForActivityResult(
         ActivityResultContracts.RequestPermission(),
     ) { granted ->
         resultMessage = if (granted) {
-            messageFor(onShow())
+            messageFor(showForCurrentSelection())
         } else {
             permissionDeniedMessage
         }
@@ -732,6 +785,27 @@ private fun DebugNotificationSection(
 
     Column {
         Text(stringResource(R.string.debug_notification_section_heading), style = MaterialTheme.typography.titleSmall)
+        Spacer(Modifier.height(8.dp))
+
+        Text(stringResource(R.string.debug_disruption_effect_picker_label), style = MaterialTheme.typography.bodySmall)
+        Spacer(Modifier.height(4.dp))
+        Row(
+            modifier = Modifier.fillMaxWidth().horizontalScroll(rememberScrollState()),
+            horizontalArrangement = Arrangement.spacedBy(8.dp),
+        ) {
+            FilterChip(
+                selected = selectedEffect == null,
+                onClick = { selectedEffect = null },
+                label = { Text(realDisruptionLabel) },
+            )
+            DisruptionEffect.entries.forEach { effect ->
+                FilterChip(
+                    selected = selectedEffect == effect,
+                    onClick = { selectedEffect = effect },
+                    label = { Text(stringResource(disruptionEffectLabelRes(effect))) },
+                )
+            }
+        }
         Spacer(Modifier.height(8.dp))
 
         Button(
@@ -742,7 +816,7 @@ private fun DebugNotificationSection(
                 if (needsPermissionRequest) {
                     permissionLauncher.launch(Manifest.permission.POST_NOTIFICATIONS)
                 } else {
-                    resultMessage = messageFor(onShow())
+                    resultMessage = messageFor(showForCurrentSelection())
                 }
             },
             enabled = canShow,
@@ -1260,7 +1334,7 @@ private fun DisruptionsSection(state: DisruptionsState) {
         is DisruptionsState.Loading -> CenteredBox(Modifier.fillMaxWidth().padding(vertical = 16.dp)) {
             CircularProgressIndicator()
         }
-        is DisruptionsState.Loaded -> DisruptionsList(state.disruptions)
+        is DisruptionsState.Loaded -> DisruptionsList(state.disruptions.map { it.toPresentation() })
         is DisruptionsState.NoDisruptions -> Unit
         is DisruptionsState.Unavailable -> Text(
             stringResource(R.string.routine_details_disruptions_unavailable),
@@ -1270,8 +1344,14 @@ private fun DisruptionsSection(state: DisruptionsState) {
     }
 }
 
+/** Shared by both routine types — a `LINE_DIRECTION` [Disruption] adapted via
+ * [se.blick.app.domain.model.toPresentation], or an `EXACT_DESTINATION` PRIMARY journey's own
+ * [se.blick.app.domain.model.JourneyDisruptionNotice]s, mapped 1:1 into the same
+ * [DisruptionPresentation] shape — see that type's own doc. Multiple genuinely different notices
+ * are always all shown here, one card each; only the notification/widget's single compact
+ * indicator ever collapses them (see [se.blick.app.domain.usecase.compactPresentation]). */
 @Composable
-private fun DisruptionsList(disruptions: List<Disruption>) {
+private fun DisruptionsList(disruptions: List<DisruptionPresentation>) {
     Column(verticalArrangement = Arrangement.spacedBy(12.dp)) {
         disruptions.forEach { disruption -> DisruptionRow(disruption) }
     }
@@ -1283,14 +1363,20 @@ private fun DisruptionsList(disruptions: List<Disruption>) {
  * [MaterialTheme.colorScheme.onErrorContainer] text in both light and dark mode, rather than a
  * hand-picked alpha over the bright [MaterialTheme.colorScheme.error] red used for genuine
  * failure states elsewhere on this screen) so a disruption is clearly noticeable without being
- * visually harsh. Collapsed by default, showing only [se.blick.app.domain.model.DisruptionMessage.header];
- * the expand/collapse icon button reveals [se.blick.app.domain.model.DisruptionMessage.details]
- * below it, mirroring the same collapsed-header/expanded-details split the notification's own
- * [se.blick.app.notification.RoutineNotificationBuilder] uses.
+ * visually harsh. Always shows [DisruptionPresentation]'s own real, unaltered text — never only
+ * the classified [DisruptionPresentation.effect] label (that compact summary is the
+ * notification/widget's own job, not this detailed screen's). Collapsed by default, showing only
+ * [DisruptionPresentation.headline]; the expand/collapse icon button reveals
+ * [DisruptionPresentation.details] below it when one exists, mirroring the same collapsed-header/
+ * expanded-details split the notification's own [se.blick.app.notification.RoutineNotificationBuilder]
+ * uses. An `EXACT_DESTINATION` notice has no separate details (a Journey Planner notice is
+ * already one short piece of text, unlike an SL Deviations message's own header/details split),
+ * so the expand affordance itself is omitted rather than expanding to nothing.
  */
 @Composable
-private fun DisruptionRow(disruption: Disruption) {
-    var expanded by remember(disruption.disruptionId) { mutableStateOf(false) }
+private fun DisruptionRow(disruption: DisruptionPresentation) {
+    var expanded by remember(disruption.headline) { mutableStateOf(false) }
+    val details = disruption.details
 
     Surface(
         modifier = Modifier.fillMaxWidth(),
@@ -1304,19 +1390,21 @@ private fun DisruptionRow(disruption: Disruption) {
                 horizontalArrangement = Arrangement.SpaceBetween,
                 verticalAlignment = Alignment.CenterVertically,
             ) {
-                Text("⚠️ ${disruption.message.header}", style = MaterialTheme.typography.bodyLarge, modifier = Modifier.weight(1f))
-                IconButton(onClick = { expanded = !expanded }) {
-                    Icon(
-                        imageVector = if (expanded) Icons.Filled.KeyboardArrowUp else Icons.Filled.KeyboardArrowDown,
-                        contentDescription = stringResource(
-                            if (expanded) R.string.routine_details_disruption_collapse else R.string.routine_details_disruption_expand,
-                        ),
-                    )
+                Text("⚠️ ${disruption.headline}", style = MaterialTheme.typography.bodyLarge, modifier = Modifier.weight(1f))
+                if (details != null) {
+                    IconButton(onClick = { expanded = !expanded }) {
+                        Icon(
+                            imageVector = if (expanded) Icons.Filled.KeyboardArrowUp else Icons.Filled.KeyboardArrowDown,
+                            contentDescription = stringResource(
+                                if (expanded) R.string.routine_details_disruption_collapse else R.string.routine_details_disruption_expand,
+                            ),
+                        )
+                    }
                 }
             }
-            if (expanded) {
+            if (expanded && details != null) {
                 Spacer(Modifier.height(4.dp))
-                Text(disruption.message.details, style = MaterialTheme.typography.bodySmall)
+                Text(details, style = MaterialTheme.typography.bodySmall)
             }
         }
     }

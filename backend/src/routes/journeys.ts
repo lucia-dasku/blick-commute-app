@@ -398,6 +398,11 @@ function toPublicJourney(journey: RankableNormalizedJourney, role: JourneyRole) 
       disruptions: leg.disruptions,
     })),
     disruptions: journey.disruptions,
+    // Additive: the classified, deduplicated counterpart to `disruptions` above (see
+    // normalizeJourney.ts's own JourneyDisruptionNotice doc) -- lets Android decide PRIMARY's
+    // own live disruption relevance for the notification/widget/Routine Details without
+    // re-implementing classification client-side.
+    disruptionNotices: journey.disruptionNotices,
     role,
   };
 }

@@ -19,6 +19,9 @@ data class JourneyLegDto(
 )
 
 @Serializable
+data class JourneyDisruptionNoticeDto(val text: String, val effect: String)
+
+@Serializable
 data class JourneyPlanDto(
     val journeyId: String,
     val originName: String,
@@ -33,6 +36,9 @@ data class JourneyPlanDto(
     // JourneyRepository's own toJourneyRole() mapping fails closed (drops the journey) for a
     // null, unrecognized, or otherwise malformed value, rather than inventing a role for it.
     val role: String? = null,
+    // Default covers the same stale-deployment case as `disruptions` always has -- see
+    // JourneyDisruptionNotice's own doc.
+    val disruptionNotices: List<JourneyDisruptionNoticeDto> = emptyList(),
 )
 
 @Serializable data class JourneysResponseDto(val fetchedAt: String, val journeys: List<JourneyPlanDto>)

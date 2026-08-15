@@ -21,19 +21,25 @@ import kotlinx.coroutines.launch
 import se.blick.app.data.local.datastore.AppSettingsDataStore
 import se.blick.app.data.repository.RoutineRepository
 import se.blick.app.data.repository.StaleSnapshotRepository
+import se.blick.app.debug.DebugDisruptionSampleSource
 import se.blick.app.domain.model.CommuteRoutine
+import se.blick.app.domain.model.DisruptionEffect
+import se.blick.app.domain.model.DisruptionPresentation
 import se.blick.app.domain.model.ExactDestinationChangesPreference
 import se.blick.app.domain.model.JourneyPlan
 import se.blick.app.domain.model.JOURNEY_TRANSPORT_MODE_OPTIONS
 import se.blick.app.domain.model.RoutineType
 import se.blick.app.domain.model.TransportMode
+import se.blick.app.domain.model.toPresentation
 import se.blick.app.domain.usecase.GetRankedJourneysUseCase
 import se.blick.app.domain.usecase.DisruptionsState
 import se.blick.app.domain.usecase.GetDisruptionsUseCase
 import se.blick.app.domain.usecase.GetLiveDeparturesUseCase
 import se.blick.app.domain.usecase.LiveDeparturesSnapshot
 import se.blick.app.domain.usecase.LiveDeparturesState
+import se.blick.app.domain.usecase.compactPresentation
 import se.blick.app.domain.usecase.departureIdentity
+import se.blick.app.domain.usecase.primaryDisruptionNotices
 import se.blick.app.notification.NotificationAvailability
 import se.blick.app.notification.NotificationAvailabilityChecker
 import se.blick.app.notification.NotificationPostResult
@@ -52,6 +58,7 @@ import java.time.Clock
 import java.time.Instant
 import java.time.LocalDate
 import java.time.ZonedDateTime
+import java.util.Optional
 import javax.inject.Inject
 
 private const val LOG_TAG = "RoutineDetailsViewModel"
@@ -173,6 +180,11 @@ class RoutineDetailsViewModel @Inject constructor(
     private val clock: Clock,
     private val deviceZoneProvider: DeviceZoneProvider,
     private val getRankedJourneys: GetRankedJourneysUseCase? = null,
+    /** Present only in a `debug` build (see [DebugDisruptionSampleSource]'s own doc on why
+     * that's a structural, not merely runtime, guarantee) — [Optional.empty] in every other
+     * variant, including release. Defaults to empty so every existing test construction of
+     * this ViewModel keeps compiling unchanged. */
+    private val debugDisruptionSampleSource: Optional<DebugDisruptionSampleSource> = Optional.empty(),
 ) : ViewModel() {
 
     private val routineId: String =
@@ -869,11 +881,28 @@ class RoutineDetailsViewModel @Inject constructor(
      * the debug UI can tell an actual [NotificationPostResult.Posted] apart from
      * [NotificationPostResult.NotificationsDisabled]/[NotificationPostResult.Failed] rather
      * than assuming success merely because this function was called.
+     *
+     * [debugEffectOverride], when non-null, replaces the real disruption below (whichever it
+     * would otherwise have been) with [debugDisruptionSampleSource]'s own synthetic sample for
+     * that one [DisruptionEffect] — see that property's own doc for why a release build always
+     * has [debugDisruptionSampleSource] empty, so an override request there silently falls back
+     * to the real disruption instead of ever fabricating one. This still goes through the exact
+     * same [RoutineNotificationMapper]/[RoutineNotifier]/[RoutineNotificationBuilder] production
+     * rendering path as an ordinary call — only the input disruption is ever synthetic, nothing
+     * about how it is formatted or posted differs, and no repository, Room row, or the worker's
+     * own state is touched.
      */
-    fun showDebugTestNotification(): NotificationPostResult? {
+    fun showDebugTestNotification(debugEffectOverride: DisruptionEffect? = null): NotificationPostResult? {
         val state = _uiState.value
         val routine = state.routine ?: return null
-        val topDisruption = (state.disruptions as? DisruptionsState.Loaded)?.disruptions?.firstOrNull()
+        val realDisruption = if (routine.type == RoutineType.EXACT_DESTINATION) {
+            state.journeys.primaryDisruptionNotices().compactPresentation()
+        } else {
+            (state.disruptions as? DisruptionsState.Loaded)?.disruptions?.firstOrNull()?.toPresentation()
+        }
+        val topDisruption = debugEffectOverride
+            ?.let { effect -> debugDisruptionSampleSource.map { it.sampleFor(effect) }.orElse(null) }
+            ?: realDisruption
         val model = RoutineNotificationMapper.map(routine, state.departures, clock.instant(), topDisruption)
         return routineNotifier.showOrUpdate(model)
     }

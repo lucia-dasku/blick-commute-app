@@ -45,6 +45,16 @@ enum class JourneyRole { PRIMARY, NEXT, ALTERNATIVE }
 fun String?.toJourneyRole(): JourneyRole? =
     this?.let { runCatching { JourneyRole.valueOf(it) }.getOrNull() }
 
+/**
+ * One Journey Planner disruption notice attached to this journey's own legs, classified into
+ * the same nine passenger-facing [DisruptionEffect]s `/api/v1/disruptions` already uses (see
+ * `backend/src/normalize/classifyDisruptionEffect.ts`) — never a second, independent
+ * classification. [text] is SL's own unmodified notice text (never translated or reinterpreted);
+ * the backend already deduplicates identical text repeated across legs before this ever reaches
+ * Android (see `backend/src/normalize/normalizeJourney.ts`'s own doc).
+ */
+data class JourneyDisruptionNotice(val text: String, val effect: DisruptionEffect)
+
 data class JourneyPlan(
     val journeyId: String,
     val originName: String,
@@ -56,4 +66,8 @@ data class JourneyPlan(
     val legs: List<JourneyLeg>,
     val disruptions: List<String>,
     val role: JourneyRole = JourneyRole.PRIMARY,
+    /** Additive alongside [disruptions] (the existing raw text, unchanged) — see
+     * [JourneyDisruptionNotice]'s own doc. Defaults to empty so every existing positional/named
+     * test construction across this codebase keeps compiling unchanged. */
+    val disruptionNotices: List<JourneyDisruptionNotice> = emptyList(),
 )

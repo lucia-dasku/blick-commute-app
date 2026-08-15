@@ -6,9 +6,12 @@ import org.junit.Assert.assertTrue
 import org.junit.Test
 import se.blick.app.domain.model.CommuteRoutine
 import se.blick.app.domain.model.Disruption
+import se.blick.app.domain.model.DisruptionEffect
 import se.blick.app.domain.model.DisruptionMessage
+import se.blick.app.domain.model.DisruptionPresentation
 import se.blick.app.domain.model.DisruptionPriority
 import se.blick.app.domain.model.TransportMode
+import se.blick.app.domain.model.toPresentation
 import se.blick.app.domain.usecase.LiveDeparturesSnapshot
 import se.blick.app.domain.usecase.LiveDeparturesState
 import se.blick.app.domain.usecase.PreparedDeparture
@@ -336,7 +339,7 @@ class RoutineWidgetMapperTest {
 
     @Test
     fun `a topDisruption's header is carried into disruptionHeadline`() {
-        val model = RoutineWidgetMapper.map(routine(), LiveDeparturesState.Loading, now, disruption("Delays on line 14"))
+        val model = RoutineWidgetMapper.map(routine(), LiveDeparturesState.Loading, now, disruption("Delays on line 14").toPresentation())
         assertEquals("Delays on line 14", model.disruptionHeadline)
     }
 
@@ -348,8 +351,15 @@ class RoutineWidgetMapperTest {
 
     @Test
     fun `only the header is carried, never the longer details text`() {
-        val model = RoutineWidgetMapper.map(routine(), LiveDeparturesState.Loading, now, disruption("Delays on line 14"))
+        val model = RoutineWidgetMapper.map(routine(), LiveDeparturesState.Loading, now, disruption("Delays on line 14").toPresentation())
         assertEquals("Delays on line 14", model.disruptionHeadline)
         assertTrue(!model.disruptionHeadline!!.contains("Details"))
+    }
+
+    @Test
+    fun `a structured journey disruption notice's own real text reaches disruptionHeadline unchanged`() {
+        val presentation = DisruptionPresentation(headline = "Hissen är ur funktion.", details = null, effect = DisruptionEffect.ACCESSIBILITY_ISSUE)
+        val model = RoutineWidgetMapper.map(routine(), LiveDeparturesState.Loading, now, presentation)
+        assertEquals("Hissen är ur funktion.", model.disruptionHeadline)
     }
 }
