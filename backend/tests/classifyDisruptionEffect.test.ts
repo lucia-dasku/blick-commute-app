@@ -499,6 +499,136 @@ describe("classifyDisruptionEffect: real SL fixture", () => {
   });
 });
 
+describe("classifyEffectFromText: the Mariatorget accessibility-classification regression (real live SL wording, observed 2026-08-16)", () => {
+  // The real bug: the pre-fix closure matcher (isAffirmedClosedWording) only recognized "stängd"/
+  // "stängs" as EXACT word-final suffixes, so ordinary adjective agreement ("stängda"/"stängt")
+  // and other tense forms were invisible to it. This real live SL header/details pair (deviation
+  // 12285394, fetched directly from SL Deviations on 2026-08-16, reproduced verbatim below -- not
+  // invented) fell through to the generic DISRUPTION fallback instead of ACCESSIBILITY_ISSUE
+  // purely because "avstängda" is not "avstängd" at a word boundary. See disruptionRelevance.test.ts's
+  // "the Mariatorget accessibility-classification regression" describe block for the complementary
+  // end-to-end proof that this classification change correctly propagates through
+  // scopePolicyForEffect and resolveDeviationRelevance for a real Slussen -> Mälarhöjden journey.
+  const mariatorgetHeader = "Avstängda hissar vid Mariatorget";
+  const mariatorgetDetails =
+    "Båda hissarna vid Mariatorget, entrén mot Mariatorget, är avstängda på grund av tekniskt fel. " +
+    "Resenärer i behov av hiss hänvisas till den andra entrén, mot Polishuset.\n \n" +
+    "Vi saknar prognos för när hissarna åter kan vara i drift.\n\n" +
+    "Hissarna omfattas av tillgänglighetsgarantin. För mer information om tillgänglighet, kontakta SL på telefonnummer 020-120 20 22.";
+
+  it('header only: "Avstängda hissar vid Mariatorget" -> ACCESSIBILITY_ISSUE', () => {
+    expect(classifyEffectFromText(mariatorgetHeader)).toBe("ACCESSIBILITY_ISSUE");
+  });
+
+  it("the full message (header + real details, via classifyDisruptionEffect) -> ACCESSIBILITY_ISSUE", () => {
+    expect(classifyDisruptionEffect(sv(mariatorgetHeader, mariatorgetDetails))).toBe("ACCESSIBILITY_ISSUE");
+  });
+
+  it('the details\' own "Båda hissarna ... är avstängda" sentence, in isolation -> ACCESSIBILITY_ISSUE', () => {
+    expect(classifyEffectFromText("Båda hissarna vid Mariatorget, entrén mot Mariatorget, är avstängda på grund av tekniskt fel.")).toBe(
+      "ACCESSIBILITY_ISSUE",
+    );
+  });
+
+  it('the details\' own recovery sentence ("åter kan vara i drift") does NOT itself trigger a false STATION_ACCESS/ACCESSIBILITY_ISSUE match from "entré" elsewhere in a different sentence', () => {
+    // "i drift" ("in service" -- the opposite of a problem) must never be misread as "ur drift";
+    // this also guards the cross-sentence scoping around the two separate "entré" mentions.
+    expect(classifyEffectFromText("Vi saknar prognos för när hissarna åter kan vara i drift.")).toBeNull();
+  });
+});
+
+describe("classifyEffectFromText: Swedish closure-word morphology matrix", () => {
+  // Compact table-driven coverage of every CLOSED_WORD_FORMS entry (see
+  // classifyDisruptionEffect.ts's own doc) against both subject rules that share it.
+
+  const accessibilityPositive: ReadonlyArray<[string, string]> = [
+    ["singular adjective: avstängd", "Hissen är avstängd"],
+    ["plural adjective: avstängda (the Mariatorget form, predicate position)", "Hissarna är avstängda"],
+    ["plural adjective: avstängda, attributive before the subject (the real SL header word order)", "Avstängda hissar vid Mariatorget"],
+    ["singular adjective, no av- prefix: stängd", "Rulltrappan är stängd"],
+    ["plural adjective, no av- prefix: stängda", "Rulltrapporna är stängda"],
+    ["neuter adjective: avstängt", "Hissområdet är avstängt på grund av ombyggnad."],
+    ["past passive: stängdes", "Hissen stängdes på grund av tekniskt fel"],
+    ["past passive with av- prefix: avstängdes", "Hissen avstängdes på grund av tekniskt fel"],
+  ];
+  for (const [label, text] of accessibilityPositive) {
+    it(`${label} -> ACCESSIBILITY_ISSUE ("${text}")`, () => {
+      expect(classifyEffectFromText(text)).toBe("ACCESSIBILITY_ISSUE");
+    });
+  }
+
+  const stationAccessPositive: ReadonlyArray<[string, string]> = [
+    ["singular adjective: stängd", "Entrén är stängd"],
+    ["plural adjective: stängda", "Entréerna är stängda"],
+    ["plural adjective: avstängda, attributive before the subject", "Avstängda utgångar vid stationen"],
+    ["singular adjective: avstängd (ingång)", "Ingången är avstängd"],
+    ["present passive: stängs (pre-existing, unchanged)", "3 augusti stängs en utgång vid Slussen"],
+    ["perfect passive: stängts", "Entrén har stängts på grund av tekniskt fel"],
+  ];
+  for (const [label, text] of stationAccessPositive) {
+    it(`${label} -> STATION_ACCESS ("${text}")`, () => {
+      expect(classifyEffectFromText(text)).toBe("STATION_ACCESS");
+    });
+  }
+
+  it('an unrelated word sharing only the "stäng-" stem (not any of the six supported grammatical forms) does not trigger a false positive', () => {
+    // "stängningstider" (closing/operating HOURS -- a schedule notice, not a closure/malfunction)
+    // is not "stängd"/"stängt"/"stängda"/"stängs"/"stängdes"/"stängts" at a word boundary --
+    // confirms the fix is an explicit, closed grammatical set, never an uncontrolled stem prefix.
+    expect(classifyEffectFromText("Information om hissarnas stängningstider inför helgen")).toBeNull();
+  });
+});
+
+describe("classifyEffectFromText: negative regressions for the new plural/neuter morphology", () => {
+  it('"Hissarna är inte avstängda" -> not ACCESSIBILITY_ISSUE', () => {
+    expect(classifyEffectFromText("Hissarna är inte avstängda")).toBeNull();
+  });
+
+  it('"Rulltrapporna är inte avstängda" -> not ACCESSIBILITY_ISSUE', () => {
+    expect(classifyEffectFromText("Rulltrapporna är inte avstängda")).toBeNull();
+  });
+
+  it('"Entréerna är inte stängda" -> not STATION_ACCESS', () => {
+    expect(classifyEffectFromText("Entréerna är inte stängda")).toBeNull();
+  });
+
+  it("a negated plural occurrence does not hide a genuinely affirmed one in the same unit (plural counterpart of the existing singular regression)", () => {
+    expect(classifyEffectFromText("De första hissarna är inte avstängda, men de andra hissarna är avstängda.")).toBe("ACCESSIBILITY_ISSUE");
+  });
+
+  it('"Hissarna fungerar normalt. Trafiken är avstängd." does not become ACCESSIBILITY_ISSUE (plural subject, cross-sentence)', () => {
+    expect(classifyEffectFromText("Hissarna fungerar normalt. Trafiken är avstängd.")).toBeNull();
+  });
+
+  it('"Entréerna är öppna. Trafiken är avstängd." does not become STATION_ACCESS (plural subject, cross-sentence)', () => {
+    expect(classifyEffectFromText("Entréerna är öppna. Trafiken är avstängd.")).toBeNull();
+  });
+
+  it('bare plural "Det finns hissar vid stationen" does not become ACCESSIBILITY_ISSUE', () => {
+    expect(classifyEffectFromText("Det finns hissar vid stationen")).toBeNull();
+  });
+
+  it('bare plural "Hissarna är nya" does not become ACCESSIBILITY_ISSUE', () => {
+    expect(classifyEffectFromText("Hissarna är nya")).toBeNull();
+  });
+
+  it('bare plural "Rulltrapporna fungerar normalt" does not become ACCESSIBILITY_ISSUE', () => {
+    expect(classifyEffectFromText("Rulltrapporna fungerar normalt")).toBeNull();
+  });
+
+  it('bare plural "Entréerna är öppna" does not become STATION_ACCESS', () => {
+    expect(classifyEffectFromText("Entréerna är öppna")).toBeNull();
+  });
+
+  it('"tekniskt fel" alone, with no accessibility/access subject at all, does not classify', () => {
+    expect(classifyEffectFromText("Ett tekniskt fel har uppstått i biljettsystemet")).toBeNull();
+  });
+
+  it('"tekniskt fel" merely co-occurring with an accessibility subject, with no closure/problem wording actually said about it, does not classify', () => {
+    expect(classifyEffectFromText("Stationen har ett tekniskt fel i biljettautomaten, hissen fungerar som vanligt.")).toBeNull();
+  });
+});
+
 describe("classifyEffectFromText: every effect is reachable", () => {
   const cases: Record<string, string> = {
     DELAYS: "Förseningar på linje 14",

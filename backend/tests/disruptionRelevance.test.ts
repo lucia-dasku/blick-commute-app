@@ -6,7 +6,8 @@ import {
   type JourneyPlannerNoticeInput,
   type JourneyTimeWindow,
 } from "../src/domain/disruptionRelevance.js";
-import type { ResolvedLegScope, ScopeSet } from "../src/domain/journeyDisruptionScope.js";
+import { scopePolicyForEffect, type ResolvedLegScope, type ScopeSet } from "../src/domain/journeyDisruptionScope.js";
+import { classifyEffectFromText } from "../src/normalize/classifyDisruptionEffect.js";
 import type { DisruptionEffect } from "../src/models/disruption.js";
 import type { RawDeviation } from "../src/services/upstreamTypes.js";
 
@@ -236,6 +237,148 @@ describe("resolveDeviationRelevance — ACCESS_POINTS vs TRAVELLED_PATH: the rea
   it("the same Kista delay on an unrelated line/mode is UNRELATED", () => {
     const kistaDelayOtherLine = deviation({ id: 90004, lines: [{ designation: "1", transportMode: "BUS" }], stopAreaIds: [3251] });
     expect(resolveDeviationRelevance(kistaDelayOtherLine, "DELAYS", [AKALLA_TO_TCENTRALEN], null)).toBeNull();
+  });
+});
+
+describe("resolveDeviationRelevance — the Mariatorget accessibility-classification regression, end to end from real SL wording", () => {
+  // Real topology: Slussen -> Mälarhöjden, Metro 13 direct. ACCESS_POINTS = {Slussen, Mälarhöjden};
+  // TRAVELLED_PATH additionally includes Mariatorget and Zinkensdamm (intermediate stops the
+  // passenger stays onboard through). This is the exact real passenger scenario the classifier's
+  // "avstängda" (plural) morphology gap broke: before the fix, "Avstängda hissar vid Mariatorget"
+  // fell through to the generic DISRUPTION effect (-> TRAVELLED_PATH), which wrongly made a
+  // Mariatorget-only elevator problem visible on this journey; ACCESSIBILITY_ISSUE (-> ACCESS_POINTS)
+  // is the correct classification, under which Mariatorget is correctly NOT relevant. Every test
+  // below derives its effect via classifyEffectFromText from the real message text -- never a
+  // hardcoded literal -- specifically to protect the FULL chain: Swedish wording -> classification
+  // -> effect policy -> scope selection -> passenger relevance, not merely one regex in isolation
+  // (see classifyDisruptionEffect.test.ts for the classifier-only version of this same regression).
+  const SLUSSEN = 1011; // real, verified StopArea id (see journeyDisruptionScope.test.ts)
+  const MARIATORGET = 1210;
+  const ZINKENSDAMM = 1220;
+  const MALARHOJDEN = 1360;
+
+  const SLUSSEN_TO_MALARHOJDEN = accessTravelLegScope(
+    "METRO",
+    "13",
+    { stopAreaIds: [SLUSSEN, MALARHOJDEN], completeness: "COMPLETE" },
+    { stopAreaIds: [SLUSSEN, MARIATORGET, ZINKENSDAMM, MALARHOJDEN], completeness: "COMPLETE" },
+  );
+
+  // The real live SL deviation (id 12285394, observed 2026-08-16) that exposed the bug.
+  const MARIATORGET_LIFT = deviation({
+    id: 12285394,
+    header: "Avstängda hissar vid Mariatorget",
+    details:
+      "Båda hissarna vid Mariatorget, entrén mot Mariatorget, är avstängda på grund av tekniskt fel. " +
+      "Resenärer i behov av hiss hänvisas till den andra entrén, mot Polishuset.",
+    lines: [{ designation: "13", transportMode: "METRO" }],
+    stopAreaIds: [MARIATORGET],
+  });
+
+  it("the real live header classifies as ACCESSIBILITY_ISSUE (not the pre-fix generic DISRUPTION)", () => {
+    expect(classifyEffectFromText(MARIATORGET_LIFT.message_variants[0]!.header)).toBe("ACCESSIBILITY_ISSUE");
+  });
+
+  it("ACCESSIBILITY_ISSUE resolves to the ACCESS_POINTS scope policy", () => {
+    expect(scopePolicyForEffect("ACCESSIBILITY_ISSUE")).toBe("ACCESS_POINTS");
+  });
+
+  it("end to end: the Mariatorget lift disruption is UNRELATED (omitted) for Slussen -> Mälarhöjden", () => {
+    const effect = classifyEffectFromText(MARIATORGET_LIFT.message_variants[0]!.header)!;
+    expect(resolveDeviationRelevance(MARIATORGET_LIFT, effect, [SLUSSEN_TO_MALARHOJDEN], null)).toBeNull();
+  });
+
+  it("the complementary case: a DELAYS disruption at Mariatorget on the same line is CONFIRMED -- proves the fix did not simply start filtering Mariatorget globally", () => {
+    const mariatorgetDelay = deviation({
+      id: 12300100,
+      header: "Förseningar på linje 13 vid Mariatorget",
+      details: "Tågen på linje 13 är försenade vid Mariatorget på grund av signalfel.",
+      lines: [{ designation: "13", transportMode: "METRO" }],
+      stopAreaIds: [MARIATORGET],
+    });
+    const effect = classifyEffectFromText(mariatorgetDelay.message_variants[0]!.header)!;
+    expect(effect).toBe("DELAYS");
+    expect(resolveDeviationRelevance(mariatorgetDelay, effect, [SLUSSEN_TO_MALARHOJDEN], null)).toEqual({
+      relevance: "CONFIRMED",
+      matchedLineDesignations: ["13"],
+    });
+  });
+
+  it("an accessibility issue AT Slussen (this journey's own boarding access point) is CONFIRMED", () => {
+    const slussenLift = deviation({
+      id: 12300101,
+      header: "Avstängd hiss vid Slussen",
+      details: "Hissen vid Slussen är avstängd på grund av tekniskt fel.",
+      lines: [{ designation: "13", transportMode: "METRO" }],
+      stopAreaIds: [SLUSSEN],
+    });
+    const effect = classifyEffectFromText(slussenLift.message_variants[0]!.header)!;
+    expect(effect).toBe("ACCESSIBILITY_ISSUE");
+    expect(resolveDeviationRelevance(slussenLift, effect, [SLUSSEN_TO_MALARHOJDEN], null)).toEqual({
+      relevance: "CONFIRMED",
+      matchedLineDesignations: ["13"],
+    });
+  });
+
+  it("an accessibility issue AT Mälarhöjden (this journey's own alighting access point) is CONFIRMED", () => {
+    const malarhojdenLift = deviation({
+      id: 12300102,
+      header: "Avstängd hiss vid Mälarhöjden",
+      details: "Hissen vid Mälarhöjden är avstängd på grund av tekniskt fel.",
+      lines: [{ designation: "13", transportMode: "METRO" }],
+      stopAreaIds: [MALARHOJDEN],
+    });
+    const effect = classifyEffectFromText(malarhojdenLift.message_variants[0]!.header)!;
+    expect(effect).toBe("ACCESSIBILITY_ISSUE");
+    expect(resolveDeviationRelevance(malarhojdenLift, effect, [SLUSSEN_TO_MALARHOJDEN], null)).toEqual({
+      relevance: "CONFIRMED",
+      matchedLineDesignations: ["13"],
+    });
+  });
+});
+
+describe("resolveDeviationRelevance — transfer point vs ordinary pass-through stop (does not accidentally exclude transfers)", () => {
+  // A -> C (transfer between two legs) -> E, with B an ordinary pass-through stop on leg 1. This
+  // guards against a too-broad version of the Mariatorget fix that treated every intermediate stop
+  // as always irrelevant -- C is a genuine ACCESS_POINT (leg 1's own alighting side / leg 2's own
+  // boarding side), even though it sits in the "middle" of the overall multi-leg trip.
+  const A = 2100, B = 2110, C = 2120, E = 2130;
+  const leg1 = accessTravelLegScope(
+    "METRO", "19",
+    { stopAreaIds: [A, C], completeness: "COMPLETE" },
+    { stopAreaIds: [A, B, C], completeness: "COMPLETE" },
+  );
+  const leg2 = accessTravelLegScope(
+    "BUS", "471",
+    { stopAreaIds: [C, E], completeness: "COMPLETE" },
+    { stopAreaIds: [C, E], completeness: "COMPLETE" },
+  );
+
+  it("an accessibility issue at the transfer point C is CONFIRMED -- C is leg1's own alighting access point", () => {
+    const transferLift = deviation({
+      id: 12300110,
+      header: "Avstängd hiss vid transferstationen",
+      details: "Hissen är avstängd på grund av tekniskt fel.",
+      lines: [{ designation: "19", transportMode: "METRO" }],
+      stopAreaIds: [C],
+    });
+    const effect = classifyEffectFromText(transferLift.message_variants[0]!.header)!;
+    expect(resolveDeviationRelevance(transferLift, effect, [leg1, leg2], null)).toEqual({
+      relevance: "CONFIRMED",
+      matchedLineDesignations: ["19"],
+    });
+  });
+
+  it("an accessibility issue at ordinary pass-through stop B is UNRELATED -- the passenger never boards or alights there", () => {
+    const passThroughLift = deviation({
+      id: 12300111,
+      header: "Avstängd hiss vid genomfartsstationen",
+      details: "Hissen är avstängd på grund av tekniskt fel.",
+      lines: [{ designation: "19", transportMode: "METRO" }],
+      stopAreaIds: [B],
+    });
+    const effect = classifyEffectFromText(passThroughLift.message_variants[0]!.header)!;
+    expect(resolveDeviationRelevance(passThroughLift, effect, [leg1, leg2], null)).toBeNull();
   });
 });
 

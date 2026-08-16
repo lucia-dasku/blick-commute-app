@@ -258,11 +258,31 @@ function suffixPattern(suffix: string): RegExp {
   return new RegExp(`[${SV_LETTER}]*${escapeRegExp(suffix)}(?![${SV_LETTER}])`, "g");
 }
 
-/** `"stängd"`/`"stängs"` as a word-final suffix also matches `"avstängd"`/`"avstängs"` for free —
+/**
+ * Every supported inflected/conjugated form of "stänga" ("to close") that affirmatively signals a
+ * closure: adjective/participle agreement (`stängd`/`stängt`/`stängda` — common/neuter/plural
+ * gender, e.g. "hissen är stängd" vs "hissarna är stängda"), present passive (`stängs`), and
+ * past/perfect passive (`stängdes`/`stängts`). An explicit, closed set of grammatical forms —
+ * never a bare "stäng" stem wildcard, which would also match unrelated words that merely share
+ * the stem (see this file's own test suite, "does not match an unrelated stäng- word").
+ *
+ * Each form is matched as a word-final suffix (see [suffixPattern]), so `"avstängd"`,
+ * `"avstängt"`, `"avstängda"`, `"avstängs"`, `"avstängdes"`, and `"avstängts"` all match for free
+ * without a separate "av"-prefixed entry — the same mechanism the original two-entry
+ * `"stängd"`/`"stängs"` pair already relied on, just applied to the full grammatical family
+ * instead of only two of its forms. That incomplete pair missed plural/neuter adjective agreement
+ * entirely: a live SL disruption's real header, "Avstängda hissar vid Mariatorget" (deviation
+ * 12285394, observed 2026-08-16), fell through to the generic DISRUPTION fallback instead of
+ * ACCESSIBILITY_ISSUE, because "avstängda" is not "avstängd" at a word boundary. See this file's
+ * own test suite for the full morphology matrix this was verified against.
+ */
+const CLOSED_WORD_FORMS = ["stängd", "stängt", "stängda", "stängs", "stängdes", "stängts"];
+
+/** True if any [CLOSED_WORD_FORMS] member occurs as an affirmed (non-negated), word-final match —
  * reused by both ACCESSIBILITY_ISSUE and STATION_ACCESS, which differ only in *what* the closure
- * applies to. Negation-guarded: only an affirmed closure counts. */
+ * applies to. */
 function isAffirmedClosedWording(text: string): boolean {
-  return hasAffirmedMatch(text, suffixPattern("stängd")) || hasAffirmedMatch(text, suffixPattern("stängs"));
+  return CLOSED_WORD_FORMS.some((form) => hasAffirmedMatch(text, suffixPattern(form)));
 }
 
 /** The STOP_CHANGE moved/withdrawn wordlist, negation-guarded the same way. */
