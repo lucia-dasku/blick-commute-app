@@ -346,23 +346,35 @@ private fun JourneyComparisonSection(
                         modifier = Modifier.fillMaxWidth().clickable { expanded = !expanded },
                     ) {
                         Column(Modifier.padding(16.dp), verticalArrangement = Arrangement.spacedBy(6.dp)) {
-                            // Labelled from the journey's OWN role, never list position: the
-                            // Direct/With-changes filters above can leave any single journey as
-                            // the only (and therefore first-shown) card, and it must still say
-                            // what it actually is rather than default to "FASTEST" purely by
-                            // virtue of being shown first (see JourneyFilterRow's own doc, and
-                            // the product spec's "filtering cannot cause misleading role
-                            // labels" requirement).
-                            Text(
-                                stringResource(
-                                    when (journey.role) {
-                                        JourneyRole.PRIMARY -> R.string.journey_fastest
-                                        JourneyRole.NEXT -> R.string.journey_next
-                                        JourneyRole.ALTERNATIVE -> R.string.journey_alternative
-                                    },
-                                ),
-                                style = MaterialTheme.typography.labelLarge,
-                            )
+                            Row(
+                                modifier = Modifier.fillMaxWidth(),
+                                horizontalArrangement = Arrangement.SpaceBetween,
+                                verticalAlignment = Alignment.CenterVertically,
+                            ) {
+                                // Labelled from the journey's OWN role, never list position: the
+                                // Direct/With-changes filters above can leave any single journey as
+                                // the only (and therefore first-shown) card, and it must still say
+                                // what it actually is rather than default to "FASTEST" purely by
+                                // virtue of being shown first (see JourneyFilterRow's own doc, and
+                                // the product spec's "filtering cannot cause misleading role
+                                // labels" requirement).
+                                Text(
+                                    stringResource(
+                                        when (journey.role) {
+                                            JourneyRole.PRIMARY -> R.string.journey_fastest
+                                            JourneyRole.NEXT -> R.string.journey_next
+                                            JourneyRole.ALTERNATIVE -> R.string.journey_alternative
+                                        },
+                                    ),
+                                    style = MaterialTheme.typography.labelLarge,
+                                )
+                                Icon(
+                                    imageVector = if (expanded) Icons.Filled.KeyboardArrowUp else Icons.Filled.KeyboardArrowDown,
+                                    contentDescription = stringResource(
+                                        if (expanded) R.string.journey_collapse else R.string.journey_expand,
+                                    ),
+                                )
+                            }
                             Row(horizontalArrangement = Arrangement.spacedBy(8.dp), verticalAlignment = Alignment.CenterVertically) {
                                 journey.firstLeg.lineDesignation?.let {
                                     LineBadge(it, journey.firstLeg.transportMode)
@@ -392,12 +404,10 @@ private fun JourneyComparisonSection(
                                     Text("${leg.originName} → ${leg.destinationName}${leg.lineDesignation?.let { " · $it" }.orEmpty()}")
                                     leg.disruptions.forEach { Text(it, color = MaterialTheme.colorScheme.error) }
                                 }
-                            } else {
-                                Text(stringResource(R.string.journey_tap_details), style = MaterialTheme.typography.bodySmall)
                             }
                             // Total journey time -- always the true bottom of the card, after the
-                            // expanded leg breakdown or the collapsed "tap for details" hint,
-                            // regardless of which of those two is currently showing. The same
+                            // expanded leg breakdown when shown (the chevron in the header row
+                            // above is the only collapsed-state expand affordance now). The same
                             // effectiveFirstDeparture the countdown above is measured from, not
                             // the raw top-level departureTime, so this duration is consistent
                             // with the departure this card actually displays.

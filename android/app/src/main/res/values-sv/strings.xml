@@ -77,7 +77,8 @@
     <string name="journey_arrives">Ankomst %1$s</string>
     <string name="journey_later">%1$d min senare</string>
     <string name="journey_duration_minutes">%1$d min</string>
-    <string name="journey_tap_details">Tryck för hela resan</string>
+    <string name="journey_expand">Visa hela resan</string>
+    <string name="journey_collapse">Dölj hela resan</string>
     <string name="journey_mode_metro">Tunnelbana</string>
     <string name="journey_mode_commuter_rail">Pendeltåg</string>
     <string name="journey_mode_bus">Buss</string>

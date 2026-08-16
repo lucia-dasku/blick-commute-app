@@ -1143,8 +1143,9 @@ class RoutineDetailsScreenTest {
             now = now,
         )
 
-        // Collapsed by default -- tap the card (its own "tap for details" hint) to expand it.
-        composeRule.onNodeWithText(composeRule.activity.getString(R.string.journey_tap_details)).performClick()
+        // Collapsed by default -- tap the card (its own role label, the only journey here so
+        // it's FASTEST) to expand it.
+        composeRule.onNodeWithText(composeRule.activity.getString(R.string.journey_fastest)).performClick()
         composeRule.onNodeWithText("Lift unavailable at Origin").assertExists()
     }
 

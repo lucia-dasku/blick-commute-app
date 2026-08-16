@@ -83,7 +83,8 @@
     <string name="journey_arrives">Arrives %1$s</string>
     <string name="journey_later">%1$d min later</string>
     <string name="journey_duration_minutes">%1$d min</string>
-    <string name="journey_tap_details">Tap for the complete journey</string>
+    <string name="journey_expand">Show complete journey</string>
+    <string name="journey_collapse">Hide complete journey</string>
     <string name="journey_mode_metro">Metro</string>
     <string name="journey_mode_commuter_rail">Commuter rail</string>
     <string name="journey_mode_bus">Bus</string>
