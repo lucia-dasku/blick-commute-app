@@ -209,6 +209,83 @@ class RoutineWidgetPreferencesTest {
         assertNull(restored.model.disruptionHeadline)
     }
 
+    // ---- disruptionUncertainLineDesignations -- drives the conservative "Line 11 disruption"
+    // strip label instead of the raw headline (see that field's own doc). ----
+
+    @Test
+    fun `disruptionUncertainLineDesignations round-trips exactly, for the conservative strip label`() {
+        val model = RoutineWidgetModel(
+            routineId = "r1",
+            routineName = "Morning commute",
+            stationName = "Fruängen",
+            directionLabel = "T-Centralen",
+            content = RoutineWidgetContent.Loading,
+            disruptionHeadline = "Trafiken är stängd mellan T-Centralen och Kungsträdgården",
+            disruptionUncertainLineDesignations = listOf("11"),
+        )
+        val restored = roundTrip(RoutineWidgetUiState.ActiveRoutine(model)) as RoutineWidgetUiState.ActiveRoutine
+        assertEquals(model, restored.model)
+        assertEquals(listOf("11"), restored.model.disruptionUncertainLineDesignations)
+    }
+
+    @Test
+    fun `multiple matched line designations round-trip in order`() {
+        val model = RoutineWidgetModel(
+            routineId = "r1",
+            routineName = "Morning commute",
+            stationName = "Fruängen",
+            directionLabel = "T-Centralen",
+            content = RoutineWidgetContent.Loading,
+            disruptionHeadline = "Trafikstörning",
+            disruptionUncertainLineDesignations = listOf("11", "17"),
+        )
+        val restored = roundTrip(RoutineWidgetUiState.ActiveRoutine(model)) as RoutineWidgetUiState.ActiveRoutine
+        assertEquals(listOf("11", "17"), restored.model.disruptionUncertainLineDesignations)
+    }
+
+    @Test
+    fun `an empty disruptionUncertainLineDesignations round-trips as empty, not omitted or crashing, matching the default`() {
+        val model = RoutineWidgetModel("r1", "Morning commute", "Fruängen", "T-Centralen", RoutineWidgetContent.Loading)
+        val restored = roundTrip(RoutineWidgetUiState.ActiveRoutine(model)) as RoutineWidgetUiState.ActiveRoutine
+        assertEquals(emptyList<String>(), restored.model.disruptionUncertainLineDesignations)
+    }
+
+    @Test
+    fun `disruptionUncertainLineDesignations persisted by a version predating this field decodes to empty, never crashes`() {
+        val prefs = mutablePreferencesOf()
+        val withDesignations = RoutineWidgetModel(
+            "r1", "Morning commute", "Fruängen", "T-Centralen", RoutineWidgetContent.Loading,
+            disruptionHeadline = "Trafiken är stängd",
+            disruptionUncertainLineDesignations = listOf("11"),
+        )
+        RoutineWidgetUiState.ActiveRoutine(withDesignations).writeInto(prefs)
+        prefs.remove(stringPreferencesKey("disruptionUncertainLineDesignations"))
+
+        val restored = prefs.toPreferences().toWidgetUiState() as RoutineWidgetUiState.ActiveRoutine
+        assertEquals(emptyList<String>(), restored.model.disruptionUncertainLineDesignations)
+        // The rest of the disruption (the CONFIRMED-equivalent headline) is unaffected by the
+        // missing key -- only the uncertainty signal itself decodes to empty.
+        assertEquals("Trafiken är stängd", restored.model.disruptionHeadline)
+    }
+
+    @Test
+    fun `a transition to a state with no disruption clears a previous state's leftover uncertain line designations`() {
+        val prefs = mutablePreferencesOf()
+        val withDesignations = RoutineWidgetModel(
+            "r1", "Morning commute", "Fruängen", "T-Centralen", RoutineWidgetContent.Loading,
+            disruptionHeadline = "Trafiken är stängd",
+            disruptionUncertainLineDesignations = listOf("11"),
+        )
+        RoutineWidgetUiState.ActiveRoutine(withDesignations).writeInto(prefs)
+
+        RoutineWidgetUiState.ActiveRoutine(
+            withDesignations.copy(disruptionHeadline = null, disruptionUncertainLineDesignations = emptyList()),
+        ).writeInto(prefs)
+
+        val restored = prefs.toPreferences().toWidgetUiState() as RoutineWidgetUiState.ActiveRoutine
+        assertEquals(emptyList<String>(), restored.model.disruptionUncertainLineDesignations)
+    }
+
     @Test
     fun `exact-destination primary and secondary journeys round-trip for compact and large layouts`() {
         val primary = WidgetJourneyRow(

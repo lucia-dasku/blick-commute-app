@@ -6,6 +6,8 @@ import se.blick.app.data.remote.dto.StopSearchResponseDto
 import se.blick.app.data.remote.dto.PurchaseVerificationResponseDto
 import se.blick.app.data.remote.dto.JourneyLocationSearchDto
 import se.blick.app.data.remote.dto.JourneysResponseDto
+import se.blick.app.data.remote.dto.JourneyDisruptionRelevanceRequestDto
+import se.blick.app.data.remote.dto.JourneyDisruptionRelevanceResponseDto
 
 /**
  * Talks to the Blick backend only — never directly to SL Transport/SL Deviations
@@ -36,4 +38,11 @@ interface BlickApiClient {
         changesPreference: String = "BOTH",
     ): JourneysResponseDto =
         throw UnsupportedOperationException("Journey search is not implemented by this test client")
+
+    /** See `backend/src/routes/journeyDisruptions.ts`'s own doc — the backend's single
+     * authoritative disruption-relevance resolver. */
+    suspend fun getJourneyDisruptionRelevance(
+        request: JourneyDisruptionRelevanceRequestDto,
+    ): JourneyDisruptionRelevanceResponseDto =
+        throw UnsupportedOperationException("Journey disruption relevance lookup is not implemented by this test client")
 }

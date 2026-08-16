@@ -46,14 +46,23 @@ fun String?.toJourneyRole(): JourneyRole? =
     this?.let { runCatching { JourneyRole.valueOf(it) }.getOrNull() }
 
 /**
- * One Journey Planner disruption notice attached to this journey's own legs, classified into
- * the same nine passenger-facing [DisruptionEffect]s `/api/v1/disruptions` already uses (see
+ * A disruption notice for the current PRIMARY journey, classified into the same nine
+ * passenger-facing [DisruptionEffect]s `/api/v1/disruptions` already uses (see
  * `backend/src/normalize/classifyDisruptionEffect.ts`) — never a second, independent
- * classification. [text] is SL's own unmodified notice text (never translated or reinterpreted);
- * the backend already deduplicates identical text repeated across legs before this ever reaches
- * Android (see `backend/src/normalize/normalizeJourney.ts`'s own doc).
+ * classification. [text] is SL's own unmodified notice text (never translated or reinterpreted).
+ *
+ * This shape is only ever populated from Journey Planner's own `infos`
+ * (`JourneyPlan.disruptionNotices`, unchanged) — the backend already deduplicates identical text
+ * repeated across legs before this ever reaches Android (see
+ * `backend/src/normalize/normalizeJourney.ts`'s own doc). [details] is always `null` here —
+ * Journey Planner notices have no separate longer body the way an SL Deviations message does. Sent
+ * to `POST /api/v1/journeys/disruptions` as-is (see
+ * [se.blick.app.domain.usecase.primaryDisruptionNotices]'s own doc); the backend's own
+ * `ResolvedJourneyDisruption` resolver is what combines it with matched SL Deviations — Android
+ * itself never performs that combination (see `backend/src/domain/disruptionRelevance.ts`'s own
+ * doc for the full matching rules).
  */
-data class JourneyDisruptionNotice(val text: String, val effect: DisruptionEffect)
+data class JourneyDisruptionNotice(val text: String, val effect: DisruptionEffect, val details: String? = null)
 
 data class JourneyPlan(
     val journeyId: String,

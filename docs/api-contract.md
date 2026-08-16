@@ -43,6 +43,15 @@ timeout/network/schema failures retain the existing error-envelope behavior. Res
 public-cacheable for 30 seconds so app/detail/widget consumers do not independently amplify
 upstream traffic.
 
+### `POST /api/v1/journeys/disruptions`
+
+The single authoritative source of exact-destination disruption relevance — resolves a journey's
+own `disruptionNotices` (above, sent in the request body) together with SL Deviations matched to
+its transit legs, read from the SAME shared cached snapshot `/api/v1/disruptions` uses — no new
+upstream SL request. Returns each disruption tagged `CONFIRMED` or `LINE_RELEVANT`, never a plain
+relevant/unrelated binary — see "Resolving Journey Planner notices + matched SL Deviations" below
+for the full request/response shape, the three-state relevance model, and matching rules.
+
 Each returned journey carries a `role` of `PRIMARY`, `NEXT`, or `ALTERNATIVE` — Android renders
 off this field and never infers a role from list position (see `backend/src/routes/journeys.ts`'s
 own doc for the full model):
@@ -128,9 +137,100 @@ relevance scope anyway — can derive its own live disruption relevance directly
 journey currently holds the `PRIMARY` role, with no additional upstream request. See the Android
 client's `RoutineActiveWindowWorker` (`android/app/src/main/java/se/blick/app/scheduling/`) for
 exactly how PRIMARY's notices become the ongoing notification's classified summary line, the
-widget's disruption strip, and Routine Details' own disruption cards, and why an
-`EXACT_DESTINATION` routine never calls `/api/v1/disruptions` at all — that endpoint, and
-everything described in §3 below, remains `LINE_DIRECTION`-only.
+widget's disruption strip, and Routine Details' own disruption cards. An `EXACT_DESTINATION`
+routine never calls `/api/v1/disruptions` itself — that endpoint, and everything described in §3
+below, remains `LINE_DIRECTION`-only — but see "Resolving Journey Planner notices + matched SL
+Deviations" immediately below for the one additional, still-`disruptions`-endpoint-free source it
+does consult.
+
+#### Resolving Journey Planner notices + matched SL Deviations (`/api/v1/journeys/disruptions`)
+
+Journey Planner's own `infos` (the source of `disruptionNotices` above) is **not** a reliable
+disruption source on its own: SL Journey Planner can silently reroute a journey around an active
+disruption — e.g. terminating a metro line short of its usual destination and continuing on foot
+or another line — without attaching any notice text to the resulting legs at all. Confirmed live:
+an Akalla → Kungsträdgården `PRIMARY` journey using Metro 11 (rerouted to terminate at
+T-Centralen) had `disruptions: []`/`disruptionNotices: []` on every leg, while SL Deviations
+simultaneously listed an active `NO_SERVICE` deviation for exactly that corridor
+(`affectedLines`: Metro 10 + 11, `affectedStopAreas: []`).
+
+`POST /api/v1/journeys/disruptions` closes this gap. It is the single authoritative source of
+exact-destination disruption relevance — all matching AND combination logic lives in
+`backend/src/domain/disruptionRelevance.ts`'s own `resolveJourneyDisruptions`; the route itself is
+a thin HTTP adapter, and Android performs no relevance inference of its own. A genuinely separate
+HTTP call from `/api/v1/journeys`, deliberately never baked into that response, so a
+disruption-relevance lookup can never delay or couple to the critical PRIMARY journey update (see
+the Android client's own "primary data first, disruption lookup second" timing, mirroring
+`LINE_DIRECTION`'s existing pattern). No new upstream SL request is introduced: this reads the
+exact same shared, already-cached SL Deviations snapshot `/api/v1/disruptions` itself reads
+(`deviationsSnapshotService.ts`).
+
+**Why a POST, not a GET**: the request body carries an arbitrary-length list of the journey's own
+already-fetched Journey Planner notices (see below) — sent back specifically so this ONE endpoint
+can perform the full combine/dedupe/merge in one authoritative place, rather than splitting that
+decision between the backend and Android.
+
+Request body: `{ legs: {transportMode, lineDesignation}[], originSiteId?, journeyPlannerNotices:
+{text, effect}[] }` — `legs` are PRIMARY's own transit legs (a WALK leg or one with no line
+designation carries no line-scope signal and must never be sent); `originSiteId` is the routine's
+own SL-Transport-namespace origin site id, absent when unavailable; `journeyPlannerNotices` is the
+journey's own already-fetched `disruptionNotices`, unchanged.
+
+Response: `{ fetchedAt, disruptions: ResolvedJourneyDisruption[] }`, where each entry is
+`{ id?, headline, details?, effect, relevance, source, matchedLineDesignations }`.
+
+**Relevance model** — three semantic outcomes, only two of which are ever represented in the
+response (an `UNRELATED` deviation is filtered out entirely, never returned as a value):
+
+- **`CONFIRMED`**: structured evidence proves this disruption affects the journey — either a
+  Journey Planner notice was attached directly to PRIMARY (the strongest possible evidence, since
+  Journey Planner itself already scoped it to this exact journey), or an SL Deviation's line/mode
+  scope AND a verified stop-area intersection both hold. Blick may present the real classified
+  `effect` (e.g. "No service") as definitely true for this journey.
+- **`LINE_RELEVANT`**: an SL Deviation's line/mode scope matches a PRIMARY leg (via
+  `matchedLineDesignations`), but the currently available structured fields cannot prove the
+  affected segment/stop intersects this exact journey — either the deviation has no
+  `affectedStopAreas` at all (SL did not scope it to specific stops), or it does but no
+  reliably-namespaced origin id was supplied to check against it. Blick must NOT present the real
+  classified `effect` as proven for this journey's own segment; only a conservative, line-scoped
+  warning is appropriate on the client.
+- **`UNRELATED`** (never returned): line/mode does not match PRIMARY at all, or the deviation's
+  own stop scope is verified to exclude the journey's origin. `affectedModes` alone is never
+  treated as relevance evidence.
+
+**Matching rules** (`resolveDeviationRelevance`):
+
+1. `scope.lines` empty/absent → `UNRELATED`.
+2. Exact `(transportMode, lineDesignation)` overlap required between a supplied leg and a
+   `scope.lines` entry — never textual/fuzzy matching. No overlap → `UNRELATED` (this is what keeps
+   Slussen → Liljeholmen, Metro 13/14, correctly unaffected by an unrelated Bus 401 delay at the
+   same station — sharing a station is never sharing a line).
+3. Given a line/mode match, if `scope.stop_areas` is also non-empty: `originSiteId` known and
+   intersecting → `CONFIRMED`; known and NOT intersecting → `UNRELATED` (SL explicitly told us
+   where, and it isn't here — a real disproof, not merely an absence of proof); `originSiteId`
+   unavailable → `LINE_RELEVANT` (fails safe toward "uncertain", never silently dropped).
+4. Given a line/mode match and `scope.stop_areas` empty → `LINE_RELEVANT`. This is the confirmed
+   Akalla → Kungsträdgården case, and — critically — this is also why Akalla → T-Centralen (same
+   Metro 11 line, but never actually travelling the T-Centralen↔Kungsträdgården segment) does NOT
+   get shown as a confirmed "No service": with only line-level evidence, `LINE_RELEVANT` is the
+   honest ceiling, never `CONFIRMED`.
+
+**Known limitation**: Blick's exact-destination routines persist a reliable
+SL-Transport-namespace site id for their ORIGIN only (`CommuteRoutine.siteId`, the same field
+`LINE_DIRECTION` already uses). The destination and any intermediate stop are known only via SL
+Journey Planner's own place-id format, a genuinely different, never-verified-compatible namespace
+from SL Transport/Deviations' `stop_areas[].id` (documented with the full evidence in
+`disruptionRelevance.ts` itself) — deriving one from the other would be exactly the kind of
+substring/id-guessing this design avoids. A deviation whose relevance depends on a stop scope
+covering only the destination or an intermediate stop (not the origin) can reach at most
+`LINE_RELEVANT`, never `CONFIRMED`, with data available today — e.g. the live reproduction's
+accessibility issue at Kungsträdgården itself (the destination, not Akalla).
+
+**Deduplication**: SL Deviations are deduplicated by `deviation_case_id`; Journey Planner notices
+by exact text (no stable id). Cross-source: when a Journey Planner notice's text exactly matches a
+Deviation's own `message.header`, the merged entry keeps the DEVIATION's richer `id`/`details` —
+never the text-only Journey Planner copy — with `relevance` upgraded to `CONFIRMED` if not already
+(Journey Planner's own attachment to PRIMARY is itself confirming evidence).
 
 ## 1. Upstream architecture
 
@@ -381,7 +481,11 @@ signal — Journey Planner's own per-leg `infos`, normalized into each journey's
 `disruptionNotices` — IS read by the Android app, but only for `EXACT_DESTINATION` routines; see
 "Journey disruption notices (`disruptionNotices`)" above for why that case is structurally
 different (no `siteId`/`lineId` to query `/api/v1/disruptions` with) and deliberately does not
-reuse this endpoint.
+reuse this endpoint. `EXACT_DESTINATION` routines now also resolve `disruptionNotices` together
+with a second, separate lookup against the SAME underlying SL Deviations cache this endpoint reads
+— see "Resolving Journey Planner notices + matched SL Deviations (`/api/v1/journeys/disruptions`)"
+above — but that lookup is still a genuinely different route from this one, not a call to
+`/api/v1/disruptions` itself.
 
 #### 3.5 Request validation vs. response compatibility
 

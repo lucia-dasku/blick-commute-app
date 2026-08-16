@@ -12,6 +12,8 @@ import se.blick.app.data.remote.dto.PurchaseVerificationRequestDto
 import se.blick.app.data.remote.dto.PurchaseVerificationResponseDto
 import se.blick.app.data.remote.dto.JourneyLocationSearchDto
 import se.blick.app.data.remote.dto.JourneysResponseDto
+import se.blick.app.data.remote.dto.JourneyDisruptionRelevanceRequestDto
+import se.blick.app.data.remote.dto.JourneyDisruptionRelevanceResponseDto
 
 /**
  * Retrofit service definition. Every response is wrapped in the success envelope
@@ -51,6 +53,15 @@ interface RetrofitBlickApiService {
         @Query("searchUntil") searchUntil: String?,
         @Query("changesPreference") changesPreference: String,
     ): SuccessEnvelopeDto<JourneysResponseDto>
+
+    /** See `backend/src/routes/journeyDisruptions.ts`'s own doc — a POST (not GET) specifically
+     * because [request] carries an arbitrary-length list of Journey Planner notices, not just a
+     * few scalar query parameters. The response is the backend's own fully resolved, deduplicated
+     * disruption list — this app performs no relevance inference of its own. */
+    @POST("api/v1/journeys/disruptions")
+    suspend fun getJourneyDisruptionRelevance(
+        @Body request: JourneyDisruptionRelevanceRequestDto,
+    ): SuccessEnvelopeDto<JourneyDisruptionRelevanceResponseDto>
 }
 
 class RetrofitBlickApiClient(
@@ -66,4 +77,6 @@ class RetrofitBlickApiClient(
     override suspend fun searchJourneyLocations(query: String) = service.searchJourneyLocations(query).data
     override suspend fun getJourneys(originId: String, destinationId: String, transportModes: String, searchUntil: String?, changesPreference: String) =
         service.getJourneys(originId, destinationId, transportModes, searchUntil, changesPreference).data
+    override suspend fun getJourneyDisruptionRelevance(request: JourneyDisruptionRelevanceRequestDto) =
+        service.getJourneyDisruptionRelevance(request).data
 }

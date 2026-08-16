@@ -30,11 +30,14 @@ import se.blick.app.domain.model.Disruption
 import se.blick.app.domain.model.DisruptionEffect
 import se.blick.app.domain.model.DisruptionMessage
 import se.blick.app.domain.model.DisruptionPriority
+import se.blick.app.domain.model.DisruptionRelevance
+import se.blick.app.domain.model.DisruptionSource
 import se.blick.app.domain.model.ExactDestinationChangesPreference
 import se.blick.app.domain.model.JourneyDisruptionNotice
 import se.blick.app.domain.model.JourneyLeg
 import se.blick.app.domain.model.JourneyPlan
 import se.blick.app.domain.model.JourneyRole
+import se.blick.app.domain.model.ResolvedJourneyDisruption
 import se.blick.app.domain.model.RoutineType
 import se.blick.app.domain.model.TransportMode
 import se.blick.app.domain.usecase.DisruptionsState
@@ -118,6 +121,7 @@ class RoutineDetailsScreenTest {
         routine: CommuteRoutine = sampleRoutine(),
         isPausedToday: Boolean = false,
         journeys: List<JourneyPlan> = emptyList(),
+        exactDestinationDeviationNotices: List<ResolvedJourneyDisruption> = emptyList(),
         now: Instant = Instant.now(),
         onUpdateJourneyTransportModes: (Set<TransportMode>) -> Unit = {},
         isUpdatingChangesPreference: Boolean = false,
@@ -139,6 +143,7 @@ class RoutineDetailsScreenTest {
                 isRefreshing = false,
                 disruptionsState = disruptionsState,
                 journeys = journeys,
+                exactDestinationDeviationNotices = exactDestinationDeviationNotices,
                 now = now,
                 onUpdateJourneyTransportModes = onUpdateJourneyTransportModes,
                 isUpdatingChangesPreference = isUpdatingChangesPreference,
@@ -1007,15 +1012,56 @@ class RoutineDetailsScreenTest {
             .assertCountEquals(1)
     }
 
-    // ---- Exact-destination disruption relevance: the top Disruptions section works from
-    // PRIMARY's own notices, never NEXT's/ALTERNATIVE's, and the existing expanded leg.disruptions
-    // rendering (raw SL text, unrelated to this feature) is unaffected. ----
+    // ---- Exact-destination disruption relevance: the top Disruptions section is driven ENTIRELY
+    // by exactDestinationDeviationNotices -- the backend's own already-resolved, deduplicated
+    // list (see RoutineDetailsContent's own doc) -- never by journeys' own raw disruptionNotices
+    // directly (those only feed the FIRST, primary-only notification/widget post; the screen's
+    // own section always reflects the fully resolved result). A CONFIRMED entry shows its real SL
+    // text with no qualifier; a LINE_RELEVANT entry shows the same real text PLUS the "not
+    // confirmed for this exact journey" caption (the Akalla -> T-Centralen false-positive fix).
+    // The existing expanded leg.disruptions rendering (raw SL text, unrelated to this feature) is
+    // unaffected. ----
+
+    private fun resolvedDisruption(
+        id: String? = "d1",
+        headline: String = "Hissen är ur funktion.",
+        details: String? = null,
+        effect: DisruptionEffect = DisruptionEffect.ACCESSIBILITY_ISSUE,
+        relevance: DisruptionRelevance = DisruptionRelevance.CONFIRMED,
+        source: DisruptionSource = DisruptionSource.JOURNEY_PLANNER,
+        matchedLineDesignations: List<String> = emptyList(),
+    ) = ResolvedJourneyDisruption(id, headline, details, effect, relevance, source, matchedLineDesignations)
 
     @Test
-    fun exactDestinationRoutine_topDisruptionsSection_showsPrimarysOwnNotice() {
+    fun exactDestinationRoutine_topDisruptionsSection_showsConfirmedResolvedDisruption() {
         val now = Instant.parse("2026-08-13T08:00:00Z")
         val primary = journeyWithTransfers("primary", "14", transferCount = 0, departure = now.plusSeconds(300), durationMinutes = 20)
-            .copy(disruptionNotices = listOf(JourneyDisruptionNotice("Hissen är ur funktion.", DisruptionEffect.ACCESSIBILITY_ISSUE)))
+
+        setContent(
+            disruptionsState = DisruptionsState.NoDisruptions,
+            routine = exactDestinationRoutine(),
+            journeys = listOf(primary),
+            exactDestinationDeviationNotices = listOf(resolvedDisruption()),
+            now = now,
+        )
+
+        composeRule.onNodeWithText(
+            composeRule.activity.getString(R.string.routine_details_disruptions_heading_exact_destination),
+        ).assertExists()
+        composeRule.onNodeWithText("⚠️ Hissen är ur funktion.").assertExists()
+        // CONFIRMED -- the "not confirmed for this exact journey" qualifier must never appear.
+        composeRule.onNodeWithText(
+            composeRule.activity.getString(R.string.routine_details_disruption_line_relevant_qualifier, "11"),
+        ).assertDoesNotExist()
+    }
+
+    @Test
+    fun exactDestinationRoutine_topDisruptionsSection_hiddenWhenThereIsNoResolvedDisruption() {
+        val now = Instant.parse("2026-08-13T08:00:00Z")
+        // PRIMARY's own journeys.disruptionNotices is irrelevant to this section now -- only
+        // exactDestinationDeviationNotices (empty here) decides whether it renders at all.
+        val primary = journeyWithTransfers("primary", "14", transferCount = 0, departure = now.plusSeconds(300), durationMinutes = 20)
+            .copy(disruptionNotices = listOf(JourneyDisruptionNotice("Bussen är omledd.", DisruptionEffect.ROUTE_CHANGE)))
 
         setContent(
             disruptionsState = DisruptionsState.NoDisruptions,
@@ -1026,29 +1072,39 @@ class RoutineDetailsScreenTest {
 
         composeRule.onNodeWithText(
             composeRule.activity.getString(R.string.routine_details_disruptions_heading_exact_destination),
-        ).assertExists()
-        composeRule.onNodeWithText("⚠️ Hissen är ur funktion.").assertExists()
+        ).assertDoesNotExist()
+        composeRule.onNodeWithText("⚠️ Bussen är omledd.").assertDoesNotExist()
     }
 
     @Test
-    fun exactDestinationRoutine_topDisruptionsSection_hiddenWhenPrimaryHasNoNotices() {
+    fun exactDestinationRoutine_topDisruptionsSection_lineRelevantDisruptionShowsRealTextPlusQualifier() {
+        // The Akalla -> T-Centralen false-positive fix: an SL Deviation whose line/mode scope
+        // matched PRIMARY, but whose affected segment/stop was not proven to intersect this exact
+        // journey, must still show the real SL text (Routine Details never hides it) but with a
+        // caption making clear it is not confirmed for this exact journey.
         val now = Instant.parse("2026-08-13T08:00:00Z")
-        // PRIMARY genuinely has none; only NEXT does -- must never surface here.
-        val primary = journeyWithTransfers("primary", "14", transferCount = 0, departure = now.plusSeconds(300), durationMinutes = 20)
-        val next = journeyWithTransfers("next", "14", transferCount = 0, departure = now.plusSeconds(900), durationMinutes = 20, role = JourneyRole.NEXT)
-            .copy(disruptionNotices = listOf(JourneyDisruptionNotice("Bussen är omledd.", DisruptionEffect.ROUTE_CHANGE)))
+        val primary = journeyWithTransfers("primary", "11", transferCount = 0, departure = now.plusSeconds(300), durationMinutes = 20)
+        val lineRelevant = resolvedDisruption(
+            id = "akalla-dev-1",
+            headline = "Inställd trafik på Blå linjen mellan T-Centralen och Kungsträdgården",
+            effect = DisruptionEffect.NO_SERVICE,
+            relevance = DisruptionRelevance.LINE_RELEVANT,
+            source = DisruptionSource.SL_DEVIATIONS,
+            matchedLineDesignations = listOf("11"),
+        )
 
         setContent(
             disruptionsState = DisruptionsState.NoDisruptions,
             routine = exactDestinationRoutine(),
-            journeys = listOf(primary, next),
+            journeys = listOf(primary),
+            exactDestinationDeviationNotices = listOf(lineRelevant),
             now = now,
         )
 
+        composeRule.onNodeWithText("⚠️ Inställd trafik på Blå linjen mellan T-Centralen och Kungsträdgården").assertExists()
         composeRule.onNodeWithText(
-            composeRule.activity.getString(R.string.routine_details_disruptions_heading_exact_destination),
-        ).assertDoesNotExist()
-        composeRule.onNodeWithText("⚠️ Bussen är omledd.").assertDoesNotExist()
+            composeRule.activity.getString(R.string.routine_details_disruption_line_relevant_qualifier, "11"),
+        ).assertExists()
     }
 
     @Test

@@ -69,6 +69,8 @@ class BlickRoutineWidgetRenderTest {
         primary: WidgetJourneyRow,
         secondary: WidgetJourneyRow?,
         changesPreference: ExactDestinationChangesPreference = ExactDestinationChangesPreference.BOTH,
+        disruptionHeadline: String? = null,
+        disruptionUncertainLineDesignations: List<String> = emptyList(),
     ) = RoutineWidgetUiState.ActiveRoutine(
         RoutineWidgetModel(
             routineId = "r1",
@@ -78,6 +80,8 @@ class BlickRoutineWidgetRenderTest {
             content = RoutineWidgetContent.Journeys(primary, secondary, changesPreference),
             lineDesignation = primary.lineDesignation,
             transportMode = primary.transportMode,
+            disruptionHeadline = disruptionHeadline,
+            disruptionUncertainLineDesignations = disruptionUncertainLineDesignations,
         ),
     )
 
@@ -89,6 +93,8 @@ class BlickRoutineWidgetRenderTest {
     private fun arriveWithChangesText(arrival: Instant, changes: Int) = context.resources.getQuantityString(
         R.plurals.widget_journey_arrive_with_changes, changes, arrivalFormatter.format(arrival), changes,
     )
+    private fun lineRelevantSingleText(line: String) = context.getString(R.string.notification_disruption_line_relevant_single_format, line)
+    private fun lineRelevantGenericText() = context.getString(R.string.notification_disruption_line_relevant_generic)
 
     // ---- resolveEffectiveModel: the same 4-case matrix BlickRoutineWidgetTest proves as a pure
     // function -- this is the complementary proof that ActiveRoutineContent truly calls it and
@@ -352,5 +358,101 @@ class BlickRoutineWidgetRenderTest {
             onNode(hasTextEqualTo(nextLabelText())).assertExists()
             // 110-minute secondary countdown.
             onNode(hasTextEqualTo(countdownText(110))).assertExists()
+        }
+
+    // ---- Disruption strip: a CONFIRMED disruption's own real SL text renders directly; a
+    // LINE_RELEVANT one renders the same conservative "Line X disruption" label the notification
+    // shows instead -- see disruptionStripText's own doc and the Akalla -> T-Centralen false-
+    // positive this exists to prevent. All at a non-compact size (see this file's own class doc)
+    // so the strip is never dropped merely for lack of room. ----
+
+    @Test
+    fun `a CONFIRMED disruption -- empty uncertain line designations -- renders its own real headline text`() =
+        runGlanceAppWidgetUnitTest {
+            setContext(context)
+            setAppWidgetSize(DpSize(300.dp, 200.dp))
+            val primary = journeyRow(now.plusSeconds(300), lineDesignation = "14")
+            provideComposable {
+                BlickWidgetContent(
+                    activeRoutineState(primary, null, disruptionHeadline = "Hissen är ur funktion."),
+                    now,
+                )
+            }
+
+            onNode(hasText("Hissen är ur funktion.")).assertExists()
+        }
+
+    @Test
+    fun `a LINE_RELEVANT disruption with one matched line renders the conservative Line X disruption label, never the raw headline`() =
+        runGlanceAppWidgetUnitTest {
+            setContext(context)
+            setAppWidgetSize(DpSize(300.dp, 200.dp))
+            val primary = journeyRow(now.plusSeconds(300), lineDesignation = "14")
+            provideComposable {
+                BlickWidgetContent(
+                    activeRoutineState(
+                        primary, null,
+                        disruptionHeadline = "Inställd trafik på Blå linjen mellan T-Centralen och Kungsträdgården",
+                        disruptionUncertainLineDesignations = listOf("11"),
+                    ),
+                    now,
+                )
+            }
+
+            onNode(hasText(lineRelevantSingleText("11"))).assertExists()
+            onNode(hasText("Inställd trafik på Blå linjen mellan T-Centralen och Kungsträdgården")).assertDoesNotExist()
+        }
+
+    @Test
+    fun `a LINE_RELEVANT disruption with multiple matched lines falls back to the generic Line disruption label`() =
+        runGlanceAppWidgetUnitTest {
+            setContext(context)
+            setAppWidgetSize(DpSize(300.dp, 200.dp))
+            val primary = journeyRow(now.plusSeconds(300), lineDesignation = "14")
+            provideComposable {
+                BlickWidgetContent(
+                    activeRoutineState(
+                        primary, null,
+                        disruptionHeadline = "Trafikstörning",
+                        disruptionUncertainLineDesignations = listOf("11", "17"),
+                    ),
+                    now,
+                )
+            }
+
+            onNode(hasText(lineRelevantGenericText())).assertExists()
+        }
+
+    @Test
+    fun `no disruption renders no disruption strip at all`() =
+        runGlanceAppWidgetUnitTest {
+            setContext(context)
+            setAppWidgetSize(DpSize(300.dp, 200.dp))
+            val primary = journeyRow(now.plusSeconds(300), lineDesignation = "14")
+            provideComposable { BlickWidgetContent(activeRoutineState(primary, null), now) }
+
+            onNode(hasText(lineRelevantGenericText())).assertDoesNotExist()
+        }
+
+    @Test
+    fun `a compact size never renders the disruption strip, CONFIRMED or LINE_RELEVANT alike`() =
+        runGlanceAppWidgetUnitTest {
+            setContext(context)
+            // Below COMPACT_HEIGHT_THRESHOLD -- see isCompactLayout's own thresholds.
+            setAppWidgetSize(DpSize(300.dp, 90.dp))
+            val primary = journeyRow(now.plusSeconds(300), lineDesignation = "14")
+            provideComposable {
+                BlickWidgetContent(
+                    activeRoutineState(
+                        primary, null,
+                        disruptionHeadline = "Inställd trafik",
+                        disruptionUncertainLineDesignations = listOf("11"),
+                    ),
+                    now,
+                )
+            }
+
+            onNode(hasText("Inställd trafik")).assertDoesNotExist()
+            onNode(hasText(lineRelevantSingleText("11"))).assertDoesNotExist()
         }
 }

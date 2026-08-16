@@ -5,6 +5,7 @@ import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.CompletableDeferred
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.ExperimentalCoroutinesApi
+import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.update
@@ -32,14 +33,20 @@ import se.blick.app.domain.model.CommuteRoutine
 import se.blick.app.domain.model.Departure
 import se.blick.app.domain.model.DeparturesResult
 import se.blick.app.domain.model.Disruption
+import se.blick.app.domain.model.DisruptionEffect
 import se.blick.app.domain.model.DisruptionMessage
 import se.blick.app.domain.model.DisruptionPriority
+import se.blick.app.domain.model.DisruptionRelevance
+import se.blick.app.domain.model.DisruptionSource
 import se.blick.app.domain.model.ExactDestinationChangesPreference
 import se.blick.app.domain.model.Journey
+import se.blick.app.domain.model.JourneyDisruptionNotice
 import se.blick.app.domain.model.JourneyLeg
 import se.blick.app.domain.model.JourneyLocation
 import se.blick.app.domain.model.JourneyPlan
+import se.blick.app.domain.model.JourneyRole
 import se.blick.app.domain.model.LineRef
+import se.blick.app.domain.model.ResolvedJourneyDisruption
 import se.blick.app.domain.model.RoutineType
 import se.blick.app.domain.model.StopAreaRef
 import se.blick.app.domain.model.StopPointRef
@@ -47,6 +54,7 @@ import se.blick.app.domain.model.TransportMode
 import se.blick.app.domain.usecase.DepartureIdentity
 import se.blick.app.domain.usecase.DisruptionsState
 import se.blick.app.domain.usecase.GetDisruptionsUseCase
+import se.blick.app.domain.usecase.GetJourneyDisruptionRelevanceUseCase
 import se.blick.app.domain.usecase.GetLiveDeparturesUseCase
 import se.blick.app.domain.usecase.GetRankedJourneysUseCase
 import se.blick.app.domain.usecase.LiveDeparturesSnapshot
@@ -58,6 +66,7 @@ import se.blick.app.notification.NotificationPostResult
 import se.blick.app.notification.PromotedNotificationChecker
 import se.blick.app.notification.RoutineNotificationModel
 import se.blick.app.notification.RoutineNotifier
+import se.blick.app.scheduling.DISRUPTIONS_FETCH_TIMEOUT_MS
 import se.blick.app.scheduling.DeviceZoneProvider
 import se.blick.app.scheduling.NotificationRecoveryReporter
 import se.blick.app.scheduling.RoutineScheduler
@@ -525,6 +534,7 @@ class RoutineDetailsViewModelTest {
         // which need a Clock they can advance BETWEEN consecutive automatic fetches).
         clock: Clock = this.clock,
         getRankedJourneys: GetRankedJourneysUseCase? = null,
+        getJourneyDisruptionRelevance: GetJourneyDisruptionRelevanceUseCase? = null,
     ) = RoutineDetailsViewModel(
         savedStateHandle = SavedStateHandle(mapOf(Routes.RoutineDetails.ARG_ROUTINE_ID to routineId)),
         routineRepository = routines,
@@ -541,6 +551,7 @@ class RoutineDetailsViewModelTest {
         clock = clock,
         deviceZoneProvider = deviceZoneProvider,
         getRankedJourneys = getRankedJourneys,
+        getJourneyDisruptionRelevance = getJourneyDisruptionRelevance,
     )
 
     // ---- Routine loading ----
@@ -2578,13 +2589,29 @@ class RoutineDetailsViewModelTest {
 
     /** Always returns the SAME [journeys] list, however many times [getJourneys] is called --
      * models the real "identical structurally-equal response on the next automatic refresh"
-     * scenario [RoutineDetailsUiState.journeysEvaluatedAt] exists to make observable. */
-    private class FixedJourneyRepository(private val journeys: List<JourneyPlan>) : JourneyRepository {
+     * scenario [RoutineDetailsUiState.journeysEvaluatedAt] exists to make observable.
+     *
+     * [resolvedDisruptions] is what [getRelevantDeviationNotices] returns -- the backend's own
+     * already-resolved, already-combined result (see that function's real doc on
+     * [JourneyRepository]); this fake never combines/deduplicates anything itself. Defaults to
+     * empty so every existing test constructing this fake without caring about deviations keeps
+     * behaving unchanged. */
+    private class FixedJourneyRepository(
+        private val journeys: List<JourneyPlan>,
+        private val resolvedDisruptions: List<ResolvedJourneyDisruption> = emptyList(),
+    ) : JourneyRepository {
         var callCount = 0
         var receivedSearchUntil: Instant? = null
             private set
         var receivedChangesPreference: ExactDestinationChangesPreference? = null
             private set
+
+        /** Captures every call [getRelevantDeviationNotices] actually received. */
+        val receivedDeviationLegsCalls = mutableListOf<List<JourneyLeg>>()
+        var receivedOriginSiteId: Long? = null
+            private set
+        val receivedJourneyPlannerNotices = mutableListOf<List<JourneyDisruptionNotice>>()
+
         override suspend fun searchLocations(query: String): List<JourneyLocation> = emptyList()
         override suspend fun getJourneys(
             originId: String,
@@ -2597,6 +2624,17 @@ class RoutineDetailsViewModelTest {
             receivedSearchUntil = searchUntil
             receivedChangesPreference = changesPreference
             return journeys
+        }
+
+        override suspend fun getRelevantDeviationNotices(
+            legs: List<JourneyLeg>,
+            originSiteId: Long?,
+            journeyPlannerNotices: List<JourneyDisruptionNotice>,
+        ): List<ResolvedJourneyDisruption> {
+            receivedDeviationLegsCalls += legs
+            receivedOriginSiteId = originSiteId
+            receivedJourneyPlannerNotices += journeyPlannerNotices
+            return resolvedDisruptions
         }
     }
 
@@ -2833,4 +2871,491 @@ class RoutineDetailsViewModelTest {
             job.cancel()
         }
 
+    // ---- loadJourneyDisruptionRelevance / exactDestinationDeviationNotices: the backend's own
+    // fully resolved, deduplicated exact-destination disruption list -- see GetJourneyDisruptionRelevanceUseCase's
+    // own doc, and RoutineActiveWindowWorkerTest's "Exact-destination: resolved disruption
+    // relevance" section for the same behavior exercised through the worker instead of this
+    // screen. Unlike the worker (which only ever needs one compacted DisruptionPresentation),
+    // Routine Details keeps the FULL list here -- one card per distinct entry (see
+    // DisruptionsSection's own doc) -- so this ViewModel itself must never collapse it. ----
+
+    private fun resolvedDisruption(
+        id: String? = "d1",
+        headline: String = "Delayed",
+        details: String? = null,
+        effect: DisruptionEffect = DisruptionEffect.DELAYS,
+        relevance: DisruptionRelevance = DisruptionRelevance.CONFIRMED,
+        source: DisruptionSource = DisruptionSource.SL_DEVIATIONS,
+        matchedLineDesignations: List<String> = emptyList(),
+    ) = ResolvedJourneyDisruption(id, headline, details, effect, relevance, source, matchedLineDesignations)
+
+    /** [getJourneys] always returns the same [journeys] immediately; [getRelevantDeviationNotices]
+     * suspends on its own [CompletableDeferred] per call -- lets a test resolve deviation lookups
+     * out of order to reproduce a slow/superseded refresh, mirroring [ControllableDisruptionRepository]'s
+     * own pattern for the LINE_DIRECTION path. */
+    private class ControllableDeviationJourneyRepository(private val journeys: List<JourneyPlan>) : JourneyRepository {
+        private val pending = mutableListOf<CompletableDeferred<List<ResolvedJourneyDisruption>>>()
+        val callCount: Int get() = pending.size
+        override suspend fun searchLocations(query: String): List<JourneyLocation> = emptyList()
+        override suspend fun getJourneys(
+            originId: String,
+            destinationId: String,
+            allowedTransportModes: Set<TransportMode>,
+            searchUntil: Instant?,
+            changesPreference: ExactDestinationChangesPreference,
+        ): List<JourneyPlan> = journeys
+
+        override suspend fun getRelevantDeviationNotices(
+            legs: List<JourneyLeg>,
+            originSiteId: Long?,
+            journeyPlannerNotices: List<JourneyDisruptionNotice>,
+        ): List<ResolvedJourneyDisruption> {
+            val deferred = CompletableDeferred<List<ResolvedJourneyDisruption>>()
+            pending += deferred
+            return deferred.await()
+        }
+        fun complete(callIndex: Int, result: List<ResolvedJourneyDisruption>) {
+            pending[callIndex].complete(result)
+        }
+    }
+
+    @Test
+    fun `loadJourneys triggers the deviation lookup for PRIMARY, populating exactDestinationDeviationNotices with the backend's resolved result`() =
+        runTest(dispatcher) {
+            val primary = journeyPlan("primary", Instant.parse("2026-07-28T08:05:00Z"), lineDesignation = "11")
+            val journeyRepository = FixedJourneyRepository(listOf(primary), resolvedDisruptions = listOf(resolvedDisruption()))
+            val getRankedJourneys = GetRankedJourneysUseCase(journeyRepository, clock)
+            val routine = exactDestinationRoutine()
+            val vm = viewModel(
+                routine = routine, routines = FakeRoutineRepository(routine),
+                getRankedJourneys = getRankedJourneys,
+                getJourneyDisruptionRelevance = GetJourneyDisruptionRelevanceUseCase(journeyRepository),
+            )
+            dispatcher.scheduler.advanceUntilIdle()
+
+            assertEquals(listOf(resolvedDisruption()), vm.uiState.value.exactDestinationDeviationNotices)
+        }
+
+    @Test
+    fun `no PRIMARY journey -- exactDestinationDeviationNotices stays empty and the deviation lookup is never called`() = runTest(dispatcher) {
+        val next = journeyPlan("next", Instant.parse("2026-07-28T08:05:00Z")).copy(role = JourneyRole.NEXT)
+        val journeyRepository = FixedJourneyRepository(listOf(next), resolvedDisruptions = listOf(resolvedDisruption()))
+        val getRankedJourneys = GetRankedJourneysUseCase(journeyRepository, clock)
+        val routine = exactDestinationRoutine()
+        val vm = viewModel(
+            routine = routine, routines = FakeRoutineRepository(routine),
+            getRankedJourneys = getRankedJourneys,
+            getJourneyDisruptionRelevance = GetJourneyDisruptionRelevanceUseCase(journeyRepository),
+        )
+        dispatcher.scheduler.advanceUntilIdle()
+
+        assertTrue(vm.uiState.value.exactDestinationDeviationNotices.isEmpty())
+        assertTrue(journeyRepository.receivedDeviationLegsCalls.isEmpty())
+    }
+
+    @Test
+    fun `only PRIMARY's own legs and origin siteId are sent to the deviation lookup, never NEXT's or ALTERNATIVE's`() = runTest(dispatcher) {
+        val primary = journeyPlan("primary", Instant.parse("2026-07-28T08:05:00Z"), lineDesignation = "11")
+        val next = journeyPlan("next", Instant.parse("2026-07-28T08:20:00Z"), lineDesignation = "13").copy(role = JourneyRole.NEXT)
+        val journeyRepository = FixedJourneyRepository(listOf(primary, next))
+        val getRankedJourneys = GetRankedJourneysUseCase(journeyRepository, clock)
+        val routine = exactDestinationRoutine()
+        val vm = viewModel(
+            routine = routine, routines = FakeRoutineRepository(routine),
+            getRankedJourneys = getRankedJourneys,
+            getJourneyDisruptionRelevance = GetJourneyDisruptionRelevanceUseCase(journeyRepository),
+        )
+        dispatcher.scheduler.advanceUntilIdle()
+
+        assertEquals(1, journeyRepository.receivedDeviationLegsCalls.size)
+        assertEquals(listOf("11"), journeyRepository.receivedDeviationLegsCalls.single().map { it.lineDesignation })
+        assertEquals(routine.siteId, journeyRepository.receivedOriginSiteId)
+    }
+
+    @Test
+    fun `PRIMARY's own already-fetched Journey Planner notices are sent alongside its legs`() = runTest(dispatcher) {
+        val jpNotice = JourneyDisruptionNotice("Rerouted via replacement bus", DisruptionEffect.REPLACEMENT_SERVICE)
+        val leg = JourneyLeg(TransportMode.METRO, "11", "Direction", "Fruängen", "Arlanda", Instant.parse("2026-07-28T08:05:00Z"), Instant.parse("2026-07-28T08:15:00Z"), true, emptyList())
+        val primary = JourneyPlan(
+            "primary", "Fruängen", "Arlanda", Instant.parse("2026-07-28T08:05:00Z"), Instant.parse("2026-07-28T08:15:00Z"),
+            0, leg, listOf(leg), emptyList(), JourneyRole.PRIMARY, listOf(jpNotice),
+        )
+        val journeyRepository = FixedJourneyRepository(listOf(primary))
+        val getRankedJourneys = GetRankedJourneysUseCase(journeyRepository, clock)
+        val routine = exactDestinationRoutine()
+        val vm = viewModel(
+            routine = routine, routines = FakeRoutineRepository(routine),
+            getRankedJourneys = getRankedJourneys,
+            getJourneyDisruptionRelevance = GetJourneyDisruptionRelevanceUseCase(journeyRepository),
+        )
+        dispatcher.scheduler.advanceUntilIdle()
+
+        assertEquals(listOf(listOf(jpNotice)), journeyRepository.receivedJourneyPlannerNotices)
+    }
+
+    @Test
+    fun `a LINE_RELEVANT resolved disruption is exposed with its relevance and matchedLineDesignations intact -- the ViewModel performs no collapsing or inference`() =
+        runTest(dispatcher) {
+            val primary = journeyPlan("primary", Instant.parse("2026-07-28T08:05:00Z"), lineDesignation = "11")
+            val lineRelevant = resolvedDisruption(
+                id = "akalla-dev-1",
+                headline = "Inställd trafik på Blå linjen mellan T-Centralen och Kungsträdgården",
+                effect = DisruptionEffect.NO_SERVICE,
+                relevance = DisruptionRelevance.LINE_RELEVANT,
+                matchedLineDesignations = listOf("11"),
+            )
+            val journeyRepository = FixedJourneyRepository(listOf(primary), resolvedDisruptions = listOf(lineRelevant))
+            val getRankedJourneys = GetRankedJourneysUseCase(journeyRepository, clock)
+            val routine = exactDestinationRoutine()
+            val vm = viewModel(
+                routine = routine, routines = FakeRoutineRepository(routine),
+                getRankedJourneys = getRankedJourneys,
+                getJourneyDisruptionRelevance = GetJourneyDisruptionRelevanceUseCase(journeyRepository),
+            )
+            dispatcher.scheduler.advanceUntilIdle()
+
+            val stored = vm.uiState.value.exactDestinationDeviationNotices.single()
+            assertEquals(DisruptionRelevance.LINE_RELEVANT, stored.relevance)
+            assertEquals(listOf("11"), stored.matchedLineDesignations)
+            // The real SL headline/effect are never hidden or replaced merely because relevance
+            // is line-level -- see DisruptionPresentation.uncertainLineDesignations' own doc for
+            // which surfaces (not this one) apply that conservative treatment.
+            assertEquals("Inställd trafik på Blå linjen mellan T-Centralen och Kungsträdgården", stored.headline)
+            assertEquals(DisruptionEffect.NO_SERVICE, stored.effect)
+        }
+
+    @Test
+    fun `exactDestinationDeviationNotices holds every distinct resolved entry, not just one, for Routine Details' own per-entry cards`() =
+        runTest(dispatcher) {
+            val primary = journeyPlan("primary", Instant.parse("2026-07-28T08:05:00Z"), lineDesignation = "11")
+            val a = resolvedDisruption(id = "d1", headline = "Delayed", effect = DisruptionEffect.DELAYS)
+            val b = resolvedDisruption(id = "d2", headline = "Rerouted", effect = DisruptionEffect.ROUTE_CHANGE)
+            val journeyRepository = FixedJourneyRepository(listOf(primary), resolvedDisruptions = listOf(a, b))
+            val getRankedJourneys = GetRankedJourneysUseCase(journeyRepository, clock)
+            val routine = exactDestinationRoutine()
+            val vm = viewModel(
+                routine = routine, routines = FakeRoutineRepository(routine),
+                getRankedJourneys = getRankedJourneys,
+                getJourneyDisruptionRelevance = GetJourneyDisruptionRelevanceUseCase(journeyRepository),
+            )
+            dispatcher.scheduler.advanceUntilIdle()
+
+            assertEquals(listOf(a, b), vm.uiState.value.exactDestinationDeviationNotices)
+        }
+
+    @Test
+    fun `a deviation lookup failure leaves exactDestinationDeviationNotices empty without crashing or affecting journeys`() = runTest(dispatcher) {
+        val primary = journeyPlan("primary", Instant.parse("2026-07-28T08:05:00Z"), lineDesignation = "11")
+        val throwingRepository = object : JourneyRepository by FixedJourneyRepository(listOf(primary)) {
+            override suspend fun getRelevantDeviationNotices(
+                legs: List<JourneyLeg>,
+                originSiteId: Long?,
+                journeyPlannerNotices: List<JourneyDisruptionNotice>,
+            ): List<ResolvedJourneyDisruption> = error("simulated failure")
+        }
+        val getRankedJourneys = GetRankedJourneysUseCase(throwingRepository, clock)
+        val routine = exactDestinationRoutine()
+        val vm = viewModel(
+            routine = routine, routines = FakeRoutineRepository(routine),
+            getRankedJourneys = getRankedJourneys,
+            getJourneyDisruptionRelevance = GetJourneyDisruptionRelevanceUseCase(throwingRepository),
+        )
+        dispatcher.scheduler.advanceUntilIdle()
+
+        assertTrue(vm.uiState.value.exactDestinationDeviationNotices.isEmpty())
+        // The journey itself is completely unaffected by the deviation-lookup failure.
+        assertEquals(listOf("primary"), vm.uiState.value.journeys.map { it.journeyId })
+    }
+
+    @Test
+    fun `an older in-flight deviation lookup cannot overwrite a newer one's result`() = runTest(dispatcher) {
+        val primary = journeyPlan("primary", Instant.parse("2026-07-28T08:05:00Z"), lineDesignation = "11")
+        val journeyRepository = ControllableDeviationJourneyRepository(listOf(primary))
+        val getRankedJourneys = GetRankedJourneysUseCase(journeyRepository, clock)
+        val routine = exactDestinationRoutine()
+        val vm = viewModel(
+            routine = routine, routines = FakeRoutineRepository(routine),
+            getRankedJourneys = getRankedJourneys,
+            getJourneyDisruptionRelevance = GetJourneyDisruptionRelevanceUseCase(journeyRepository),
+        )
+        // runCurrent(), never advanceUntilIdle(), throughout this test: with the lookup now
+        // bounded by withTimeoutOrNull(DISRUPTIONS_FETCH_TIMEOUT_MS), advanceUntilIdle() would
+        // eagerly fast-forward virtual time PAST that timeout (there is nothing else scheduled
+        // to run while a CompletableDeferred sits unresolved), firing it before this test ever
+        // gets a chance to call complete() itself. runCurrent() only drains work already ready
+        // at the CURRENT virtual instant, so the deliberately-pending lookup stays parked on its
+        // own deferred exactly as this test intends.
+        dispatcher.scheduler.runCurrent() // call index 0 (initial load), left pending
+
+        vm.refresh() // call index 1 (newer refresh) -- must supersede index 0
+        dispatcher.scheduler.runCurrent()
+
+        val newer = resolvedDisruption(id = "newer", headline = "newer")
+        journeyRepository.complete(1, listOf(newer))
+        dispatcher.scheduler.runCurrent()
+        assertEquals(listOf(newer), vm.uiState.value.exactDestinationDeviationNotices)
+
+        // The older, superseded lookup finally resolves late -- must be ignored.
+        journeyRepository.complete(0, listOf(resolvedDisruption(id = "stale-older", headline = "stale-older")))
+        dispatcher.scheduler.runCurrent()
+        assertEquals(listOf(newer), vm.uiState.value.exactDestinationDeviationNotices)
+    }
+
+    @Test
+    fun `showDebugTestNotification for an exact-destination routine uses the compacted resolved disruption list`() = runTest(dispatcher) {
+        val primary = journeyPlan("primary", Instant.parse("2026-07-28T08:05:00Z"), lineDesignation = "11")
+        val journeyRepository = FixedJourneyRepository(
+            listOf(primary),
+            resolvedDisruptions = listOf(resolvedDisruption(headline = "Inställd trafik", effect = DisruptionEffect.NO_SERVICE)),
+        )
+        val getRankedJourneys = GetRankedJourneysUseCase(journeyRepository, clock)
+        val routine = exactDestinationRoutine()
+        val notifier = FakeRoutineNotifier()
+        val vm = viewModel(
+            routine = routine, routines = FakeRoutineRepository(routine), notifier = notifier,
+            getRankedJourneys = getRankedJourneys,
+            getJourneyDisruptionRelevance = GetJourneyDisruptionRelevanceUseCase(journeyRepository),
+        )
+        dispatcher.scheduler.advanceUntilIdle()
+
+        vm.showDebugTestNotification()
+
+        val posted = notifier.shown.last()
+        assertEquals(DisruptionEffect.NO_SERVICE, posted.disruptionEffect)
+        assertEquals("Inställd trafik", posted.disruptionHeadline)
+    }
+
+    @Test
+    fun `a LINE_DIRECTION routine never calls the deviation lookup at all`() = runTest(dispatcher) {
+        val routine = sampleRoutine().copy(type = RoutineType.LINE_DIRECTION)
+        val journeyRepository = FixedJourneyRepository(emptyList(), resolvedDisruptions = listOf(resolvedDisruption()))
+        val vm = viewModel(
+            routine = routine, routines = FakeRoutineRepository(routine),
+            getJourneyDisruptionRelevance = GetJourneyDisruptionRelevanceUseCase(journeyRepository),
+        )
+        dispatcher.scheduler.advanceUntilIdle()
+
+        assertTrue(journeyRepository.receivedDeviationLegsCalls.isEmpty())
+        assertTrue(vm.uiState.value.exactDestinationDeviationNotices.isEmpty())
+    }
+
+    // ---- PRIMARY-owned disruption state: exactDestinationDeviationNotices must never combine a
+    // stale PRIMARY's own resolved disruption with a newer PRIMARY -- see PrimaryDisruptionState's
+    // own doc. Two independent guards are exercised here: the pre-existing request-generation
+    // guard (an old in-flight lookup losing a race to a newer one) and the NEW primaryJourneyId
+    // ownership check (an old lookup's own SUCCESSFUL, already-applied result becoming ineligible
+    // the instant PRIMARY changes, even before any new lookup resolves). ----
+
+    /** [getJourneys] returns a DIFFERENT PRIMARY on each successive call, indexed by call count --
+     * models a genuine PRIMARY change between two refreshes (unlike [FixedJourneyRepository]/
+     * [ControllableDeviationJourneyRepository], which always return the same journeys).
+     * [getRelevantDeviationNotices] suspends on its own [CompletableDeferred] per call,
+     * independently controllable, so a test can resolve deviation lookups out of order relative to
+     * which PRIMARY triggered them. */
+    private class ChangingPrimaryJourneyRepository(private val journeysByCall: List<List<JourneyPlan>>) : JourneyRepository {
+        private var getJourneysCallCount = 0
+        private val pending = mutableListOf<CompletableDeferred<List<ResolvedJourneyDisruption>>>()
+        override suspend fun searchLocations(query: String): List<JourneyLocation> = emptyList()
+        override suspend fun getJourneys(
+            originId: String,
+            destinationId: String,
+            allowedTransportModes: Set<TransportMode>,
+            searchUntil: Instant?,
+            changesPreference: ExactDestinationChangesPreference,
+        ): List<JourneyPlan> {
+            val result = journeysByCall.getOrElse(getJourneysCallCount) { journeysByCall.last() }
+            getJourneysCallCount++
+            return result
+        }
+
+        override suspend fun getRelevantDeviationNotices(
+            legs: List<JourneyLeg>,
+            originSiteId: Long?,
+            journeyPlannerNotices: List<JourneyDisruptionNotice>,
+        ): List<ResolvedJourneyDisruption> {
+            val deferred = CompletableDeferred<List<ResolvedJourneyDisruption>>()
+            pending += deferred
+            return deferred.await()
+        }
+        fun complete(callIndex: Int, result: List<ResolvedJourneyDisruption>) {
+            pending[callIndex].complete(result)
+        }
+    }
+
+    @Test
+    fun `when PRIMARY changes, the old PRIMARY's disruption is not rendered with the new PRIMARY, even before the new lookup resolves`() =
+        runTest(dispatcher) {
+            val primaryA = journeyPlan("primary-A", Instant.parse("2026-07-28T08:05:00Z"), lineDesignation = "11")
+            val primaryB = journeyPlan("primary-B", Instant.parse("2026-07-28T08:10:00Z"), lineDesignation = "17")
+            val journeyRepository = ChangingPrimaryJourneyRepository(listOf(listOf(primaryA), listOf(primaryB)))
+            val getRankedJourneys = GetRankedJourneysUseCase(journeyRepository, clock)
+            val routine = exactDestinationRoutine()
+            val vm = viewModel(
+                routine = routine, routines = FakeRoutineRepository(routine),
+                getRankedJourneys = getRankedJourneys,
+                getJourneyDisruptionRelevance = GetJourneyDisruptionRelevanceUseCase(journeyRepository),
+            )
+            // runCurrent(), never advanceUntilIdle(), throughout: see the identical note on "an
+            // older in-flight deviation lookup cannot overwrite a newer one's result" -- with the
+            // lookup now bounded by withTimeoutOrNull, advanceUntilIdle() would eagerly fast-
+            // forward virtual time straight past that timeout while a CompletableDeferred sits
+            // deliberately unresolved.
+            dispatcher.scheduler.runCurrent() // initial load: PRIMARY A, deviation lookup 0 left pending
+
+            val disruptionA = resolvedDisruption(id = "a-disruption", headline = "A's own disruption")
+            journeyRepository.complete(0, listOf(disruptionA))
+            dispatcher.scheduler.runCurrent()
+            assertEquals(listOf(disruptionA), vm.uiState.value.exactDestinationDeviationNotices)
+            assertEquals("primary-A", vm.uiState.value.journeys.first { it.role == JourneyRole.PRIMARY }.journeyId)
+
+            // PRIMARY changes to B -- journeys updates synchronously; B's own deviation lookup
+            // (call index 1) is deliberately left pending, never completed in this test.
+            vm.refresh()
+            dispatcher.scheduler.runCurrent()
+
+            assertEquals("primary-B", vm.uiState.value.journeys.first { it.role == JourneyRole.PRIMARY }.journeyId)
+            // A's own disruption must NOT still be shown against B, even though B's own lookup
+            // hasn't resolved yet -- invalidation happens the instant journeys itself updates.
+            assertTrue(vm.uiState.value.exactDestinationDeviationNotices.isEmpty())
+        }
+
+    @Test
+    fun `a same-PRIMARY refresh keeps showing the existing disruption while a fresh lookup is still in flight -- no flicker`() =
+        runTest(dispatcher) {
+            val primary = journeyPlan("primary", Instant.parse("2026-07-28T08:05:00Z"), lineDesignation = "11")
+            val journeyRepository = ChangingPrimaryJourneyRepository(listOf(listOf(primary))) // same PRIMARY every call
+            val getRankedJourneys = GetRankedJourneysUseCase(journeyRepository, clock)
+            val routine = exactDestinationRoutine()
+            val vm = viewModel(
+                routine = routine, routines = FakeRoutineRepository(routine),
+                getRankedJourneys = getRankedJourneys,
+                getJourneyDisruptionRelevance = GetJourneyDisruptionRelevanceUseCase(journeyRepository),
+            )
+            // runCurrent(), never advanceUntilIdle() -- see the identical note above.
+            dispatcher.scheduler.runCurrent()
+            val existing = resolvedDisruption(id = "existing", headline = "Existing disruption")
+            journeyRepository.complete(0, listOf(existing))
+            dispatcher.scheduler.runCurrent()
+            assertEquals(listOf(existing), vm.uiState.value.exactDestinationDeviationNotices)
+
+            // Same PRIMARY refreshes -- a second lookup (call index 1) starts, deliberately left
+            // pending in this test.
+            vm.refresh()
+            dispatcher.scheduler.runCurrent()
+
+            // No flicker: the existing, still-valid result for the SAME PRIMARY stays visible
+            // while the new lookup is in flight, rather than blanking to empty and back.
+            assertEquals(listOf(existing), vm.uiState.value.exactDestinationDeviationNotices)
+        }
+
+    @Test
+    fun `a late response for an old, no-longer-current PRIMARY cannot resurrect a stale disruption once a newer PRIMARY has its own result`() =
+        runTest(dispatcher) {
+            val primaryA = journeyPlan("primary-A", Instant.parse("2026-07-28T08:05:00Z"), lineDesignation = "11")
+            val primaryB = journeyPlan("primary-B", Instant.parse("2026-07-28T08:10:00Z"), lineDesignation = "17")
+            val journeyRepository = ChangingPrimaryJourneyRepository(listOf(listOf(primaryA), listOf(primaryB)))
+            val getRankedJourneys = GetRankedJourneysUseCase(journeyRepository, clock)
+            val routine = exactDestinationRoutine()
+            val vm = viewModel(
+                routine = routine, routines = FakeRoutineRepository(routine),
+                getRankedJourneys = getRankedJourneys,
+                getJourneyDisruptionRelevance = GetJourneyDisruptionRelevanceUseCase(journeyRepository),
+            )
+            // runCurrent(), never advanceUntilIdle() -- see the identical note above.
+            dispatcher.scheduler.runCurrent() // PRIMARY A, lookup 0 left pending
+
+            // PRIMARY changes to B -- lookup 0 (A's own, now superseded) is cancelled; lookup 1
+            // (B's own) starts.
+            vm.refresh()
+            dispatcher.scheduler.runCurrent()
+
+            val disruptionB = resolvedDisruption(id = "b-disruption", headline = "B's own disruption")
+            journeyRepository.complete(1, listOf(disruptionB))
+            dispatcher.scheduler.runCurrent()
+            assertEquals(listOf(disruptionB), vm.uiState.value.exactDestinationDeviationNotices)
+
+            // A's own (already-cancelled) lookup finally "completes" late -- must never resurrect
+            // A's disruption, whether by winning a race or by any other path.
+            journeyRepository.complete(0, listOf(resolvedDisruption(id = "stale-a", headline = "stale-a")))
+            dispatcher.scheduler.runCurrent()
+            assertEquals(listOf(disruptionB), vm.uiState.value.exactDestinationDeviationNotices)
+        }
+
+    @Test
+    fun `a foreground relevance timeout does not affect journeys or journeysUnavailable`() = runTest(dispatcher) {
+        val primary = journeyPlan("primary", Instant.parse("2026-07-28T08:05:00Z"), lineDesignation = "11")
+        val slowRepository = object : JourneyRepository by FixedJourneyRepository(listOf(primary)) {
+            override suspend fun getRelevantDeviationNotices(
+                legs: List<JourneyLeg>,
+                originSiteId: Long?,
+                journeyPlannerNotices: List<JourneyDisruptionNotice>,
+            ): List<ResolvedJourneyDisruption> {
+                delay(DISRUPTIONS_FETCH_TIMEOUT_MS * 10)
+                return listOf(resolvedDisruption())
+            }
+        }
+        val getRankedJourneys = GetRankedJourneysUseCase(slowRepository, clock)
+        val routine = exactDestinationRoutine()
+        val vm = viewModel(
+            routine = routine, routines = FakeRoutineRepository(routine),
+            getRankedJourneys = getRankedJourneys,
+            getJourneyDisruptionRelevance = GetJourneyDisruptionRelevanceUseCase(slowRepository),
+        )
+        dispatcher.scheduler.advanceUntilIdle()
+
+        // The journey itself posted normally -- the deviation-lookup timeout never touched it.
+        assertEquals(listOf("primary"), vm.uiState.value.journeys.map { it.journeyId })
+        assertFalse(vm.uiState.value.journeysUnavailable)
+        // The timed-out lookup never produced a result to show, and nothing else was ever stored.
+        assertTrue(vm.uiState.value.exactDestinationDeviationNotices.isEmpty())
+    }
+
+    @Test
+    fun `a foreground timeout on the new PRIMARY's own lookup does not leave the old PRIMARY's disruption falsely attached`() = runTest(dispatcher) {
+        val primaryA = journeyPlan("primary-A", Instant.parse("2026-07-28T08:05:00Z"), lineDesignation = "11")
+        val primaryB = journeyPlan("primary-B", Instant.parse("2026-07-28T08:10:00Z"), lineDesignation = "17")
+        var getJourneysCallCount = 0
+        val repository = object : JourneyRepository {
+            override suspend fun searchLocations(query: String): List<JourneyLocation> = emptyList()
+            override suspend fun getJourneys(
+                originId: String,
+                destinationId: String,
+                allowedTransportModes: Set<TransportMode>,
+                searchUntil: Instant?,
+                changesPreference: ExactDestinationChangesPreference,
+            ): List<JourneyPlan> {
+                val result = if (getJourneysCallCount == 0) listOf(primaryA) else listOf(primaryB)
+                getJourneysCallCount++
+                return result
+            }
+
+            override suspend fun getRelevantDeviationNotices(
+                legs: List<JourneyLeg>,
+                originSiteId: Long?,
+                journeyPlannerNotices: List<JourneyDisruptionNotice>,
+            ): List<ResolvedJourneyDisruption> {
+                // A's own lookup resolves immediately; B's own always times out.
+                if (legs.any { it.lineDesignation == "11" }) return listOf(resolvedDisruption(id = "a-disruption"))
+                delay(DISRUPTIONS_FETCH_TIMEOUT_MS * 10)
+                return listOf(resolvedDisruption(id = "b-disruption"))
+            }
+        }
+        val getRankedJourneys = GetRankedJourneysUseCase(repository, clock)
+        val routine = exactDestinationRoutine()
+        val vm = viewModel(
+            routine = routine, routines = FakeRoutineRepository(routine),
+            getRankedJourneys = getRankedJourneys,
+            getJourneyDisruptionRelevance = GetJourneyDisruptionRelevanceUseCase(repository),
+        )
+        dispatcher.scheduler.advanceUntilIdle() // PRIMARY A resolves immediately
+        assertEquals(listOf("a-disruption"), vm.uiState.value.exactDestinationDeviationNotices.map { it.id })
+
+        vm.refresh() // PRIMARY changes to B; B's own lookup will time out
+        dispatcher.scheduler.advanceUntilIdle()
+
+        assertEquals("primary-B", vm.uiState.value.journeys.first { it.role == JourneyRole.PRIMARY }.journeyId)
+        // A's disruption must not still be shown against B, whether B's own lookup succeeds,
+        // fails, or (as here) times out.
+        assertTrue(vm.uiState.value.exactDestinationDeviationNotices.isEmpty())
+    }
 }

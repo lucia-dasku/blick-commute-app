@@ -18,6 +18,7 @@ import kotlinx.coroutines.flow.map
 import kotlinx.coroutines.flow.update
 import kotlinx.coroutines.isActive
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.withTimeoutOrNull
 import se.blick.app.data.local.datastore.AppSettingsDataStore
 import se.blick.app.data.repository.RoutineRepository
 import se.blick.app.data.repository.StaleSnapshotRepository
@@ -27,10 +28,13 @@ import se.blick.app.domain.model.DisruptionEffect
 import se.blick.app.domain.model.DisruptionPresentation
 import se.blick.app.domain.model.ExactDestinationChangesPreference
 import se.blick.app.domain.model.JourneyPlan
+import se.blick.app.domain.model.JourneyRole
 import se.blick.app.domain.model.JOURNEY_TRANSPORT_MODE_OPTIONS
+import se.blick.app.domain.model.ResolvedJourneyDisruption
 import se.blick.app.domain.model.RoutineType
 import se.blick.app.domain.model.TransportMode
 import se.blick.app.domain.model.toPresentation
+import se.blick.app.domain.usecase.GetJourneyDisruptionRelevanceUseCase
 import se.blick.app.domain.usecase.GetRankedJourneysUseCase
 import se.blick.app.domain.usecase.DisruptionsState
 import se.blick.app.domain.usecase.GetDisruptionsUseCase
@@ -46,6 +50,7 @@ import se.blick.app.notification.NotificationPostResult
 import se.blick.app.notification.PromotedNotificationChecker
 import se.blick.app.notification.RoutineNotificationMapper
 import se.blick.app.notification.RoutineNotifier
+import se.blick.app.scheduling.DISRUPTIONS_FETCH_TIMEOUT_MS
 import se.blick.app.scheduling.DeviceZoneProvider
 import se.blick.app.scheduling.NextOccurrence
 import se.blick.app.scheduling.NextOccurrenceCalculator
@@ -147,6 +152,47 @@ data class RoutineDetailsUiState(
      * [journeyTransportModesUpdateFailed]'s identical role for the transport-mode allow-list. */
     val isUpdatingChangesPreference: Boolean = false,
     val changesPreferenceUpdateFailed: Boolean = false,
+    /** The most recently SUCCESSFULLY resolved exact-destination disruption result, tagged with
+     * which PRIMARY journey it was resolved for — see [PrimaryDisruptionState]'s own doc and
+     * [RoutineDetailsViewModel.loadJourneyDisruptionRelevance]. Deliberately NOT read directly —
+     * see [exactDestinationDeviationNotices] below, the computed property every real consumer
+     * (this screen, [RoutineDetailsViewModel.showDebugTestNotification]) actually reads, which
+     * applies the PRIMARY-ownership check this raw field does not. */
+    val primaryDisruptionState: PrimaryDisruptionState? = null,
+) {
+    /** The backend's own fully resolved, deduplicated exact-destination disruption list for the
+     * CURRENT PRIMARY journey — see [RoutineDetailsViewModel.loadJourneyDisruptionRelevance]'s own
+     * doc. Already combines [journeys]' own Journey Planner notices with structurally-matched SL
+     * Deviations (see [se.blick.app.domain.model.ResolvedJourneyDisruption]'s own doc) — no
+     * further Android-side merging is needed wherever exact-destination disruptions are shown.
+     *
+     * Computed, not stored directly: [primaryDisruptionState] is only ever updated when a lookup
+     * for its own PRIMARY genuinely SUCCEEDS (see [RoutineDetailsViewModel.loadJourneyDisruptionRelevance]'s
+     * own doc on why a failed/timed-out lookup leaves it untouched) — so the instant PRIMARY
+     * changes (a new [journeys] list lands, synchronously, before any new network call even
+     * starts), [primaryDisruptionState] can still be naming the OLD PRIMARY's own journeyId for a
+     * little while. This property is what makes that old result immediately ineligible: it is
+     * only ever surfaced when [PrimaryDisruptionState.primaryJourneyId] still matches the CURRENT
+     * PRIMARY in [journeys]. When it matches (including while a fresh lookup for the SAME PRIMARY
+     * is still in flight), the existing result stays visible — no unnecessary flicker; when it
+     * doesn't (PRIMARY changed), this reads as empty immediately, never the old PRIMARY's own
+     * disruption superimposed on the new one. */
+    val exactDestinationDeviationNotices: List<ResolvedJourneyDisruption>
+        get() {
+            val state = primaryDisruptionState ?: return emptyList()
+            val currentPrimaryJourneyId = journeys.firstOrNull { it.role == JourneyRole.PRIMARY }?.journeyId
+            return if (state.primaryJourneyId == currentPrimaryJourneyId) state.notices else emptyList()
+        }
+}
+
+/** One already-resolved exact-destination disruption result, tagged with the PRIMARY journey it
+ * was resolved for — see [RoutineDetailsUiState.exactDestinationDeviationNotices]'s own doc for
+ * why this ownership tag exists (a PRIMARY change must invalidate a stale result immediately,
+ * before the new lookup even starts, while a same-PRIMARY refresh must NOT flicker just because a
+ * new lookup happens to be in flight). */
+data class PrimaryDisruptionState(
+    val primaryJourneyId: String,
+    val notices: List<ResolvedJourneyDisruption>,
 )
 
 /**
@@ -185,6 +231,11 @@ class RoutineDetailsViewModel @Inject constructor(
      * variant, including release. Defaults to empty so every existing test construction of
      * this ViewModel keeps compiling unchanged. */
     private val debugDisruptionSampleSource: Optional<DebugDisruptionSampleSource> = Optional.empty(),
+    /** Trailing and defaulted, like [getRankedJourneys] — deliberately added AFTER every
+     * existing parameter (never inserted earlier in the list) so no existing POSITIONAL test
+     * construction of this ViewModel can have a later positional argument silently rebind to
+     * this new parameter instead. See [GetJourneyDisruptionRelevanceUseCase]'s own doc. */
+    private val getJourneyDisruptionRelevance: GetJourneyDisruptionRelevanceUseCase? = null,
 ) : ViewModel() {
 
     private val routineId: String =
@@ -896,7 +947,7 @@ class RoutineDetailsViewModel @Inject constructor(
         val state = _uiState.value
         val routine = state.routine ?: return null
         val realDisruption = if (routine.type == RoutineType.EXACT_DESTINATION) {
-            state.journeys.primaryDisruptionNotices().compactPresentation()
+            state.exactDestinationDeviationNotices.compactPresentation()
         } else {
             (state.disruptions as? DisruptionsState.Loaded)?.disruptions?.firstOrNull()?.toPresentation()
         }
@@ -998,10 +1049,86 @@ class RoutineDetailsViewModel @Inject constructor(
                 _uiState.update {
                     it.copy(journeys = journeys, journeysUnavailable = false, isRefreshingDepartures = false, journeysEvaluatedAt = evaluatedAt)
                 }
+                loadJourneyDisruptionRelevance(routine, journeys)
             } catch (e: CancellationException) { throw e }
             catch (_: Exception) {
                 _uiState.update { it.copy(journeysUnavailable = true, isRefreshingDepartures = false) }
             }
+        }
+    }
+
+    /** Guards against an overlapping/superseded disruption-relevance lookup overwriting a newer
+     * one — same job + request-generation-token pattern as [disruptionsJob]/[disruptionsRequestId],
+     * kept entirely separate: see [loadJourneyDisruptionRelevance]'s own doc. This alone is NOT
+     * sufficient to keep a stale PRIMARY's own disruption off screen — see [PrimaryDisruptionState]
+     * and [RoutineDetailsUiState.exactDestinationDeviationNotices]'s own docs for the second,
+     * independent guard that solves that different problem. */
+    private var journeyDeviationNoticesJob: Job? = null
+    private var journeyDeviationNoticesRequestId = 0
+
+    /**
+     * Supplements the current PRIMARY exact-destination journey's own Journey Planner notices
+     * (already part of [journeys], fetched moments ago by [loadJourneys]) with
+     * structurally-matched cached SL Deviations — see [GetJourneyDisruptionRelevanceUseCase]'s own
+     * doc for why Journey Planner's own `infos` is not a reliable disruption source on its own
+     * (confirmed live for Akalla -> Kungsträdgården). Always re-derived from whichever journey is
+     * CURRENTLY PRIMARY, never a value held onto across a PRIMARY change.
+     *
+     * Bounded by [DISRUPTIONS_FETCH_TIMEOUT_MS] — the SAME constant/semantics
+     * [se.blick.app.scheduling.RoutineActiveWindowWorker]'s own second-phase deviations lookup
+     * already uses, reused rather than inventing a second arbitrary value. A slow lookup must never
+     * remain in flight indefinitely, but this is a purely secondary enhancement: a timeout never
+     * touches [RoutineDetailsUiState.journeys]/[RoutineDetailsUiState.journeysUnavailable] or any
+     * other section, and never blocks or delays this screen's own departures/journeys refresh
+     * (already completed by the time this function is even called from [loadJourneys]).
+     *
+     * Two independent guards protect [RoutineDetailsUiState.primaryDisruptionState] from staleness
+     * — they solve two different problems, and BOTH are required (see
+     * [RoutineDetailsUiState.exactDestinationDeviationNotices]'s own doc for how they combine at
+     * read time):
+     * - [journeyDeviationNoticesRequestId] (this function's own generation guard, same pattern
+     *   [loadDisruptions] already uses via [disruptionsRequestId]): a late-arriving response from
+     *   an OLDER, already-superseded lookup must never overwrite a NEWER one that already landed.
+     * - [PrimaryDisruptionState.primaryJourneyId] ownership, checked at READ time by
+     *   [RoutineDetailsUiState.exactDestinationDeviationNotices] — NOT here: even a response that
+     *   wins the generation race is only ever rendered while it still names the CURRENT PRIMARY.
+     *   This is what makes a PRIMARY change invalidate the old result IMMEDIATELY, the instant the
+     *   new [journeys] list lands (synchronously, in [loadJourneys], before this function's own new
+     *   lookup even starts) — not merely once that new lookup eventually resolves.
+     *
+     * [RoutineDetailsUiState.primaryDisruptionState] is updated ONLY on genuine SUCCESS, replaced
+     * with the new result tagged with THIS [primary]'s own journeyId (even an empty list is a
+     * meaningful, positive result — "no relevant deviation for this PRIMARY right now" — and must
+     * still overwrite whatever was stored before). On FAILURE, TIMEOUT, or being
+     * superseded/cancelled by a newer call, it is left COMPLETELY UNTOUCHED: a same-PRIMARY refresh
+     * whose lookup happens to fail or time out must not blank an existing, still-valid result merely
+     * because this one attempt didn't complete (no unnecessary flicker) — and a genuine PRIMARY
+     * change is already handled independently by the ownership check above regardless of whether
+     * this attempt ever succeeds, so eagerly clearing here would only cost a needless flicker
+     * without preventing anything the ownership check doesn't already prevent.
+     */
+    private fun loadJourneyDisruptionRelevance(routine: CommuteRoutine, journeys: List<JourneyPlan>) {
+        journeyDeviationNoticesJob?.cancel()
+        val requestId = ++journeyDeviationNoticesRequestId
+        val useCase = getJourneyDisruptionRelevance
+        val primary = journeys.firstOrNull { it.role == JourneyRole.PRIMARY }
+        if (useCase == null || primary == null) return
+        journeyDeviationNoticesJob = viewModelScope.launch {
+            val disruptions = try {
+                withTimeoutOrNull(DISRUPTIONS_FETCH_TIMEOUT_MS) {
+                    useCase(primary.legs, routine.siteId, journeys.primaryDisruptionNotices())
+                }
+            } catch (e: CancellationException) {
+                throw e
+            } catch (e: Exception) {
+                null
+            }
+            // null covers BOTH a genuine timeout (withTimeoutOrNull itself) and any other
+            // exception (caught above) — both are secondary failures that must leave
+            // primaryDisruptionState exactly as it was, never overwritten with an empty result.
+            if (disruptions == null) return@launch
+            if (requestId != journeyDeviationNoticesRequestId) return@launch
+            _uiState.update { it.copy(primaryDisruptionState = PrimaryDisruptionState(primary.journeyId, disruptions)) }
         }
     }
 

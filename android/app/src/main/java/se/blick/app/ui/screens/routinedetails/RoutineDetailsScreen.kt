@@ -74,6 +74,7 @@ import se.blick.app.domain.model.CommuteRoutine
 import se.blick.app.domain.model.Disruption
 import se.blick.app.domain.model.DisruptionEffect
 import se.blick.app.domain.model.DisruptionPresentation
+import se.blick.app.domain.model.ResolvedJourneyDisruption
 import se.blick.app.domain.model.toPresentation
 import se.blick.app.notification.disruptionEffectLabelRes
 import se.blick.app.domain.model.ExactDestinationChangesPreference
@@ -83,7 +84,6 @@ import se.blick.app.domain.usecase.PreparedDeparture
 import se.blick.app.domain.usecase.countdownMinutes
 import se.blick.app.domain.usecase.effectiveFirstDeparture
 import se.blick.app.domain.usecase.filterCurrentJourneys
-import se.blick.app.domain.usecase.primaryDisruptionNotices
 import se.blick.app.domain.model.TransportMode
 import se.blick.app.domain.model.JourneyPlan
 import se.blick.app.domain.model.JourneyRole
@@ -178,6 +178,7 @@ fun RoutineDetailsScreen(
                 disruptionsState = uiState.disruptions,
                 journeys = uiState.journeys,
                 journeysUnavailable = uiState.journeysUnavailable,
+                exactDestinationDeviationNotices = uiState.exactDestinationDeviationNotices,
                 // The ViewModel's own journeysEvaluatedAt, not the default Instant.now() --
                 // see that field's own doc, and RoutineDetailsContent's now parameter doc, for
                 // why production must never rely on the default here.
@@ -463,6 +464,11 @@ internal fun RoutineDetailsContent(
     disruptionsState: DisruptionsState,
     journeys: List<JourneyPlan> = emptyList(),
     journeysUnavailable: Boolean = false,
+    /** The backend's own fully resolved, deduplicated exact-destination disruption list for the
+     * current PRIMARY journey -- see [RoutineDetailsViewModel.loadJourneyDisruptionRelevance]'s
+     * own doc. Already combines [journeys]' own Journey Planner notices with structurally-matched
+     * SL Deviations; no further combination happens here. */
+    exactDestinationDeviationNotices: List<ResolvedJourneyDisruption> = emptyList(),
     /** The "now" [JourneyComparisonSection] filters and computes countdowns against.
      * [RoutineDetailsScreen] (the only production call site) always passes
      * `uiState.journeysEvaluatedAt` here — never relies on this parameter's own default -- see
@@ -506,14 +512,17 @@ internal fun RoutineDetailsContent(
     // Blick's effective English/Svenska presentation locale -- see that function's own doc.
     val locale = currentBlickLocale()
 
-    // EXACT_DESTINATION's own top-section relevance: the CURRENT PRIMARY journey's notices --
-    // never NEXT's or ALTERNATIVE's own (see RoutineActiveWindowWorker's own doc on why PRIMARY
-    // alone decides live relevance) -- so this automatically follows PRIMARY across a refresh,
-    // being a pure derivation from `journeys`/`now`, never cached or held onto separately. Empty
-    // (and therefore this section skipped below, same as LINE_DIRECTION's own NoDisruptions
-    // case) whenever there is no current PRIMARY or it simply has none.
+    // EXACT_DESTINATION's own top-section relevance: the backend's own fully resolved
+    // disruption list for whichever journey was PRIMARY at the time of the last successful
+    // lookup -- never NEXT's or ALTERNATIVE's own (see RoutineActiveWindowWorker's own doc on
+    // why PRIMARY alone decides live relevance). See RoutineDetailsViewModel.loadJourneyDisruptionRelevance's
+    // own doc for how this is kept following PRIMARY across a refresh (a fresh lookup is
+    // triggered every time journeys reloads, guarded against a superseded in-flight request).
+    // Empty (and therefore this section skipped below, same as LINE_DIRECTION's own
+    // NoDisruptions case) whenever there is no current PRIMARY, it simply has no relevant
+    // disruption, or the lookup itself hasn't completed/failed.
     val exactDestinationPrimaryNotices = if (routine.type == RoutineType.EXACT_DESTINATION) {
-        journeys.filterCurrentJourneys(now).primaryDisruptionNotices()
+        exactDestinationDeviationNotices
     } else {
         emptyList()
     }
@@ -546,7 +555,7 @@ internal fun RoutineDetailsContent(
             Text(stringResource(heading), style = MaterialTheme.typography.titleMedium)
             Spacer(Modifier.height(12.dp))
             if (routine.type == RoutineType.EXACT_DESTINATION) {
-                DisruptionsList(exactDestinationPrimaryNotices.map { DisruptionPresentation(it.text, null, it.effect) })
+                DisruptionsList(exactDestinationPrimaryNotices.map { it.toPresentation() })
             } else {
                 DisruptionsSection(disruptionsState)
             }
@@ -1346,10 +1355,10 @@ private fun DisruptionsSection(state: DisruptionsState) {
 
 /** Shared by both routine types — a `LINE_DIRECTION` [Disruption] adapted via
  * [se.blick.app.domain.model.toPresentation], or an `EXACT_DESTINATION` PRIMARY journey's own
- * [se.blick.app.domain.model.JourneyDisruptionNotice]s, mapped 1:1 into the same
- * [DisruptionPresentation] shape — see that type's own doc. Multiple genuinely different notices
- * are always all shown here, one card each; only the notification/widget's single compact
- * indicator ever collapses them (see [se.blick.app.domain.usecase.compactPresentation]). */
+ * [se.blick.app.domain.model.ResolvedJourneyDisruption]s, mapped 1:1 via that same extension —
+ * see [DisruptionPresentation]'s own doc. Multiple genuinely different notices are always all
+ * shown here, one card each; only the notification/widget's single compact indicator ever
+ * collapses them (see [se.blick.app.domain.usecase.compactPresentation]). */
 @Composable
 private fun DisruptionsList(disruptions: List<DisruptionPresentation>) {
     Column(verticalArrangement = Arrangement.spacedBy(12.dp)) {
@@ -1365,13 +1374,20 @@ private fun DisruptionsList(disruptions: List<DisruptionPresentation>) {
  * failure states elsewhere on this screen) so a disruption is clearly noticeable without being
  * visually harsh. Always shows [DisruptionPresentation]'s own real, unaltered text — never only
  * the classified [DisruptionPresentation.effect] label (that compact summary is the
- * notification/widget's own job, not this detailed screen's). Collapsed by default, showing only
+ * notification/widget's own job, not this detailed screen's) — this holds for a `CONFIRMED`
+ * exact-destination disruption AND a `LINE_RELEVANT` one alike: the real SL header/details are
+ * never hidden merely because confidence is only line-level (see
+ * [se.blick.app.domain.model.DisruptionRelevance]'s own doc). Collapsed by default, showing only
  * [DisruptionPresentation.headline]; the expand/collapse icon button reveals
  * [DisruptionPresentation.details] below it when one exists, mirroring the same collapsed-header/
  * expanded-details split the notification's own [se.blick.app.notification.RoutineNotificationBuilder]
- * uses. An `EXACT_DESTINATION` notice has no separate details (a Journey Planner notice is
- * already one short piece of text, unlike an SL Deviations message's own header/details split),
- * so the expand affordance itself is omitted rather than expanding to nothing.
+ * uses. A `LINE_DIRECTION`/`CONFIRMED` disruption's own [DisruptionPresentation.uncertainLineDesignations]
+ * is always empty; when it is NOT empty (a `LINE_RELEVANT` exact-destination disruption), an
+ * additional small caption makes clear this card's own real text has NOT been proven to affect
+ * this exact journey's own segment — the real text stays visible, never replaced, but is no
+ * longer presented as though it were confirmed. A Journey Planner notice has no separate details
+ * (it is already one short piece of text, unlike an SL Deviations message's own header/details
+ * split), so the expand affordance itself is omitted rather than expanding to nothing.
  */
 @Composable
 private fun DisruptionRow(disruption: DisruptionPresentation) {
@@ -1401,6 +1417,15 @@ private fun DisruptionRow(disruption: DisruptionPresentation) {
                         )
                     }
                 }
+            }
+            if (disruption.uncertainLineDesignations.isNotEmpty()) {
+                Text(
+                    stringResource(
+                        R.string.routine_details_disruption_line_relevant_qualifier,
+                        disruption.uncertainLineDesignations.joinToString(", "),
+                    ),
+                    style = MaterialTheme.typography.bodySmall,
+                )
             }
             if (expanded && details != null) {
                 Spacer(Modifier.height(4.dp))

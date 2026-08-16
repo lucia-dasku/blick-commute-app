@@ -16,6 +16,7 @@ import { config } from "./config/env.js";
 import { createBillingRoute } from "./routes/billing.js";
 import { createGooglePlayPurchaseVerifier } from "./services/googlePlayPurchaseVerifier.js";
 import { createJourneyRoutes } from "./routes/journeys.js";
+import { createJourneyDisruptionsRoute } from "./routes/journeyDisruptions.js";
 import { createSlJourneyPlannerClient } from "./services/slJourneyPlannerClient.js";
 
 /**
@@ -53,6 +54,12 @@ export function createApp() {
   app.route("/disruptions", createDisruptionsRoute(deviationsSnapshotService, siteDirectory));
   app.route("/billing", createBillingRoute(createGooglePlayPurchaseVerifier(config.googlePlay)));
   app.route("/journeys", createJourneyRoutes(createSlJourneyPlannerClient()));
+  // A separate top-level mount, not nested inside createJourneyRoutes -- see
+  // createJourneyDisruptionsRoute's own doc for why this must stay a genuinely independent
+  // route/HTTP call rather than a field on /api/v1/journeys itself. Reuses the SAME
+  // deviationsSnapshotService/siteDirectory instances /api/v1/disruptions already uses -- no new
+  // upstream SL request is introduced by this route's existence.
+  app.route("/journeys/disruptions", createJourneyDisruptionsRoute(deviationsSnapshotService, siteDirectory));
 
   app.notFound(notFoundHandler);
   app.onError(onError);

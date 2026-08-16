@@ -45,10 +45,13 @@ import se.blick.app.billing.RoutineTierPolicy
 import kotlinx.coroutines.flow.first
 import se.blick.app.domain.model.RoutineType
 import se.blick.app.domain.model.JourneyPlan
+import se.blick.app.domain.model.JourneyRole
+import se.blick.app.domain.usecase.GetJourneyDisruptionRelevanceUseCase
 import se.blick.app.domain.usecase.GetRankedJourneysUseCase
 import se.blick.app.domain.usecase.LiveDeparturesSnapshot
 import se.blick.app.domain.usecase.PreparedDeparture
 import se.blick.app.domain.usecase.RoutineScheduleOverlapValidator
+import se.blick.app.domain.usecase.compactJourneyPlannerPresentation
 import se.blick.app.domain.usecase.compactPresentation
 import se.blick.app.domain.usecase.countdownMinutes
 import se.blick.app.domain.usecase.effectiveFirstDeparture
@@ -301,6 +304,7 @@ class RoutineActiveWindowWorker @AssistedInject constructor(
     private val entitlementRepository: PremiumEntitlementRepository = FreePremiumEntitlementRepository,
     private val freeRoutineSelectionStore: FreeRoutineSelectionStore? = null,
     private val getRankedJourneys: GetRankedJourneysUseCase? = null,
+    private val getJourneyDisruptionRelevance: GetJourneyDisruptionRelevanceUseCase? = null,
 ) : CoroutineWorker(context, params) {
 
     private fun zonedNow(): ZonedDateTime = ZonedDateTime.ofInstant(clock.instant(), deviceZoneProvider.currentZone())
@@ -622,13 +626,13 @@ class RoutineActiveWindowWorker @AssistedInject constructor(
                 // EXACT_DESTINATION's own disruption notices arrive as part of THIS SAME
                 // journeyPlans fetch -- no separate fetch to wait for, unlike LINE_DIRECTION's
                 // own lastKnownDisruption/getDisruptions below (untouched by this branch).
-                // Conservatively aggregated (see compactPresentation's own doc: a single
-                // distinct PRIMARY notice's own effect, or the generic DISRUPTION label when
+                // Conservatively aggregated (see compactJourneyPlannerPresentation's own doc: a
+                // single distinct PRIMARY notice's own effect, or the generic DISRUPTION label when
                 // PRIMARY has several genuinely different ones -- never an invented ranking),
                 // and always re-derived from the CURRENT PRIMARY, so a PRIMARY change on a later
                 // tick is reflected automatically with no extra bookkeeping.
                 val exactDisruption = if (current.type == RoutineType.EXACT_DESTINATION) {
-                    journeyPlans.primaryDisruptionNotices().compactPresentation()
+                    journeyPlans.primaryDisruptionNotices().compactJourneyPlannerPresentation()
                 } else {
                     null
                 }
@@ -696,6 +700,59 @@ class RoutineActiveWindowWorker @AssistedInject constructor(
                     // same tick, same already-fetched departuresState, no separate widget fetch
                     // or timer.
                     runWidgetUpdateSafely { routineWidgetUpdater.updateWithDepartures(current, departuresState, nowAfterDisruptionFetch, lastKnownDisruption) }
+                }
+
+                // EXACT_DESTINATION's own second-phase disruption-relevance lookup -- mirrors the
+                // LINE_DIRECTION block above's own primary-first/disruption-second timing. Sends
+                // PRIMARY's own already-shown Journey Planner notices (the first post above)
+                // ALONGSIDE its legs/origin site id so the backend's own single authoritative
+                // resolver (see GetJourneyDisruptionRelevanceUseCase's own doc) can combine them
+                // with structurally-matched cached SL Deviations -- never combined/deduplicated
+                // here, since Journey Planner's own `infos` can miss a disruption entirely when it
+                // silently reroutes PRIMARY around one without attaching any notice text at all
+                // (confirmed live for Akalla -> Kungsträdgården). Bounded by the SAME
+                // DISRUPTIONS_FETCH_TIMEOUT_MS and never awaited before the first post above -- a
+                // timeout or failure here simply leaves this tick's own presentation
+                // Journey-Planner-notices-only (still correct, just possibly incomplete), never
+                // blocking or delaying the journey/countdown/notification/widget refresh already
+                // completed above. No separate 30-second loop, no per-leg/per-stop upstream
+                // request -- one bounded call per tick, reading the backend's own shared cached SL
+                // Deviations snapshot (see `backend/src/routes/journeyDisruptions.ts`'s own doc).
+                if (current.type == RoutineType.EXACT_DESTINATION && getJourneyDisruptionRelevance != null) {
+                    val primary = journeyPlans.firstOrNull { it.role == JourneyRole.PRIMARY }
+                    val resolvedDisruptions = if (primary != null) {
+                        withTimeoutOrNull(DISRUPTIONS_FETCH_TIMEOUT_MS) {
+                            try {
+                                getJourneyDisruptionRelevance(primary.legs, current.siteId, journeyPlans.primaryDisruptionNotices())
+                            } catch (e: CancellationException) {
+                                throw e
+                            } catch (_: Exception) {
+                                null
+                            }
+                        } ?: emptyList()
+                    } else {
+                        emptyList()
+                    }
+                    if (resolvedDisruptions.isNotEmpty()) {
+                        // Already the backend's own fully resolved, deduplicated, merged result --
+                        // renders exactly what was returned, no Android-side relevance inference.
+                        val resolvedDisruption = resolvedDisruptions.compactPresentation()
+                        // Only re-posts if the deviations lookup actually changed what's already
+                        // shown -- mirrors the LINE_DIRECTION block above's own
+                        // `lastKnownDisruption != disruptionAtPost` guard.
+                        if (resolvedDisruption != exactDisruption) {
+                            val nowAfterDeviationsFetch = clock.instant()
+                            routineNotifier.showOrUpdate(
+                                RoutineNotificationMapper.map(notificationRoutine, departuresState, nowAfterDeviationsFetch, resolvedDisruption),
+                            )
+                            runWidgetUpdateSafely {
+                                routineWidgetUpdater.updateWithJourneys(
+                                    current, journeyPlans, nowAfterDeviationsFetch,
+                                    fetchFailed = rawJourneyPlans == null, disruption = resolvedDisruption,
+                                )
+                            }
+                        }
+                    }
                 }
 
                 // Subtracts however long this WHOLE tick actually took -- the routine re-read,

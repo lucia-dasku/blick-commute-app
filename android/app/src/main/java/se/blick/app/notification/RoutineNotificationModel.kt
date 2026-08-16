@@ -52,6 +52,16 @@ data class RoutineNotificationModel(
      * [se.blick.app.domain.model.toDisruptionEffect]), so this field never needs its own
      * separate "unavailable" fallback here. */
     val disruptionEffect: DisruptionEffect? = null,
+    /** Non-empty ONLY when the current disruption's own relevance is LINE_RELEVANT (see
+     * [se.blick.app.domain.model.DisruptionPresentation.uncertainLineDesignations]'s own doc) —
+     * the matched PRIMARY line designation(s), without structured proof the affected segment
+     * intersects this exact journey. When non-empty, [RoutineNotificationBuilder] uses THIS field
+     * to build a conservative "Line 11 disruption"-style label INSTEAD of [disruptionEffect]'s own
+     * classified label, which would otherwise overclaim proof for this exact journey's own
+     * segment. Always empty for `LINE_DIRECTION` and for a `CONFIRMED` exact-destination
+     * disruption, both of which render [disruptionEffect] directly exactly as before this field
+     * existed. */
+    val disruptionUncertainLineDesignations: List<String> = emptyList(),
 )
 
 /**

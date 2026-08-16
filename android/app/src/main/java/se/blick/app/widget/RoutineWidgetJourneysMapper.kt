@@ -72,6 +72,7 @@ internal fun decideJourneysWidgetState(
             RoutineWidgetContent.Journeys(primary, rows.getOrNull(1), routine.changesPreference),
             primary.lineDesignation, primary.transportMode,
             disruptionHeadline = disruption?.headline,
+            disruptionUncertainLineDesignations = disruption?.uncertainLineDesignations ?: emptyList(),
         ),
     )
 }

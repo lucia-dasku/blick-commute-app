@@ -30,6 +30,10 @@ private object WidgetKeys {
     val LINE_DESIGNATION = stringPreferencesKey("lineDesignation")
     val TRANSPORT_MODE = stringPreferencesKey("transportMode")
     val DISRUPTION_HEADLINE = stringPreferencesKey("disruptionHeadline")
+    /** Encoded via [encodeLineDesignations] (see that function's own doc) — new in this version;
+     * absent entirely on state persisted by an older app version, or whenever the current
+     * disruption (if any) is `CONFIRMED`/`LINE_DIRECTION` rather than `LINE_RELEVANT`. */
+    val DISRUPTION_UNCERTAIN_LINE_DESIGNATIONS = stringPreferencesKey("disruptionUncertainLineDesignations")
     val LAST_CHECKED_AT_EPOCH_MILLIS = longPreferencesKey("lastCheckedAtEpochMillis")
     val NEXT_LINE = stringPreferencesKey("nextLine")
     val NEXT_DESTINATION = stringPreferencesKey("nextDestination")
@@ -93,6 +97,16 @@ private fun String?.decodeLegBadges(): List<WidgetJourneyLegBadge> =
         }
         .orEmpty()
 
+/** Encodes [RoutineWidgetModel.disruptionUncertainLineDesignations] as `"11|17"` — pipe-separated,
+ * matching [encodeLegBadges]'s own convention (a real SL line designation never itself contains
+ * `|`). */
+private fun List<String>.encodeLineDesignations(): String = joinToString("|")
+
+/** The exact inverse of [encodeLineDesignations] — a null/blank value (absent key, or a version
+ * predating this field) decodes to an empty list, matching [RoutineWidgetModel.disruptionUncertainLineDesignations]'s
+ * own default. */
+private fun String?.decodeLineDesignations(): List<String> = this?.takeIf(String::isNotEmpty)?.split("|").orEmpty()
+
 private enum class ContentType { NO_ACTIVE_COMMUTE, LOADING, LIVE, STALE, NO_UPCOMING, OFFLINE, UNAVAILABLE, NOTIFICATIONS_UNAVAILABLE, JOURNEYS }
 
 /** Clears every key this codec owns before writing new ones — a widget state transition (e.g.
@@ -110,6 +124,9 @@ internal fun RoutineWidgetUiState.writeInto(prefs: MutablePreferences) {
             model.directionLabel?.let { prefs[WidgetKeys.DIRECTION_LABEL] = it }
             model.lineDesignation?.let { prefs[WidgetKeys.LINE_DESIGNATION] = it }
             model.disruptionHeadline?.let { prefs[WidgetKeys.DISRUPTION_HEADLINE] = it }
+            if (model.disruptionUncertainLineDesignations.isNotEmpty()) {
+                prefs[WidgetKeys.DISRUPTION_UNCERTAIN_LINE_DESIGNATIONS] = model.disruptionUncertainLineDesignations.encodeLineDesignations()
+            }
             when (val content = model.content) {
                 RoutineWidgetContent.Loading -> prefs[WidgetKeys.CONTENT_TYPE] = ContentType.LOADING.name
                 is RoutineWidgetContent.Live -> {
@@ -192,6 +209,7 @@ internal fun Preferences.toWidgetUiState(): RoutineWidgetUiState {
     val directionLabel = this[WidgetKeys.DIRECTION_LABEL]
     val lineDesignation = this[WidgetKeys.LINE_DESIGNATION]
     val disruptionHeadline = this[WidgetKeys.DISRUPTION_HEADLINE]
+    val disruptionUncertainLineDesignations = this[WidgetKeys.DISRUPTION_UNCERTAIN_LINE_DESIGNATIONS].decodeLineDesignations()
     // .toTransportMode() defaults to TransportMode.UNKNOWN both for a genuinely unrecognized
     // value and for a widget instance whose prefs were written by an app version before this
     // key existed (this[...] is then simply null) -- either way, a safe grey badge, never a
@@ -247,6 +265,7 @@ internal fun Preferences.toWidgetUiState(): RoutineWidgetUiState {
             lineDesignation = lineDesignation,
             transportMode = transportMode,
             disruptionHeadline = disruptionHeadline,
+            disruptionUncertainLineDesignations = disruptionUncertainLineDesignations,
         ),
     )
 }

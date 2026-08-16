@@ -43,6 +43,13 @@ function disruptionText(infos: unknown[] | undefined): string[] {
 export interface JourneyDisruptionNotice {
   text: string;
   effect: DisruptionEffect;
+  /** Present only for a notice sourced from a matched SL Deviation (see
+   * `routes/journeyDisruptions.ts`), carrying that deviation's own `message.details` body text —
+   * `text` there is the deviation's `message.header`. Absent (never an empty string) for a notice
+   * sourced from Journey Planner's own `infos`, which has no separate longer body the way an SL
+   * Deviations message does (see `se.blick.app.domain.model.DisruptionPresentation`'s own doc on
+   * the Android side of this same distinction). */
+  details?: string;
 }
 
 /**

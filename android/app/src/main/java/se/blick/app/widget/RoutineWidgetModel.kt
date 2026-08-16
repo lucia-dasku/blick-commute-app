@@ -53,6 +53,16 @@ data class RoutineWidgetModel(
      * disruption data in hand (e.g. [RoutineWidgetReconciler]'s reconciliation paths), exactly
      * like [lineDesignation] being null is handled — never shown, rather than shown empty. */
     val disruptionHeadline: String? = null,
+    /** Mirrors [se.blick.app.notification.RoutineNotificationModel.disruptionUncertainLineDesignations]
+     * exactly — non-empty ONLY when the current disruption's own relevance is LINE_RELEVANT (see
+     * [se.blick.app.domain.model.DisruptionPresentation.uncertainLineDesignations]'s own doc).
+     * When non-empty, [BlickRoutineWidget]'s own disruption strip uses this field to build the
+     * same conservative "Line 11 disruption"-style label the notification shows, INSTEAD of
+     * [disruptionHeadline]'s own real SL text, which would otherwise overclaim proof for this
+     * exact journey's own segment. Always empty for `LINE_DIRECTION` and for a `CONFIRMED`
+     * exact-destination disruption, both of which show [disruptionHeadline] directly, exactly as
+     * before this field existed. */
+    val disruptionUncertainLineDesignations: List<String> = emptyList(),
 )
 
 /** Mirrors [se.blick.app.notification.RoutineNotificationContent] one-for-one, except [Live] and

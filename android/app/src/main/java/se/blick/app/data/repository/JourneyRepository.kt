@@ -2,13 +2,19 @@ package se.blick.app.data.repository
 
 import se.blick.app.data.remote.BlickApiClient
 import se.blick.app.data.remote.dto.JourneyDisruptionNoticeDto
+import se.blick.app.data.remote.dto.JourneyDisruptionRelevanceLegDto
+import se.blick.app.data.remote.dto.JourneyDisruptionRelevanceRequestDto
 import se.blick.app.data.remote.dto.JourneyLegDto
+import se.blick.app.data.remote.dto.ResolvedJourneyDisruptionDto
+import se.blick.app.domain.model.DisruptionRelevance
+import se.blick.app.domain.model.DisruptionSource
 import se.blick.app.domain.model.ExactDestinationChangesPreference
 import se.blick.app.domain.model.JourneyDisruptionNotice
 import se.blick.app.domain.model.JourneyLeg
 import se.blick.app.domain.model.JourneyLocation
 import se.blick.app.domain.model.JourneyPlan
 import se.blick.app.domain.model.JOURNEY_TRANSPORT_MODE_OPTIONS
+import se.blick.app.domain.model.ResolvedJourneyDisruption
 import se.blick.app.domain.model.TransportMode
 import se.blick.app.domain.model.toDisruptionEffect
 import se.blick.app.domain.model.toJourneyRole
@@ -31,6 +37,28 @@ interface JourneyRepository {
         searchUntil: Instant? = null,
         changesPreference: ExactDestinationChangesPreference = ExactDestinationChangesPreference.BOTH,
     ): List<JourneyPlan>
+
+    /** Resolves the current PRIMARY exact-destination journey's own live disruption relevance —
+     * see `backend/src/routes/journeyDisruptions.ts`'s own doc. The backend is the single
+     * authoritative source: it combines [journeyPlannerNotices] (PRIMARY's own already-fetched
+     * `disruptionNotices`, sent back unchanged — see
+     * [se.blick.app.domain.usecase.primaryDisruptionNotices]) with structurally-matched SL
+     * Deviations from its own shared cached snapshot, deduplicates, and resolves each to
+     * [DisruptionRelevance.CONFIRMED] or [DisruptionRelevance.LINE_RELEVANT] — this app performs
+     * no relevance inference of its own, only rendering.
+     *
+     * A WALK leg or a leg with no [JourneyLeg.lineDesignation] in [legs] carries no line-scope
+     * signal and is never sent (see [RemoteJourneyRepository]'s own filtering). When there is
+     * nothing at all to resolve (no eligible leg AND no Journey Planner notice), this returns an
+     * empty list without making a network call. [originSiteId] is the routine's own
+     * SL-Transport-namespace origin site id (see [se.blick.app.domain.model.CommuteRoutine.siteId]),
+     * or null when unavailable — see `disruptionRelevance.ts`'s own doc for why only the origin,
+     * never the destination, can be supplied this way today. */
+    suspend fun getRelevantDeviationNotices(
+        legs: List<JourneyLeg>,
+        originSiteId: Long?,
+        journeyPlannerNotices: List<JourneyDisruptionNotice>,
+    ): List<ResolvedJourneyDisruption> = emptyList()
 }
 
 class RemoteJourneyRepository @Inject constructor(private val apiClient: BlickApiClient) : JourneyRepository {
@@ -62,6 +90,28 @@ class RemoteJourneyRepository @Inject constructor(private val apiClient: BlickAp
                 role, dto.disruptionNotices.map(JourneyDisruptionNoticeDto::toDomain),
             )
     }
+
+    override suspend fun getRelevantDeviationNotices(
+        legs: List<JourneyLeg>,
+        originSiteId: Long?,
+        journeyPlannerNotices: List<JourneyDisruptionNotice>,
+    ): List<ResolvedJourneyDisruption> {
+        // A WALK leg's own transportMode is already TransportMode.UNKNOWN by the time it reaches
+        // this domain model (see String.toTransportMode()'s own doc -- Android's TransportMode
+        // enum has no WALK case at all, since walking legs carry no SL line/mode to filter
+        // disruptions by), so excluding UNKNOWN here also excludes every WALK leg for free.
+        val encodedLegs = legs
+            .filter { it.transportMode != TransportMode.UNKNOWN && it.lineDesignation != null }
+            .distinctBy { it.transportMode to it.lineDesignation }
+            .map { JourneyDisruptionRelevanceLegDto(it.transportMode.name, it.lineDesignation!!) }
+        if (encodedLegs.isEmpty() && journeyPlannerNotices.isEmpty()) return emptyList()
+        val request = JourneyDisruptionRelevanceRequestDto(
+            legs = encodedLegs,
+            originSiteId = originSiteId,
+            journeyPlannerNotices = journeyPlannerNotices.map { JourneyDisruptionNoticeDto(it.text, it.effect.name) },
+        )
+        return apiClient.getJourneyDisruptionRelevance(request).disruptions.mapNotNull(ResolvedJourneyDisruptionDto::toDomain)
+    }
 }
 
 private fun JourneyLegDto.toDomain() = JourneyLeg(
@@ -69,4 +119,14 @@ private fun JourneyLegDto.toDomain() = JourneyLeg(
     departureTime?.let(Instant::parse), arrivalTime?.let(Instant::parse), isRealtime, disruptions,
 )
 
-private fun JourneyDisruptionNoticeDto.toDomain() = JourneyDisruptionNotice(text, effect.toDisruptionEffect())
+private fun JourneyDisruptionNoticeDto.toDomain() = JourneyDisruptionNotice(text, effect.toDisruptionEffect(), details)
+
+/** Fail closed, never invent a relevance/source — a single malformed entry is dropped rather
+ * than failing the whole response, matching [RemoteJourneyRepository.getJourneys]'s own
+ * `toJourneyRole()` convention for exactly the same reason: the remaining, validly-shaped
+ * disruptions are still genuinely useful to show. */
+private fun ResolvedJourneyDisruptionDto.toDomain(): ResolvedJourneyDisruption? {
+    val relevance = runCatching { DisruptionRelevance.valueOf(relevance) }.getOrNull() ?: return null
+    val source = runCatching { DisruptionSource.valueOf(source) }.getOrNull() ?: return null
+    return ResolvedJourneyDisruption(id, headline, details, effect.toDisruptionEffect(), relevance, source, matchedLineDesignations)
+}

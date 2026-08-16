@@ -469,4 +469,36 @@ class RoutineNotificationMapperTest {
         val presentation = d.toPresentation()
         assertEquals(DisruptionPresentation("Delays on line 14", "Expect longer travel times.", DisruptionEffect.DELAYS), presentation)
     }
+
+    // ---- disruptionUncertainLineDesignations: mirrors DisruptionPresentation.uncertainLineDesignations
+    // one-for-one -- see RoutineNotificationBuilderTest for how RoutineNotificationBuilder itself
+    // renders this into the conservative "Line 11 disruption" label. ----
+
+    @Test
+    fun `no topDisruption produces empty disruptionUncertainLineDesignations`() {
+        val model = RoutineNotificationMapper.map(routine(), LiveDeparturesState.Loading, now)
+        assertTrue(model.disruptionUncertainLineDesignations.isEmpty())
+    }
+
+    @Test
+    fun `a CONFIRMED-equivalent topDisruption -- LINE_DIRECTION's own real disruption -- carries empty disruptionUncertainLineDesignations`() {
+        val d = disruption()
+        val model = RoutineNotificationMapper.map(routine(), LiveDeparturesState.Loading, now, topDisruption = d.toPresentation())
+        assertTrue(model.disruptionUncertainLineDesignations.isEmpty())
+    }
+
+    @Test
+    fun `a LINE_RELEVANT presentation's uncertainLineDesignations is carried into the model unchanged`() {
+        val presentation = DisruptionPresentation(
+            headline = "Trafiken är stängd mellan T-Centralen och Kungsträdgården",
+            details = null,
+            effect = DisruptionEffect.NO_SERVICE,
+            uncertainLineDesignations = listOf("11"),
+        )
+        val model = RoutineNotificationMapper.map(routine(), LiveDeparturesState.Loading, now, topDisruption = presentation)
+        assertEquals(listOf("11"), model.disruptionUncertainLineDesignations)
+        // The real classified effect still travels through unchanged -- RoutineNotificationBuilder,
+        // not this pure mapper, is responsible for choosing not to render it directly.
+        assertEquals(DisruptionEffect.NO_SERVICE, model.disruptionEffect)
+    }
 }

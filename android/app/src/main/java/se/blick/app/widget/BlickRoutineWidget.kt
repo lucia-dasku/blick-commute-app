@@ -332,7 +332,7 @@ private fun ActiveRoutineContent(context: Context, model: RoutineWidgetModel, no
     val isStale = model.content is RoutineWidgetContent.Stale
     // No room for the disruption strip in compact mode -- same reasoning as dropping the
     // secondary station/next-departure block and status row there (see WidgetContentBody).
-    val disruptionHeadline = model.disruptionHeadline?.takeIf { !compact }
+    val disruptionStripText = disruptionStripText(context, model)?.takeIf { !compact }
 
     Box(
         modifier = GlanceModifier
@@ -372,10 +372,32 @@ private fun ActiveRoutineContent(context: Context, model: RoutineWidgetModel, no
                 Spacer(modifier = GlanceModifier.height(if (compact) 6.dp else 12.dp))
                 WidgetContentBody(context, model, compact, tier, now)
             }
-            if (disruptionHeadline != null) {
-                DisruptionStrip(disruptionHeadline, tier)
+            if (disruptionStripText != null) {
+                DisruptionStrip(disruptionStripText, tier)
             }
         }
+    }
+}
+
+/** The widget's own disruption-strip text — [model]'s real SL headline when
+ * [RoutineWidgetModel.disruptionUncertainLineDesignations] is empty (a `CONFIRMED`
+ * exact-destination disruption, or any `LINE_DIRECTION` disruption — both already proven
+ * relevant, see that field's own doc), or a conservative "Line 11 disruption"-style label built
+ * from it otherwise (`LINE_RELEVANT`: SL's line/mode scope matched but the affected segment/stop
+ * was not proven to intersect this exact journey). Reuses the exact same
+ * [R.string.notification_disruption_line_relevant_single_format]/`_generic` resources
+ * [se.blick.app.notification.RoutineNotificationBuilder]'s own `lineRelevantDisruptionLabel`
+ * uses — this file already shares several other `notification_*` strings with that class (see
+ * [WidgetContentBody]) — so the widget and notification never disagree about how uncertain this
+ * same disruption is presented. Null exactly when [RoutineWidgetModel.disruptionHeadline] is
+ * null (no relevant disruption at all). */
+private fun disruptionStripText(context: Context, model: RoutineWidgetModel): String? {
+    val headline = model.disruptionHeadline ?: return null
+    val designations = model.disruptionUncertainLineDesignations
+    return when {
+        designations.isEmpty() -> headline
+        designations.size == 1 -> context.getString(R.string.notification_disruption_line_relevant_single_format, designations.single())
+        else -> context.getString(R.string.notification_disruption_line_relevant_generic)
     }
 }
 

@@ -42,6 +42,7 @@ object RoutineWidgetMapper {
             lineDesignation = routine.lineDesignation,
             transportMode = routine.transportMode,
             disruptionHeadline = topDisruption?.headline,
+            disruptionUncertainLineDesignations = topDisruption?.uncertainLineDesignations ?: emptyList(),
         )
 
     /** No [LiveDeparturesState] counterpart exists for this case — see

@@ -11,6 +11,7 @@ import io.mockk.every
 import io.mockk.mockk
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.CompletableDeferred
+import kotlinx.coroutines.cancelAndJoin
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.test.currentTime
@@ -40,6 +41,8 @@ import se.blick.app.domain.model.DisruptionEffect
 import se.blick.app.domain.model.DisruptionMessage
 import se.blick.app.domain.model.DisruptionPresentation
 import se.blick.app.domain.model.DisruptionPriority
+import se.blick.app.domain.model.DisruptionRelevance
+import se.blick.app.domain.model.DisruptionSource
 import se.blick.app.domain.model.JourneyDisruptionNotice
 import se.blick.app.domain.model.ExactDestinationChangesPreference
 import se.blick.app.domain.model.Journey
@@ -48,12 +51,14 @@ import se.blick.app.domain.model.JourneyLocation
 import se.blick.app.domain.model.JourneyPlan
 import se.blick.app.domain.model.JourneyRole
 import se.blick.app.domain.model.LineRef
+import se.blick.app.domain.model.ResolvedJourneyDisruption
 import se.blick.app.domain.model.RoutineType
 import se.blick.app.domain.model.StopAreaRef
 import se.blick.app.domain.model.StopPointRef
 import se.blick.app.domain.model.TransportMode
 import se.blick.app.domain.usecase.DepartureIdentity
 import se.blick.app.domain.usecase.GetDisruptionsUseCase
+import se.blick.app.domain.usecase.GetJourneyDisruptionRelevanceUseCase
 import se.blick.app.domain.usecase.GetLiveDeparturesUseCase
 import se.blick.app.domain.usecase.GetRankedJourneysUseCase
 import se.blick.app.domain.usecase.LiveDeparturesSnapshot
@@ -583,6 +588,7 @@ class RoutineActiveWindowWorkerTest {
         elapsedRealtimeProvider: ElapsedRealtimeProvider = FakeElapsedRealtimeProvider(),
         bootCountProvider: BootCountProvider = FakeBootCountProvider(),
         getRankedJourneys: se.blick.app.domain.usecase.GetRankedJourneysUseCase? = null,
+        getJourneyDisruptionRelevance: se.blick.app.domain.usecase.GetJourneyDisruptionRelevanceUseCase? = null,
     ): RoutineActiveWindowWorker =
         TestListenableWorkerBuilder<RoutineActiveWindowWorker>(context)
             .setInputData(workDataOf(RoutineActiveWindowWorker.KEY_ROUTINE_ID to routineId))
@@ -611,6 +617,7 @@ class RoutineActiveWindowWorkerTest {
                     elapsedRealtimeProvider,
                     bootCountProvider,
                     getRankedJourneys = getRankedJourneys,
+                    getJourneyDisruptionRelevance = getJourneyDisruptionRelevance,
                 )
             })
             .build()
@@ -2931,7 +2938,17 @@ class RoutineActiveWindowWorkerTest {
      * comment) rather than by choreographing advances within a single shared clock, since
      * production code has no suspension point between GetRankedJourneysUseCase's own post-response
      * `now` read and the worker's subsequent one for a shared TickingClock to advance across. */
-    private class FakeJourneyRepository(private val journeys: List<JourneyPlan>) : JourneyRepository {
+    private class FakeJourneyRepository(
+        private val journeys: List<JourneyPlan>,
+        /** What [getRelevantDeviationNotices] returns — already the backend's own fully
+         * resolved, deduplicated, merged result (see that function's real doc on
+         * [JourneyRepository]): this fake never combines/deduplicates anything itself, exactly
+         * like the real [se.blick.app.data.repository.RemoteJourneyRepository] never does either.
+         * Defaults to empty so every existing test constructing this fake without caring about
+         * deviations keeps behaving unchanged. */
+        private val resolvedDisruptions: List<ResolvedJourneyDisruption> = emptyList(),
+        private val deviationNoticesShouldThrow: Boolean = false,
+    ) : JourneyRepository {
         /** Captures whatever `searchUntil` the worker's own call actually supplied — most tests
          * in this section don't care, but see "passes windowEnd as searchUntil" below. */
         var receivedSearchUntil: Instant? = null
@@ -2942,6 +2959,19 @@ class RoutineActiveWindowWorkerTest {
          * below. */
         var receivedChangesPreference: ExactDestinationChangesPreference? = null
             private set
+
+        /** Captures every call [getRelevantDeviationNotices] actually received — used to assert
+         * no per-leg/per-stop request pattern exists (one call per worker tick, never one per
+         * journey leg) and that it is only ever called with PRIMARY's own legs. */
+        val receivedDeviationLegsCalls = mutableListOf<List<JourneyLeg>>()
+        var receivedOriginSiteId: Long? = null
+            private set
+
+        /** Captures every `journeyPlannerNotices` argument actually received — proves the worker
+         * really does send PRIMARY's own already-shown Journey Planner notices (the first post's
+         * own source) alongside its legs, for the backend's own resolver to combine — never an
+         * empty placeholder. */
+        val receivedJourneyPlannerNotices = mutableListOf<List<JourneyDisruptionNotice>>()
 
         override suspend fun searchLocations(query: String): List<JourneyLocation> = emptyList()
         override suspend fun getJourneys(
@@ -2955,6 +2985,370 @@ class RoutineActiveWindowWorkerTest {
             receivedChangesPreference = changesPreference
             return journeys
         }
+
+        override suspend fun getRelevantDeviationNotices(
+            legs: List<JourneyLeg>,
+            originSiteId: Long?,
+            journeyPlannerNotices: List<JourneyDisruptionNotice>,
+        ): List<ResolvedJourneyDisruption> {
+            receivedDeviationLegsCalls += legs
+            receivedOriginSiteId = originSiteId
+            receivedJourneyPlannerNotices += journeyPlannerNotices
+            if (deviationNoticesShouldThrow) error("simulated failure")
+            return resolvedDisruptions
+        }
+    }
+
+    // ---- Exact-destination: resolved disruption relevance (GetJourneyDisruptionRelevanceUseCase)
+    // -- the Akalla -> Kungsträdgården fix, and the CONFIRMED/LINE_RELEVANT distinction that
+    // replaced its original binary relevant/unrelated model (the Akalla -> T-Centralen false-
+    // positive fix). See JourneyDisruptionRelevanceTest for the pure compactPresentation unit
+    // tests on both overloads; these exercise the same behavior end to end through the worker's
+    // own two-phase (primary-first, deviations-second) posting. The backend is the SOLE source of
+    // relevance/combination -- this fake's own resolvedDisruptions parameter always models
+    // already-resolved, already-combined output, never raw input Android would need to interpret.
+
+    private fun akallaResolvedDeviation(
+        relevance: DisruptionRelevance = DisruptionRelevance.CONFIRMED,
+        matchedLineDesignations: List<String> = emptyList(),
+    ) = ResolvedJourneyDisruption(
+        id = "akalla-dev-1",
+        headline = "Inställd trafik på Blå linjen mellan T-Centralen och Kungsträdgården",
+        details = "På grund av ett tekniskt fel är trafiken på Blå linjen inställd mellan T-Centralen och Kungsträdgården.",
+        effect = DisruptionEffect.NO_SERVICE,
+        relevance = relevance,
+        source = DisruptionSource.SL_DEVIATIONS,
+        matchedLineDesignations = matchedLineDesignations,
+    )
+
+    @Test
+    fun `a CONFIRMED matched cached SL Deviation reaches the notification even though Journey Planner's own infos was empty`() = runTest {
+        val clock = TickingClock(Instant.parse("2026-07-27T05:00:00Z"), zone)
+        val routine = exactDestinationRoutine()
+        val repository = ScriptedRoutineRepository(clock) { routine }
+        val primary = exactJourney("primary", Instant.parse("2026-07-27T05:01:00Z"), lineDesignation = "11")
+        val journeyRepository = FakeJourneyRepository(listOf(primary), resolvedDisruptions = listOf(akallaResolvedDeviation()))
+        val getRankedJourneys = GetRankedJourneysUseCase(journeyRepository, Clock.fixed(clock.instant(), zone))
+        val notifier = RecordingNotifier()
+        val widgetUpdater = RecordingWidgetUpdater()
+
+        val worker = buildWorker(
+            routineId = routine.id, routineRepository = repository,
+            getLiveDepartures = GetLiveDeparturesUseCase(FakeDepartureRepository { error("unused for EXACT_DESTINATION") }, Clock.systemUTC()),
+            notifier = notifier, scheduler = RecordingScheduler(), clock = clock,
+            widgetUpdater = widgetUpdater, getRankedJourneys = getRankedJourneys,
+            getJourneyDisruptionRelevance = GetJourneyDisruptionRelevanceUseCase(journeyRepository),
+        )
+        val job = launch { worker.doWork() }
+        runCurrent()
+        job.cancelAndJoin()
+
+        // The FIRST post (Journey-Planner-notices-only, primary.disruptions is empty) must have
+        // no disruption; the SECOND, deviations-aware post must carry the matched CONFIRMED
+        // NO_SERVICE notice -- proving the deviations lookup genuinely happened as a second
+        // phase, not baked into the first post.
+        assertTrue(notifier.shown.size >= 2)
+        assertNull(notifier.shown.first().disruptionEffect)
+        val last = notifier.shown.last()
+        assertEquals(DisruptionEffect.NO_SERVICE, last.disruptionEffect)
+        assertEquals("Inställd trafik på Blå linjen mellan T-Centralen och Kungsträdgården", last.disruptionHeadline)
+        assertEquals(
+            "På grund av ett tekniskt fel är trafiken på Blå linjen inställd mellan T-Centralen och Kungsträdgården.",
+            last.disruptionDetails,
+        )
+        // CONFIRMED -- never presented as merely line-scoped uncertainty.
+        assertTrue(last.disruptionUncertainLineDesignations.isEmpty())
+    }
+
+    @Test
+    fun `a LINE_RELEVANT resolved deviation never claims the specific effect for this exact journey -- the Akalla to T-Centralen false-positive fix`() =
+        runTest {
+            val clock = TickingClock(Instant.parse("2026-07-27T05:00:00Z"), zone)
+            val routine = exactDestinationRoutine()
+            val repository = ScriptedRoutineRepository(clock) { routine }
+            val primary = exactJourney("primary", Instant.parse("2026-07-27T05:01:00Z"), lineDesignation = "11")
+            // Metro 11's line/mode scope matched, but the backend could NOT prove the affected
+            // segment/stop intersects THIS exact journey (e.g. Akalla -> T-Centralen, on the same
+            // line as a deviation that only actually closes T-Centralen<->Kungsträdgården) --
+            // relevance is LINE_RELEVANT, not CONFIRMED.
+            val journeyRepository = FakeJourneyRepository(
+                listOf(primary),
+                resolvedDisruptions = listOf(akallaResolvedDeviation(relevance = DisruptionRelevance.LINE_RELEVANT, matchedLineDesignations = listOf("11"))),
+            )
+            val getRankedJourneys = GetRankedJourneysUseCase(journeyRepository, Clock.fixed(clock.instant(), zone))
+            val notifier = RecordingNotifier()
+            val widgetUpdater = RecordingWidgetUpdater()
+
+            val worker = buildWorker(
+                routineId = routine.id, routineRepository = repository,
+                getLiveDepartures = GetLiveDeparturesUseCase(FakeDepartureRepository { error("unused for EXACT_DESTINATION") }, Clock.systemUTC()),
+                notifier = notifier, scheduler = RecordingScheduler(), clock = clock,
+                widgetUpdater = widgetUpdater, getRankedJourneys = getRankedJourneys,
+                getJourneyDisruptionRelevance = GetJourneyDisruptionRelevanceUseCase(journeyRepository),
+            )
+            val job = launch { worker.doWork() }
+            runCurrent()
+            job.cancelAndJoin()
+
+            val last = notifier.shown.last()
+            // The real classified effect (NO_SERVICE) travels through unchanged -- Routine
+            // Details still needs it -- but RoutineNotificationBuilder must render the
+            // conservative "Line 11 disruption" label from disruptionUncertainLineDesignations
+            // INSTEAD of the raw NO_SERVICE claim (see that class's own lineRelevantDisruptionLabel).
+            assertEquals(DisruptionEffect.NO_SERVICE, last.disruptionEffect)
+            assertEquals(listOf("11"), last.disruptionUncertainLineDesignations)
+            // The widget receives the identical uncertainty signal, not just the notification.
+            assertEquals(listOf("11"), widgetUpdater.journeysDisruptionAtUpdate.last()?.uncertainLineDesignations)
+        }
+
+    @Test
+    fun `the widget receives the exact same resolved disruption as the notification`() = runTest {
+        val clock = TickingClock(Instant.parse("2026-07-27T05:00:00Z"), zone)
+        val routine = exactDestinationRoutine()
+        val repository = ScriptedRoutineRepository(clock) { routine }
+        val primary = exactJourney("primary", Instant.parse("2026-07-27T05:01:00Z"), lineDesignation = "11")
+        val journeyRepository = FakeJourneyRepository(listOf(primary), resolvedDisruptions = listOf(akallaResolvedDeviation()))
+        val getRankedJourneys = GetRankedJourneysUseCase(journeyRepository, Clock.fixed(clock.instant(), zone))
+        val widgetUpdater = RecordingWidgetUpdater()
+
+        val worker = buildWorker(
+            routineId = routine.id, routineRepository = repository,
+            getLiveDepartures = GetLiveDeparturesUseCase(FakeDepartureRepository { error("unused") }, Clock.systemUTC()),
+            notifier = RecordingNotifier(), scheduler = RecordingScheduler(), clock = clock,
+            widgetUpdater = widgetUpdater, getRankedJourneys = getRankedJourneys,
+            getJourneyDisruptionRelevance = GetJourneyDisruptionRelevanceUseCase(journeyRepository),
+        )
+        val job = launch { worker.doWork() }
+        runCurrent()
+        job.cancelAndJoin()
+
+        assertEquals(DisruptionEffect.NO_SERVICE, widgetUpdater.journeysDisruptionAtUpdate.last()?.effect)
+        assertEquals(
+            "Inställd trafik på Blå linjen mellan T-Centralen och Kungsträdgården",
+            widgetUpdater.journeysDisruptionAtUpdate.last()?.headline,
+        )
+    }
+
+    @Test
+    fun `the worker sends PRIMARY's own already-shown Journey Planner notices alongside its legs, for the backend's own resolver to combine`() = runTest {
+        val clock = TickingClock(Instant.parse("2026-07-27T05:00:00Z"), zone)
+        val routine = exactDestinationRoutine()
+        val repository = ScriptedRoutineRepository(clock) { routine }
+        val jpNotice = JourneyDisruptionNotice("Rerouted via replacement bus", DisruptionEffect.REPLACEMENT_SERVICE)
+        val leg = JourneyLeg(TransportMode.METRO, "11", "Direction", "Fruängen", "Arlanda", Instant.parse("2026-07-27T05:01:00Z"), Instant.parse("2026-07-27T05:11:00Z"), true, emptyList())
+        val primary = JourneyPlan(
+            "primary", "Fruängen", "Arlanda", Instant.parse("2026-07-27T05:01:00Z"), Instant.parse("2026-07-27T05:11:00Z"),
+            0, leg, listOf(leg), emptyList(), JourneyRole.PRIMARY, listOf(jpNotice),
+        )
+        val journeyRepository = FakeJourneyRepository(listOf(primary))
+        val getRankedJourneys = GetRankedJourneysUseCase(journeyRepository, Clock.fixed(clock.instant(), zone))
+
+        val worker = buildWorker(
+            routineId = routine.id, routineRepository = repository,
+            getLiveDepartures = GetLiveDeparturesUseCase(FakeDepartureRepository { error("unused") }, Clock.systemUTC()),
+            notifier = RecordingNotifier(), scheduler = RecordingScheduler(), clock = clock,
+            widgetUpdater = RecordingWidgetUpdater(), getRankedJourneys = getRankedJourneys,
+            getJourneyDisruptionRelevance = GetJourneyDisruptionRelevanceUseCase(journeyRepository),
+        )
+        val job = launch { worker.doWork() }
+        runCurrent()
+        job.cancelAndJoin()
+
+        assertEquals(listOf(listOf(jpNotice)), journeyRepository.receivedJourneyPlannerNotices)
+    }
+
+    @Test
+    fun `the second post shows exactly the backend's own already-resolved list -- Android never re-combines or re-deduplicates it`() = runTest {
+        val clock = TickingClock(Instant.parse("2026-07-27T05:00:00Z"), zone)
+        val routine = exactDestinationRoutine()
+        val repository = ScriptedRoutineRepository(clock) { routine }
+        val jpNotice = JourneyDisruptionNotice("Rerouted via replacement bus", DisruptionEffect.REPLACEMENT_SERVICE)
+        val leg = JourneyLeg(TransportMode.METRO, "11", "Direction", "Fruängen", "Arlanda", Instant.parse("2026-07-27T05:01:00Z"), Instant.parse("2026-07-27T05:11:00Z"), true, emptyList())
+        val primary = JourneyPlan(
+            "primary", "Fruängen", "Arlanda", Instant.parse("2026-07-27T05:01:00Z"), Instant.parse("2026-07-27T05:11:00Z"),
+            0, leg, listOf(leg), emptyList(), JourneyRole.PRIMARY, listOf(jpNotice),
+        )
+        // The backend already merged the Journey Planner notice with a genuinely different
+        // matched deviation into two distinct resolved entries -- this fake models the
+        // backend's OWN combination, never Android's.
+        val journeyRepository = FakeJourneyRepository(
+            listOf(primary),
+            resolvedDisruptions = listOf(
+                ResolvedJourneyDisruption(
+                    null, "Rerouted via replacement bus", null, DisruptionEffect.REPLACEMENT_SERVICE,
+                    DisruptionRelevance.CONFIRMED, DisruptionSource.JOURNEY_PLANNER, emptyList(),
+                ),
+                akallaResolvedDeviation(),
+            ),
+        )
+        val getRankedJourneys = GetRankedJourneysUseCase(journeyRepository, Clock.fixed(clock.instant(), zone))
+        val notifier = RecordingNotifier()
+
+        val worker = buildWorker(
+            routineId = routine.id, routineRepository = repository,
+            getLiveDepartures = GetLiveDeparturesUseCase(FakeDepartureRepository { error("unused") }, Clock.systemUTC()),
+            notifier = notifier, scheduler = RecordingScheduler(), clock = clock,
+            widgetUpdater = RecordingWidgetUpdater(), getRankedJourneys = getRankedJourneys,
+            getJourneyDisruptionRelevance = GetJourneyDisruptionRelevanceUseCase(journeyRepository),
+        )
+        val job = launch { worker.doWork() }
+        runCurrent()
+        job.cancelAndJoin()
+
+        // The FIRST post already carries the Journey Planner notice (arrives with the same
+        // journeys fetch, no separate call needed).
+        assertEquals(DisruptionEffect.REPLACEMENT_SERVICE, notifier.shown.first().disruptionEffect)
+        // The SECOND post reflects the backend's own two genuinely different resolved entries --
+        // conservative aggregation falls back to the generic DISRUPTION label (never an invented
+        // ranking between them), exactly like compactPresentation's own documented behavior. This
+        // is never computed by combining/deduplicating on the Android side -- FakeJourneyRepository
+        // simply returned the already-combined list, and the worker rendered it as-is.
+        assertEquals(DisruptionEffect.DISRUPTION, notifier.shown.last().disruptionEffect)
+    }
+
+    @Test
+    fun `when the backend's own resolved list already collapsed to a single entry, the second post shows that entry's real effect, never the generic fallback`() =
+        runTest {
+            val clock = TickingClock(Instant.parse("2026-07-27T05:00:00Z"), zone)
+            val routine = exactDestinationRoutine()
+            val repository = ScriptedRoutineRepository(clock) { routine }
+            val primary = exactJourney("primary", Instant.parse("2026-07-27T05:01:00Z"), lineDesignation = "11")
+            // Models the backend having already deduplicated an overlapping Journey Planner
+            // notice and matched deviation down to ONE resolved entry (see
+            // backend/src/domain/disruptionRelevance.ts's own dedup-prefers-richer-details fix).
+            val journeyRepository = FakeJourneyRepository(listOf(primary), resolvedDisruptions = listOf(akallaResolvedDeviation()))
+            val getRankedJourneys = GetRankedJourneysUseCase(journeyRepository, Clock.fixed(clock.instant(), zone))
+            val notifier = RecordingNotifier()
+
+            val worker = buildWorker(
+                routineId = routine.id, routineRepository = repository,
+                getLiveDepartures = GetLiveDeparturesUseCase(FakeDepartureRepository { error("unused") }, Clock.systemUTC()),
+                notifier = notifier, scheduler = RecordingScheduler(), clock = clock,
+                widgetUpdater = RecordingWidgetUpdater(), getRankedJourneys = getRankedJourneys,
+                getJourneyDisruptionRelevance = GetJourneyDisruptionRelevanceUseCase(journeyRepository),
+            )
+            val job = launch { worker.doWork() }
+            runCurrent()
+            job.cancelAndJoin()
+
+            assertEquals(DisruptionEffect.NO_SERVICE, notifier.shown.last().disruptionEffect)
+        }
+
+    @Test
+    fun `only PRIMARY's own legs are ever sent to the deviations lookup -- never NEXT's or ALTERNATIVE's`() = runTest {
+        val clock = TickingClock(Instant.parse("2026-07-27T05:00:00Z"), zone)
+        val routine = exactDestinationRoutine()
+        val repository = ScriptedRoutineRepository(clock) { routine }
+        val primary = exactJourney("primary", Instant.parse("2026-07-27T05:01:00Z"), lineDesignation = "11")
+        val next = exactJourney("next", Instant.parse("2026-07-27T05:05:00Z"), lineDesignation = "13").copy(role = JourneyRole.NEXT)
+        val journeyRepository = FakeJourneyRepository(listOf(primary, next))
+        val getRankedJourneys = GetRankedJourneysUseCase(journeyRepository, Clock.fixed(clock.instant(), zone))
+
+        val worker = buildWorker(
+            routineId = routine.id, routineRepository = repository,
+            getLiveDepartures = GetLiveDeparturesUseCase(FakeDepartureRepository { error("unused") }, Clock.systemUTC()),
+            notifier = RecordingNotifier(), scheduler = RecordingScheduler(), clock = clock,
+            widgetUpdater = RecordingWidgetUpdater(), getRankedJourneys = getRankedJourneys,
+            getJourneyDisruptionRelevance = GetJourneyDisruptionRelevanceUseCase(journeyRepository),
+        )
+        val job = launch { worker.doWork() }
+        runCurrent()
+        job.cancelAndJoin()
+
+        assertEquals(1, journeyRepository.receivedDeviationLegsCalls.size)
+        assertEquals(listOf("11"), journeyRepository.receivedDeviationLegsCalls.single().map { it.lineDesignation })
+        // Also proves the routine's own origin siteId (not the Journey Planner destination id)
+        // is what gets sent for stop-scope matching.
+        assertEquals(routine.siteId, journeyRepository.receivedOriginSiteId)
+    }
+
+    @Test
+    fun `a cached disruption-lookup failure never prevents the journey notification from being posted`() = runTest {
+        val clock = TickingClock(Instant.parse("2026-07-27T05:00:00Z"), zone)
+        val routine = exactDestinationRoutine()
+        val repository = ScriptedRoutineRepository(clock) { routine }
+        val primary = exactJourney("primary", Instant.parse("2026-07-27T05:01:00Z"), lineDesignation = "11")
+        val journeyRepository = FakeJourneyRepository(listOf(primary), deviationNoticesShouldThrow = true)
+        val getRankedJourneys = GetRankedJourneysUseCase(journeyRepository, Clock.fixed(clock.instant(), zone))
+        val notifier = RecordingNotifier()
+
+        val worker = buildWorker(
+            routineId = routine.id, routineRepository = repository,
+            getLiveDepartures = GetLiveDeparturesUseCase(FakeDepartureRepository { error("unused") }, Clock.systemUTC()),
+            notifier = notifier, scheduler = RecordingScheduler(), clock = clock,
+            widgetUpdater = RecordingWidgetUpdater(), getRankedJourneys = getRankedJourneys,
+            getJourneyDisruptionRelevance = GetJourneyDisruptionRelevanceUseCase(journeyRepository),
+        )
+        val job = launch { worker.doWork() }
+        runCurrent()
+        job.cancelAndJoin()
+
+        // The journey notification was still posted (at least the first, Journey-Planner-only
+        // post) despite the deviations lookup throwing -- never blocked or crashed.
+        assertTrue(notifier.shown.isNotEmpty())
+        assertEquals("Fruängen", notifier.shown.first().let { primary.originName })
+    }
+
+    @Test
+    fun `a deviations lookup far slower than DISRUPTIONS_FETCH_TIMEOUT_MS cannot delay or block the journey notification`() = runTest {
+        val clock = TickingClock(Instant.parse("2026-07-27T05:00:00Z"), zone)
+        val routine = exactDestinationRoutine()
+        val repository = ScriptedRoutineRepository(clock) { routine }
+        val primary = exactJourney("primary", Instant.parse("2026-07-27T05:01:00Z"), lineDesignation = "11")
+        val journeyRepository = object : JourneyRepository by FakeJourneyRepository(listOf(primary)) {
+            override suspend fun getRelevantDeviationNotices(
+                legs: List<JourneyLeg>,
+                originSiteId: Long?,
+                journeyPlannerNotices: List<JourneyDisruptionNotice>,
+            ): List<ResolvedJourneyDisruption> {
+                delay(DISRUPTIONS_FETCH_TIMEOUT_MS * 100)
+                return listOf(akallaResolvedDeviation())
+            }
+        }
+        val getRankedJourneys = GetRankedJourneysUseCase(journeyRepository, Clock.fixed(clock.instant(), zone))
+        val notifier = RecordingNotifier()
+
+        val worker = buildWorker(
+            routineId = routine.id, routineRepository = repository,
+            getLiveDepartures = GetLiveDeparturesUseCase(FakeDepartureRepository { error("unused") }, Clock.systemUTC()),
+            notifier = notifier, scheduler = RecordingScheduler(), clock = clock,
+            widgetUpdater = RecordingWidgetUpdater(), getRankedJourneys = getRankedJourneys,
+            getJourneyDisruptionRelevance = GetJourneyDisruptionRelevanceUseCase(journeyRepository),
+        )
+        val job = launch { worker.doWork() }
+        runCurrent()
+        job.cancelAndJoin()
+
+        // The first, Journey-Planner-only post happened; the timed-out deviations lookup never
+        // produced a second, NO_SERVICE-carrying post.
+        assertTrue(notifier.shown.isNotEmpty())
+        assertTrue(notifier.shown.none { it.disruptionEffect == DisruptionEffect.NO_SERVICE })
+    }
+
+    @Test
+    fun `LINE_DIRECTION routines never call the deviations lookup at all`() = runTest {
+        val clock = TickingClock(Instant.parse("2026-07-27T05:00:00Z"), zone)
+        val lineRoutine = CommuteRoutine(
+            id = "line1", name = "Commute", siteId = 9192, siteName = "Slussen", transportMode = TransportMode.METRO,
+            lineId = 17, lineDesignation = "17", directionCode = 1, destinationLabel = "Danderyd",
+            activeDays = setOf(DayOfWeek.MONDAY), startTime = LocalTime.of(7, 0), endTime = LocalTime.of(7, 2),
+            type = RoutineType.LINE_DIRECTION,
+        )
+        val repository = ScriptedRoutineRepository(clock) { lineRoutine }
+        val journeyRepository = FakeJourneyRepository(emptyList(), resolvedDisruptions = listOf(akallaResolvedDeviation()))
+
+        val worker = buildWorker(
+            routineId = lineRoutine.id, routineRepository = repository,
+            getLiveDepartures = GetLiveDeparturesUseCase(FakeDepartureRepository { DeparturesResult(clock.instant(), lineRoutine.siteId, emptyList()) }, Clock.systemUTC()),
+            notifier = RecordingNotifier(), scheduler = RecordingScheduler(), clock = clock,
+            widgetUpdater = RecordingWidgetUpdater(),
+            getJourneyDisruptionRelevance = GetJourneyDisruptionRelevanceUseCase(journeyRepository),
+        )
+        val job = launch { worker.doWork() }
+        runCurrent()
+        job.cancelAndJoin()
+
+        assertEquals(0, journeyRepository.receivedDeviationLegsCalls.size)
     }
 
     @Test

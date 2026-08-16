@@ -57,6 +57,7 @@ object RoutineNotificationMapper {
             disruptionHeadline = topDisruption?.headline,
             disruptionDetails = topDisruption?.details,
             disruptionEffect = topDisruption?.effect,
+            disruptionUncertainLineDesignations = topDisruption?.uncertainLineDesignations ?: emptyList(),
         )
 
     private fun LiveDeparturesState.toContent(now: Instant): RoutineNotificationContent = when (this) {

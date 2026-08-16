@@ -126,8 +126,13 @@ class RoutineNotificationBuilder @Inject constructor(
         // fully visible, so there is no "expand to reveal" gate to hide the real message behind.
         // The real message is only ever shown by tapping into Routine Details' own Disruptions
         // section, which is exactly what "Tap for details" refers to.
-        val disruptionIndicator = model.disruptionEffect?.let {
-            listOf(localizedContext.getString(R.string.notification_disruption_format, disruptionEffectLabel(it)))
+        val disruptionIndicator = model.disruptionEffect?.let { effect ->
+            val label = if (model.disruptionUncertainLineDesignations.isNotEmpty()) {
+                lineRelevantDisruptionLabel(model.disruptionUncertainLineDesignations)
+            } else {
+                disruptionEffectLabel(effect)
+            }
+            listOf(localizedContext.getString(R.string.notification_disruption_format, label))
         } ?: emptyList()
 
         when (val content = model.content) {
@@ -177,6 +182,19 @@ class RoutineNotificationBuilder @Inject constructor(
      * disruption's own real header/details (see this class's own doc on why). */
     private fun disruptionEffectLabel(effect: DisruptionEffect): String =
         localizedContext.getString(disruptionEffectLabelRes(effect))
+
+    /** Builds the conservative LINE_RELEVANT label from
+     * [RoutineNotificationModel.disruptionUncertainLineDesignations] instead of
+     * [disruptionEffectLabel] — see that field's own doc for why. A single matched PRIMARY line
+     * uses [R.string.notification_disruption_line_relevant_single_format]; more than one falls
+     * back to the generic [R.string.notification_disruption_line_relevant_generic] rather than
+     * concatenating a cluttered list. */
+    private fun lineRelevantDisruptionLabel(designations: List<String>): String =
+        if (designations.size == 1) {
+            localizedContext.getString(R.string.notification_disruption_line_relevant_single_format, designations.single())
+        } else {
+            localizedContext.getString(R.string.notification_disruption_line_relevant_generic)
+        }
 
     /** Up to two lines: the soonest departure's own countdown+status (or "Cancelled"), then
      * the following departure's own countdown (or "Cancelled") -- omitted entirely when there

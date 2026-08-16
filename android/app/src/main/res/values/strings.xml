@@ -116,6 +116,12 @@
     <string name="routine_details_disruptions_unavailable">Couldn\'t load disruptions right now.</string>
     <string name="routine_details_disruption_expand">Show disruption details</string>
     <string name="routine_details_disruption_collapse">Hide disruption details</string>
+    <!-- Shown under a disruption card whose relevance is LINE_RELEVANT (see
+         se.blick.app.domain.model.DisruptionRelevance) — the real SL text above is NOT hidden,
+         but this makes clear it has not been proven to affect this exact journey's own segment,
+         only that it affects the named line(s) somewhere. %1$s is the matched line
+         designation(s), comma-joined when more than one. -->
+    <string name="routine_details_disruption_line_relevant_qualifier">Line %1$s · not confirmed for this exact journey</string>
 
     <string name="routine_details_actions_heading">Manage routine</string>
     <string name="routine_details_actions_description">Edit, disable or delete this routine.</string>
@@ -278,6 +284,17 @@
          classification") — e.g. "⚠️ Delays · Tap for details". "Tap for details" means what it
          says: tapping opens Routine Details, which shows the real message in full. -->
     <string name="notification_disruption_format">⚠️ %1$s · Tap for details</string>
+    <!-- LINE_RELEVANT presentation (see se.blick.app.domain.model.DisruptionRelevance): SL's own
+         structured line/mode scope matched PRIMARY, but the affected segment/stop could not be
+         proven to intersect this exact journey — so the notification deliberately never claims a
+         specific effect (e.g. "No service") is definitely true here, showing only which line is
+         implicated instead. %1$s is a single matched PRIMARY line designation (e.g. "11").
+         Combined with notification_disruption_format exactly like an effect label would be (see
+         RoutineNotificationBuilder's own lineRelevantDisruptionLabel). -->
+    <string name="notification_disruption_line_relevant_single_format">Line %1$s disruption</string>
+    <!-- Fallback when several PRIMARY lines each have their own LINE_RELEVANT disruption —
+         deliberately generic rather than concatenating a cluttered list of line designations. -->
+    <string name="notification_disruption_line_relevant_generic">Line disruption</string>
     <!-- One label per backend DisruptionEffect value (see
          se.blick.app.domain.model.DisruptionEffect) — notification_disruption_effect_disruption
          is also the safe fallback label for a disruption whose effect could not be classified or

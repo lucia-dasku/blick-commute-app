@@ -60,6 +60,7 @@ class RoutineNotificationBuilderTest {
         // headline here keeps that same pairing for every existing call site below that only
         // passes disruptionHeadline, without having to touch each one individually.
         disruptionEffect: DisruptionEffect? = if (disruptionHeadline != null) DisruptionEffect.DISRUPTION else null,
+        disruptionUncertainLineDesignations: List<String> = emptyList(),
     ) = RoutineNotificationModel(
         routineId,
         stationName,
@@ -69,6 +70,7 @@ class RoutineNotificationBuilderTest {
         disruptionHeadline,
         disruptionDetails,
         disruptionEffect,
+        disruptionUncertainLineDesignations,
     )
 
     private fun sampleRow(
@@ -758,6 +760,99 @@ class RoutineNotificationBuilderTest {
     fun `a disruption never removes the Stop action`() {
         val notification = builder.build(model(disruptionHeadline = "Delays on line 14"))
         assertTrue(notification.actions.any { it.title == context.getString(R.string.notification_action_stop) })
+    }
+
+    // ---- LINE_RELEVANT: a conservative "Line X disruption" label, never the raw classified
+    // effect claim -- see RoutineNotificationModel.disruptionUncertainLineDesignations' own doc
+    // and the Akalla -> T-Centralen false-positive this exists to prevent (an SL Deviation whose
+    // line/mode scope matched PRIMARY, but whose affected segment/stop was not proven to
+    // intersect this exact journey, must never be shown as though "No service" were confirmed
+    // for this rider's own trip). ----
+
+    @Test
+    fun `a single matched line with disruptionUncertainLineDesignations renders the conservative Line X disruption label, not the raw effect`() {
+        val notification = builder.build(
+            model(
+                disruptionHeadline = "Inställd trafik på Blå linjen mellan T-Centralen och Kungsträdgården",
+                disruptionEffect = DisruptionEffect.NO_SERVICE,
+                disruptionUncertainLineDesignations = listOf("11"),
+            ),
+        )
+        val expected = context.getString(
+            R.string.notification_disruption_format,
+            context.getString(R.string.notification_disruption_line_relevant_single_format, "11"),
+        )
+        assertEquals(expected, bigTextLines(notification).last())
+        // The raw classified effect's own label must never appear anywhere in the rendered text.
+        assertFalse(contentText(notification).contains(context.getString(R.string.notification_disruption_effect_no_service)))
+    }
+
+    @Test
+    fun `more than one matched line falls back to the generic Line disruption label, never a concatenated list`() {
+        val notification = builder.build(
+            model(
+                disruptionHeadline = "Trafikstörning",
+                disruptionEffect = DisruptionEffect.DISRUPTION,
+                disruptionUncertainLineDesignations = listOf("11", "17"),
+            ),
+        )
+        val expected = context.getString(
+            R.string.notification_disruption_format,
+            context.getString(R.string.notification_disruption_line_relevant_generic),
+        )
+        assertEquals(expected, bigTextLines(notification).last())
+    }
+
+    @Test
+    fun `empty disruptionUncertainLineDesignations -- a CONFIRMED disruption -- still renders the real classified effect label unchanged`() {
+        val notification = builder.build(
+            model(
+                disruptionHeadline = "Inställd trafik",
+                disruptionEffect = DisruptionEffect.NO_SERVICE,
+                disruptionUncertainLineDesignations = emptyList(),
+            ),
+        )
+        assertEquals(disruptionText(DisruptionEffect.NO_SERVICE), bigTextLines(notification).last())
+    }
+
+    @Test
+    fun `the conservative line-relevant label is also used in the collapsed contentText`() {
+        val notification = builder.build(
+            model(
+                content = RoutineNotificationContent.Live(listOf(sampleRow())),
+                disruptionHeadline = "Inställd trafik",
+                disruptionEffect = DisruptionEffect.NO_SERVICE,
+                disruptionUncertainLineDesignations = listOf("11"),
+            ),
+        )
+        val expected = context.getString(
+            R.string.notification_disruption_format,
+            context.getString(R.string.notification_disruption_line_relevant_single_format, "11"),
+        )
+        assertTrue(contentText(notification).endsWith(expected))
+    }
+
+    @Test
+    fun `no explicit Blick choice, ordered system locale list Lithuanian-then-Swedish, resolves a Swedish conservative line-relevant label`() {
+        val multiLocaleContext = context.createConfigurationContext(
+            android.content.res.Configuration(context.resources.configuration).apply {
+                setLocales(android.os.LocaleList(Locale.forLanguageTag("lt"), Locale.forLanguageTag("sv")))
+            },
+        )
+        val multiLocaleBuilder = RoutineNotificationBuilder(multiLocaleContext)
+
+        val notification = multiLocaleBuilder.build(
+            model(
+                disruptionHeadline = "Inställd trafik",
+                disruptionEffect = DisruptionEffect.NO_SERVICE,
+                disruptionUncertainLineDesignations = listOf("11"),
+            ),
+        )
+
+        assertEquals(
+            "⚠️ Störning på linje 11 · Tryck för detaljer",
+            notification.extras.getCharSequence(Notification.EXTRA_TEXT).toString().split("\n").last(),
+        )
     }
 
     // ---- Promoted-ongoing (Live Update) request ----

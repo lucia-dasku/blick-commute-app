@@ -362,4 +362,38 @@ class RoutineWidgetMapperTest {
         val model = RoutineWidgetMapper.map(routine(), LiveDeparturesState.Loading, now, presentation)
         assertEquals("Hissen är ur funktion.", model.disruptionHeadline)
     }
+
+    // ---- disruptionUncertainLineDesignations: mirrors DisruptionPresentation.uncertainLineDesignations
+    // one-for-one -- see BlickRoutineWidgetTest for how the widget's own DisruptionStrip renders
+    // this into the conservative "Line 11 disruption" label. ----
+
+    @Test
+    fun `no topDisruption produces empty disruptionUncertainLineDesignations`() {
+        val model = RoutineWidgetMapper.map(routine(), LiveDeparturesState.Loading, now)
+        assertTrue(model.disruptionUncertainLineDesignations.isEmpty())
+    }
+
+    @Test
+    fun `a CONFIRMED-equivalent topDisruption -- LINE_DIRECTION's own real disruption -- carries empty disruptionUncertainLineDesignations`() {
+        val model = RoutineWidgetMapper.map(routine(), LiveDeparturesState.Loading, now, disruption("Delays on line 14").toPresentation())
+        assertTrue(model.disruptionUncertainLineDesignations.isEmpty())
+    }
+
+    @Test
+    fun `a LINE_RELEVANT presentation's uncertainLineDesignations is carried into the model unchanged`() {
+        val presentation = DisruptionPresentation(
+            headline = "Trafiken är stängd mellan T-Centralen och Kungsträdgården",
+            details = null,
+            effect = DisruptionEffect.NO_SERVICE,
+            uncertainLineDesignations = listOf("11"),
+        )
+        val model = RoutineWidgetMapper.map(routine(), LiveDeparturesState.Loading, now, presentation)
+        assertEquals(listOf("11"), model.disruptionUncertainLineDesignations)
+    }
+
+    @Test
+    fun `notificationsUnavailable carries no disruption -- disruptionUncertainLineDesignations is empty`() {
+        val model = RoutineWidgetMapper.notificationsUnavailable(routine())
+        assertTrue(model.disruptionUncertainLineDesignations.isEmpty())
+    }
 }
