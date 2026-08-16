@@ -359,4 +359,49 @@ class RoutineWidgetJourneysMapperTest {
         val model = (state as RoutineWidgetUiState.ActiveRoutine).model
         assertTrue(model.disruptionUncertainLineDesignations.isEmpty())
     }
+
+    // ---- disruption.effect: mirrors disruptionHeadline's own handling one-for-one -- see
+    // RoutineWidgetModel.disruptionEffect's own doc. ----
+
+    @Test fun `a supplied disruption's effect is carried onto the model's own disruptionEffect`() {
+        val primary = journey("primary", now.plusSeconds(60), now.plusSeconds(60))
+        val presentation = DisruptionPresentation("Hissen är ur funktion.", null, DisruptionEffect.ACCESSIBILITY_ISSUE)
+
+        val state = decideJourneysWidgetState(routine(), listOf(primary), now, disruption = presentation)
+
+        val model = (state as RoutineWidgetUiState.ActiveRoutine).model
+        assertEquals(DisruptionEffect.ACCESSIBILITY_ISSUE, model.disruptionEffect)
+    }
+
+    @Test fun `no disruption argument leaves disruptionEffect null, matching the existing default`() {
+        val primary = journey("primary", now.plusSeconds(60), now.plusSeconds(60))
+
+        val state = decideJourneysWidgetState(routine(), listOf(primary), now)
+
+        val model = (state as RoutineWidgetUiState.ActiveRoutine).model
+        assertNull(model.disruptionEffect)
+    }
+
+    @Test fun `a LINE_RELEVANT disruption's effect is still carried onto the model, alongside uncertainLineDesignations`() {
+        val primary = journey("primary", now.plusSeconds(60), now.plusSeconds(60))
+        val presentation = DisruptionPresentation(
+            "Trafiken är stängd mellan T-Centralen och Kungsträdgården", null, DisruptionEffect.NO_SERVICE,
+            uncertainLineDesignations = listOf("11"),
+        )
+
+        val state = decideJourneysWidgetState(routine(), listOf(primary), now, disruption = presentation)
+
+        val model = (state as RoutineWidgetUiState.ActiveRoutine).model
+        assertEquals(DisruptionEffect.NO_SERVICE, model.disruptionEffect)
+        assertEquals(listOf("11"), model.disruptionUncertainLineDesignations)
+    }
+
+    @Test fun `an empty journeys list never attaches an effect either -- there is no PRIMARY to attach one to`() {
+        val presentation = DisruptionPresentation("Hissen är ur funktion.", null, DisruptionEffect.ACCESSIBILITY_ISSUE)
+
+        val state = decideJourneysWidgetState(routine(), emptyList(), now, disruption = presentation)
+
+        val model = (state as RoutineWidgetUiState.ActiveRoutine).model
+        assertNull(model.disruptionEffect)
+    }
 }

@@ -28,9 +28,10 @@ object RoutineWidgetMapper {
      * [se.blick.app.scheduling.RoutineActiveWindowWorker]'s own doc on why departures are always
      * posted before disruptions are ever awaited). Defaults to null for every call site that has
      * no fresh disruption data in hand (reconciliation paths — see [RoutineWidgetReconciler]).
-     * Unlike the notification, the widget's own [BlickRoutineWidget] disruption strip shows
-     * [topDisruption]'s real [DisruptionPresentation.headline] text directly, never only the
-     * classified effect — see [RoutineWidgetModel.disruptionHeadline]'s own doc.
+     * [topDisruption]'s [DisruptionPresentation.headline] is carried onto the model for Routine
+     * Details' own full-text display, but — exactly like the notification — [BlickRoutineWidget]'s
+     * own compact disruption strip renders [DisruptionPresentation.effect]'s classified label, not
+     * this raw headline; see [RoutineWidgetModel.disruptionEffect]'s own doc.
      */
     fun map(routine: CommuteRoutine, departuresState: LiveDeparturesState, now: Instant, topDisruption: DisruptionPresentation? = null): RoutineWidgetModel =
         RoutineWidgetModel(
@@ -43,6 +44,7 @@ object RoutineWidgetMapper {
             transportMode = routine.transportMode,
             disruptionHeadline = topDisruption?.headline,
             disruptionUncertainLineDesignations = topDisruption?.uncertainLineDesignations ?: emptyList(),
+            disruptionEffect = topDisruption?.effect,
         )
 
     /** No [LiveDeparturesState] counterpart exists for this case — see

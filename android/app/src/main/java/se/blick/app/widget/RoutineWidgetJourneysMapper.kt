@@ -43,7 +43,10 @@ internal fun decideJourneysWidgetState(
      * worker tick from the same [journeys] this call already carries — see
      * [RoutineWidgetUpdater.updateWithJourneys]'s own doc. Only ever attached to the
      * [RoutineWidgetContent.Journeys] branch below (there is no PRIMARY to attach a disruption to
-     * when [journeys] has nothing current). */
+     * when [journeys] has nothing current). Its [DisruptionPresentation.headline]/`.effect`/
+     * `.uncertainLineDesignations` are carried onto the model as three separate fields — see
+     * [RoutineWidgetModel.disruptionHeadline]/`.disruptionEffect`/`.disruptionUncertainLineDesignations`'
+     * own docs for what each one actually drives at render time. */
     disruption: DisruptionPresentation? = null,
 ): RoutineWidgetUiState {
     val rows = journeys.filterCurrentJourneys(now).take(2).map { journey ->
@@ -73,6 +76,7 @@ internal fun decideJourneysWidgetState(
             primary.lineDesignation, primary.transportMode,
             disruptionHeadline = disruption?.headline,
             disruptionUncertainLineDesignations = disruption?.uncertainLineDesignations ?: emptyList(),
+            disruptionEffect = disruption?.effect,
         ),
     )
 }

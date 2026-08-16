@@ -42,11 +42,13 @@ import androidx.glance.text.Text
 import androidx.glance.text.TextStyle
 import androidx.glance.unit.ColorProvider
 import se.blick.app.R
+import se.blick.app.domain.model.DisruptionEffect
 import se.blick.app.domain.model.ExactDestinationChangesPreference
 import se.blick.app.domain.model.JourneyRole
 import se.blick.app.domain.usecase.countdownMinutes
 import se.blick.app.domain.usecase.isDepartureCurrent
 import se.blick.app.locale.withAppLocale
+import se.blick.app.notification.disruptionEffectLabelRes
 import java.time.format.DateTimeFormatter
 
 /**
@@ -379,25 +381,38 @@ private fun ActiveRoutineContent(context: Context, model: RoutineWidgetModel, no
     }
 }
 
-/** The widget's own disruption-strip text — [model]'s real SL headline when
- * [RoutineWidgetModel.disruptionUncertainLineDesignations] is empty (a `CONFIRMED`
- * exact-destination disruption, or any `LINE_DIRECTION` disruption — both already proven
- * relevant, see that field's own doc), or a conservative "Line 11 disruption"-style label built
- * from it otherwise (`LINE_RELEVANT`: SL's line/mode scope matched but the affected segment/stop
- * was not proven to intersect this exact journey). Reuses the exact same
- * [R.string.notification_disruption_line_relevant_single_format]/`_generic` resources
- * [se.blick.app.notification.RoutineNotificationBuilder]'s own `lineRelevantDisruptionLabel`
- * uses — this file already shares several other `notification_*` strings with that class (see
- * [WidgetContentBody]) — so the widget and notification never disagree about how uncertain this
- * same disruption is presented. Null exactly when [RoutineWidgetModel.disruptionHeadline] is
- * null (no relevant disruption at all). */
+/** The widget's own disruption-strip text — never [RoutineWidgetModel.disruptionHeadline]'s raw
+ * SL free text, which is carried on the model only for
+ * [se.blick.app.ui.screens.routinedetails.RoutineDetailsScreen]'s own full-text display (reached
+ * by tapping the widget — see [ActiveRoutineContent]'s own [clickable]) and is never
+ * machine-translated. Three cases, checked in this order:
+ * 1. [RoutineWidgetModel.disruptionUncertainLineDesignations] non-empty (`LINE_RELEVANT`: SL's
+ *    line/mode scope matched but the affected segment/stop was not proven to intersect this
+ *    exact journey) — a conservative "Line 11 disruption"-style label built from it, via the
+ *    exact same [R.string.notification_disruption_line_relevant_single_format]/`_generic`
+ *    resources [se.blick.app.notification.RoutineNotificationBuilder]'s own
+ *    `lineRelevantDisruptionLabel` uses, so the widget and notification never disagree about how
+ *    uncertain this same disruption is presented. The classified [RoutineWidgetModel.disruptionEffect]
+ *    is deliberately NEVER rendered here, even when it names something as specific as
+ *    `NO_SERVICE` — LINE_RELEVANT means that effect was never proven to apply to this exact
+ *    journey, only to the line/mode in general.
+ * 2. Otherwise (`CONFIRMED`/`LINE_DIRECTION`: already proven relevant) — [RoutineWidgetModel.disruptionEffect]'s
+ *    own localized category via [disruptionEffectLabelRes], exactly like
+ *    [se.blick.app.notification.RoutineNotificationBuilder]'s own disruption line — falling back
+ *    to [DisruptionEffect.DISRUPTION]'s own generic "Disruption"/"Störning" label when
+ *    [RoutineWidgetModel.disruptionEffect] is null, which happens only for state persisted by an
+ *    app version predating that field: the headline is real, but its classification hasn't been
+ *    persisted yet (the worker's next ~30-second tick overwrites it with a real effect).
+ *
+ * Null exactly when [RoutineWidgetModel.disruptionHeadline] is null (no relevant disruption at
+ * all) — the one case with nothing to summarize either way. */
 private fun disruptionStripText(context: Context, model: RoutineWidgetModel): String? {
-    val headline = model.disruptionHeadline ?: return null
+    if (model.disruptionHeadline == null) return null
     val designations = model.disruptionUncertainLineDesignations
     return when {
-        designations.isEmpty() -> headline
         designations.size == 1 -> context.getString(R.string.notification_disruption_line_relevant_single_format, designations.single())
-        else -> context.getString(R.string.notification_disruption_line_relevant_generic)
+        designations.isNotEmpty() -> context.getString(R.string.notification_disruption_line_relevant_generic)
+        else -> context.getString(disruptionEffectLabelRes(model.disruptionEffect ?: DisruptionEffect.DISRUPTION))
     }
 }
 
@@ -422,19 +437,20 @@ private fun WidgetHeader(model: RoutineWidgetModel, tier: WidgetSizeTier, routeT
 }
 
 /**
- * A relevant disruption's headline as a distinct, full-bleed band along the very bottom edge —
- * outside the main content [Column]'s own padding (see [ActiveRoutineContent]), so it touches
- * the widget's left/right/bottom edges directly rather than sitting inset like the rest of the
- * content. [GlanceTheme.colors.errorContainer]/`onErrorContainer` — the same theme-adaptive
- * "muted red" role `RoutineDetailsScreen`'s own disruption cards use via
+ * [disruptionStripText]'s own short, localized summary — never SL's raw free text (see that
+ * function's own doc) — as a distinct, full-bleed band along the very bottom edge, outside the
+ * main content [Column]'s own padding (see [ActiveRoutineContent]), so it touches the widget's
+ * left/right/bottom edges directly rather than sitting inset like the rest of the content.
+ * [GlanceTheme.colors.errorContainer]/`onErrorContainer` — the same theme-adaptive "muted red"
+ * role `RoutineDetailsScreen`'s own disruption cards use via
  * `MaterialTheme.colorScheme.errorContainer`/`onErrorContainer` — rather than a hardcoded color,
  * so this looks correct in both light and dark theme, like everything else in this file. A
  * trailing "›" is a tap-for-more affordance only — tapping anywhere on the widget (including
  * this strip) already opens Routine Details via [ActiveRoutineContent]'s own [clickable], where
- * the disruption's full text is shown; this is not a second, separate tap target.
+ * the disruption's full original SL text is shown; this is not a second, separate tap target.
  */
 @Composable
-private fun DisruptionStrip(headline: String, tier: WidgetSizeTier) {
+private fun DisruptionStrip(text: String, tier: WidgetSizeTier) {
     Row(
         modifier = GlanceModifier
             .fillMaxWidth()
@@ -443,7 +459,7 @@ private fun DisruptionStrip(headline: String, tier: WidgetSizeTier) {
         verticalAlignment = Alignment.CenterVertically,
     ) {
         Text(
-            text = headline,
+            text = text,
             maxLines = 1,
             modifier = GlanceModifier.defaultWeight(),
             style = TextStyle(fontSize = tier.statusSize, color = GlanceTheme.colors.onErrorContainer),

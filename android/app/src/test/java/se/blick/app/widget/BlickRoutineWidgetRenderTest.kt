@@ -5,15 +5,18 @@ import androidx.compose.ui.unit.dp
 import androidx.glance.appwidget.testing.unit.runGlanceAppWidgetUnitTest
 import androidx.glance.testing.unit.hasText
 import androidx.glance.testing.unit.hasTextEqualTo
+import org.junit.Assert.assertEquals
 import org.junit.Test
 import org.junit.runner.RunWith
 import org.robolectric.RobolectricTestRunner
 import org.robolectric.RuntimeEnvironment
 import org.robolectric.annotation.Config
 import se.blick.app.R
+import se.blick.app.domain.model.DisruptionEffect
 import se.blick.app.domain.model.ExactDestinationChangesPreference
 import se.blick.app.domain.model.JourneyRole
 import se.blick.app.domain.model.TransportMode
+import se.blick.app.notification.disruptionEffectLabelRes
 import java.time.Instant
 import java.time.ZoneId
 import java.time.format.DateTimeFormatter
@@ -71,6 +74,7 @@ class BlickRoutineWidgetRenderTest {
         changesPreference: ExactDestinationChangesPreference = ExactDestinationChangesPreference.BOTH,
         disruptionHeadline: String? = null,
         disruptionUncertainLineDesignations: List<String> = emptyList(),
+        disruptionEffect: DisruptionEffect? = null,
     ) = RoutineWidgetUiState.ActiveRoutine(
         RoutineWidgetModel(
             routineId = "r1",
@@ -82,6 +86,7 @@ class BlickRoutineWidgetRenderTest {
             transportMode = primary.transportMode,
             disruptionHeadline = disruptionHeadline,
             disruptionUncertainLineDesignations = disruptionUncertainLineDesignations,
+            disruptionEffect = disruptionEffect,
         ),
     )
 
@@ -95,6 +100,7 @@ class BlickRoutineWidgetRenderTest {
     )
     private fun lineRelevantSingleText(line: String) = context.getString(R.string.notification_disruption_line_relevant_single_format, line)
     private fun lineRelevantGenericText() = context.getString(R.string.notification_disruption_line_relevant_generic)
+    private fun effectText(effect: DisruptionEffect) = context.getString(disruptionEffectLabelRes(effect))
 
     // ---- resolveEffectiveModel: the same 4-case matrix BlickRoutineWidgetTest proves as a pure
     // function -- this is the complementary proof that ActiveRoutineContent truly calls it and
@@ -360,30 +366,83 @@ class BlickRoutineWidgetRenderTest {
             onNode(hasTextEqualTo(countdownText(110))).assertExists()
         }
 
-    // ---- Disruption strip: a CONFIRMED disruption's own real SL text renders directly; a
-    // LINE_RELEVANT one renders the same conservative "Line X disruption" label the notification
-    // shows instead -- see disruptionStripText's own doc and the Akalla -> T-Centralen false-
-    // positive this exists to prevent. All at a non-compact size (see this file's own class doc)
-    // so the strip is never dropped merely for lack of room. ----
+    // ---- Disruption strip: a CONFIRMED/LINE_DIRECTION disruption renders its own classified
+    // effect as a short, localized category label -- NEVER the raw SL headline (see
+    // disruptionStripText's own doc: SL's free text is never machine-translated, so it stays
+    // reserved for Routine Details' own full-text display). A LINE_RELEVANT one instead renders
+    // the same conservative "Line X disruption" label the notification shows -- see the
+    // Akalla -> T-Centralen false-positive this exists to prevent. All at a non-compact size (see
+    // this file's own class doc) so the strip is never dropped merely for lack of room. ----
 
     @Test
-    fun `a CONFIRMED disruption -- empty uncertain line designations -- renders its own real headline text`() =
+    fun `a CONFIRMED disruption renders its classified effect's localized category, never the raw SL headline`() =
         runGlanceAppWidgetUnitTest {
             setContext(context)
             setAppWidgetSize(DpSize(300.dp, 200.dp))
             val primary = journeyRow(now.plusSeconds(300), lineDesignation = "14")
             provideComposable {
                 BlickWidgetContent(
-                    activeRoutineState(primary, null, disruptionHeadline = "Hissen är ur funktion."),
+                    activeRoutineState(
+                        primary, null,
+                        disruptionHeadline = "Hissen är ur funktion.",
+                        disruptionEffect = DisruptionEffect.ACCESSIBILITY_ISSUE,
+                    ),
                     now,
                 )
             }
 
-            onNode(hasText("Hissen är ur funktion.")).assertExists()
+            onNode(hasText(effectText(DisruptionEffect.ACCESSIBILITY_ISSUE))).assertExists()
+            onNode(hasText("Hissen är ur funktion.")).assertDoesNotExist()
         }
 
     @Test
-    fun `a LINE_RELEVANT disruption with one matched line renders the conservative Line X disruption label, never the raw headline`() =
+    @Config(qualifiers = "sv")
+    fun `a CONFIRMED disruption in Swedish renders the Swedish classified category, never the raw SL headline`() =
+        runGlanceAppWidgetUnitTest {
+            setContext(context)
+            setAppWidgetSize(DpSize(300.dp, 200.dp))
+            val primary = journeyRow(now.plusSeconds(300), lineDesignation = "14")
+            provideComposable {
+                BlickWidgetContent(
+                    activeRoutineState(
+                        primary, null,
+                        disruptionHeadline = "Hissen är ur funktion.",
+                        disruptionEffect = DisruptionEffect.ACCESSIBILITY_ISSUE,
+                    ),
+                    now,
+                )
+            }
+
+            val swedishLabel = effectText(DisruptionEffect.ACCESSIBILITY_ISSUE)
+            assertEquals("Tillgänglighetsproblem", swedishLabel)
+            onNode(hasText(swedishLabel)).assertExists()
+            onNode(hasText("Hissen är ur funktion.")).assertDoesNotExist()
+        }
+
+    @Test
+    fun `a DELAYS-classified disruption renders the Delays category label`() =
+        runGlanceAppWidgetUnitTest {
+            setContext(context)
+            setAppWidgetSize(DpSize(300.dp, 200.dp))
+            val primary = journeyRow(now.plusSeconds(300), lineDesignation = "14")
+            provideComposable {
+                BlickWidgetContent(
+                    activeRoutineState(
+                        primary, null,
+                        disruptionHeadline = "Försenad avgång från Slussen",
+                        disruptionEffect = DisruptionEffect.DELAYS,
+                    ),
+                    now,
+                )
+            }
+
+            val delaysLabel = effectText(DisruptionEffect.DELAYS)
+            assertEquals("Delays", delaysLabel)
+            onNode(hasText(delaysLabel)).assertExists()
+        }
+
+    @Test
+    fun `a LINE_RELEVANT disruption with one matched line renders the conservative Line X disruption label, never the classified effect or the raw headline`() =
         runGlanceAppWidgetUnitTest {
             setContext(context)
             setAppWidgetSize(DpSize(300.dp, 200.dp))
@@ -394,6 +453,10 @@ class BlickRoutineWidgetRenderTest {
                         primary, null,
                         disruptionHeadline = "Inställd trafik på Blå linjen mellan T-Centralen och Kungsträdgården",
                         disruptionUncertainLineDesignations = listOf("11"),
+                        // A specific, confident effect -- LINE_RELEVANT must still win: this
+                        // effect was never proven to apply to THIS exact journey, only to the
+                        // line/mode in general (see disruptionStripText's own doc).
+                        disruptionEffect = DisruptionEffect.NO_SERVICE,
                     ),
                     now,
                 )
@@ -401,6 +464,7 @@ class BlickRoutineWidgetRenderTest {
 
             onNode(hasText(lineRelevantSingleText("11"))).assertExists()
             onNode(hasText("Inställd trafik på Blå linjen mellan T-Centralen och Kungsträdgården")).assertDoesNotExist()
+            onNode(hasText(effectText(DisruptionEffect.NO_SERVICE))).assertDoesNotExist()
         }
 
     @Test
@@ -421,6 +485,28 @@ class BlickRoutineWidgetRenderTest {
             }
 
             onNode(hasText(lineRelevantGenericText())).assertExists()
+        }
+
+    @Test
+    fun `a disruption persisted before disruptionEffect existed renders the generic Disruption label, never the raw Swedish headline`() =
+        runGlanceAppWidgetUnitTest {
+            setContext(context)
+            setAppWidgetSize(DpSize(300.dp, 200.dp))
+            val primary = journeyRow(now.plusSeconds(300), lineDesignation = "14")
+            provideComposable {
+                BlickWidgetContent(
+                    // disruptionEffect deliberately omitted -- defaults to null, matching state
+                    // an older app version persisted: the headline is real, but its own
+                    // classification was never written for this widget instance yet.
+                    activeRoutineState(primary, null, disruptionHeadline = "Hissen är ur funktion."),
+                    now,
+                )
+            }
+
+            val genericLabel = effectText(DisruptionEffect.DISRUPTION)
+            assertEquals("Disruption", genericLabel)
+            onNode(hasText(genericLabel)).assertExists()
+            onNode(hasText("Hissen är ur funktion.")).assertDoesNotExist()
         }
 
     @Test

@@ -5,9 +5,11 @@ import androidx.datastore.preferences.core.Preferences
 import androidx.datastore.preferences.core.booleanPreferencesKey
 import androidx.datastore.preferences.core.longPreferencesKey
 import androidx.datastore.preferences.core.stringPreferencesKey
+import se.blick.app.domain.model.DisruptionEffect
 import se.blick.app.domain.model.ExactDestinationChangesPreference
 import se.blick.app.domain.model.JourneyRole
 import se.blick.app.domain.model.TransportMode
+import se.blick.app.domain.model.toDisruptionEffect
 import se.blick.app.domain.model.toExactDestinationChangesPreference
 import se.blick.app.domain.model.toJourneyRole
 import se.blick.app.domain.model.toTransportMode
@@ -34,6 +36,10 @@ private object WidgetKeys {
      * absent entirely on state persisted by an older app version, or whenever the current
      * disruption (if any) is `CONFIRMED`/`LINE_DIRECTION` rather than `LINE_RELEVANT`. */
     val DISRUPTION_UNCERTAIN_LINE_DESIGNATIONS = stringPreferencesKey("disruptionUncertainLineDesignations")
+    /** [DisruptionEffect.name] — new in this version; absent entirely on state persisted by an
+     * older app version (see [toDisruptionEffect]'s own doc for how a present-but-unrecognized
+     * value, as opposed to an absent key, is handled on read). */
+    val DISRUPTION_EFFECT = stringPreferencesKey("disruptionEffect")
     val LAST_CHECKED_AT_EPOCH_MILLIS = longPreferencesKey("lastCheckedAtEpochMillis")
     val NEXT_LINE = stringPreferencesKey("nextLine")
     val NEXT_DESTINATION = stringPreferencesKey("nextDestination")
@@ -127,6 +133,7 @@ internal fun RoutineWidgetUiState.writeInto(prefs: MutablePreferences) {
             if (model.disruptionUncertainLineDesignations.isNotEmpty()) {
                 prefs[WidgetKeys.DISRUPTION_UNCERTAIN_LINE_DESIGNATIONS] = model.disruptionUncertainLineDesignations.encodeLineDesignations()
             }
+            model.disruptionEffect?.let { prefs[WidgetKeys.DISRUPTION_EFFECT] = it.name }
             when (val content = model.content) {
                 RoutineWidgetContent.Loading -> prefs[WidgetKeys.CONTENT_TYPE] = ContentType.LOADING.name
                 is RoutineWidgetContent.Live -> {
@@ -210,6 +217,14 @@ internal fun Preferences.toWidgetUiState(): RoutineWidgetUiState {
     val lineDesignation = this[WidgetKeys.LINE_DESIGNATION]
     val disruptionHeadline = this[WidgetKeys.DISRUPTION_HEADLINE]
     val disruptionUncertainLineDesignations = this[WidgetKeys.DISRUPTION_UNCERTAIN_LINE_DESIGNATIONS].decodeLineDesignations()
+    // Safe-call, not ?: DisruptionEffect.DISRUPTION -- an absent key (state persisted by a
+    // version predating this field) must stay null, so BlickRoutineWidget's own
+    // disruptionStripText can tell "old state, effect genuinely unknown" apart from "backend
+    // classified this as DISRUPTION" even though both currently render the same generic label.
+    // A present-but-unrecognized value (a newer app version's future DisruptionEffect, read by
+    // this older one) goes through .toDisruptionEffect()'s own safe fallback instead, exactly
+    // like every other persisted enum in this file.
+    val disruptionEffect = this[WidgetKeys.DISRUPTION_EFFECT]?.toDisruptionEffect()
     // .toTransportMode() defaults to TransportMode.UNKNOWN both for a genuinely unrecognized
     // value and for a widget instance whose prefs were written by an app version before this
     // key existed (this[...] is then simply null) -- either way, a safe grey badge, never a
@@ -266,6 +281,7 @@ internal fun Preferences.toWidgetUiState(): RoutineWidgetUiState {
             transportMode = transportMode,
             disruptionHeadline = disruptionHeadline,
             disruptionUncertainLineDesignations = disruptionUncertainLineDesignations,
+            disruptionEffect = disruptionEffect,
         ),
     )
 }

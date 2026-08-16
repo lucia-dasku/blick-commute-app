@@ -1,5 +1,6 @@
 package se.blick.app.widget
 
+import se.blick.app.domain.model.DisruptionEffect
 import se.blick.app.domain.model.ExactDestinationChangesPreference
 import se.blick.app.domain.model.JourneyRole
 import se.blick.app.domain.model.TransportMode
@@ -44,25 +45,42 @@ data class RoutineWidgetModel(
      * every real production call site ([RoutineWidgetMapper]) always passes the routine's own
      * mode explicitly. */
     val transportMode: TransportMode = TransportMode.UNKNOWN,
-    /** The highest-priority currently-relevant disruption's header, or null if none was
-     * fetched/available — mirrors [se.blick.app.notification.RoutineNotificationModel.disruptionHeadline]
-     * exactly (see [RoutineWidgetMapper.map]'s `topDisruption` parameter), but the widget only
-     * ever shows the short header, never the longer body text: [BlickRoutineWidget]'s own
-     * disruption strip is a small, tap-for-more affordance, not a substitute for the full
-     * disruption text Routine Details already shows. Null in every state produced without fresh
-     * disruption data in hand (e.g. [RoutineWidgetReconciler]'s reconciliation paths), exactly
-     * like [lineDesignation] being null is handled — never shown, rather than shown empty. */
+    /** The highest-priority currently-relevant disruption's header, in SL's own original
+     * language — carried for [se.blick.app.ui.screens.routinedetails.RoutineDetailsScreen]'s own
+     * full-text disruption display (reached by tapping the widget), NOT for direct rendering in
+     * the widget's own compact strip: SL's free text is never machine-translated (see
+     * [disruptionEffect]'s own doc for what the strip actually renders), so showing it directly
+     * here would silently defeat English-locale users on a Swedish source message. Mirrors
+     * [se.blick.app.notification.RoutineNotificationModel.disruptionHeadline] exactly (see
+     * [RoutineWidgetMapper.map]'s `topDisruption` parameter). Null in every state produced
+     * without fresh disruption data in hand (e.g. [RoutineWidgetReconciler]'s reconciliation
+     * paths), exactly like [lineDesignation] being null is handled — never shown, rather than
+     * shown empty. */
     val disruptionHeadline: String? = null,
     /** Mirrors [se.blick.app.notification.RoutineNotificationModel.disruptionUncertainLineDesignations]
      * exactly — non-empty ONLY when the current disruption's own relevance is LINE_RELEVANT (see
      * [se.blick.app.domain.model.DisruptionPresentation.uncertainLineDesignations]'s own doc).
      * When non-empty, [BlickRoutineWidget]'s own disruption strip uses this field to build the
      * same conservative "Line 11 disruption"-style label the notification shows, INSTEAD of
-     * [disruptionHeadline]'s own real SL text, which would otherwise overclaim proof for this
+     * [disruptionEffect]'s own classified label, which would otherwise overclaim proof for this
      * exact journey's own segment. Always empty for `LINE_DIRECTION` and for a `CONFIRMED`
-     * exact-destination disruption, both of which show [disruptionHeadline] directly, exactly as
+     * exact-destination disruption, both of which render [disruptionEffect] directly, exactly as
      * before this field existed. */
     val disruptionUncertainLineDesignations: List<String> = emptyList(),
+    /** [disruptionHeadline]'s own backend-classified category — mirrors
+     * [se.blick.app.notification.RoutineNotificationModel.disruptionEffect] exactly (see
+     * [RoutineWidgetMapper.map]'s `topDisruption` parameter). This, not [disruptionHeadline]'s
+     * own SL free text, is what [BlickRoutineWidget]'s compact strip actually renders for a
+     * `CONFIRMED`/`LINE_DIRECTION` disruption — via the same
+     * [se.blick.app.notification.disruptionEffectLabelRes] mapping the notification uses, so the
+     * two surfaces never disagree — leaving the full original SL text solely to
+     * [se.blick.app.ui.screens.routinedetails.RoutineDetailsScreen] (see [disruptionHeadline]'s
+     * own doc). Null exactly when [disruptionHeadline] is null (no disruption), OR when
+     * [disruptionHeadline] was persisted by an app version predating this field — the widget
+     * treats that second case as a generic, effect-unknown disruption (see
+     * [BlickRoutineWidget]'s own `disruptionStripText`) until the worker's next tick overwrites
+     * it with a real effect, rather than crashing or falling back to raw SL text. */
+    val disruptionEffect: DisruptionEffect? = null,
 )
 
 /** Mirrors [se.blick.app.notification.RoutineNotificationContent] one-for-one, except [Live] and

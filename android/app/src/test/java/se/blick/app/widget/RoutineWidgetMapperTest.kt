@@ -396,4 +396,40 @@ class RoutineWidgetMapperTest {
         val model = RoutineWidgetMapper.notificationsUnavailable(routine())
         assertTrue(model.disruptionUncertainLineDesignations.isEmpty())
     }
+
+    // ---- disruptionEffect: mirrors DisruptionPresentation.effect one-for-one -- see
+    // BlickRoutineWidgetRenderTest for how the widget's own disruption strip renders this into a
+    // localized category label INSTEAD of disruptionHeadline's raw SL text. ----
+
+    @Test
+    fun `a topDisruption's effect is carried into disruptionEffect`() {
+        val presentation = DisruptionPresentation("Hissen är ur funktion.", null, DisruptionEffect.ACCESSIBILITY_ISSUE)
+        val model = RoutineWidgetMapper.map(routine(), LiveDeparturesState.Loading, now, presentation)
+        assertEquals(DisruptionEffect.ACCESSIBILITY_ISSUE, model.disruptionEffect)
+    }
+
+    @Test
+    fun `no topDisruption leaves disruptionEffect null, not defaulted to DISRUPTION`() {
+        val model = RoutineWidgetMapper.map(routine(), LiveDeparturesState.Loading, now)
+        assertNull(model.disruptionEffect)
+    }
+
+    @Test
+    fun `a LINE_RELEVANT presentation still carries its own real effect onto the model, alongside uncertainLineDesignations`() {
+        val presentation = DisruptionPresentation(
+            headline = "Trafiken är stängd mellan T-Centralen och Kungsträdgården",
+            details = null,
+            effect = DisruptionEffect.NO_SERVICE,
+            uncertainLineDesignations = listOf("11"),
+        )
+        val model = RoutineWidgetMapper.map(routine(), LiveDeparturesState.Loading, now, presentation)
+        assertEquals(DisruptionEffect.NO_SERVICE, model.disruptionEffect)
+        assertEquals(listOf("11"), model.disruptionUncertainLineDesignations)
+    }
+
+    @Test
+    fun `notificationsUnavailable carries no disruption -- disruptionEffect is null`() {
+        val model = RoutineWidgetMapper.notificationsUnavailable(routine())
+        assertNull(model.disruptionEffect)
+    }
 }

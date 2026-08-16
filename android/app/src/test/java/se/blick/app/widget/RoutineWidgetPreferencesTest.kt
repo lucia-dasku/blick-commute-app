@@ -4,7 +4,9 @@ import androidx.datastore.preferences.core.mutablePreferencesOf
 import androidx.datastore.preferences.core.stringPreferencesKey
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertNull
+import org.junit.Assert.assertTrue
 import org.junit.Test
+import se.blick.app.domain.model.DisruptionEffect
 import se.blick.app.domain.model.ExactDestinationChangesPreference
 import se.blick.app.domain.model.JourneyRole
 import se.blick.app.domain.model.TransportMode
@@ -284,6 +286,120 @@ class RoutineWidgetPreferencesTest {
 
         val restored = prefs.toPreferences().toWidgetUiState() as RoutineWidgetUiState.ActiveRoutine
         assertEquals(emptyList<String>(), restored.model.disruptionUncertainLineDesignations)
+    }
+
+    // ---- disruptionEffect -- drives the classified category label in the disruption strip,
+    // INSTEAD of disruptionHeadline's raw SL text (see that field's own doc). ----
+
+    @Test
+    fun `disruptionEffect round-trips exactly, for the classified category label`() {
+        val model = RoutineWidgetModel(
+            routineId = "r1",
+            routineName = "Morning commute",
+            stationName = "Fruängen",
+            directionLabel = "T-Centralen",
+            content = RoutineWidgetContent.Loading,
+            disruptionHeadline = "Hissen är ur funktion.",
+            disruptionEffect = DisruptionEffect.ACCESSIBILITY_ISSUE,
+        )
+        val restored = roundTrip(RoutineWidgetUiState.ActiveRoutine(model)) as RoutineWidgetUiState.ActiveRoutine
+        assertEquals(model, restored.model)
+        assertEquals(DisruptionEffect.ACCESSIBILITY_ISSUE, restored.model.disruptionEffect)
+    }
+
+    @Test
+    fun `a null disruptionEffect round-trips as null, not defaulted to DISRUPTION`() {
+        val model = RoutineWidgetModel("r1", "Morning commute", "Fruängen", "T-Centralen", RoutineWidgetContent.Loading)
+        val restored = roundTrip(RoutineWidgetUiState.ActiveRoutine(model)) as RoutineWidgetUiState.ActiveRoutine
+        assertNull(restored.model.disruptionEffect)
+    }
+
+    @Test
+    fun `every DisruptionEffect value round-trips exactly`() {
+        for (effect in DisruptionEffect.entries) {
+            val model = RoutineWidgetModel(
+                "r1", "Morning commute", "Fruängen", "T-Centralen", RoutineWidgetContent.Loading,
+                disruptionHeadline = "Some disruption",
+                disruptionEffect = effect,
+            )
+            val restored = roundTrip(RoutineWidgetUiState.ActiveRoutine(model)) as RoutineWidgetUiState.ActiveRoutine
+            assertEquals(effect, restored.model.disruptionEffect)
+        }
+    }
+
+    @Test
+    fun `disruptionEffect persisted by a version predating this field decodes to null, never crashes -- distinct from an unrecognized value`() {
+        val prefs = mutablePreferencesOf()
+        val withEffect = RoutineWidgetModel(
+            "r1", "Morning commute", "Fruängen", "T-Centralen", RoutineWidgetContent.Loading,
+            disruptionHeadline = "Hissen är ur funktion.",
+            disruptionEffect = DisruptionEffect.ACCESSIBILITY_ISSUE,
+        )
+        RoutineWidgetUiState.ActiveRoutine(withEffect).writeInto(prefs)
+        // Simulate a pre-upgrade write: the key was never present at all.
+        prefs.remove(stringPreferencesKey("disruptionEffect"))
+
+        val restored = prefs.toPreferences().toWidgetUiState() as RoutineWidgetUiState.ActiveRoutine
+        assertNull(restored.model.disruptionEffect)
+        // The headline itself is unaffected by the missing key -- only its classification is
+        // unknown, until the worker's next tick overwrites it with a real effect.
+        assertEquals("Hissen är ur funktion.", restored.model.disruptionHeadline)
+    }
+
+    @Test
+    fun `an unrecognized persisted disruptionEffect value degrades to DISRUPTION, never crashes`() {
+        val prefs = mutablePreferencesOf()
+        val model = RoutineWidgetModel(
+            "r1", "Morning commute", "Fruängen", "T-Centralen", RoutineWidgetContent.Loading,
+            disruptionHeadline = "Något har hänt.",
+            disruptionEffect = DisruptionEffect.ACCESSIBILITY_ISSUE,
+        )
+        RoutineWidgetUiState.ActiveRoutine(model).writeInto(prefs)
+        // Simulate a NEWER app version's DisruptionEffect value, read by this OLDER one -- unlike
+        // an absent key (the previous test), the key is genuinely present here.
+        prefs[stringPreferencesKey("disruptionEffect")] = "SOME_FUTURE_EFFECT"
+
+        val restored = prefs.toPreferences().toWidgetUiState() as RoutineWidgetUiState.ActiveRoutine
+        assertEquals(DisruptionEffect.DISRUPTION, restored.model.disruptionEffect)
+    }
+
+    @Test
+    fun `a transition to a state with no disruption clears a previous state's leftover effect`() {
+        val prefs = mutablePreferencesOf()
+        val withDisruption = RoutineWidgetModel(
+            "r1", "Morning commute", "Fruängen", "T-Centralen", RoutineWidgetContent.Loading,
+            disruptionHeadline = "Hissen är ur funktion.",
+            disruptionEffect = DisruptionEffect.ACCESSIBILITY_ISSUE,
+        )
+        RoutineWidgetUiState.ActiveRoutine(withDisruption).writeInto(prefs)
+
+        RoutineWidgetUiState.ActiveRoutine(withDisruption.copy(disruptionHeadline = null, disruptionEffect = null)).writeInto(prefs)
+
+        val restored = prefs.toPreferences().toWidgetUiState() as RoutineWidgetUiState.ActiveRoutine
+        assertNull(restored.model.disruptionEffect)
+    }
+
+    @Test
+    fun `a state transition with no disruption clears headline, effect, and uncertain line designations together`() {
+        val prefs = mutablePreferencesOf()
+        val withDisruption = RoutineWidgetModel(
+            "r1", "Morning commute", "Fruängen", "T-Centralen", RoutineWidgetContent.Loading,
+            disruptionHeadline = "Trafiken är stängd mellan T-Centralen och Kungsträdgården",
+            disruptionUncertainLineDesignations = listOf("11"),
+            disruptionEffect = DisruptionEffect.NO_SERVICE,
+        )
+        RoutineWidgetUiState.ActiveRoutine(withDisruption).writeInto(prefs)
+
+        // Transition straight to Offline -- like the earlier "leftover fields" test above, no
+        // disruption fields are set on the new state at all.
+        RoutineWidgetUiState.ActiveRoutine(
+            RoutineWidgetModel("r1", "Morning commute", "Fruängen", "T-Centralen", RoutineWidgetContent.Offline),
+        ).writeInto(prefs)
+
+        val restored = prefs.toPreferences().toWidgetUiState() as RoutineWidgetUiState.ActiveRoutine
+        assertNull(restored.model.disruptionHeadline)
+        assertNull(restored.model.disruptionEffect)
+        assertTrue(restored.model.disruptionUncertainLineDesignations.isEmpty())
     }
 
     @Test
