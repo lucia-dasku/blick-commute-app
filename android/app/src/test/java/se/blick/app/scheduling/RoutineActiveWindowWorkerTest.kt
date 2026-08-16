@@ -43,6 +43,8 @@ import se.blick.app.domain.model.DisruptionPresentation
 import se.blick.app.domain.model.DisruptionPriority
 import se.blick.app.domain.model.DisruptionRelevance
 import se.blick.app.domain.model.DisruptionSource
+import se.blick.app.domain.model.JourneyDisruptionContext
+import se.blick.app.domain.model.JourneyDisruptionContextLeg
 import se.blick.app.domain.model.JourneyDisruptionNotice
 import se.blick.app.domain.model.ExactDestinationChangesPreference
 import se.blick.app.domain.model.Journey
@@ -2973,6 +2975,17 @@ class RoutineActiveWindowWorkerTest {
          * empty placeholder. */
         val receivedJourneyPlannerNotices = mutableListOf<List<JourneyDisruptionNotice>>()
 
+        /** Captures PRIMARY's own [JourneyPlan.disruptionContext]/`departureTime`/`arrivalTime` as
+         * actually received — proves the worker forwards these completely unchanged from whichever
+         * journey currently holds [JourneyRole.PRIMARY], never re-derived, re-interpreted, or
+         * substituted from some other journey. */
+        var receivedDisruptionContext: JourneyDisruptionContext? = null
+            private set
+        var receivedDepartureTime: Instant? = null
+            private set
+        var receivedArrivalTime: Instant? = null
+            private set
+
         override suspend fun searchLocations(query: String): List<JourneyLocation> = emptyList()
         override suspend fun getJourneys(
             originId: String,
@@ -2990,10 +3003,16 @@ class RoutineActiveWindowWorkerTest {
             legs: List<JourneyLeg>,
             originSiteId: Long?,
             journeyPlannerNotices: List<JourneyDisruptionNotice>,
+            disruptionContext: JourneyDisruptionContext?,
+            departureTime: Instant?,
+            arrivalTime: Instant?,
         ): List<ResolvedJourneyDisruption> {
             receivedDeviationLegsCalls += legs
             receivedOriginSiteId = originSiteId
             receivedJourneyPlannerNotices += journeyPlannerNotices
+            receivedDisruptionContext = disruptionContext
+            receivedDepartureTime = departureTime
+            receivedArrivalTime = arrivalTime
             if (deviationNoticesShouldThrow) error("simulated failure")
             return resolvedDisruptions
         }
@@ -3058,6 +3077,45 @@ class RoutineActiveWindowWorkerTest {
         )
         // CONFIRMED -- never presented as merely line-scoped uncertainty.
         assertTrue(last.disruptionUncertainLineDesignations.isEmpty())
+    }
+
+    @Test
+    fun `PRIMARY's own disruptionContext and departureTime-arrivalTime are forwarded to the backend completely unchanged`() = runTest {
+        val clock = TickingClock(Instant.parse("2026-07-27T05:00:00Z"), zone)
+        val routine = exactDestinationRoutine()
+        val repository = ScriptedRoutineRepository(clock) { routine }
+        val disruptionContext = JourneyDisruptionContext(
+            version = 1,
+            journeyStart = "Akalla",
+            journeyEnd = "T-Centralen",
+            legs = listOf(
+                JourneyDisruptionContextLeg(
+                    transportMode = "METRO", lineDesignation = "11",
+                    boardingPatternPointGid = "9025001000003272", alightingPatternPointGid = "9025001000003051",
+                    stopPatternPointGids = listOf("9025001000003272", "9025001000003051"), stopSequenceComplete = true,
+                ),
+            ),
+        )
+        val primary = exactJourney("primary", Instant.parse("2026-07-27T05:01:00Z"), lineDesignation = "11")
+            .copy(disruptionContext = disruptionContext)
+        val journeyRepository = FakeJourneyRepository(listOf(primary))
+        val getRankedJourneys = GetRankedJourneysUseCase(journeyRepository, Clock.fixed(clock.instant(), zone))
+
+        val worker = buildWorker(
+            routineId = routine.id, routineRepository = repository,
+            getLiveDepartures = GetLiveDeparturesUseCase(FakeDepartureRepository { error("unused for EXACT_DESTINATION") }, Clock.systemUTC()),
+            notifier = RecordingNotifier(), scheduler = RecordingScheduler(), clock = clock,
+            widgetUpdater = RecordingWidgetUpdater(), getRankedJourneys = getRankedJourneys,
+            getJourneyDisruptionRelevance = GetJourneyDisruptionRelevanceUseCase(journeyRepository),
+        )
+        val job = launch { worker.doWork() }
+        runCurrent()
+        job.cancelAndJoin()
+
+        // Forwarded exactly as PRIMARY carried it -- never re-derived, re-interpreted, or dropped.
+        assertEquals(disruptionContext, journeyRepository.receivedDisruptionContext)
+        assertEquals(primary.departureTime, journeyRepository.receivedDepartureTime)
+        assertEquals(primary.arrivalTime, journeyRepository.receivedArrivalTime)
     }
 
     @Test
@@ -3300,6 +3358,9 @@ class RoutineActiveWindowWorkerTest {
                 legs: List<JourneyLeg>,
                 originSiteId: Long?,
                 journeyPlannerNotices: List<JourneyDisruptionNotice>,
+                disruptionContext: JourneyDisruptionContext?,
+                departureTime: Instant?,
+                arrivalTime: Instant?,
             ): List<ResolvedJourneyDisruption> {
                 delay(DISRUPTIONS_FETCH_TIMEOUT_MS * 100)
                 return listOf(akallaResolvedDeviation())

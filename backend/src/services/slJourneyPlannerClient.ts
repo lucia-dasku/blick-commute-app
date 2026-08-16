@@ -24,11 +24,24 @@ const StopFinderSchema = z.object({ locations: z.array(LocationSchema).optional(
  * (a stop-area itself, which can itself carry a FURTHER parent, e.g. a locality). Preserved
  * defensively/verbatim (never validated against a fixed enum) since real SL data may use
  * other values this schema hasn't seen yet -- see normalizeJourney.ts's own
- * canonicalStopId, which is the actual consumer of this field. */
+ * canonicalStopId, which is the actual consumer of this field.
+ *
+ * `isGlobalId` distinguishes whether `id` is safe to treat as a standalone global identifier at
+ * all -- confirmed live that a `type: "platform"` node normally carries `isGlobalId: true`
+ * alongside a `pattern_point_gid`-namespace `id` (e.g. `"9025001000003272"`), which is exactly
+ * the identifier `StopPointDirectory` (`services/stopPointDirectory.ts`) resolves against SL
+ * Transport's own `/v1/stop-points` -- see that service's own doc for the full bridge evidence.
+ * Also confirmed live that a leg's own `origin`/`destination` can carry `type: "stop"` instead
+ * (SL has not pinned a specific boarding/alighting platform yet) even when the SAME physical
+ * stop appears as `type: "platform"` elsewhere in that same trip's own `stopSequence` -- see
+ * `normalizeJourney.ts`'s own `buildDisruptionContextLeg`, which is why every consumer of this
+ * field checks `type === "platform" && isGlobalId === true` before ever treating `id` as a
+ * `PatternPointGid`, rather than assuming `id` is always in that namespace. */
 interface RawPlace {
   id?: string;
   name: string;
   type?: string;
+  isGlobalId?: boolean;
   disassembledName?: string;
   departureTimePlanned?: string;
   departureTimeEstimated?: string;
@@ -41,6 +54,7 @@ const PlaceSchema: z.ZodType<RawPlace> = z.lazy(() => z.object({
   id: z.string().optional(),
   name: z.string().min(1),
   type: z.string().optional(),
+  isGlobalId: z.boolean().optional(),
   disassembledName: z.string().optional(),
   departureTimePlanned: z.string().datetime({ offset: true }).optional(),
   departureTimeEstimated: z.string().datetime({ offset: true }).optional(),

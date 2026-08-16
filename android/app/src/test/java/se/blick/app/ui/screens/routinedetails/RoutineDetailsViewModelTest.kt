@@ -40,6 +40,8 @@ import se.blick.app.domain.model.DisruptionRelevance
 import se.blick.app.domain.model.DisruptionSource
 import se.blick.app.domain.model.ExactDestinationChangesPreference
 import se.blick.app.domain.model.Journey
+import se.blick.app.domain.model.JourneyDisruptionContext
+import se.blick.app.domain.model.JourneyDisruptionContextLeg
 import se.blick.app.domain.model.JourneyDisruptionNotice
 import se.blick.app.domain.model.JourneyLeg
 import se.blick.app.domain.model.JourneyLocation
@@ -2611,6 +2613,12 @@ class RoutineDetailsViewModelTest {
         var receivedOriginSiteId: Long? = null
             private set
         val receivedJourneyPlannerNotices = mutableListOf<List<JourneyDisruptionNotice>>()
+        var receivedDisruptionContext: JourneyDisruptionContext? = null
+            private set
+        var receivedDepartureTime: Instant? = null
+            private set
+        var receivedArrivalTime: Instant? = null
+            private set
 
         override suspend fun searchLocations(query: String): List<JourneyLocation> = emptyList()
         override suspend fun getJourneys(
@@ -2630,10 +2638,16 @@ class RoutineDetailsViewModelTest {
             legs: List<JourneyLeg>,
             originSiteId: Long?,
             journeyPlannerNotices: List<JourneyDisruptionNotice>,
+            disruptionContext: JourneyDisruptionContext?,
+            departureTime: Instant?,
+            arrivalTime: Instant?,
         ): List<ResolvedJourneyDisruption> {
             receivedDeviationLegsCalls += legs
             receivedOriginSiteId = originSiteId
             receivedJourneyPlannerNotices += journeyPlannerNotices
+            receivedDisruptionContext = disruptionContext
+            receivedDepartureTime = departureTime
+            receivedArrivalTime = arrivalTime
             return resolvedDisruptions
         }
     }
@@ -2909,6 +2923,9 @@ class RoutineDetailsViewModelTest {
             legs: List<JourneyLeg>,
             originSiteId: Long?,
             journeyPlannerNotices: List<JourneyDisruptionNotice>,
+            disruptionContext: JourneyDisruptionContext?,
+            departureTime: Instant?,
+            arrivalTime: Instant?,
         ): List<ResolvedJourneyDisruption> {
             val deferred = CompletableDeferred<List<ResolvedJourneyDisruption>>()
             pending += deferred
@@ -2970,6 +2987,36 @@ class RoutineDetailsViewModelTest {
         assertEquals(1, journeyRepository.receivedDeviationLegsCalls.size)
         assertEquals(listOf("11"), journeyRepository.receivedDeviationLegsCalls.single().map { it.lineDesignation })
         assertEquals(routine.siteId, journeyRepository.receivedOriginSiteId)
+    }
+
+    @Test
+    fun `PRIMARY's own disruptionContext and departureTime-arrivalTime are sent unchanged, never NEXT's`() = runTest(dispatcher) {
+        val disruptionContext = JourneyDisruptionContext(
+            version = 1, journeyStart = "Akalla", journeyEnd = "T-Centralen",
+            legs = listOf(
+                JourneyDisruptionContextLeg(
+                    transportMode = "METRO", lineDesignation = "11",
+                    boardingPatternPointGid = "9025001000003272", alightingPatternPointGid = "9025001000003051",
+                    stopPatternPointGids = listOf("9025001000003272", "9025001000003051"), stopSequenceComplete = true,
+                ),
+            ),
+        )
+        val primary = journeyPlan("primary", Instant.parse("2026-07-28T08:05:00Z"), lineDesignation = "11").copy(disruptionContext = disruptionContext)
+        val next = journeyPlan("next", Instant.parse("2026-07-28T08:20:00Z"), lineDesignation = "13").copy(role = JourneyRole.NEXT)
+        val journeyRepository = FixedJourneyRepository(listOf(primary, next))
+        val getRankedJourneys = GetRankedJourneysUseCase(journeyRepository, clock)
+        val routine = exactDestinationRoutine()
+        val vm = viewModel(
+            routine = routine, routines = FakeRoutineRepository(routine),
+            getRankedJourneys = getRankedJourneys,
+            getJourneyDisruptionRelevance = GetJourneyDisruptionRelevanceUseCase(journeyRepository),
+        )
+        dispatcher.scheduler.advanceUntilIdle()
+
+        assertEquals(disruptionContext, journeyRepository.receivedDisruptionContext)
+        assertEquals(primary.departureTime, journeyRepository.receivedDepartureTime)
+        assertEquals(primary.arrivalTime, journeyRepository.receivedArrivalTime)
+        assertNotEquals(next.departureTime, journeyRepository.receivedDepartureTime)
     }
 
     @Test
@@ -3051,6 +3098,9 @@ class RoutineDetailsViewModelTest {
                 legs: List<JourneyLeg>,
                 originSiteId: Long?,
                 journeyPlannerNotices: List<JourneyDisruptionNotice>,
+                disruptionContext: JourneyDisruptionContext?,
+                departureTime: Instant?,
+                arrivalTime: Instant?,
             ): List<ResolvedJourneyDisruption> = error("simulated failure")
         }
         val getRankedJourneys = GetRankedJourneysUseCase(throwingRepository, clock)
@@ -3172,6 +3222,9 @@ class RoutineDetailsViewModelTest {
             legs: List<JourneyLeg>,
             originSiteId: Long?,
             journeyPlannerNotices: List<JourneyDisruptionNotice>,
+            disruptionContext: JourneyDisruptionContext?,
+            departureTime: Instant?,
+            arrivalTime: Instant?,
         ): List<ResolvedJourneyDisruption> {
             val deferred = CompletableDeferred<List<ResolvedJourneyDisruption>>()
             pending += deferred
@@ -3289,6 +3342,9 @@ class RoutineDetailsViewModelTest {
                 legs: List<JourneyLeg>,
                 originSiteId: Long?,
                 journeyPlannerNotices: List<JourneyDisruptionNotice>,
+                disruptionContext: JourneyDisruptionContext?,
+                departureTime: Instant?,
+                arrivalTime: Instant?,
             ): List<ResolvedJourneyDisruption> {
                 delay(DISRUPTIONS_FETCH_TIMEOUT_MS * 10)
                 return listOf(resolvedDisruption())
@@ -3333,6 +3389,9 @@ class RoutineDetailsViewModelTest {
                 legs: List<JourneyLeg>,
                 originSiteId: Long?,
                 journeyPlannerNotices: List<JourneyDisruptionNotice>,
+                disruptionContext: JourneyDisruptionContext?,
+                departureTime: Instant?,
+                arrivalTime: Instant?,
             ): List<ResolvedJourneyDisruption> {
                 // A's own lookup resolves immediately; B's own always times out.
                 if (legs.any { it.lineDesignation == "11" }) return listOf(resolvedDisruption(id = "a-disruption"))

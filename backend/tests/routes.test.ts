@@ -44,6 +44,9 @@ function buildTestApp(options?: { departuresShouldFail?: boolean; receivedForeca
       }
       return departuresFixture as unknown as RawDeparturesResponse;
     },
+    async fetchStopPoints() {
+      return [];
+    },
   };
 
   const fakeDeviationsClient: SlDeviationsClient = {

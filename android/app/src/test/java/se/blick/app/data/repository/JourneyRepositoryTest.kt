@@ -2,18 +2,28 @@ package se.blick.app.data.repository
 
 import kotlinx.coroutines.test.runTest
 import org.junit.Assert.assertEquals
+import org.junit.Assert.assertNull
 import org.junit.Assert.assertTrue
 import org.junit.Test
 import se.blick.app.data.remote.BlickApiClient
 import se.blick.app.data.remote.dto.DeparturesResponseDto
 import se.blick.app.data.remote.dto.DisruptionsResponseDto
+import se.blick.app.data.remote.dto.JourneyDisruptionContextDto
+import se.blick.app.data.remote.dto.JourneyDisruptionContextLegDto
+import se.blick.app.data.remote.dto.JourneyDisruptionRelevanceRequestDto
+import se.blick.app.data.remote.dto.JourneyDisruptionRelevanceResponseDto
 import se.blick.app.data.remote.dto.JourneyLegDto
 import se.blick.app.data.remote.dto.JourneyPlanDto
 import se.blick.app.data.remote.dto.JourneysResponseDto
 import se.blick.app.data.remote.dto.StopSearchResponseDto
 import se.blick.app.domain.model.DEFAULT_JOURNEY_TRANSPORT_MODES
 import se.blick.app.domain.model.ExactDestinationChangesPreference
+import se.blick.app.domain.model.JourneyDisruptionContext
+import se.blick.app.domain.model.JourneyDisruptionContextLeg
+import se.blick.app.domain.model.JourneyLeg
 import se.blick.app.domain.model.JourneyRole
+import se.blick.app.domain.model.TransportMode
+import java.time.Instant
 
 /**
  * Backend roles are authoritative — see [se.blick.app.domain.model.toJourneyRole]'s own doc.
@@ -154,5 +164,114 @@ class JourneyRepositoryTest {
         RemoteJourneyRepository(client).getJourneys("origin", "destination", DEFAULT_JOURNEY_TRANSPORT_MODES)
 
         assertEquals("BOTH", client.receivedChangesPreference)
+    }
+
+    // ---- disruptionContext: additive structural metadata carried opaquely between
+    // /api/v1/journeys and POST /api/v1/journeys/disruptions -- Android never reads an
+    // individual field out of it, only maps it 1:1 between DTO and domain shape and sends it
+    // back unchanged. See backend/src/models/journeyDisruptionContext.ts's own doc. ----
+
+    private fun disruptionContextDto() = JourneyDisruptionContextDto(
+        version = 1,
+        journeyStart = "Akalla",
+        journeyEnd = "T-Centralen",
+        legs = listOf(
+            JourneyDisruptionContextLegDto(
+                transportMode = "METRO",
+                lineDesignation = "11",
+                boardingPatternPointGid = "9025001000003272",
+                alightingPatternPointGid = "9025001000003051",
+                stopPatternPointGids = listOf("9025001000003272", "9025001000003051"),
+                stopSequenceComplete = true,
+            ),
+        ),
+    )
+
+    @Test
+    fun `disruptionContext maps from the DTO to the domain model with every field intact`() = runTest {
+        val result = mapped(dto("primary", "PRIMARY").copy(disruptionContext = disruptionContextDto()))
+
+        val context = result.single().disruptionContext
+        assertEquals(1, context?.version)
+        assertEquals("Akalla", context?.journeyStart)
+        assertEquals("T-Centralen", context?.journeyEnd)
+        val leg = context?.legs?.single()
+        assertEquals("METRO", leg?.transportMode)
+        assertEquals("11", leg?.lineDesignation)
+        assertEquals("9025001000003272", leg?.boardingPatternPointGid)
+        assertEquals("9025001000003051", leg?.alightingPatternPointGid)
+        assertEquals(listOf("9025001000003272", "9025001000003051"), leg?.stopPatternPointGids)
+        assertEquals(true, leg?.stopSequenceComplete)
+    }
+
+    @Test
+    fun `disruptionContext is null when the response omits it (a stale cached-proxied deployment)`() = runTest {
+        val result = mapped(dto("primary", "PRIMARY"))
+
+        assertNull(result.single().disruptionContext)
+    }
+
+    private class CapturingDisruptionRelevanceApiClient : BlickApiClient {
+        var receivedRequest: JourneyDisruptionRelevanceRequestDto? = null
+            private set
+        override suspend fun searchStops(query: String) = throw NotImplementedError("unused")
+        override suspend fun getDepartures(siteId: Long, forecastMinutes: Int?) = throw NotImplementedError("unused")
+        override suspend fun getDisruptions(siteId: Long, lineId: Long?, transportMode: String?) = throw NotImplementedError("unused")
+        override suspend fun getJourneyDisruptionRelevance(request: JourneyDisruptionRelevanceRequestDto): JourneyDisruptionRelevanceResponseDto {
+            receivedRequest = request
+            return JourneyDisruptionRelevanceResponseDto("2026-08-10T07:00:00Z", emptyList())
+        }
+    }
+
+    private fun leg(originName: String, destinationName: String, lineDesignation: String) = JourneyLeg(
+        TransportMode.METRO, lineDesignation, "Direction", originName, destinationName,
+        Instant.parse("2026-08-16T10:00:00Z"), Instant.parse("2026-08-16T10:20:00Z"), true, emptyList(),
+    )
+
+    @Test
+    fun `getRelevantDeviationNotices sends disruptionContext and departureTime-arrivalTime completely unchanged`() = runTest {
+        val client = CapturingDisruptionRelevanceApiClient()
+        val context = JourneyDisruptionContext(
+            version = 1, journeyStart = "Akalla", journeyEnd = "T-Centralen",
+            legs = listOf(
+                JourneyDisruptionContextLeg(
+                    "METRO", "11", "9025001000003272", "9025001000003051",
+                    listOf("9025001000003272", "9025001000003051"), true,
+                ),
+            ),
+        )
+
+        RemoteJourneyRepository(client).getRelevantDeviationNotices(
+            legs = listOf(leg("Akalla", "T-Centralen", "11")),
+            originSiteId = 9192L,
+            journeyPlannerNotices = emptyList(),
+            disruptionContext = context,
+            departureTime = Instant.parse("2026-08-16T10:00:00Z"),
+            arrivalTime = Instant.parse("2026-08-16T10:20:00Z"),
+        )
+
+        val request = requireNotNull(client.receivedRequest)
+        assertEquals(1, request.disruptionContext?.version)
+        assertEquals("Akalla", request.disruptionContext?.journeyStart)
+        assertEquals("9025001000003272", request.disruptionContext?.legs?.single()?.boardingPatternPointGid)
+        assertEquals(true, request.disruptionContext?.legs?.single()?.stopSequenceComplete)
+        assertEquals("2026-08-16T10:00:00Z", request.departureTime)
+        assertEquals("2026-08-16T10:20:00Z", request.arrivalTime)
+    }
+
+    @Test
+    fun `getRelevantDeviationNotices omits disruptionContext-departureTime-arrivalTime when the caller does not supply them`() = runTest {
+        val client = CapturingDisruptionRelevanceApiClient()
+
+        RemoteJourneyRepository(client).getRelevantDeviationNotices(
+            legs = listOf(leg("Akalla", "T-Centralen", "11")),
+            originSiteId = 9192L,
+            journeyPlannerNotices = emptyList(),
+        )
+
+        val request = requireNotNull(client.receivedRequest)
+        assertNull(request.disruptionContext)
+        assertNull(request.departureTime)
+        assertNull(request.arrivalTime)
     }
 }

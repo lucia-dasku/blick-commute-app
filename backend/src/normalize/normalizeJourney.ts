@@ -1,6 +1,11 @@
 import type { RawJourneyPlannerJourney, RawJourneyPlannerPlace } from "../services/slJourneyPlannerClient.js";
 import type { DisruptionEffect } from "../models/disruption.js";
 import { classifyEffectFromText } from "./classifyDisruptionEffect.js";
+import {
+  JOURNEY_DISRUPTION_CONTEXT_VERSION,
+  type JourneyDisruptionContext,
+  type JourneyDisruptionContextLeg,
+} from "../models/journeyDisruptionContext.js";
 
 function modeFor(productClass?: number, name?: string): string {
   if (productClass === 0 || productClass === 1) return "TRAIN";
@@ -119,6 +124,65 @@ function buildStopIds(leg: { origin: RawJourneyPlannerPlace; destination: RawJou
   return source.map(canonicalStopId).filter((id): id is string => id != null);
 }
 
+/** [place]'s own `id`, but ONLY when it is actually a `PatternPointGid` (see
+ * `services/stopPointDirectory.ts`'s own doc for that identity) — `undefined` for anything else
+ * (a coarser `type: "stop"` node, a street/POI walk endpoint, or a place with no `id` at all),
+ * never a guess. This is deliberately a DIFFERENT, stricter check than `canonicalStopId` above:
+ * that function walks UP the `parent` chain looking for a `"stop"`-typed ancestor (the right
+ * behavior for RoutePattern's own coarser stop-area identity), while this one only ever trusts
+ * the node actually passed in, and only when it is precisely the platform/global-id shape
+ * `StopPointDirectory` can resolve — confirmed live that Journey Planner does NOT always supply
+ * one (a leg's own `origin` can legitimately be `type: "stop"` even when SL pinned a specific
+ * platform for the very next `stopSequence` entry), so silently falling back to a parent/stop-
+ * level id here would misrepresent a genuinely unresolvable point as a resolvable one. */
+function platformPatternPointGid(place: RawJourneyPlannerPlace): string | undefined {
+  return place.type === "platform" && place.isGlobalId === true && place.id != null ? place.id : undefined;
+}
+
+/** Builds one leg's own `JourneyDisruptionContextLeg` — see that type's own doc for the exact
+ * field contract. Every WALK leg is included too (`transportMode: "WALK"`, `lineDesignation:
+ * null`), never filtered out here: the CONSUMER of this context
+ * (`domain/journeyDisruptionScope.ts`) is what decides a WALK leg carries no independent line
+ * scope, keeping this extraction itself a simple, uniform, uninterpreted map over every leg SL
+ * actually returned — exactly mirroring how the existing `legs` field below (unchanged by this
+ * feature) is built. */
+function buildDisruptionContextLeg(leg: RawJourneyPlannerJourney["legs"][number]): JourneyDisruptionContextLeg {
+  const transportMode = leg.transportation == null ? "WALK" : modeFor(leg.transportation.product?.class, leg.transportation.product?.name);
+  const lineDesignation = leg.transportation?.disassembledName ?? leg.transportation?.number ?? null;
+
+  const rawSequence = leg.stopSequence != null && leg.stopSequence.length > 0 ? leg.stopSequence : undefined;
+  const stopPatternPointGids: string[] = [];
+  // Starts true only when SL actually supplied a sequence at all; degrades to false the moment
+  // any single entry in it isn't a resolvable platform id -- see JourneyDisruptionContextLeg's
+  // own stopSequenceComplete doc.
+  let stopSequenceComplete = rawSequence != null;
+  if (rawSequence != null) {
+    for (const place of rawSequence) {
+      const gid = platformPatternPointGid(place);
+      if (gid != null) stopPatternPointGids.push(gid);
+      else stopSequenceComplete = false;
+    }
+  }
+
+  return {
+    transportMode,
+    lineDesignation,
+    boardingPatternPointGid: platformPatternPointGid(leg.origin),
+    alightingPatternPointGid: platformPatternPointGid(leg.destination),
+    stopPatternPointGids,
+    stopSequenceComplete,
+  };
+}
+
+function buildDisruptionContext(raw: RawJourneyPlannerJourney, journeyStart: string, journeyEnd: string): JourneyDisruptionContext {
+  return {
+    version: JOURNEY_DISRUPTION_CONTEXT_VERSION,
+    journeyStart,
+    journeyEnd,
+    legs: raw.legs.map(buildDisruptionContextLeg),
+  };
+}
+
 /** Sums a journey's total walking duration from every WALK leg's own `duration`
  * (seconds, per planned timetable — see slJourneyPlannerClient.ts's own schema doc).
  * Returns `null` — genuinely unknown, never a silent zero — the moment any relevant WALK
@@ -207,5 +271,11 @@ export function normalizeJourney(raw: RawJourneyPlannerJourney) {
     // classified and deduplicated, the source `/api/v1/journeys` consumers use to decide
     // PRIMARY's own live disruption relevance (see backend/src/routes/journeys.ts's own doc).
     disruptionNotices: classifyJourneyDisruptionNotices(allDisruptionTexts),
+    // Additive structural metadata for the SEPARATE, secondary /api/v1/journeys/disruptions
+    // lookup -- see models/journeyDisruptionContext.ts's own doc. Pure/synchronous, built from
+    // data already parsed above: no StopPointDirectory lookup, no SL Deviations read, and no
+    // other upstream call happens here, so this can never delay or couple to this journey
+    // update itself.
+    disruptionContext: buildDisruptionContext(raw, first.origin.name, last.destination.name),
   };
 }

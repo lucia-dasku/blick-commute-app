@@ -53,6 +53,9 @@ describe("GET /api/v1/departures — fetchedAt semantics", () => {
           await new Promise<void>((resolve) => setTimeout(resolve, 5000));
           return departuresFixture as unknown as RawDeparturesResponse;
         },
+        async fetchStopPoints() {
+          return [];
+        },
       };
 
       const app = new Hono().basePath("/api/v1");

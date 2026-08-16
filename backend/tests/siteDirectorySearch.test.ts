@@ -19,6 +19,9 @@ function buildDirectory() {
     async fetchDepartures() {
       throw new Error("not used in this test");
     },
+    async fetchStopPoints() {
+      throw new Error("not used in this test");
+    },
   };
   const siteDirectory = createSiteDirectory(fakeClient, new InMemoryCache(), new InFlightDeduper());
   return { siteDirectory, fetchAllSites };

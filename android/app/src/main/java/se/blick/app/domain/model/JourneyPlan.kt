@@ -64,6 +64,43 @@ fun String?.toJourneyRole(): JourneyRole? =
  */
 data class JourneyDisruptionNotice(val text: String, val effect: DisruptionEffect, val details: String? = null)
 
+/** One PRIMARY transit leg's own structural boarding/alighting/travelled-stop identity — see
+ * `backend/src/models/journeyDisruptionContext.ts`'s own doc for the full field contract. Every
+ * field here is opaque to Android: nothing in this app ever branches on
+ * [boardingPatternPointGid]/[alightingPatternPointGid]/[stopPatternPointGids]/[stopSequenceComplete]
+ * — they exist purely to be carried, unread, from [JourneyPlan.disruptionContext] back to
+ * `POST /api/v1/journeys/disruptions` (see [JourneyDisruptionContext]'s own doc). */
+data class JourneyDisruptionContextLeg(
+    val transportMode: String,
+    val lineDesignation: String?,
+    val boardingPatternPointGid: String?,
+    val alightingPatternPointGid: String?,
+    val stopPatternPointGids: List<String>,
+    val stopSequenceComplete: Boolean,
+)
+
+/**
+ * Additive structural metadata attached to a [JourneyPlan] alongside [JourneyPlan.disruptions]/
+ * [JourneyPlan.disruptionNotices] — backend-produced, backend-consumed. Android's own single
+ * responsibility for this type is to retain it unchanged with whichever [JourneyPlan] currently
+ * holds [JourneyRole.PRIMARY] and send it back verbatim as part of the request to
+ * `POST /api/v1/journeys/disruptions` (see
+ * [se.blick.app.data.repository.JourneyRepository.getRelevantDeviationNotices]); the backend's own
+ * `domain/journeyDisruptionScope.ts` and `services/stopPointDirectory.ts` are what actually resolve
+ * it into ACCESS_POINTS/TRAVELLED_PATH stop scopes — this app never performs that resolution, or
+ * any other interpretation of [legs], itself. `null` on a [JourneyPlan] from a stale cached/proxied
+ * deployment predating this field, or a journey the backend genuinely could not build one for —
+ * [se.blick.app.data.repository.JourneyRepository] simply omits it from the outgoing request in
+ * that case, which the backend already treats as "fall back to the pre-existing
+ * `legs`/`originSiteId`-only PARTIAL resolution".
+ */
+data class JourneyDisruptionContext(
+    val version: Int,
+    val journeyStart: String,
+    val journeyEnd: String,
+    val legs: List<JourneyDisruptionContextLeg>,
+)
+
 data class JourneyPlan(
     val journeyId: String,
     val originName: String,
@@ -79,4 +116,7 @@ data class JourneyPlan(
      * [JourneyDisruptionNotice]'s own doc. Defaults to empty so every existing positional/named
      * test construction across this codebase keeps compiling unchanged. */
     val disruptionNotices: List<JourneyDisruptionNotice> = emptyList(),
+    /** Additive — see [JourneyDisruptionContext]'s own doc. Defaults to null so every existing
+     * positional/named test construction across this codebase keeps compiling unchanged. */
+    val disruptionContext: JourneyDisruptionContext? = null,
 )

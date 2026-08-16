@@ -1,9 +1,11 @@
 package se.blick.app.domain.usecase
 
 import se.blick.app.data.repository.JourneyRepository
+import se.blick.app.domain.model.JourneyDisruptionContext
 import se.blick.app.domain.model.JourneyDisruptionNotice
 import se.blick.app.domain.model.JourneyLeg
 import se.blick.app.domain.model.ResolvedJourneyDisruption
+import java.time.Instant
 import javax.inject.Inject
 
 /**
@@ -25,6 +27,12 @@ import javax.inject.Inject
  * [primaryDisruptionNotices]'s own deduplicated result in hand (needed for its own first,
  * primary-only post) at the exact point it needs this too — recomputing it here would be
  * redundant, not more correct.
+ *
+ * [disruptionContext]/[departureTime]/[arrivalTime] are PRIMARY's own
+ * [se.blick.app.domain.model.JourneyPlan.disruptionContext]/`departureTime`/`arrivalTime` — see
+ * [JourneyRepository.getRelevantDeviationNotices]'s own doc. Trailing and defaulted to null, like
+ * every other addition to this use case, so no existing positional call site elsewhere in this
+ * codebase can have a later positional argument silently rebind to a new parameter instead.
  */
 class GetJourneyDisruptionRelevanceUseCase @Inject constructor(
     private val repository: JourneyRepository,
@@ -33,6 +41,9 @@ class GetJourneyDisruptionRelevanceUseCase @Inject constructor(
         primaryLegs: List<JourneyLeg>,
         originSiteId: Long?,
         journeyPlannerNotices: List<JourneyDisruptionNotice>,
+        disruptionContext: JourneyDisruptionContext? = null,
+        departureTime: Instant? = null,
+        arrivalTime: Instant? = null,
     ): List<ResolvedJourneyDisruption> =
-        repository.getRelevantDeviationNotices(primaryLegs, originSiteId, journeyPlannerNotices)
+        repository.getRelevantDeviationNotices(primaryLegs, originSiteId, journeyPlannerNotices, disruptionContext, departureTime, arrivalTime)
 }

@@ -1,6 +1,8 @@
 package se.blick.app.data.repository
 
 import se.blick.app.data.remote.BlickApiClient
+import se.blick.app.data.remote.dto.JourneyDisruptionContextDto
+import se.blick.app.data.remote.dto.JourneyDisruptionContextLegDto
 import se.blick.app.data.remote.dto.JourneyDisruptionNoticeDto
 import se.blick.app.data.remote.dto.JourneyDisruptionRelevanceLegDto
 import se.blick.app.data.remote.dto.JourneyDisruptionRelevanceRequestDto
@@ -9,6 +11,8 @@ import se.blick.app.data.remote.dto.ResolvedJourneyDisruptionDto
 import se.blick.app.domain.model.DisruptionRelevance
 import se.blick.app.domain.model.DisruptionSource
 import se.blick.app.domain.model.ExactDestinationChangesPreference
+import se.blick.app.domain.model.JourneyDisruptionContext
+import se.blick.app.domain.model.JourneyDisruptionContextLeg
 import se.blick.app.domain.model.JourneyDisruptionNotice
 import se.blick.app.domain.model.JourneyLeg
 import se.blick.app.domain.model.JourneyLocation
@@ -52,12 +56,23 @@ interface JourneyRepository {
      * nothing at all to resolve (no eligible leg AND no Journey Planner notice), this returns an
      * empty list without making a network call. [originSiteId] is the routine's own
      * SL-Transport-namespace origin site id (see [se.blick.app.domain.model.CommuteRoutine.siteId]),
-     * or null when unavailable — see `disruptionRelevance.ts`'s own doc for why only the origin,
-     * never the destination, can be supplied this way today. */
+     * or null when unavailable.
+     *
+     * [disruptionContext] is PRIMARY's own [JourneyPlan.disruptionContext], sent back completely
+     * unchanged — this app never reads an individual field out of it (see that type's own "dumb
+     * pass-through" doc). Trailing and defaulted to null, like every other addition to this
+     * interface, so no existing positional override of this method anywhere in this codebase can
+     * have a later positional argument silently rebind to a new parameter instead. [departureTime]/
+     * [arrivalTime] are PRIMARY's own [JourneyPlan.departureTime]/[JourneyPlan.arrivalTime],
+     * enabling the backend's own temporal-relevance check — omitted entirely (both default to
+     * null) simply skips that check, exactly as it was always skipped before this feature existed. */
     suspend fun getRelevantDeviationNotices(
         legs: List<JourneyLeg>,
         originSiteId: Long?,
         journeyPlannerNotices: List<JourneyDisruptionNotice>,
+        disruptionContext: JourneyDisruptionContext? = null,
+        departureTime: Instant? = null,
+        arrivalTime: Instant? = null,
     ): List<ResolvedJourneyDisruption> = emptyList()
 }
 
@@ -88,6 +103,7 @@ class RemoteJourneyRepository @Inject constructor(private val apiClient: BlickAp
                 Instant.parse(dto.departureTime), Instant.parse(dto.arrivalTime), dto.transferCount,
                 dto.firstLeg.toDomain(), dto.legs.map(JourneyLegDto::toDomain), dto.disruptions,
                 role, dto.disruptionNotices.map(JourneyDisruptionNoticeDto::toDomain),
+                dto.disruptionContext?.toDomain(),
             )
     }
 
@@ -95,6 +111,9 @@ class RemoteJourneyRepository @Inject constructor(private val apiClient: BlickAp
         legs: List<JourneyLeg>,
         originSiteId: Long?,
         journeyPlannerNotices: List<JourneyDisruptionNotice>,
+        disruptionContext: JourneyDisruptionContext?,
+        departureTime: Instant?,
+        arrivalTime: Instant?,
     ): List<ResolvedJourneyDisruption> {
         // A WALK leg's own transportMode is already TransportMode.UNKNOWN by the time it reaches
         // this domain model (see String.toTransportMode()'s own doc -- Android's TransportMode
@@ -109,6 +128,9 @@ class RemoteJourneyRepository @Inject constructor(private val apiClient: BlickAp
             legs = encodedLegs,
             originSiteId = originSiteId,
             journeyPlannerNotices = journeyPlannerNotices.map { JourneyDisruptionNoticeDto(it.text, it.effect.name) },
+            disruptionContext = disruptionContext?.toDto(),
+            departureTime = departureTime?.toString(),
+            arrivalTime = arrivalTime?.toString(),
         )
         return apiClient.getJourneyDisruptionRelevance(request).disruptions.mapNotNull(ResolvedJourneyDisruptionDto::toDomain)
     }
@@ -120,6 +142,20 @@ private fun JourneyLegDto.toDomain() = JourneyLeg(
 )
 
 private fun JourneyDisruptionNoticeDto.toDomain() = JourneyDisruptionNotice(text, effect.toDisruptionEffect(), details)
+
+private fun JourneyDisruptionContextDto.toDomain() =
+    JourneyDisruptionContext(version, journeyStart, journeyEnd, legs.map(JourneyDisruptionContextLegDto::toDomain))
+
+private fun JourneyDisruptionContextLegDto.toDomain() = JourneyDisruptionContextLeg(
+    transportMode, lineDesignation, boardingPatternPointGid, alightingPatternPointGid, stopPatternPointGids, stopSequenceComplete,
+)
+
+private fun JourneyDisruptionContext.toDto() =
+    JourneyDisruptionContextDto(version, journeyStart, journeyEnd, legs.map(JourneyDisruptionContextLeg::toDto))
+
+private fun JourneyDisruptionContextLeg.toDto() = JourneyDisruptionContextLegDto(
+    transportMode, lineDesignation, boardingPatternPointGid, alightingPatternPointGid, stopPatternPointGids, stopSequenceComplete,
+)
 
 /** Fail closed, never invent a relevance/source — a single malformed entry is dropped rather
  * than failing the whole response, matching [RemoteJourneyRepository.getJourneys]'s own

@@ -723,7 +723,10 @@ class RoutineActiveWindowWorker @AssistedInject constructor(
                     val resolvedDisruptions = if (primary != null) {
                         withTimeoutOrNull(DISRUPTIONS_FETCH_TIMEOUT_MS) {
                             try {
-                                getJourneyDisruptionRelevance(primary.legs, current.siteId, journeyPlans.primaryDisruptionNotices())
+                                getJourneyDisruptionRelevance(
+                                    primary.legs, current.siteId, journeyPlans.primaryDisruptionNotices(),
+                                    primary.disruptionContext, primary.departureTime, primary.arrivalTime,
+                                )
                             } catch (e: CancellationException) {
                                 throw e
                             } catch (_: Exception) {

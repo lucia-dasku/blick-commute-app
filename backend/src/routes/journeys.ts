@@ -403,6 +403,11 @@ function toPublicJourney(journey: RankableNormalizedJourney, role: JourneyRole) 
     // own live disruption relevance for the notification/widget/Routine Details without
     // re-implementing classification client-side.
     disruptionNotices: journey.disruptionNotices,
+    // Additive: structural metadata for the separate POST /api/v1/journeys/disruptions lookup
+    // -- see models/journeyDisruptionContext.ts's own doc. Android retains this unchanged with
+    // whichever journey currently holds PRIMARY and sends it back verbatim; it never interprets
+    // it itself.
+    disruptionContext: journey.disruptionContext,
     role,
   };
 }

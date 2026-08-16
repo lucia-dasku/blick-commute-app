@@ -43,14 +43,26 @@ timeout/network/schema failures retain the existing error-envelope behavior. Res
 public-cacheable for 30 seconds so app/detail/widget consumers do not independently amplify
 upstream traffic.
 
+Each journey additionally carries `disruptionContext` (`{ version, journeyStart, journeyEnd,
+legs: [{ transportMode, lineDesignation, boardingPatternPointGid?, alightingPatternPointGid?,
+stopPatternPointGids, stopSequenceComplete }] }`) — purely structural metadata extracted from the
+SAME Journey Planner response already being normalized (no extra upstream call, no
+`StopPointDirectory` lookup — see "Resolving Journey Planner notices + matched SL Deviations"
+below for what actually reads it). Android does not interpret this: it retains PRIMARY's own copy
+unchanged and sends it back verbatim as part of `POST /api/v1/journeys/disruptions`.
+
 ### `POST /api/v1/journeys/disruptions`
 
 The single authoritative source of exact-destination disruption relevance — resolves a journey's
 own `disruptionNotices` (above, sent in the request body) together with SL Deviations matched to
 its transit legs, read from the SAME shared cached snapshot `/api/v1/disruptions` uses — no new
-upstream SL request. Returns each disruption tagged `CONFIRMED` or `LINE_RELEVANT`, never a plain
-relevant/unrelated binary — see "Resolving Journey Planner notices + matched SL Deviations" below
-for the full request/response shape, the three-state relevance model, and matching rules.
+upstream SL Deviations request. When the request also carries a recognized `disruptionContext`
+(above), this additionally reads a second shared, independently-cached snapshot —
+`StopPointDirectory`, backed by SL Transport's own `/v1/stop-points` — to verify not just the
+journey's origin but its destination and every transfer/intermediate stop too. Returns each
+disruption tagged `CONFIRMED` or `LINE_RELEVANT`, never a plain relevant/unrelated binary — see
+"Resolving Journey Planner notices + matched SL Deviations" below for the full request/response
+shape, the relevance model, and matching rules.
 
 Each returned journey carries a `role` of `PRIMARY`, `NEXT`, or `ALTERNATIVE` — Android renders
 off this field and never infers a role from list position (see `backend/src/routes/journeys.ts`'s
@@ -171,60 +183,155 @@ can perform the full combine/dedupe/merge in one authoritative place, rather tha
 decision between the backend and Android.
 
 Request body: `{ legs: {transportMode, lineDesignation}[], originSiteId?, journeyPlannerNotices:
-{text, effect}[] }` — `legs` are PRIMARY's own transit legs (a WALK leg or one with no line
-designation carries no line-scope signal and must never be sent); `originSiteId` is the routine's
-own SL-Transport-namespace origin site id, absent when unavailable; `journeyPlannerNotices` is the
-journey's own already-fetched `disruptionNotices`, unchanged.
+{text, effect}[], disruptionContext?, departureTime?, arrivalTime? }` — `legs` are PRIMARY's own
+transit legs (a WALK leg or one with no line designation carries no line-scope signal and must
+never be sent); `originSiteId` is the routine's own SL-Transport-namespace origin site id, absent
+when unavailable; `journeyPlannerNotices` is the journey's own already-fetched `disruptionNotices`,
+unchanged. `disruptionContext` is PRIMARY's own additive structural metadata from
+`GET /api/v1/journeys` (see above), sent back unchanged; `departureTime`/`arrivalTime` are
+PRIMARY's own real travel interval, enabling the temporal-relevance check below — both pairs are
+optional and independently backward compatible (an older Android build simply omits them).
 
 Response: `{ fetchedAt, disruptions: ResolvedJourneyDisruption[] }`, where each entry is
-`{ id?, headline, details?, effect, relevance, source, matchedLineDesignations }`.
+`{ id?, headline, details?, effect, relevance, source, matchedLineDesignations }` — unchanged by
+this feature.
 
 **Relevance model** — three semantic outcomes, only two of which are ever represented in the
 response (an `UNRELATED` deviation is filtered out entirely, never returned as a value):
 
 - **`CONFIRMED`**: structured evidence proves this disruption affects the journey — either a
   Journey Planner notice was attached directly to PRIMARY (the strongest possible evidence, since
-  Journey Planner itself already scoped it to this exact journey), or an SL Deviation's line/mode
-  scope AND a verified stop-area intersection both hold. Blick may present the real classified
-  `effect` (e.g. "No service") as definitely true for this journey.
+  Journey Planner itself already scoped it to this exact journey), or an SL Deviation's own
+  structured stop scope (`scope.stop_areas` and/or `scope.stop_points`) genuinely intersects the
+  journey's own resolved scope of the effect-appropriate kind (see "Structured stop scope" below).
+  Blick may present the real classified `effect` (e.g. "No service") as definitely true for this
+  journey.
 - **`LINE_RELEVANT`**: an SL Deviation's line/mode scope matches a PRIMARY leg (via
-  `matchedLineDesignations`), but the currently available structured fields cannot prove the
-  affected segment/stop intersects this exact journey — either the deviation has no
-  `affectedStopAreas` at all (SL did not scope it to specific stops), or it does but no
-  reliably-namespaced origin id was supplied to check against it. Blick must NOT present the real
-  classified `effect` as proven for this journey's own segment; only a conservative, line-scoped
-  warning is appropriate on the client.
-- **`UNRELATED`** (never returned): line/mode does not match PRIMARY at all, or the deviation's
-  own stop scope is verified to exclude the journey's origin. `affectedModes` alone is never
-  treated as relevance evidence.
+  `matchedLineDesignations`), but the currently available structured stop evidence cannot prove
+  the affected segment/stop intersects this exact journey — either the deviation has no stop scope
+  at all (SL did not scope it to specific stops), or the journey's own relevant scope is only
+  `PARTIAL` and does not itself intersect. Blick must NOT present the real classified `effect` as
+  proven for this journey's own segment; only a conservative, line-scoped warning is appropriate on
+  the client. Never produced for a deviation with no line scope at all (see rule 2 below).
+- **`UNRELATED`** (never returned): temporal validity does not overlap the journey, line/mode does
+  not match PRIMARY at all, or the deviation's own stop scope is verified to exclude the journey's
+  `COMPLETE` relevant scope. `affectedModes` alone is never treated as relevance evidence.
 
-**Matching rules** (`resolveDeviationRelevance`):
+**Structured stop scope — ACCESS_POINTS vs. TRAVELLED_PATH**: different disruption effects have
+different relevance scopes, computed per PRIMARY transit leg
+(`backend/src/domain/journeyDisruptionScope.ts`):
 
-1. `scope.lines` empty/absent → `UNRELATED`.
-2. Exact `(transportMode, lineDesignation)` overlap required between a supplied leg and a
-   `scope.lines` entry — never textual/fuzzy matching. No overlap → `UNRELATED` (this is what keeps
-   Slussen → Liljeholmen, Metro 13/14, correctly unaffected by an unrelated Bus 401 delay at the
-   same station — sharing a station is never sharing a line).
-3. Given a line/mode match, if `scope.stop_areas` is also non-empty: `originSiteId` known and
-   intersecting → `CONFIRMED`; known and NOT intersecting → `UNRELATED` (SL explicitly told us
-   where, and it isn't here — a real disproof, not merely an absence of proof); `originSiteId`
-   unavailable → `LINE_RELEVANT` (fails safe toward "uncertain", never silently dropped).
-4. Given a line/mode match and `scope.stop_areas` empty → `LINE_RELEVANT`. This is the confirmed
-   Akalla → Kungsträdgården case, and — critically — this is also why Akalla → T-Centralen (same
-   Metro 11 line, but never actually travelling the T-Centralen↔Kungsträdgården segment) does NOT
-   get shown as a confirmed "No service": with only line-level evidence, `LINE_RELEVANT` is the
-   honest ceiling, never `CONFIRMED`.
+- **`ACCESS_POINTS`** (`ACCESSIBILITY_ISSUE`, `STATION_ACCESS`, `STOP_CHANGE`): only the stop(s)
+  the passenger actually boards/alights at for that leg — an ordinary intermediate stop the
+  passenger stays onboard through is never an access point.
+- **`TRAVELLED_PATH`** (`DELAYS`, `NO_SERVICE`, `REDUCED_SERVICE`, `ROUTE_CHANGE`,
+  `REPLACEMENT_SERVICE`, `DISRUPTION`): every stop actually traversed by that leg, boarding through
+  alighting, including intermediate stops.
 
-**Known limitation**: Blick's exact-destination routines persist a reliable
-SL-Transport-namespace site id for their ORIGIN only (`CommuteRoutine.siteId`, the same field
-`LINE_DIRECTION` already uses). The destination and any intermediate stop are known only via SL
-Journey Planner's own place-id format, a genuinely different, never-verified-compatible namespace
-from SL Transport/Deviations' `stop_areas[].id` (documented with the full evidence in
-`disruptionRelevance.ts` itself) — deriving one from the other would be exactly the kind of
-substring/id-guessing this design avoids. A deviation whose relevance depends on a stop scope
-covering only the destination or an intermediate stop (not the origin) can reach at most
-`LINE_RELEVANT`, never `CONFIRMED`, with data available today — e.g. the live reproduction's
-accessibility issue at Kungsträdgården itself (the destination, not Akalla).
+Each leg's own scope is a `{ stopAreaIds, stopPointIds, completeness }` set, `completeness` being
+`COMPLETE` only when every point that scope kind should cover was independently verified —
+otherwise `PARTIAL`, which a non-intersection can never be treated as a disproof for (only an
+actual intersection is ever usable as `CONFIRMED` evidence at `PARTIAL` completeness). Verification
+comes from `StopPointDirectory`, resolving each `disruptionContext` leg's own
+`boardingPatternPointGid`/`alightingPatternPointGid`/`stopPatternPointGids` (Journey Planner
+`stopSequence` platform ids) against SL Transport's `/v1/stop-points` — see "Stop identity: Journey
+Planner platform ids ↔ SL Transport `pattern_point_gid`" below for the full bridge. The routine's
+own proven `originSiteId` is folded in additively for the journey's own FIRST leg only, alongside
+(never instead of) the platform-bridge result.
+
+When `disruptionContext` is absent, unrecognized, or `StopPointDirectory` itself is unavailable,
+every leg falls back to a synthetic, uniform, always-`PARTIAL` scope built from `originSiteId`
+alone — byte-for-byte the same relevance behavior this endpoint had before this scope model
+existed. This fallback is why supplying `disruptionContext` can only ever ADD precision
+(`UNRELATED` becoming reachable for a genuinely unrelated stop-scoped deviation, and `CONFIRMED`
+becoming reachable for a genuinely matching destination/transfer/intermediate stop), never remove
+disruption coverage an older client already had.
+
+**Matching rules** (`resolveDeviationRelevance`), in order:
+
+1. **Temporal**: the deviation's own `publish.from`/`publish.upto` must overlap PRIMARY's own
+   `departureTime`/`arrivalTime` (when supplied) — an already-ended or not-yet-started deviation
+   relative to the journey's own travel interval is `UNRELATED`. Skipped entirely (never filters
+   anything) when `departureTime`/`arrivalTime` are absent from the request.
+2. **No line evidence at all** (`scope.lines` empty/absent): resolvable ONLY via stop evidence —
+   reaches `CONFIRMED` or `UNRELATED`, but never `LINE_RELEVANT` (that state specifically means "a
+   line matched but the stop is uncertain"; nothing here has a line to be uncertain about). No
+   stop scope either (`scope.stop_areas` AND `scope.stop_points` both empty) → `UNRELATED` — fails
+   closed rather than parsing SL's own free text. Otherwise compared against the UNION of every
+   leg's own scope of the effect-appropriate kind (no line to narrow to one specific leg).
+3. **Line evidence present**: exact `(transportMode, lineDesignation)` overlap required between a
+   PRIMARY leg and a `scope.lines` entry — never textual/fuzzy matching. No overlap → `UNRELATED`
+   (this is what keeps Slussen → Liljeholmen, Metro 13/14, correctly unaffected by an unrelated Bus
+   401 delay at the same station — sharing a station is never sharing a line).
+4. Given a line match and NO stop scope at all → `LINE_RELEVANT`. This is the confirmed Akalla →
+   Kungsträdgården closure case (`NO_SERVICE`, `affectedLines`: Metro 10 + 11, no stop scope) — SL
+   itself did not scope it to specific stops, so Blick must not invent a stricter restriction SL
+   never provided, but also must not claim the specific effect is proven merely because the line
+   matches.
+5. Given a line match and a non-empty stop scope: compared against the UNION of only the matched
+   leg(s)' own scope of the effect-appropriate kind — an exact `stop_areas` OR `stop_points`
+   intersection → `CONFIRMED` (direct proof, regardless of completeness); no intersection while
+   `COMPLETE` → `UNRELATED` (a genuine disproof); no intersection while `PARTIAL` → `LINE_RELEVANT`
+   (fails safe — the affected stop may simply be one Blick could not verify).
+
+Concretely, for Akalla → T-Centralen direct on Metro 11 (ACCESS_POINTS = {Akalla, T-Centralen};
+TRAVELLED_PATH additionally includes every intermediate stop, e.g. Kista): a lift outage at
+Kungsträdgården (never on this route) is `UNRELATED`; the same at T-Centralen or Akalla is
+`CONFIRMED`; a lift outage at Kista (an intermediate, stayed-onboard stop — `ACCESS_POINTS` policy)
+is `UNRELATED`, but a delay at Kista on the same line (`TRAVELLED_PATH` policy) is `CONFIRMED`.
+These are the live acceptance scenarios `backend/tests/disruptionRelevance.test.ts` and
+`backend/tests/journeyDisruptions.test.ts` encode directly.
+
+#### Stop identity: Journey Planner platform ids ↔ SL Transport `pattern_point_gid`
+
+A Journey Planner `stopSequence` node with `type: "platform"` and `isGlobalId: true` carries an
+`id` (e.g. `"9025001000003272"`) that is the SAME value as one SL Transport `/v1/stop-points`
+record's own `pattern_point_gid` — confirmed live (2026-08-16 architecture review) by fetching real
+trips across every mode Journey Planner exposes (metro, commuter train, tram, bus, ferry), a
+multi-leg interchange transferring at T-Centralen, and one transferring at Slussen (via a genuine
+WALK between two DIFFERENT Slussen-named stop areas — the metro station, `1011`, and the bus
+terminal, `44000`), then cross-referencing every platform-typed `stopSequence` entry returned
+against a live full `/v1/stop-points` snapshot: **101 of 101 resolved, 0 unresolved, 0 ambiguous**,
+every resolved stop-area name/type matching Journey Planner's own name for it. `pattern_point_gid`
+was confirmed globally unique across all 14,187 live stop-point records.
+
+This is NOT derivable by any arithmetic/substring relationship between a platform id and its own
+stop-area id — live counterexamples: Fridhemsplan's platform gid ends `...3152` but its stop-area
+id is `1151` (not `3151`); T-Centralen's platform gid ends `...3051` but its stop-area id is `1051`
+(not `3051`). The exact `pattern_point_gid` value is the only reliable join, which is why
+`StopPointDirectory` (`backend/src/services/stopPointDirectory.ts`) exists as its own identity-only
+resolution service — never a formula, never name/coordinate matching. A `stopSequence` node that is
+NOT `type: "platform"` (Journey Planner can echo even a leg's own origin as a coarser `type: "stop"`
+node when it hasn't pinned a specific boarding platform — confirmed to happen live) is simply
+unresolvable evidence, contributing nothing rather than being guessed at.
+
+`pattern_point_gid`/`gid` values routinely exceed `Number.MAX_SAFE_INTEGER` (every one of the
+14,187 live records does) — `/v1/stop-points` is therefore the one upstream response read via a
+custom lossless JSON parser (`backend/src/lib/losslessJson.ts`, every number preserved as its exact
+source digit string) rather than the ordinary `response.json()` path every other upstream call in
+this codebase still uses unchanged.
+
+`StopPointDirectory`'s own compact index (`patternPointGid -> {stopPointId, stopAreaId,
+stopAreaType}`, ~594KB for the full live dataset) is cached the same way `deviationsSnapshotService`
+caches its own SL Deviations snapshot — a shared Redis-backed `Cache`/`DistributedLock` (see §7
+below), a 24-hour freshness window (matching `/v1/sites`' own documented "changes at most once per
+day"), a 7-day stale fallback on refresh failure, and both in-process (`InFlightDeduper`) and
+cross-instance (the refresh lock) deduplication of concurrent cold refreshes. `/api/v1/journeys`
+itself never touches this directory — only `/api/v1/journeys/disruptions` does, and only when a
+recognized `disruptionContext` is present.
+
+**Known limitation, unchanged from before**: SL Deviations' own `/v1/messages` feed (the source
+`deviationsSnapshotService` caches) currently never populates `scope.stop_points` at all — confirmed
+against a live 159-deviation snapshot; `scope.stop_areas` (in 89 of 159) and `scope.lines` (in all
+159) are the only structured scope evidence SL actually sends there today. `scope.stop_points` is
+still modeled and compared (`src/services/upstreamTypes.ts`'s own `RawDeviationSchema`, reusing the
+same `stop_points` shape the embedded `siteDeviations`/`RawSiteDeviationSchema` already used) so
+this backend benefits
+automatically the moment SL starts populating it, with no further schema change required. A
+deviation with `scope.lines` but no stop scope at all (line-only) can still only ever reach
+`LINE_RELEVANT` — this module still never parses SL's own free text (e.g. "mellan A och B") as a
+routing authority, and does not add GTFS or any other static-schedule dependency to guess around a
+genuine absence of upstream structure.
 
 **Deduplication**: SL Deviations are deduplicated by `deviation_case_id`; Journey Planner notices
 by exact text (no stable id). Cross-source: when a Journey Planner notice's text exactly matches a
@@ -766,6 +873,25 @@ already-expired holder must never delete a different, legitimate new holder's lo
 share one upstream call and one `fetchedAt`, alongside the pre-existing identical-request
 case).
 
+### `StopPointDirectory` (SL Transport `/v1/stop-points`)
+
+A second, independently-keyed shared Redis snapshot, structurally similar to the SL Deviations one
+above but for a genuinely different upstream and update cadence — see "Stop identity: Journey
+Planner platform ids ↔ SL Transport `pattern_point_gid`" above for what it resolves and the full
+live evidence. No documented strict per-minute fair-use ceiling applies to this endpoint (that
+constraint is SL Deviations' own), so this service has no separate rate-limit key the way
+`deviationsSnapshotService` does — only a 24-hour freshness window, a 7-day stale fallback, and the
+same refresh-lock coordination pattern (`src/services/stopPointDirectory.ts`). Sharing the SAME
+underlying Redis connection (`sharedRedisCache`/`sharedRedisLock` in `src/app.ts`) as Deviations
+costs nothing extra in infrastructure — the two snapshots use distinct cache keys
+(`sl-transport:stop-point-index:v1` vs `sl-deviations:snapshot:v1`) and never interact.
+
+Tested in `tests/stopPointDirectory.test.ts`: resolution outcomes (RESOLVED/AMBIGUOUS/UNRESOLVED),
+identity resolution using ONLY `pattern_point_gid` (no name/coordinate/substring fallback, proven
+against the real Fridhemsplan/T-Centralen counterexample), caching, stale fallback, concurrency
+across simulated separate instances, and best-effort lock release — mirroring
+`tests/deviationsSnapshotService.test.ts`'s own coverage shape.
+
 ### Redis setup (Upstash)
 
 `src/config/env.ts`'s `readRedisConfig` validates `UPSTASH_REDIS_REST_URL` and
@@ -893,7 +1019,10 @@ appear. This is a real, documented product limitation, not silently papered over
 MVP does not add a Journey Planner or GTFS static-schedule dependency to solve it fully;
 `/v1/lines` and `/v1/stop-points` were checked directly against the real upstream and
 confirmed not to provide a static site/direction association that could close the gap
-without one. Direction-option discovery is kept behind a `DirectionOptionsSource`-shaped
+without one. (`/v1/stop-points` was later put to a different, unrelated use — see
+`StopPointDirectory` above — but that is a platform-to-stop-area identity bridge for
+exact-destination disruption relevance, not a site/direction association; this limitation
+is unaffected.) Direction-option discovery is kept behind a `DirectionOptionsSource`-shaped
 interface in the Android app (see `android/README.md`) so its data source can be
 replaced later (e.g. with a static schedule fallback) without touching Room or the UI. A
 saved routine's identity is platform-neutral (`siteId`, `lineId`, `transportMode`,

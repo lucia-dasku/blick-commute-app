@@ -1,16 +1,7 @@
 import type { RawDeviation } from "../services/upstreamTypes.js";
 import type { DisruptionEffect } from "../models/disruption.js";
 import { normalizeDisruption } from "../normalize/normalizeDisruption.js";
-
-/** One PRIMARY journey leg's own transport mode + line designation — the only two fields this
- * module trusts for line-scope matching (see `resolveDeviationRelevance`'s own doc). Deliberately
- * NOT the full `NormalizedJourney` leg shape: WALK legs and legs with no line designation carry no
- * line-scope signal at all and must never reach this module (see `routes/journeyDisruptions.ts`'s
- * own doc for where that filtering happens). */
-export interface RelevanceLeg {
-  transportMode: string;
-  lineDesignation: string;
-}
+import { scopePolicyForEffect, type ResolvedLegScope, type ScopeSet } from "./journeyDisruptionScope.js";
 
 /** A Journey Planner disruption notice as already produced by `normalizeJourney.ts`'s own
  * `disruptionNotices` — the input side of this module's own combination step (see
@@ -31,15 +22,20 @@ export interface JourneyPlannerNoticeInput {
  * - `CONFIRMED`: structured evidence proves this disruption affects the journey (or the specific
  *   segment/stop it uses) — either a Journey Planner notice was attached directly to PRIMARY (the
  *   strongest possible evidence: Journey Planner itself already scoped it to this exact journey),
- *   or an SL Deviation's own line/mode scope AND verified stop-area scope both match. Blick may
- *   show the disruption's own real classified `effect` (e.g. "No service") as definitely true for
- *   this journey.
+ *   or an SL Deviation's own structured stop scope (`scope.stop_areas`/`scope.stop_points`)
+ *   genuinely intersects the journey's own resolved scope of the RIGHT kind for that deviation's
+ *   own `effect` (see `journeyDisruptionScope.ts`'s own `scopePolicyForEffect`). Blick may show
+ *   the disruption's own real classified `effect` (e.g. "No service") as definitely true for this
+ *   journey.
  * - `LINE_RELEVANT`: an SL Deviation's line/mode scope matches a PRIMARY leg, but the currently
- *   available structured fields cannot prove the affected segment/stop intersects this exact
- *   journey (no `affectedStopAreas` at all, or a stop id that cannot be verified against a
- *   reliably-namespaced identifier — see this module's own doc below). Blick must NOT present the
- *   real classified `effect` as definitely true for this journey's own segment; only a
- *   conservative, line-scoped warning is appropriate (see `matchedLineDesignations`).
+ *   available structured stop evidence cannot prove (or disprove) that the affected segment/stop
+ *   intersects this exact journey's own resolved scope — no `scope.stop_areas`/`scope.stop_points`
+ *   at all (SL itself did not scope it to specific stops), or the journey's own relevant scope is
+ *   only `"PARTIAL"` and does not itself intersect. Blick must NOT present the real classified
+ *   `effect` as definitely true for this journey's own segment; only a conservative, line-scoped
+ *   warning is appropriate (see `matchedLineDesignations`). Never produced for a deviation with NO
+ *   line evidence at all — see rule 2's own "stop-only" branch below for why that case can only
+ *   ever reach `CONFIRMED` or UNRELATED, never this cautious middle state.
  */
 export type DisruptionRelevance = "CONFIRMED" | "LINE_RELEVANT";
 
@@ -72,45 +68,85 @@ export interface ResolvedJourneyDisruption {
   source: DisruptionSource;
   /** The distinct PRIMARY leg line designation(s) whose line/mode matched this SL Deviation's own
    * `scope.lines` — always empty for a `JOURNEY_PLANNER`-sourced entry (never matched by line at
-   * all; already journey-scoped by Journey Planner itself). Populated for BOTH `CONFIRMED` and
-   * `LINE_RELEVANT` `SL_DEVIATIONS` entries — a caller that needs to build a conservative,
-   * line-scoped presentation (see `LINE_RELEVANT`'s own doc) reads this field directly rather than
-   * re-deriving it from `headline`'s own free text. */
+   * all; already journey-scoped by Journey Planner itself), and always empty for an
+   * `SL_DEVIATIONS` entry resolved purely from STOP evidence with no line scope at all (see rule
+   * 2's own "stop-only" branch below — this field specifically means "line evidence", never
+   * repurposed to mean "some leg's scope happened to intersect"). Populated for BOTH `CONFIRMED`
+   * and `LINE_RELEVANT` line-matched `SL_DEVIATIONS` entries — a caller that needs to build a
+   * conservative, line-scoped presentation (see `LINE_RELEVANT`'s own doc) reads this field
+   * directly rather than re-deriving it from `headline`'s own free text. */
   matchedLineDesignations: string[];
 }
 
-/**
- * The verified SL-Transport/SL-Deviations-namespace stop-area ids Blick can currently vouch for on
- * behalf of one journey — see {@link resolveDeviationRelevance}'s own "Known limitation" doc for
- * exactly why only the origin is ever `"COMPLETE"`-eligible today, and why that gap must be
- * represented explicitly rather than silently assumed away by treating "the one stop I checked
- * doesn't match" as "no stop on this journey matches".
- */
-export interface VerifiedJourneyStopScope {
-  stopAreaIds: ReadonlySet<number>;
-  /**
-   * `"PARTIAL"`: {@link stopAreaIds} is NOT necessarily every stop area this journey touches — a
-   * stop OUTSIDE it (typically the destination or an intermediate stop, for which Blick has no
-   * verified-namespace id today) may still genuinely be part of the journey. A stop found HERE
-   * intersecting a deviation's own scope is still direct proof (`CONFIRMED`); the ABSENCE of an
-   * intersection here proves nothing about the rest of the journey and must never be treated as a
-   * disproof.
-   *
-   * `"COMPLETE"`: {@link stopAreaIds} genuinely is every stop area this journey touches. Only then
-   * does a lack of intersection become a genuine disproof (`null`/UNRELATED). Not achievable with
-   * any data Blick has today — reserved for once verified destination/intermediate stop-area ids
-   * become available, without requiring any change to this function's callers or to the
-   * Android/notification/widget layers downstream of {@link ResolvedJourneyDisruption}.
-   */
-  completeness: "PARTIAL" | "COMPLETE";
+/** PRIMARY's own real travel interval — `departureTime`/`arrivalTime` exactly as already present
+ * on the `/api/v1/journeys` response, sent back unchanged (see `routes/journeyDisruptions.ts`'s
+ * own request schema). `null` when the caller didn't supply one (an older Android build) — see
+ * {@link deviationOverlapsJourneyWindow}'s own doc for how that degrades safely rather than
+ * failing anything. */
+export interface JourneyTimeWindow {
+  departureTime: string;
+  arrivalTime: string;
 }
 
 /**
- * Resolves one SL Deviation's relevance to a journey whose transit legs are [legs], given
- * [journeyStopScope] — see {@link resolveJourneyDisruptions}'s own doc for the full picture, and
- * this module's own bottom section for the identifier-namespace evidence this function's rules are
- * built on. Returns `null` for UNRELATED (see {@link DisruptionRelevance}'s own doc for why that
- * is not a value of the type itself).
+ * Step A of `resolveDeviationRelevance` — temporal relevance, evaluated before any line/stop
+ * matching and independently of it. A `null` [window] (no `departureTime`/`arrivalTime` supplied
+ * — see {@link JourneyTimeWindow}'s own doc) always overlaps: temporal filtering is a pure
+ * ADDITION on top of the pre-existing line/stop matching, never a new way for an older client to
+ * lose disruption coverage it already had.
+ *
+ * A deviation whose `publish.upto` is before the journey's own `departureTime` has already
+ * ended by the time the passenger would even start travelling — irrelevant. A deviation whose
+ * `publish.from` is after the journey's own `arrivalTime` hasn't started yet by the time the
+ * passenger will already have finished travelling — also irrelevant (this is what keeps a
+ * `future=true` snapshot entry, published for later today or beyond, from being shown against a
+ * journey happening right now). An absent `publish.from`/`publish.upto` is open-ended in that
+ * direction, exactly as `deviationsFilter.ts`'s own `matchesDeviationsQuery` already treats it for
+ * `LINE_DIRECTION` — this function intentionally mirrors that same open-ended convention rather
+ * than inventing a second one, without sharing any code with (or changing the behavior of) that
+ * `LINE_DIRECTION`-only function.
+ */
+export function deviationOverlapsJourneyWindow(deviation: RawDeviation, window: JourneyTimeWindow | null): boolean {
+  if (window == null) return true;
+  const journeyStartMs = new Date(window.departureTime).getTime();
+  const journeyEndMs = new Date(window.arrivalTime).getTime();
+  const publishFromMs = deviation.publish?.from ? new Date(deviation.publish.from).getTime() : null;
+  const publishUptoMs = deviation.publish?.upto ? new Date(deviation.publish.upto).getTime() : null;
+
+  if (publishUptoMs != null && publishUptoMs < journeyStartMs) return false;
+  if (publishFromMs != null && publishFromMs > journeyEndMs) return false;
+  return true;
+}
+
+function scopeSetFor(legScope: ResolvedLegScope, kind: ReturnType<typeof scopePolicyForEffect>): ScopeSet {
+  return kind === "ACCESS_POINTS" ? legScope.accessPoints : legScope.travelledPath;
+}
+
+function unionScope(scopes: readonly ScopeSet[]): ScopeSet {
+  const stopAreaIds = new Set<number>();
+  const stopPointIds = new Set<number>();
+  let completeness: ScopeSet["completeness"] = "COMPLETE";
+  for (const scope of scopes) {
+    for (const id of scope.stopAreaIds) stopAreaIds.add(id);
+    for (const id of scope.stopPointIds) stopPointIds.add(id);
+    if (scope.completeness === "PARTIAL") completeness = "PARTIAL";
+  }
+  return { stopAreaIds, stopPointIds, completeness };
+}
+
+function intersects(a: ReadonlySet<number>, b: readonly number[]): boolean {
+  return b.some((id) => a.has(id));
+}
+
+/**
+ * Resolves one SL Deviation's relevance against PRIMARY's own [legScopes] (see
+ * `journeyDisruptionScope.ts`'s own `resolveLegScopes`) and [journeyWindow] — see
+ * {@link resolveJourneyDisruptions}'s own doc for the full picture. Returns `null` for UNRELATED
+ * (see {@link DisruptionRelevance}'s own doc for why that is not a value of the type itself).
+ * [effect] is [deviation]'s own already-classified effect (`normalizeDisruption`'s own output —
+ * the SAME classification `/api/v1/disruptions` uses), passed in rather than re-derived here so
+ * `resolveJourneyDisruptions` classifies each deviation exactly once regardless of how many times
+ * its relevance is checked.
  *
  * This exists because SL Journey Planner's own `infos` text is NOT a reliable disruption source on
  * its own: Journey Planner can silently reroute a journey around a disruption (e.g. terminating a
@@ -121,94 +157,75 @@ export interface VerifiedJourneyStopScope {
  *
  * Rules, in order:
  *
- * 1. `scope.lines` empty/absent -> `null` (UNRELATED). This module deliberately never treats
- *    "affects this transport mode somewhere" (`affectedModes`) as relevance evidence on its own —
- *    that would make nearly every metro deviation "relevant" to nearly every metro journey. Line
- *    scope is the one signal reliable enough to anchor a match on.
- * 2. Given `scope.lines` non-empty: relevant only if at least one leg in [legs] shares BOTH the
+ * 1. **Temporal**: [deviation] does not overlap [journeyWindow] (see
+ *    {@link deviationOverlapsJourneyWindow}) -> `null` (UNRELATED), before anything else below is
+ *    even considered.
+ * 2. **No line evidence at all** (`scope.lines` empty/absent): this deviation can ONLY ever
+ *    resolve via STOP evidence — it can reach `CONFIRMED` or UNRELATED, but NEVER
+ *    `LINE_RELEVANT` (that state specifically means "a line matched, but the stop is uncertain";
+ *    manufacturing it from stop-only evidence with no line signal at all would be exactly the
+ *    "random network-wide warning" this rule exists to avoid). If `scope.stop_areas` AND
+ *    `scope.stop_points` are BOTH also empty -> `null` (UNRELATED): there is nothing structured
+ *    to go on at all, and this module never falls back to free-text parsing. Otherwise, compare
+ *    the deviation's own stop scope against the UNION of every transit leg's own resolved scope
+ *    of the kind {@link scopePolicyForEffect} selects for [effect] (there is no line to narrow
+ *    the comparison to one specific leg, so every leg is considered) — an intersection ->
+ *    `CONFIRMED`; no intersection while that union is `"COMPLETE"` -> `null` (a genuine disproof);
+ *    no intersection while `"PARTIAL"` -> `null` too (fails closed, per the rule's own opening
+ *    sentence — NOT `LINE_RELEVANT`).
+ * 3. **Line evidence present**: relevant only if at least one leg in [legScopes] shares BOTH the
  *    exact transport mode AND the exact line designation with a `scope.lines` entry — never mode
  *    alone, never designation alone, and never textual/fuzzy comparison. No match -> `null`
  *    (UNRELATED). This is what keeps Slussen -> Liljeholmen (Metro 13/14) correctly unaffected by
  *    an unrelated Bus 401 delay at the same station: sharing a station is never sharing a line.
- * 3. Given a line/mode match and `scope.stop_areas` EMPTY -> `LINE_RELEVANT`. SL itself did not
- *    scope this deviation to specific stops, so Blick must not invent a stricter restriction SL
- *    never provided — but it must also not claim the specific effect is proven for this exact
- *    journey's own segment merely because the line matches. This is exactly the confirmed Akalla
- *    case: `NO_SERVICE`, `affectedLines` = Metro 10 + 11, `affectedStopAreas` = [] — with only
- *    line-level evidence available, `LINE_RELEVANT` (not `CONFIRMED`) is the honest classification.
- * 4. Given a line/mode match and `scope.stop_areas` non-empty: relevance depends on how much of the
- *    journey's own stop set [journeyStopScope] can actually vouch for:
- *    - a stop in {@link VerifiedJourneyStopScope.stopAreaIds} intersects `scope.stop_areas` ->
- *      `CONFIRMED` — direct structural proof, regardless of completeness.
- *    - no intersection among the verified stops, AND
- *      {@link VerifiedJourneyStopScope.completeness} is `"COMPLETE"` -> `null` (UNRELATED) — a
- *      genuine disproof: Blick can vouch for the journey's ENTIRE stop set, and none of it is in
- *      the affected scope.
- *    - no intersection among the verified stops, AND completeness is `"PARTIAL"` (or
- *      [journeyStopScope] itself is `null`, i.e. no verified stop at all) -> `LINE_RELEVANT` — NOT
- *      a disproof: the affected stop may simply be one Blick could not verify (typically the
- *      destination or an intermediate stop — see this function's own "Known limitation" doc).
- *      Fails SAFE toward the cautious/uncertain state rather than silently discarding a real
- *      line-level signal merely because the one stop Blick COULD check isn't the affected one.
- *
- *      This is the fix for a real bug: an earlier version of this function treated "the journey's
- *      only VERIFIED stop (the origin) does not intersect" as equivalent to "the journey does not
- *      intersect" and returned UNRELATED — but with only the origin ever verified today, those are
- *      not the same claim. Concretely: Akalla -> Kungsträdgården, an accessibility issue scoped to
- *      `affectedStopAreas = [Kungsträdgården]` (the destination, not the origin) was incorrectly
- *      dropped as UNRELATED, even though Kungsträdgården genuinely IS this journey's own
- *      destination — Blick simply had no verified id to prove it. The corrected rule surfaces it as
- *      `LINE_RELEVANT` instead of silently discarding it.
- *
- * **Known limitation** (documented here rather than worked around with fuzzy matching): Blick's
- * exact-destination routines persist a reliable SL-Transport-namespace site id for their ORIGIN
- * only (`CommuteRoutine.siteId`, the same field `LINE_DIRECTION` routines already use for their own
- * disruption lookups). The DESTINATION and any intermediate stop are known only via SL Journey
- * Planner's own place-id format (`journeyDestinationId`, and each leg's own canonical stop ids —
- * see `normalizeJourney.ts`'s own `canonicalStopId`), which is a genuinely different,
- * never-verified-compatible namespace from SL Transport/Deviations' `stop_areas[].id` — see this
- * file's own bottom section for the full evidence. Deriving one from the other (e.g. by string
- * prefix/suffix manipulation) would be exactly the kind of "substring ID hack" this module must
- * never use. As a direct consequence, [journeyStopScope] built from data available today is always
- * `completeness: "PARTIAL"`, containing at most the origin's own stop-area ids — see
- * {@link resolveJourneyDisruptions}'s own doc for exactly how that scope is constructed. A
- * deviation whose relevance depends on a stop scope that includes only the destination or an
- * intermediate stop — not the origin — can therefore reach at most `LINE_RELEVANT`, never
- * `CONFIRMED`, however specific its own stop scope actually is; rule 4 above is what makes that the
- * honest, structurally-derived outcome rather than a special case bolted on separately. Should
- * verified destination/intermediate stop-area ids become available in the future, the caller only
- * needs to build a `completeness: "COMPLETE"` {@link VerifiedJourneyStopScope} covering the whole
- * route — this function's own rule 4 already knows how to use that correctly, with no further
- * change needed here.
+ * 4. Given a line match and `scope.stop_areas`/`scope.stop_points` BOTH empty -> `LINE_RELEVANT`.
+ *    SL itself did not scope this deviation to specific stops, so Blick must not invent a
+ *    stricter restriction SL never provided — but it must also not claim the specific effect is
+ *    proven for this exact journey's own segment merely because the line matches. This is exactly
+ *    the confirmed Akalla case: `NO_SERVICE`, `affectedLines` = Metro 10 + 11, no stop scope at
+ *    all — with only line-level evidence available, `LINE_RELEVANT` (not `CONFIRMED`) is the
+ *    honest classification.
+ * 5. Given a line match and a non-empty stop scope: compare it against the UNION of only the
+ *    MATCHED legs' own resolved scope of the kind {@link scopePolicyForEffect} selects for
+ *    [effect] — an exact `stop_areas` OR `stop_points` intersection -> `CONFIRMED` (direct
+ *    structural proof, regardless of completeness); no intersection while that union is
+ *    `"COMPLETE"` -> `null` (UNRELATED, a genuine disproof: Blick can vouch for every stop the
+ *    matched leg(s) touch of the relevant kind, and none of it is in the affected scope); no
+ *    intersection while `"PARTIAL"` -> `LINE_RELEVANT` (fails SAFE toward the cautious/uncertain
+ *    state — the affected stop may simply be one Blick could not verify).
  */
 export function resolveDeviationRelevance(
   deviation: RawDeviation,
-  legs: readonly RelevanceLeg[],
-  journeyStopScope: VerifiedJourneyStopScope | null,
+  effect: DisruptionEffect,
+  legScopes: readonly ResolvedLegScope[],
+  journeyWindow: JourneyTimeWindow | null,
 ): { relevance: DisruptionRelevance; matchedLineDesignations: string[] } | null {
+  if (!deviationOverlapsJourneyWindow(deviation, journeyWindow)) return null;
+
   const lines = deviation.scope.lines ?? [];
-  if (lines.length === 0) return null;
-
-  const matchedLineDesignations = Array.from(
-    new Set(
-      legs
-        .filter((leg) => lines.some((line) => line.transport_mode === leg.transportMode && line.designation === leg.lineDesignation))
-        .map((leg) => leg.lineDesignation),
-    ),
-  );
-  if (matchedLineDesignations.length === 0) return null;
-
   const stopAreaIds = deviation.scope.stop_areas?.map((a) => a.id) ?? [];
-  if (stopAreaIds.length === 0) return { relevance: "LINE_RELEVANT", matchedLineDesignations };
+  const stopPointIds = deviation.scope.stop_points?.map((p) => p.id) ?? [];
+  const hasStopScope = stopAreaIds.length > 0 || stopPointIds.length > 0;
+  const scopeKind = scopePolicyForEffect(effect);
 
-  const knownStopIds = journeyStopScope?.stopAreaIds ?? new Set<number>();
-  const intersects = stopAreaIds.some((id) => knownStopIds.has(id));
-  if (intersects) return { relevance: "CONFIRMED", matchedLineDesignations };
+  if (lines.length === 0) {
+    if (!hasStopScope) return null;
+    const union = unionScope(legScopes.map((leg) => scopeSetFor(leg, scopeKind)));
+    const matched = intersects(union.stopAreaIds, stopAreaIds) || intersects(union.stopPointIds, stopPointIds);
+    if (matched) return { relevance: "CONFIRMED", matchedLineDesignations: [] };
+    return null; // fails closed either way -- COMPLETE (genuine disproof) or PARTIAL (no line signal to fall back on)
+  }
 
-  // No intersection among the stops Blick could verify. Whether that is a genuine disproof
-  // depends entirely on whether [journeyStopScope] covers the journey's WHOLE stop set -- see this
-  // function's own rule 4 doc above.
-  if (journeyStopScope?.completeness === "COMPLETE") return null;
+  const matchedLegs = legScopes.filter((leg) => lines.some((line) => line.transport_mode === leg.transportMode && line.designation === leg.lineDesignation));
+  if (matchedLegs.length === 0) return null;
+  const matchedLineDesignations = [...new Set(matchedLegs.map((leg) => leg.lineDesignation))];
+
+  if (!hasStopScope) return { relevance: "LINE_RELEVANT", matchedLineDesignations };
+
+  const union = unionScope(matchedLegs.map((leg) => scopeSetFor(leg, scopeKind)));
+  const matched = intersects(union.stopAreaIds, stopAreaIds) || intersects(union.stopPointIds, stopPointIds);
+  if (matched) return { relevance: "CONFIRMED", matchedLineDesignations };
+  if (union.completeness === "COMPLETE") return null;
   return { relevance: "LINE_RELEVANT", matchedLineDesignations };
 }
 
@@ -222,13 +239,13 @@ export function resolveDeviationRelevance(
  *
  * Combination algorithm:
  *
- * 1. Resolve each of [deviations] via {@link resolveDeviationRelevance}, deduplicated by
- *    `deviation_case_id` (first occurrence wins — a genuinely repeated id within one snapshot is
- *    not expected, but this makes "SL Deviations are deduplicated by their own id" an explicit
- *    guarantee of this function rather than an assumption about its input). Each survivor is
- *    normalized (reusing the existing `normalizeDisruption`, which already runs it through the
- *    same classifier `/api/v1/disruptions` uses — never a second rule set) into a
- *    `source: "SL_DEVIATIONS"` {@link ResolvedJourneyDisruption}.
+ * 1. Each of [deviations] is classified exactly once (`normalizeDisruption`, the SAME classifier
+ *    `/api/v1/disruptions` uses — never a second rule set), deduplicated by `deviation_case_id`
+ *    (first occurrence wins — a genuinely repeated id within one snapshot is not expected, but
+ *    this makes "SL Deviations are deduplicated by their own id" an explicit guarantee of this
+ *    function rather than an assumption about its input), then resolved via
+ *    {@link resolveDeviationRelevance}. Each survivor becomes a `source: "SL_DEVIATIONS"`
+ *    {@link ResolvedJourneyDisruption}.
  * 2. Convert [journeyPlannerNotices] into `source: "JOURNEY_PLANNER"`, `relevance: "CONFIRMED"`
  *    entries (see {@link DisruptionRelevance}'s own doc on why a Journey Planner notice attached
  *    directly to PRIMARY is always the strongest possible evidence), deduplicated by exact `text`
@@ -249,26 +266,25 @@ export function resolveDeviationRelevance(
  * first, then remaining unmatched Deviations, mirroring the existing "PRIMARY's own notices first"
  * convention.
  *
- * [journeyStopScope] is forwarded to {@link resolveDeviationRelevance} unchanged for every
- * deviation — see that function's own doc for the `"PARTIAL"`/`"COMPLETE"` distinction it encodes.
- * `routes/journeyDisruptions.ts` is the one production caller, and today always builds a
- * `completeness: "PARTIAL"` scope from the routine's own verified ORIGIN stop-area ids alone.
+ * [legScopes] and [journeyWindow] are forwarded to {@link resolveDeviationRelevance} unchanged for
+ * every deviation — see that function's own doc for the full matching contract they feed.
+ * `routes/journeyDisruptions.ts` is the one production caller.
  */
 export function resolveJourneyDisruptions(
   journeyPlannerNotices: readonly JourneyPlannerNoticeInput[],
   deviations: readonly RawDeviation[],
-  legs: readonly RelevanceLeg[],
-  journeyStopScope: VerifiedJourneyStopScope | null,
+  legScopes: readonly ResolvedLegScope[],
+  journeyWindow: JourneyTimeWindow | null,
 ): ResolvedJourneyDisruption[] {
   const seenDeviationIds = new Set<string>();
   const deviationResults: ResolvedJourneyDisruption[] = [];
   for (const raw of deviations) {
     const id = String(raw.deviation_case_id);
     if (seenDeviationIds.has(id)) continue;
-    const resolved = resolveDeviationRelevance(raw, legs, journeyStopScope);
+    const normalized = normalizeDisruption(raw);
+    const resolved = resolveDeviationRelevance(raw, normalized.effect, legScopes, journeyWindow);
     if (resolved == null) continue;
     seenDeviationIds.add(id);
-    const normalized = normalizeDisruption(raw);
     deviationResults.push({
       id,
       headline: normalized.message.header,
@@ -315,35 +331,40 @@ export function resolveJourneyDisruptions(
 }
 
 /**
- * Identifier-namespace evidence this module's rules are built on (see `resolveDeviationRelevance`'s
- * own "Known limitation" doc) — recorded here, not just in a commit message, so a future change
- * can verify its own assumptions against the same evidence rather than re-discovering it:
+ * Identifier-namespace evidence this module's rules are built on:
  *
- * - PROVEN compatible: SL Transport's `site.id`/`stop_areas[]` and SL Deviations'
- *   `scope.stop_areas[].id` share one namespace — confirmed live during architecture review (see
- *   docs/api-contract.md, "Verified namespace result") and already relied on by
- *   `services/deviationsFilter.ts`'s own `resolveSiteStopAreaIds`, which THIS module reuses
- *   unchanged via its `originStopAreaIds` parameter (built from `CommuteRoutine.siteId`, itself
- *   confirmed to be an SL-Transport-namespace id — see `CommuteRoutine.kt`'s own doc describing
- *   `siteId` as a "platform-neutral identity field" shared by both routine types).
- * - NOT proven compatible: SL Journey Planner's own place `id` format (e.g.
- *   `"9091001000009192"`, used for `journeyOriginId`/`journeyDestinationId` and each normalized
- *   leg's own internal `stopIds` — see `normalizeJourney.ts`'s own `canonicalStopId`) versus SL
- *   Transport/Deviations' plain-integer `siteId`/`stop_areas[].id` (e.g. `9192`). These two ID
- *   spaces are never cross-referenced anywhere else in this codebase, and no upstream
- *   documentation (SL Transport, SL Deviations, or SL Journey Planner's own OpenAPI-equivalent
- *   material reviewed for this project) states or implies a derivable relationship between them.
- *   Although the same site's two ids happen to share trailing digits in the examples observed live
- *   (Slussen: siteId `9192`, Journey Planner id `"9091001000009192"`), treating that as a reliable
- *   mapping would be exactly the "last-N-digit"/substring hack this module is required not to use
- *   — it is an unverified coincidence from a handful of examples, not a documented or schema-backed
- *   guarantee, so it is NOT used anywhere in this module. Consequently: the journey's DESTINATION
- *   and any INTERMEDIATE stop cannot currently be checked against `affectedStopAreas` at all; only
- *   the ORIGIN can, via the proven `CommuteRoutine.siteId` path above.
- * - What CAN reliably establish route-segment intersection today: only whether the journey's own
- *   ORIGIN site (via `originStopAreaIds`) is named in a deviation's `scope.stop_areas`. Nothing
- *   else in the currently available structured data (Journey Planner's own leg/stop metadata, SL
- *   Deviations' `affectedModes`, priority, or validity fields) can prove segment-level intersection
- *   without inventing an unverified mapping or parsing SL's own free-text message — both explicitly
- *   out of scope for this module.
+ * - PROVEN compatible (unchanged from before this feature): SL Transport's `site.id`/
+ *   `stop_areas[]` and SL Deviations' `scope.stop_areas[].id` share one namespace — confirmed
+ *   live during architecture review (see docs/api-contract.md, "Verified namespace result").
+ * - PROVEN compatible (new for this feature): SL Journey Planner's own `stopSequence` platform
+ *   node `id` (`type: "platform"`, `isGlobalId: true`) and SL Transport `/v1/stop-points`' own
+ *   `pattern_point_gid` are the SAME value — see `services/stopPointDirectory.ts`'s own doc for
+ *   the full live evidence (101/101 platform entries resolved across metro/train/tram/bus/ferry
+ *   and two live multi-leg transfers, 0 ambiguous across 14,187 stop points). This is what makes
+ *   [legScopes] (via `journeyDisruptionScope.ts`) able to verify the journey's DESTINATION and
+ *   every INTERMEDIATE/transfer stop, not merely its origin — the gap the previous version of
+ *   this module's own doc described as its central "known limitation" is closed by this bridge,
+ *   for every stop Journey Planner itself supplies a resolvable platform id for.
+ * - STILL a real, honest limitation: a `stopSequence` node this backend cannot resolve — because
+ *   Journey Planner itself only supplied a coarser `type: "stop"` node (confirmed to happen live,
+ *   even for a leg's own origin — see `normalizeJourney.ts`'s own `platformPatternPointGid` doc),
+ *   because `StopPointDirectory` returns UNRESOLVED/AMBIGUOUS for it, or because Journey Planner
+ *   supplied no `stopSequence` for a leg at all — simply contributes no evidence for that specific
+ *   point, degrading the affected `ScopeSet`'s own `completeness` to `"PARTIAL"` rather than being
+ *   treated as a disproof; see `journeyDisruptionScope.ts`'s own doc for exactly how that
+ *   completeness then changes what `resolveDeviationRelevance`'s own non-intersection rules are
+ *   allowed to conclude.
+ * - Confirmed live (2026-08-16 architecture review): the real `/v1/messages` SL Deviations feed's
+ *   own `scope.stop_points` is currently ALWAYS empty across a live 159-deviation snapshot —
+ *   `scope.stop_areas` (89/159 of them) and `scope.lines` (159/159) are the only structured scope
+ *   evidence SL currently actually sends on this endpoint. `scope.stop_points` is still modeled
+ *   and compared (see `upstreamTypes.ts`'s own `RawDeviationSchema` doc) so this backend
+ *   automatically benefits the moment SL starts populating it, with no further code change
+ *   required — but today, EVERY `CONFIRMED` outcome that depends on structured stop evidence
+ *   comes from a `scope.stop_areas` intersection, never `scope.stop_points`.
+ * - A deviation with `scope.lines` but no stop scope at all can still only ever reach
+ *   `LINE_RELEVANT`, exactly as before this feature (rule 4 above) — this module still never
+ *   parses SL's own free text (e.g. "mellan T-Centralen och Kungsträdgården") as a routing
+ *   authority, and does not add GTFS or any other static-schedule dependency to guess around a
+ *   genuine absence of upstream structure.
  */

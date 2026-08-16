@@ -1116,7 +1116,10 @@ class RoutineDetailsViewModel @Inject constructor(
         journeyDeviationNoticesJob = viewModelScope.launch {
             val disruptions = try {
                 withTimeoutOrNull(DISRUPTIONS_FETCH_TIMEOUT_MS) {
-                    useCase(primary.legs, routine.siteId, journeys.primaryDisruptionNotices())
+                    useCase(
+                        primary.legs, routine.siteId, journeys.primaryDisruptionNotices(),
+                        primary.disruptionContext, primary.departureTime, primary.arrivalTime,
+                    )
                 }
             } catch (e: CancellationException) {
                 throw e

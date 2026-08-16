@@ -196,6 +196,17 @@ export const RawDeviationSchema = z
     scope: z
       .object({
         stop_areas: z.array(RawScopeStopAreaSchema).optional(),
+        // Confirmed live (2026-08-16 architecture review for exact-destination disruption
+        // scoping) that the real /v1/messages feed's own `scope` never actually populates this
+        // for any of a live 159-deviation snapshot -- `stop_areas`/`lines` are the only scope
+        // evidence SL currently sends on this endpoint. Modeled here anyway, reusing the exact
+        // same shape the embedded RawSiteDeviationSchema (`/v1/sites/{id}/departures`) already
+        // uses for it: additive/optional, so it costs nothing today and is used automatically
+        // the moment SL ever does start populating it here, with no further schema change
+        // required. See backend/src/domain/journeyDisruptionScope.ts's own doc for why a
+        // platform-specific StopPoint match is kept as separate, more precise evidence from a
+        // station-wide StopArea match rather than being collapsed into it up front.
+        stop_points: z.array(RawScopeStopPointSchema).optional(),
         lines: z.array(RawDeviationScopeLineSchema).optional(),
       })
       .passthrough(),
@@ -203,3 +214,61 @@ export const RawDeviationSchema = z
   .passthrough();
 export type RawDeviation = z.infer<typeof RawDeviationSchema>;
 export const RawDeviationListSchema = z.array(RawDeviationSchema);
+
+/**
+ * Runtime schema for SL Transport's `/v1/stop-points` — a nationwide reference-data snapshot
+ * (14,187 entries confirmed live for the SL region) used ONLY by `StopPointDirectory`
+ * (`services/stopPointDirectory.ts`) to resolve a Journey Planner `stopSequence` platform's own
+ * `id` (`type: "platform"`, `isGlobalId: true`) to the SL-Transport/Deviations-namespace
+ * StopArea/StopPoint identity a disruption's own `scope` can actually be compared against — see
+ * that service's own doc for the full identity-resolution contract and the live evidence that
+ * `platform.id` and this schema's own `pattern_point_gid` are the same value.
+ *
+ * Deliberately NOT parsed via the ordinary `fetchUpstreamJson`/`response.json()` path every
+ * other upstream client in this codebase uses: `gid`/`pattern_point_gid` are routinely larger
+ * than `Number.MAX_SAFE_INTEGER` (confirmed live — EVERY one of the 14,187 real entries exceeds
+ * it), and `response.json()` would silently round them. `slTransportClient.ts`'s
+ * `fetchStopPoints()` instead reads the response body as text and parses it with
+ * `lib/losslessJson.ts`'s `parseLosslessJson`, which returns every JSON number (of any
+ * magnitude) as its exact source digit string — this is why EVERY numeric field below is typed
+ * as a string on the wire and only coerced to a real `number` where the value is confirmed to
+ * always stay within the safe range (`id`, `stop_area.id`): `gid` and `pattern_point_gid`
+ * themselves are never coerced, staying exact strings end to end (see `PatternPointGid` in
+ * `services/stopPointDirectory.ts`).
+ */
+const LosslessNumericStringSchema = z
+  .string()
+  .regex(/^-?\d+(\.\d+)?([eE][+-]?\d+)?$/, "Expected a JSON number literal preserved as a string by parseLosslessJson");
+
+/** A numeric-string field this backend wants as an ordinary JS `number` — used only for fields
+ * confirmed to stay within `Number.MAX_SAFE_INTEGER` (small SL Transport ids), never for
+ * `gid`/`pattern_point_gid` themselves (see `RawStopPointSchema`'s own doc). */
+const SafeIntFromLosslessStringSchema = LosslessNumericStringSchema.transform((v) => Number(v)).pipe(z.number().int().safe());
+
+/** An identifier field kept as an exact digit string specifically because it may exceed
+ * `Number.MAX_SAFE_INTEGER` (`gid`, `pattern_point_gid`) — validated to be a well-formed
+ * non-negative integer lexeme, but deliberately NEVER transformed to a JS `number`. */
+const BigIntIdentifierStringSchema = z.string().regex(/^\d+$/, "Expected a non-negative integer lexeme preserved as a string");
+
+export const RawStopPointSchema = z
+  .object({
+    id: SafeIntFromLosslessStringSchema,
+    gid: BigIntIdentifierStringSchema,
+    pattern_point_gid: BigIntIdentifierStringSchema,
+    name: z.string(),
+    // SL's own sub-type of stop point -- confirmed live values include "PLATFORM" (metro/train/
+    // tram), "BUSSTOP", and "PIER" (ferry); kept as a permissive string, never a closed enum, for
+    // the same forward-compatibility reason every other upstream-native `type`/`transport_mode`
+    // field in this codebase is (see docs/api-contract.md §3.5).
+    type: z.string(),
+    stop_area: z
+      .object({
+        id: SafeIntFromLosslessStringSchema,
+        name: z.string(),
+        type: z.string().nullable().optional(),
+      })
+      .passthrough(),
+  })
+  .passthrough();
+export type RawStopPoint = z.infer<typeof RawStopPointSchema>;
+export const RawStopPointListSchema = z.array(RawStopPointSchema);

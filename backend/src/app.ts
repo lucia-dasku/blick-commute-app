@@ -9,6 +9,7 @@ import { createSlTransportClient } from "./services/slTransportClient.js";
 import { createSlDeviationsClient } from "./services/slDeviationsClient.js";
 import { createSiteDirectory } from "./services/siteDirectory.js";
 import { createDeviationsSnapshotService } from "./services/deviationsSnapshotService.js";
+import { createStopPointDirectory } from "./services/stopPointDirectory.js";
 import { InFlightDeduper, InMemoryCache, type Cache } from "./lib/cache.js";
 import { InMemoryLock, type DistributedLock } from "./lib/distributedLock.js";
 import { RedisCache, RedisLock } from "./lib/redisClient.js";
@@ -40,11 +41,18 @@ export function createApp() {
   // Redis-backed cache/lock in production (or whenever Upstash credentials are
   // configured) — the ONLY implementation actually shared across Vercel instances; see
   // config.redis's own doc (src/config/env.ts) for why production fails to start rather
-  // than silently falling back to the in-memory implementations below.
+  // than silently falling back to the in-memory implementations below. Shared by BOTH the SL
+  // Deviations snapshot (`deviationsSnapshotService`) and the StopPointDirectory index below —
+  // two independently-keyed snapshots on the same underlying Redis connection, never one
+  // fetching/refreshing the other's data.
   const redisClient = config.redis ? new Redis({ url: config.redis.url, token: config.redis.token }) : undefined;
-  const deviationsCache: Cache = redisClient ? new RedisCache(redisClient) : new InMemoryCache();
-  const deviationsLock: DistributedLock = redisClient ? new RedisLock(redisClient) : new InMemoryLock();
-  const deviationsSnapshotService = createDeviationsSnapshotService(slDeviationsClient, deviationsCache, deviationsLock);
+  const sharedRedisCache: Cache = redisClient ? new RedisCache(redisClient) : new InMemoryCache();
+  const sharedRedisLock: DistributedLock = redisClient ? new RedisLock(redisClient) : new InMemoryLock();
+  const deviationsSnapshotService = createDeviationsSnapshotService(slDeviationsClient, sharedRedisCache, sharedRedisLock);
+  // See services/stopPointDirectory.ts's own "Caching" doc for why this reuses the same
+  // Redis-backed Cache/DistributedLock as Deviations above, despite SL Transport's own
+  // stop-points endpoint carrying no comparable strict fair-use requirement.
+  const stopPointDirectory = createStopPointDirectory(slTransportClient, sharedRedisCache, sharedRedisLock, new InFlightDeduper());
 
   const app = new Hono().basePath("/api/v1");
 
@@ -57,9 +65,9 @@ export function createApp() {
   // A separate top-level mount, not nested inside createJourneyRoutes -- see
   // createJourneyDisruptionsRoute's own doc for why this must stay a genuinely independent
   // route/HTTP call rather than a field on /api/v1/journeys itself. Reuses the SAME
-  // deviationsSnapshotService/siteDirectory instances /api/v1/disruptions already uses -- no new
-  // upstream SL request is introduced by this route's existence.
-  app.route("/journeys/disruptions", createJourneyDisruptionsRoute(deviationsSnapshotService, siteDirectory));
+  // deviationsSnapshotService/siteDirectory/stopPointDirectory instances -- no new upstream SL
+  // request is introduced by this route's existence beyond what those services already make.
+  app.route("/journeys/disruptions", createJourneyDisruptionsRoute(deviationsSnapshotService, siteDirectory, stopPointDirectory));
 
   app.notFound(notFoundHandler);
   app.onError(onError);
