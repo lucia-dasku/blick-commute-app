@@ -2110,6 +2110,164 @@ class RoutineDetailsViewModelTest {
             secondJob.cancel()
         }
 
+    @Test
+    fun `exact PRIMARY departing in 10 seconds refreshes at its first expired millisecond`() = runTest(dispatcher) {
+        val testClock = SettableClock(now)
+        val primary = journeyPlan("primary", now.plusSeconds(10))
+        val journeys = ScriptedJourneyRepository { listOf(primary) }
+        val routine = exactDestinationRoutine()
+        val vm = viewModel(
+            routine = routine, routines = FakeRoutineRepository(routine), clock = testClock,
+            getRankedJourneys = GetRankedJourneysUseCase(journeys, testClock),
+        )
+        dispatcher.scheduler.advanceUntilIdle()
+        assertEquals(1, journeys.callCount)
+
+        val job = launch { vm.runAutoRefresh() }
+        dispatcher.scheduler.runCurrent()
+        dispatcher.scheduler.advanceTimeBy(10_000L)
+        testClock.instant = now.plusSeconds(10)
+        dispatcher.scheduler.runCurrent()
+        assertEquals(1, journeys.callCount) // equality is still current
+
+        dispatcher.scheduler.advanceTimeBy(1L)
+        testClock.instant = now.plusSeconds(10).plusMillis(1)
+        dispatcher.scheduler.runCurrent()
+        assertEquals(2, journeys.callCount)
+        job.cancel()
+    }
+
+    @Test
+    fun `exact PRIMARY later than 30 seconds keeps Routine Details on the normal interval`() = runTest(dispatcher) {
+        val testClock = SettableClock(now)
+        val primary = journeyPlan("primary", now.plusSeconds(60))
+        val journeys = ScriptedJourneyRepository { listOf(primary) }
+        val routine = exactDestinationRoutine()
+        val vm = viewModel(
+            routine = routine, routines = FakeRoutineRepository(routine), clock = testClock,
+            getRankedJourneys = GetRankedJourneysUseCase(journeys, testClock),
+        )
+        dispatcher.scheduler.advanceUntilIdle()
+
+        val job = launch { vm.runAutoRefresh() }
+        dispatcher.scheduler.runCurrent()
+        dispatcher.scheduler.advanceTimeBy(RoutineDetailsViewModel.AUTO_REFRESH_INTERVAL_MS - 1)
+        testClock.instant = now.plusMillis(RoutineDetailsViewModel.AUTO_REFRESH_INTERVAL_MS - 1)
+        dispatcher.scheduler.runCurrent()
+        assertEquals(1, journeys.callCount)
+
+        dispatcher.scheduler.advanceTimeBy(1L)
+        testClock.instant = now.plusMillis(RoutineDetailsViewModel.AUTO_REFRESH_INTERVAL_MS)
+        dispatcher.scheduler.runCurrent()
+        assertEquals(2, journeys.callCount)
+        job.cancel()
+    }
+
+    @Test
+    fun `boundary refresh waits for its in-flight request and failure falls back to normal timing`() = runTest(dispatcher) {
+        val testClock = SettableClock(now)
+        val primary = journeyPlan("primary", now.plusSeconds(10))
+        val pendingBoundaryResponse = CompletableDeferred<List<JourneyPlan>>()
+        val journeys = ScriptedJourneyRepository { callIndex ->
+            if (callIndex == 0) listOf(primary) else pendingBoundaryResponse.await()
+        }
+        val routine = exactDestinationRoutine()
+        val vm = viewModel(
+            routine = routine, routines = FakeRoutineRepository(routine), clock = testClock,
+            getRankedJourneys = GetRankedJourneysUseCase(journeys, testClock),
+        )
+        dispatcher.scheduler.advanceUntilIdle()
+
+        val job = launch { vm.runAutoRefresh() }
+        dispatcher.scheduler.runCurrent()
+        dispatcher.scheduler.advanceTimeBy(10_001L)
+        testClock.instant = now.plusSeconds(10).plusMillis(1)
+        dispatcher.scheduler.runCurrent()
+        assertEquals(2, journeys.callCount)
+
+        dispatcher.scheduler.advanceTimeBy(RoutineDetailsViewModel.AUTO_REFRESH_INTERVAL_MS * 3)
+        testClock.instant = now.plusSeconds(100).plusMillis(1)
+        dispatcher.scheduler.runCurrent()
+        assertEquals(2, journeys.callCount) // no retries while the boundary fetch is in flight
+
+        pendingBoundaryResponse.completeExceptionally(IOException("simulated failure"))
+        dispatcher.scheduler.runCurrent()
+        dispatcher.scheduler.advanceTimeBy(RoutineDetailsViewModel.AUTO_REFRESH_INTERVAL_MS - 1)
+        testClock.instant = now.plusSeconds(130)
+        dispatcher.scheduler.runCurrent()
+        assertEquals(2, journeys.callCount)
+
+        dispatcher.scheduler.advanceTimeBy(1L)
+        testClock.instant = now.plusSeconds(130).plusMillis(1)
+        dispatcher.scheduler.runCurrent()
+        assertEquals(3, journeys.callCount) // failed boundary request retries only on normal cadence
+        job.cancel()
+    }
+
+    @Test
+    fun `fresh PRIMARY after boundary refresh supplies the next departure boundary`() = runTest(dispatcher) {
+        val testClock = SettableClock(now)
+        val primaryA = journeyPlan("primary-A", now.plusSeconds(10))
+        val primaryB = journeyPlan("primary-B", now.plusSeconds(20))
+        val journeys = ScriptedJourneyRepository { callIndex ->
+            if (callIndex == 0) listOf(primaryA) else listOf(primaryB)
+        }
+        val routine = exactDestinationRoutine()
+        val vm = viewModel(
+            routine = routine, routines = FakeRoutineRepository(routine), clock = testClock,
+            getRankedJourneys = GetRankedJourneysUseCase(journeys, testClock),
+        )
+        dispatcher.scheduler.advanceUntilIdle()
+
+        val job = launch { vm.runAutoRefresh() }
+        dispatcher.scheduler.runCurrent()
+        dispatcher.scheduler.advanceTimeBy(10_001L)
+        testClock.instant = now.plusSeconds(10).plusMillis(1)
+        dispatcher.scheduler.runCurrent()
+        assertEquals(2, journeys.callCount)
+        assertEquals("primary-B", vm.uiState.value.journeys.single().journeyId)
+
+        dispatcher.scheduler.advanceTimeBy(9_999L)
+        testClock.instant = now.plusSeconds(20)
+        dispatcher.scheduler.runCurrent()
+        assertEquals(2, journeys.callCount)
+
+        dispatcher.scheduler.advanceTimeBy(1L)
+        testClock.instant = now.plusSeconds(20).plusMillis(1)
+        dispatcher.scheduler.runCurrent()
+        assertEquals(3, journeys.callCount)
+        job.cancel()
+    }
+
+    @Test
+    fun `exact reactivation performs one immediate refresh when the old PRIMARY expired while stopped`() =
+        runTest(dispatcher) {
+            val testClock = SettableClock(now)
+            val primary = journeyPlan("primary", now.plusSeconds(10))
+            val journeys = ScriptedJourneyRepository { listOf(primary) }
+            val routine = exactDestinationRoutine()
+            val vm = viewModel(
+                routine = routine, routines = FakeRoutineRepository(routine), clock = testClock,
+                getRankedJourneys = GetRankedJourneysUseCase(journeys, testClock),
+            )
+            dispatcher.scheduler.advanceUntilIdle()
+
+            val firstJob = launch { vm.runAutoRefresh() }
+            dispatcher.scheduler.runCurrent()
+            firstJob.cancel()
+            dispatcher.scheduler.runCurrent()
+            assertEquals(1, journeys.callCount)
+
+            testClock.instant = now.plusSeconds(10).plusMillis(1)
+            val resumedJob = launch { vm.runAutoRefresh() }
+            dispatcher.scheduler.runCurrent()
+
+            // The existing immediate reactivation request is sufficient. The stale, expired
+            // PRIMARY in pre-refresh UiState must not schedule a second zero-delay request.
+            assertEquals(2, journeys.callCount)
+            resumedJob.cancel()
+        }
+
     // ---- Notification availability refreshes on lifecycle resume (Fix 3) ----
 
     @Test
@@ -2652,6 +2810,38 @@ class RoutineDetailsViewModelTest {
             receivedArrivalTime = arrivalTime
             return resolvedDisruptions
         }
+    }
+
+    /** Supplies a per-call journey response while exposing the exact request count. */
+    private class ScriptedJourneyRepository(
+        private val responseForCall: suspend (Int) -> List<JourneyPlan>,
+    ) : JourneyRepository {
+        var callCount = 0
+            private set
+
+        override suspend fun searchLocations(query: String): List<JourneyLocation> = emptyList()
+
+        override suspend fun getJourneys(
+            originId: String,
+            destinationId: String,
+            allowedTransportModes: Set<TransportMode>,
+            searchUntil: Instant?,
+            changesPreference: ExactDestinationChangesPreference,
+        ): List<JourneyPlan> {
+            val callIndex = callCount++
+            return responseForCall(callIndex)
+        }
+
+        override suspend fun getRelevantDeviationNotices(
+            legs: List<JourneyLeg>,
+            originSiteId: Long?,
+            journeyPlannerNotices: List<JourneyDisruptionNotice>,
+            disruptionContext: JourneyDisruptionContext?,
+            departureTime: Instant?,
+            arrivalTime: Instant?,
+            journeyOriginId: String?,
+            journeyDestinationId: String?,
+        ): List<ResolvedJourneyDisruption> = emptyList()
     }
 
     private fun exactDestinationRoutine(id: String = "r1") = sampleRoutine(id = id).copy(

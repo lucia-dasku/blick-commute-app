@@ -1,6 +1,8 @@
 package se.blick.app.domain.usecase
 
 import se.blick.app.domain.model.JourneyPlan
+import se.blick.app.domain.model.JourneyRole
+import java.time.Duration
 import java.time.Instant
 
 /** Mirrors the backend's own defensive transferCount limit (see
@@ -30,6 +32,30 @@ fun isDepartureCurrent(now: Instant, departure: Instant): Boolean = !departure.i
  * WALK/transfer legs are excluded from "first").
  */
 fun JourneyPlan.effectiveFirstDeparture(): Instant = firstLeg.departureTime ?: departureTime
+
+/**
+ * The exact instant at which the backend-labelled PRIMARY first becomes expired under
+ * [isDepartureCurrent]'s strict comparison. [effectiveDeparture] remains current at equality,
+ * so [firstExpiredAt] is exactly one millisecond later. [journeyId] and [effectiveDeparture]
+ * together also give foreground refresh loops a stable identity for remembering that this
+ * particular boundary has already triggered a fetch while an asynchronous response is pending.
+ */
+data class PrimaryJourneyExpiryBoundary(
+    val journeyId: String,
+    val effectiveDeparture: Instant,
+) {
+    val firstExpiredAt: Instant = effectiveDeparture.plusMillis(1)
+
+    /** Milliseconds from [now] until [firstExpiredAt], or zero when the boundary has passed. */
+    fun remainingMillis(now: Instant): Long =
+        Duration.between(now, firstExpiredAt).toMillis().coerceAtLeast(0L)
+}
+
+/** Returns the backend-labelled PRIMARY's expiry boundary without promoting another role. */
+fun List<JourneyPlan>.primaryJourneyExpiryBoundary(): PrimaryJourneyExpiryBoundary? =
+    firstOrNull { it.role == JourneyRole.PRIMARY }?.let {
+        PrimaryJourneyExpiryBoundary(it.journeyId, it.effectiveFirstDeparture())
+    }
 
 /**
  * True only when this journey has not yet departed (its own [effectiveFirstDeparture] is not

@@ -57,6 +57,7 @@ import se.blick.app.domain.usecase.countdownMinutes
 import se.blick.app.domain.usecase.effectiveFirstDeparture
 import se.blick.app.domain.usecase.filterCurrentJourneys
 import se.blick.app.domain.usecase.isCurrentJourney
+import se.blick.app.domain.usecase.primaryJourneyExpiryBoundary
 import se.blick.app.domain.usecase.primaryDisruptionNotices
 import se.blick.app.widget.runWidgetUpdateSafely
 import java.time.Clock
@@ -595,6 +596,15 @@ class RoutineActiveWindowWorker @AssistedInject constructor(
                 // the widget can never disagree about whether the same journey is still current.
                 val exactProjectionNow = clock.instant()
                 val journeyPlans = (rawJourneyPlans ?: emptyList()).filterCurrentJourneys(exactProjectionNow)
+                // Derived only from the backend-labelled PRIMARY that survived this tick's own
+                // currency filter. This never promotes NEXT locally; it only remembers when a
+                // fresh fetch becomes meaningful because the current PRIMARY will have crossed
+                // the same strict expiry boundary JourneyEligibility uses everywhere else.
+                val primaryExpiryBoundary = if (current.type == RoutineType.EXACT_DESTINATION) {
+                    journeyPlans.primaryJourneyExpiryBoundary()
+                } else {
+                    null
+                }
                 val exactProjection = journeyPlans.toExactJourneyNotificationProjection(current, exactProjectionNow)
                 val departuresState = if (current.type == RoutineType.EXACT_DESTINATION) {
                     exactProjection?.departuresState ?: if (rawJourneyPlans == null) {
@@ -771,7 +781,13 @@ class RoutineActiveWindowWorker @AssistedInject constructor(
                 // work alone already consumed the full interval or more (coerceAtLeast(0L)) adds
                 // no extra delay at all, rather than a negative one.
                 val tickElapsedMs = (elapsedRealtimeProvider.elapsedRealtimeMillis() - tickStartElapsedRealtimeMillis).coerceAtLeast(0L)
-                delay((ACTIVE_WINDOW_REFRESH_INTERVAL_MS - tickElapsedMs).coerceAtLeast(0L))
+                val normalDelayMs = (ACTIVE_WINDOW_REFRESH_INTERVAL_MS - tickElapsedMs).coerceAtLeast(0L)
+                // Wall-clock time is intentionally read only for this absolute journey boundary;
+                // the normal cadence above remains protected by elapsedRealtime. If later work in
+                // this same tick already carried us past the PRIMARY departure, remainingMillis
+                // is zero and the existing loop immediately starts its next fetch.
+                val primaryExpiryDelayMs = primaryExpiryBoundary?.remainingMillis(clock.instant())
+                delay(minOf(normalDelayMs, primaryExpiryDelayMs ?: normalDelayMs))
             }
         } catch (e: CancellationException) {
             // A real coroutine cancellation (this worker's own work was replaced or cancelled

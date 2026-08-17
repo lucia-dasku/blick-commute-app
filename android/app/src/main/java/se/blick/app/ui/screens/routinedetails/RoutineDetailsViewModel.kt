@@ -41,8 +41,10 @@ import se.blick.app.domain.usecase.GetDisruptionsUseCase
 import se.blick.app.domain.usecase.GetLiveDeparturesUseCase
 import se.blick.app.domain.usecase.LiveDeparturesSnapshot
 import se.blick.app.domain.usecase.LiveDeparturesState
+import se.blick.app.domain.usecase.PrimaryJourneyExpiryBoundary
 import se.blick.app.domain.usecase.compactPresentation
 import se.blick.app.domain.usecase.departureIdentity
+import se.blick.app.domain.usecase.primaryJourneyExpiryBoundary
 import se.blick.app.domain.usecase.primaryDisruptionNotices
 import se.blick.app.notification.NotificationAvailability
 import se.blick.app.notification.NotificationAvailabilityChecker
@@ -460,19 +462,64 @@ class RoutineDetailsViewModel @Inject constructor(
         coroutineScope {
             val job = launch {
                 uiState.map { it.routine }.filterNotNull().first()
+                // A boundary is remembered before its asynchronous request starts. Until the
+                // response replaces the PRIMARY with a different identity/departure, this keeps
+                // the still-visible old state from scheduling repeated zero-delay requests.
+                var triggeredPrimaryBoundary: PrimaryJourneyExpiryBoundary? = null
                 if (hasStartedAutoRefreshOnce) {
                     _uiState.value.routine?.let {
+                        // Reactivation already owns an immediate automatic fetch. If the old UI
+                        // state crossed its boundary while the screen was stopped, count that
+                        // boundary as handled before launching the reactivation request so the
+                        // loop cannot immediately supersede it with a duplicate request.
+                        if (it.type == RoutineType.EXACT_DESTINATION) {
+                            triggeredPrimaryBoundary = _uiState.value.journeys
+                                .primaryJourneyExpiryBoundary()
+                                ?.takeIf { boundary -> boundary.remainingMillis(clock.instant()) == 0L }
+                        }
                         loadDepartures(it, RefreshTrigger.AUTOMATIC)
                         if (it.type == RoutineType.LINE_DIRECTION) loadDisruptions(it, isInitial = false)
+                        if (it.type == RoutineType.EXACT_DESTINATION) departuresJob?.join()
                     }
+                } else if (_uiState.value.routine?.type == RoutineType.EXACT_DESTINATION) {
+                    // The first lifecycle start reuses init's fetch instead of duplicating it.
+                    // Waiting for that same job lets the first scheduled delay use its freshly
+                    // known PRIMARY rather than defaulting to 30 seconds while init is in flight.
+                    departuresJob?.join()
                 }
                 hasStartedAutoRefreshOnce = true
                 while (isActive) {
-                    delay(AUTO_REFRESH_INTERVAL_MS)
+                    val stateBeforeDelay = _uiState.value
+                    val primaryBoundary = if (stateBeforeDelay.routine?.type == RoutineType.EXACT_DESTINATION) {
+                        stateBeforeDelay.journeys.primaryJourneyExpiryBoundary()
+                    } else {
+                        null
+                    }
+                    val primaryBoundaryDelayMs = primaryBoundary
+                        ?.takeUnless { it == triggeredPrimaryBoundary }
+                        ?.remainingMillis(clock.instant())
+                    val wokeForPrimaryBoundary = primaryBoundaryDelayMs != null &&
+                        primaryBoundaryDelayMs <= AUTO_REFRESH_INTERVAL_MS
+                    delay(minOf(AUTO_REFRESH_INTERVAL_MS, primaryBoundaryDelayMs ?: AUTO_REFRESH_INTERVAL_MS))
+
+                    // Mark before loadDepartures launches its existing asynchronous job. The
+                    // identity check prevents a manual refresh that changed PRIMARY during the
+                    // delay from marking or waiting on the wrong boundary.
+                    val boundaryStillCurrent = wokeForPrimaryBoundary &&
+                        _uiState.value.routine?.type == RoutineType.EXACT_DESTINATION &&
+                        _uiState.value.journeys.primaryJourneyExpiryBoundary() == primaryBoundary
+                    if (boundaryStillCurrent) triggeredPrimaryBoundary = primaryBoundary
+
                     _uiState.value.routine?.let {
                         loadDepartures(it, RefreshTrigger.AUTOMATIC)
                         if (it.type == RoutineType.LINE_DIRECTION) loadDisruptions(it, isInitial = false)
                     }
+                    // loadJourneys runs through departuresJob in viewModelScope. Awaiting only a
+                    // departure-boundary refresh lets the next loop iteration schedule from the
+                    // fresh PRIMARY, while a failed request falls back to the normal interval.
+                    // It also makes it impossible to spin against the old UiState while that one
+                    // request is still in flight; no second polling or fetch loop is introduced.
+                    if (boundaryStillCurrent) departuresJob?.join()
                 }
             }
             autoRefreshJob = job

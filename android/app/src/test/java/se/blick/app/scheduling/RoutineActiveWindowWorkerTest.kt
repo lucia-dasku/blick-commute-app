@@ -117,6 +117,17 @@ class RoutineActiveWindowWorkerTest {
         override fun instant(): Instant = instant
     }
 
+    /** A wall clock backed by coroutine-test virtual time, for exact boundary timing tests. */
+    private class SchedulerClock(
+        private val startInstant: Instant,
+        private val zoneId: ZoneId,
+        private val elapsedMillis: () -> Long,
+    ) : Clock() {
+        override fun getZone(): ZoneId = zoneId
+        override fun withZone(zoneId: ZoneId): Clock = SchedulerClock(startInstant, zoneId, elapsedMillis)
+        override fun instant(): Instant = startInstant.plusMillis(elapsedMillis())
+    }
+
     private fun routine(
         id: String = "r1",
         enabled: Boolean = true,
@@ -223,6 +234,18 @@ class RoutineActiveWindowWorkerTest {
         override suspend fun save(routine: CommuteRoutine) = throw NotImplementedError()
         override suspend fun delete(id: String) = throw NotImplementedError()
         override suspend fun pauseForDate(id: String, date: java.time.LocalDate) = throw NotImplementedError()
+        override suspend fun clearPause(id: String) = throw NotImplementedError()
+        override suspend fun setEnabled(id: String, enabled: Boolean) = throw NotImplementedError()
+        override suspend fun hasAnyRoutine(): Boolean = throw NotImplementedError()
+    }
+
+    /** Stable routine storage for tests whose clock follows coroutine virtual time directly. */
+    private class FixedRoutineRepository(private val routine: CommuteRoutine) : RoutineRepository {
+        override fun observeAll() = throw NotImplementedError("unused by RoutineActiveWindowWorker")
+        override suspend fun getById(id: String): CommuteRoutine = routine
+        override suspend fun save(routine: CommuteRoutine) = throw NotImplementedError()
+        override suspend fun delete(id: String) = throw NotImplementedError()
+        override suspend fun pauseForDate(id: String, date: LocalDate) = throw NotImplementedError()
         override suspend fun clearPause(id: String) = throw NotImplementedError()
         override suspend fun setEnabled(id: String, enabled: Boolean) = throw NotImplementedError()
         override suspend fun hasAnyRoutine(): Boolean = throw NotImplementedError()
@@ -2932,6 +2955,160 @@ class RoutineActiveWindowWorkerTest {
             departure, departure.plusSeconds(600), true, emptyList(),
         )
         JourneyPlan(id, "Fruängen", "Arlanda", departure, departure.plusSeconds(600), 0, leg, listOf(leg), emptyList())
+    }
+
+    /** Records the virtual instant of each journey fetch and supplies a per-call response. */
+    private class RecordingJourneyRepository(
+        private val currentTimeMillis: () -> Long,
+        private val responseForCall: suspend (Int) -> List<JourneyPlan>,
+    ) : JourneyRepository {
+        val callTimesMillis = mutableListOf<Long>()
+
+        override suspend fun searchLocations(query: String): List<JourneyLocation> = emptyList()
+
+        override suspend fun getJourneys(
+            originId: String,
+            destinationId: String,
+            allowedTransportModes: Set<TransportMode>,
+            searchUntil: Instant?,
+            changesPreference: ExactDestinationChangesPreference,
+        ): List<JourneyPlan> {
+            val callIndex = callTimesMillis.size
+            callTimesMillis += currentTimeMillis()
+            return responseForCall(callIndex)
+        }
+
+        override suspend fun getRelevantDeviationNotices(
+            legs: List<JourneyLeg>,
+            originSiteId: Long?,
+            journeyPlannerNotices: List<JourneyDisruptionNotice>,
+            disruptionContext: JourneyDisruptionContext?,
+            departureTime: Instant?,
+            arrivalTime: Instant?,
+            journeyOriginId: String?,
+            journeyDestinationId: String?,
+        ): List<ResolvedJourneyDisruption> = emptyList()
+    }
+
+    @Test
+    fun `exact PRIMARY departing in 10 seconds starts the next worker fetch at its expiry boundary`() = runTest {
+        val start = Instant.parse("2026-07-27T05:00:00Z")
+        val clock = SchedulerClock(start, zone) { testScheduler.currentTime }
+        val routine = exactDestinationRoutine(endTime = LocalTime.of(8, 0))
+        val primary = exactJourney("primary", start.plusSeconds(10))
+        val journeys = RecordingJourneyRepository({ testScheduler.currentTime }) { listOf(primary) }
+        val worker = buildWorker(
+            routine.id, FixedRoutineRepository(routine),
+            GetLiveDeparturesUseCase(FakeDepartureRepository { error("unused") }, clock),
+            RecordingNotifier(), RecordingScheduler(), clock,
+            getRankedJourneys = GetRankedJourneysUseCase(journeys, clock),
+        )
+
+        val job = launch { worker.doWork() }
+        runCurrent()
+        assertEquals(listOf(0L), journeys.callTimesMillis)
+
+        testScheduler.advanceTimeBy(10_000L)
+        runCurrent()
+        assertEquals(listOf(0L), journeys.callTimesMillis) // equality is still current
+
+        testScheduler.advanceTimeBy(1L)
+        runCurrent()
+        assertEquals(listOf(0L, 10_001L), journeys.callTimesMillis)
+        job.cancelAndJoin()
+    }
+
+    @Test
+    fun `exact PRIMARY later than 30 seconds keeps the worker's normal interval`() = runTest {
+        val start = Instant.parse("2026-07-27T05:00:00Z")
+        val clock = SchedulerClock(start, zone) { testScheduler.currentTime }
+        val routine = exactDestinationRoutine(endTime = LocalTime.of(8, 0))
+        val primary = exactJourney("primary", start.plusSeconds(60))
+        val journeys = RecordingJourneyRepository({ testScheduler.currentTime }) { listOf(primary) }
+        val worker = buildWorker(
+            routine.id, FixedRoutineRepository(routine),
+            GetLiveDeparturesUseCase(FakeDepartureRepository { error("unused") }, clock),
+            RecordingNotifier(), RecordingScheduler(), clock,
+            getRankedJourneys = GetRankedJourneysUseCase(journeys, clock),
+        )
+
+        val job = launch { worker.doWork() }
+        runCurrent()
+        testScheduler.advanceTimeBy(ACTIVE_WINDOW_REFRESH_INTERVAL_MS - 1)
+        runCurrent()
+        assertEquals(listOf(0L), journeys.callTimesMillis)
+
+        testScheduler.advanceTimeBy(1L)
+        runCurrent()
+        assertEquals(listOf(0L, ACTIVE_WINDOW_REFRESH_INTERVAL_MS), journeys.callTimesMillis)
+        job.cancelAndJoin()
+    }
+
+    @Test
+    fun `exact PRIMARY that departs during tick work starts the next worker fetch immediately`() = runTest {
+        val start = Instant.parse("2026-07-27T05:00:00Z")
+        val clock = SchedulerClock(start, zone) { testScheduler.currentTime }
+        val routine = exactDestinationRoutine(endTime = LocalTime.of(8, 0))
+        val primary = exactJourney("primary", start.plusSeconds(10))
+        val journeys = RecordingJourneyRepository({ testScheduler.currentTime }) { listOf(primary) }
+        val delegate = RecordingWidgetUpdater()
+        val slowWidget = object : RoutineWidgetUpdater by delegate {
+            override suspend fun updateWithJourneys(
+                routine: CommuteRoutine,
+                journeys: List<JourneyPlan>,
+                now: Instant,
+                fetchFailed: Boolean,
+                disruption: DisruptionPresentation?,
+            ) {
+                delegate.updateWithJourneys(routine, journeys, now, fetchFailed, disruption)
+                delay(15_000L)
+            }
+        }
+        val worker = buildWorker(
+            routine.id, FixedRoutineRepository(routine),
+            GetLiveDeparturesUseCase(FakeDepartureRepository { error("unused") }, clock),
+            RecordingNotifier(), RecordingScheduler(), clock, widgetUpdater = slowWidget,
+            getRankedJourneys = GetRankedJourneysUseCase(journeys, clock),
+        )
+
+        val job = launch { worker.doWork() }
+        runCurrent()
+        testScheduler.advanceTimeBy(15_000L)
+        runCurrent()
+
+        assertEquals(listOf(0L, 15_000L), journeys.callTimesMillis)
+        job.cancelAndJoin()
+    }
+
+    @Test
+    fun `empty failed and NEXT-only exact results keep normal worker timing without a tight loop`() = runTest {
+        val start = Instant.parse("2026-07-27T05:00:00Z")
+        val clock = SchedulerClock(start, zone) { testScheduler.currentTime }
+        val routine = exactDestinationRoutine(endTime = LocalTime.of(8, 0))
+        val next = exactJourney("next", start.plusSeconds(300)).copy(role = JourneyRole.NEXT)
+        val journeys = RecordingJourneyRepository({ testScheduler.currentTime }) { callIndex ->
+            when (callIndex) {
+                0 -> emptyList()
+                1 -> throw IOException("simulated fetch failure")
+                else -> listOf(next)
+            }
+        }
+        val worker = buildWorker(
+            routine.id, FixedRoutineRepository(routine),
+            GetLiveDeparturesUseCase(FakeDepartureRepository { error("unused") }, clock),
+            RecordingNotifier(), RecordingScheduler(), clock,
+            getRankedJourneys = GetRankedJourneysUseCase(journeys, clock),
+        )
+
+        val job = launch { worker.doWork() }
+        runCurrent()
+        testScheduler.advanceTimeBy(ACTIVE_WINDOW_REFRESH_INTERVAL_MS)
+        runCurrent()
+        testScheduler.advanceTimeBy(ACTIVE_WINDOW_REFRESH_INTERVAL_MS)
+        runCurrent()
+
+        assertEquals(listOf(0L, 30_000L, 60_000L), journeys.callTimesMillis)
+        job.cancelAndJoin()
     }
 
     /** A [JourneyRepository] that always returns the same [journeys] -- the "network round-trip"

@@ -6,6 +6,7 @@ import org.junit.Assert.assertTrue
 import org.junit.Test
 import se.blick.app.domain.model.JourneyLeg
 import se.blick.app.domain.model.JourneyPlan
+import se.blick.app.domain.model.JourneyRole
 import se.blick.app.domain.model.TransportMode
 import java.time.Instant
 
@@ -63,6 +64,27 @@ class JourneyEligibilityTest {
         val plan = journey("j1", null, topLevel)
 
         assertEquals(topLevel, plan.effectiveFirstDeparture())
+    }
+
+    // ---- PRIMARY expiry boundary: the first millisecond satisfying departure < now ----
+
+    @Test fun `primary expiry boundary is one millisecond after its effective first departure`() {
+        val effectiveDeparture = now.plusSeconds(10)
+        val primary = journey("primary", effectiveDeparture, now.minusSeconds(30))
+
+        val boundary = listOf(primary).primaryJourneyExpiryBoundary()!!
+
+        assertEquals("primary", boundary.journeyId)
+        assertEquals(effectiveDeparture, boundary.effectiveDeparture)
+        assertEquals(effectiveDeparture.plusMillis(1), boundary.firstExpiredAt)
+        assertEquals(10_001L, boundary.remainingMillis(now))
+        assertEquals(0L, boundary.remainingMillis(effectiveDeparture.plusMillis(2)))
+    }
+
+    @Test fun `primary expiry boundary never promotes NEXT`() {
+        val next = journey("next", now.plusSeconds(10), now.plusSeconds(10)).copy(role = JourneyRole.NEXT)
+
+        assertEquals(null, listOf(next).primaryJourneyExpiryBoundary())
     }
 
     // ---- isCurrentJourney: departure eligibility AND the two-change limit together ----
