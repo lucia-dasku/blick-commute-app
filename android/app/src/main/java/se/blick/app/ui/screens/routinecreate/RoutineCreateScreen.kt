@@ -48,12 +48,14 @@ import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import se.blick.app.R
 import se.blick.app.data.repository.DirectionOption
 import se.blick.app.domain.model.JourneyLocation
+import se.blick.app.domain.model.RoutineLabel
 import se.blick.app.domain.model.Site
 import se.blick.app.domain.model.TransportMode
 import se.blick.app.locale.currentBlickLocale
 import se.blick.app.ui.components.BlickTopBar
 import se.blick.app.ui.components.BlickWizardHeader
 import se.blick.app.ui.components.LineBadge
+import se.blick.app.ui.components.RoutineLabelSelector
 import se.blick.app.ui.notification.rememberNotificationPermissionGate
 import java.time.DayOfWeek
 import java.time.LocalTime
@@ -169,6 +171,7 @@ fun RoutineCreateScreen(
                                 onStartTimeChanged = viewModel::setStartTime,
                                 onEndTimeChanged = viewModel::setEndTime,
                                 onNameChanged = viewModel::setName,
+                                onLabelChanged = viewModel::setLabel,
                                 onSave = { notifyGate { viewModel.save(onDone) } },
                                 // Retries only the WorkManager side for the already-saved routine
                                 // -- never re-wrapped in notifyGate, which is specifically about
@@ -426,6 +429,7 @@ private fun ScheduleStep(
     onStartTimeChanged: (LocalTime) -> Unit,
     onEndTimeChanged: (LocalTime) -> Unit,
     onNameChanged: (String) -> Unit,
+    onLabelChanged: (RoutineLabel?) -> Unit,
     onSave: () -> Unit,
     onRetryScheduling: () -> Unit,
 ) {
@@ -486,6 +490,18 @@ private fun ScheduleStep(
             onValueChange = onNameChanged,
             label = { Text(stringResource(R.string.routine_create_name_label)) },
             singleLine = true,
+            modifier = Modifier.fillMaxWidth(),
+        )
+
+        Spacer(Modifier.height(16.dp))
+        Text(
+            stringResource(R.string.routine_label_field_title),
+            style = MaterialTheme.typography.labelLarge,
+        )
+        Spacer(Modifier.height(8.dp))
+        RoutineLabelSelector(
+            selectedLabel = uiState.selectedLabel,
+            onLabelSelected = onLabelChanged,
             modifier = Modifier.fillMaxWidth(),
         )
 

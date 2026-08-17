@@ -121,4 +121,33 @@ class RoutineDaoTest {
         assertEquals(20000L, stored.pausedDateEpochDay)
         assertEquals(LocalDate.ofEpochDay(20000L), stored.toDomain().pausedDate)
     }
+
+    @Test
+    fun labelPersistsAfterDatabaseReload() = runBlocking {
+        val context = ApplicationProvider.getApplicationContext<Context>()
+        val databaseName = "routine-label-reload"
+        context.deleteDatabase(databaseName)
+
+        try {
+            val firstOpen = Room.databaseBuilder(context, BlickDatabase::class.java, databaseName)
+                .allowMainThreadQueries()
+                .build()
+            try {
+                firstOpen.routineDao().upsert(sampleEntity().copy(label = "STUDY"))
+            } finally {
+                firstOpen.close()
+            }
+
+            val reopened = Room.databaseBuilder(context, BlickDatabase::class.java, databaseName)
+                .allowMainThreadQueries()
+                .build()
+            try {
+                assertEquals("STUDY", reopened.routineDao().getById("r1")?.label)
+            } finally {
+                reopened.close()
+            }
+        } finally {
+            context.deleteDatabase(databaseName)
+        }
+    }
 }

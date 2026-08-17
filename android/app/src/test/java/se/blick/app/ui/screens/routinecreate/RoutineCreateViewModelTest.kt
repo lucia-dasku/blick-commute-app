@@ -34,6 +34,7 @@ import se.blick.app.domain.model.ExactDestinationChangesPreference
 import se.blick.app.domain.model.JourneyLocation
 import se.blick.app.domain.model.JourneyPlan
 import se.blick.app.domain.model.RoutineType
+import se.blick.app.domain.model.RoutineLabel
 import se.blick.app.domain.model.Site
 import se.blick.app.domain.model.TransportMode
 import se.blick.app.domain.usecase.LiveDeparturesState
@@ -723,6 +724,7 @@ class RoutineCreateViewModelTest {
         vm.toggleDay(DayOfWeek.TUESDAY)
         vm.setStartTime(LocalTime.of(7, 0))
         vm.setEndTime(LocalTime.of(9, 0))
+        vm.setLabel(RoutineLabel.WORK)
 
         assertTrue(vm.uiState.value.canSave)
 
@@ -738,6 +740,7 @@ class RoutineCreateViewModelTest {
         assertEquals(metroOption.lineId, routine.lineId)
         assertEquals(metroOption.directionCode, routine.directionCode)
         assertEquals(setOf(DayOfWeek.MONDAY, DayOfWeek.TUESDAY), routine.activeDays)
+        assertEquals(RoutineLabel.WORK, routine.label)
     }
 
     @Test
@@ -1091,6 +1094,7 @@ class RoutineCreateViewModelTest {
         destinationLabel: String? = "Segeltorp",
         enabled: Boolean = true,
         pausedDate: LocalDate? = null,
+        label: RoutineLabel? = null,
     ) = CommuteRoutine(
         id = id,
         name = "Morning commute",
@@ -1106,11 +1110,12 @@ class RoutineCreateViewModelTest {
         endTime = LocalTime.of(8, 30),
         enabled = enabled,
         pausedDate = pausedDate,
+        label = label,
     )
 
     @Test
     fun `edit mode loads the routine by navigation id and pre-fills every editable value`() = runTest(dispatcher) {
-        val routine = existingRoutine()
+        val routine = existingRoutine(label = RoutineLabel.HOME)
         val routines = FakeRoutineRepository(listOf(routine))
         val vm = viewModel(routines = routines, routineId = routine.id)
         dispatcher.scheduler.advanceUntilIdle()
@@ -1127,7 +1132,26 @@ class RoutineCreateViewModelTest {
         assertEquals(LocalTime.of(7, 30), state.startTime)
         assertEquals(LocalTime.of(8, 30), state.endTime)
         assertEquals("Morning commute", state.name)
+        assertEquals(RoutineLabel.HOME, state.selectedLabel)
         assertEquals(RoutineCreateStep.SCHEDULE, state.step)
+    }
+
+    @Test
+    fun `editing can change and then remove a routine label`() = runTest(dispatcher) {
+        val routine = existingRoutine(label = RoutineLabel.WORK)
+        val routines = FakeRoutineRepository(listOf(routine))
+        val vm = viewModel(routines = routines, routineId = routine.id)
+        dispatcher.scheduler.advanceUntilIdle()
+
+        vm.setLabel(RoutineLabel.GYM)
+        vm.save {}
+        dispatcher.scheduler.advanceUntilIdle()
+        assertEquals(RoutineLabel.GYM, routines.getById(routine.id)?.label)
+
+        vm.setLabel(null)
+        vm.save {}
+        dispatcher.scheduler.advanceUntilIdle()
+        assertEquals(null, routines.getById(routine.id)?.label)
     }
 
     @Test

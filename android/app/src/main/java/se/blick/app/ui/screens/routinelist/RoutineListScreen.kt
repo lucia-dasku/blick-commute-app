@@ -1,17 +1,30 @@
 package se.blick.app.ui.screens.routinelist
 
 import androidx.compose.foundation.clickable
+import androidx.compose.foundation.background
 import androidx.compose.foundation.layout.Box
+import androidx.compose.foundation.layout.Arrangement
+import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.PaddingValues
+import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.fillMaxSize
+import androidx.compose.foundation.layout.fillMaxHeight
 import androidx.compose.foundation.layout.fillMaxWidth
+import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
+import androidx.compose.foundation.layout.Spacer
+import androidx.compose.foundation.layout.size
+import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
 import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.automirrored.filled.KeyboardArrowRight
 import androidx.compose.material.icons.filled.Add
+import androidx.compose.material.icons.filled.DateRange
 import androidx.compose.material.icons.filled.Settings
 import androidx.compose.material3.AlertDialog
+import androidx.compose.material3.Card
+import androidx.compose.material3.CardDefaults
 import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.FloatingActionButton
 import androidx.compose.material3.Icon
@@ -21,6 +34,7 @@ import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Scaffold
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
+import androidx.compose.material3.TopAppBar
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
@@ -28,18 +42,27 @@ import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.foundation.isSystemInDarkTheme
+import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.ui.res.stringResource
+import androidx.compose.ui.platform.testTag
+import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextAlign
+import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.hilt.navigation.compose.hiltViewModel
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import se.blick.app.R
 import se.blick.app.billing.hasPremiumAccess
 import se.blick.app.domain.model.CommuteRoutine
-import se.blick.app.ui.components.BlickTopBar
+import se.blick.app.ui.components.BlickWordmark
 import se.blick.app.ui.components.LineBadge
+import se.blick.app.ui.components.RoutineLabelIconContainer
+import se.blick.app.ui.components.RoutineLabelPill
+import se.blick.app.ui.components.visuals
 import se.blick.app.billing.RoutineTierPolicy
 import se.blick.app.domain.model.RoutineType
+import se.blick.app.locale.currentBlickLocale
 
 /** Extra bottom padding reserved for the last list row so the always-visible FAB (see
  * [RoutineListScreen]'s `floatingActionButton` slot) never obscures it — Material3's
@@ -96,14 +119,29 @@ fun RoutineListContent(
 
     Scaffold(
         topBar = {
-            BlickTopBar(
-                title = stringResource(R.string.routine_list_title),
-                actions = {
-                    IconButton(onClick = onOpenAbout) {
-                        Icon(Icons.Filled.Settings, contentDescription = stringResource(R.string.about_action))
-                    }
-                },
-            )
+            Column {
+                TopAppBar(
+                    title = { BlickWordmark() },
+                    actions = {
+                        IconButton(onClick = onOpenAbout) {
+                            Icon(Icons.Filled.Settings, contentDescription = stringResource(R.string.about_action))
+                        }
+                    },
+                )
+                Column(Modifier.padding(start = 16.dp, end = 16.dp, bottom = 12.dp)) {
+                    Text(
+                        text = stringResource(R.string.routine_list_title),
+                        style = MaterialTheme.typography.headlineSmall,
+                        fontWeight = FontWeight.Bold,
+                    )
+                    Text(
+                        text = stringResource(R.string.routine_list_subtitle),
+                        style = MaterialTheme.typography.bodyMedium,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.72f),
+                        modifier = Modifier.padding(top = 4.dp),
+                    )
+                }
+            }
         },
         floatingActionButton = {
             // Always visible. Both tiers open the same form; entitlement controls whether
@@ -151,7 +189,15 @@ fun RoutineListContent(
                     val allowed = RoutineTierPolicy.canRun(
                         routine, uiState.routines, uiState.entitlement, uiState.selectedFreeRoutineId,
                     )
-                    ListItem(
+                    if (routine.label != null) {
+                        LabeledRoutineCard(
+                            routine = routine,
+                            allowed = allowed,
+                            onOpenRoutine = onOpenRoutine,
+                            onSelectFreeRoutine = onSelectFreeRoutine,
+                        )
+                    } else {
+                        ListItem(
                         // The same colored line-number badge used throughout the app (route
                         // selection, Routine Details, departure rows, and the home-screen
                         // widget) — null only for a routine with no specific line configured,
@@ -182,7 +228,8 @@ fun RoutineListContent(
                             else -> null
                         },
                         modifier = Modifier.clickable { onOpenRoutine(routine.id) },
-                    )
+                        )
+                    }
                 }
             }
         }
@@ -204,4 +251,122 @@ fun RoutineListContent(
         )
     }
 
+}
+
+@Composable
+private fun LabeledRoutineCard(
+    routine: CommuteRoutine,
+    allowed: Boolean,
+    onOpenRoutine: (String) -> Unit,
+    onSelectFreeRoutine: (String) -> Unit,
+) {
+    val label = requireNotNull(routine.label)
+    val visuals = label.visuals(isSystemInDarkTheme())
+    val locale = currentBlickLocale()
+    val schedule = formatRoutineCardSchedule(
+        routine = routine,
+        locale = locale,
+        everyDayLabel = stringResource(R.string.routine_details_schedule_every_day),
+        weekdaysLabel = stringResource(R.string.routine_details_schedule_weekdays),
+    )
+    val status = when {
+        !allowed -> stringResource(R.string.routine_list_premium_locked)
+        !routine.enabled -> stringResource(R.string.routine_details_status_disabled)
+        else -> null
+    }
+
+    Box(
+        modifier = Modifier
+            .fillMaxWidth()
+            .padding(horizontal = 16.dp, vertical = 5.dp),
+    ) {
+        Card(
+            onClick = { onOpenRoutine(routine.id) },
+            shape = RoundedCornerShape(16.dp),
+            colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surface),
+            elevation = CardDefaults.cardElevation(defaultElevation = 2.dp),
+            modifier = Modifier
+                .fillMaxWidth()
+                .height(112.dp)
+                .testTag("labeled_routine_card_${label.name.lowercase()}"),
+        ) {
+            Row(Modifier.fillMaxSize()) {
+                Box(
+                    Modifier
+                        .width(4.dp)
+                        .fillMaxHeight()
+                        .background(visuals.accent)
+                        .testTag("routine_label_strip_${label.name.lowercase()}"),
+                )
+                Row(
+                    modifier = Modifier
+                        .weight(1f)
+                        .fillMaxHeight()
+                        .padding(start = 14.dp, end = 10.dp, top = 8.dp, bottom = 8.dp),
+                    verticalAlignment = Alignment.CenterVertically,
+                ) {
+                    RoutineLabelIconContainer(
+                        label = label,
+                        containerSize = 58.dp,
+                        iconSize = 30.dp,
+                        cornerRadius = 16.dp,
+                    )
+                    Spacer(Modifier.width(15.dp))
+                    Column(
+                        modifier = Modifier.weight(1f),
+                        verticalArrangement = Arrangement.Center,
+                    ) {
+                        RoutineLabelPill(label)
+                        Text(
+                            text = routine.name,
+                            style = MaterialTheme.typography.titleMedium,
+                            fontWeight = FontWeight.SemiBold,
+                            maxLines = 1,
+                            overflow = TextOverflow.Ellipsis,
+                            modifier = Modifier.padding(top = 2.dp),
+                        )
+                        Row(
+                            verticalAlignment = Alignment.CenterVertically,
+                            horizontalArrangement = Arrangement.spacedBy(4.dp),
+                        ) {
+                            Icon(
+                                Icons.Filled.DateRange,
+                                contentDescription = null,
+                                tint = MaterialTheme.colorScheme.onSurfaceVariant,
+                                modifier = Modifier.size(14.dp),
+                            )
+                            Text(
+                                text = schedule,
+                                style = MaterialTheme.typography.bodySmall,
+                                color = MaterialTheme.colorScheme.onSurfaceVariant,
+                                maxLines = 1,
+                                overflow = TextOverflow.Ellipsis,
+                            )
+                        }
+                        status?.let {
+                            Text(
+                                text = it,
+                                style = MaterialTheme.typography.bodySmall,
+                                color = MaterialTheme.colorScheme.onSurfaceVariant,
+                                maxLines = 1,
+                            )
+                        }
+                    }
+                    if (!allowed && routine.type == RoutineType.LINE_DIRECTION) {
+                        TextButton(onClick = { onSelectFreeRoutine(routine.id) }) {
+                            Text(stringResource(R.string.routine_list_use_free))
+                        }
+                    }
+                    Icon(
+                        Icons.AutoMirrored.Filled.KeyboardArrowRight,
+                        contentDescription = stringResource(R.string.routine_list_open, routine.name),
+                        tint = MaterialTheme.colorScheme.onSurfaceVariant,
+                        modifier = Modifier
+                            .size(28.dp)
+                            .testTag("routine_card_chevron"),
+                    )
+                }
+            }
+        }
+    }
 }

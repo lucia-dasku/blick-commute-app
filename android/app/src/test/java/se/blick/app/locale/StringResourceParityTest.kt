@@ -23,6 +23,7 @@ class StringResourceParityTest {
     // currently active, so an "English"/"Svenska" entry must stay identical everywhere too.
     private val intentionallyUntranslated = setOf(
         "app_name",
+        "brand_wordmark",
         "settings_language_option_english",
         "settings_language_option_swedish",
     )

@@ -28,6 +28,7 @@ import se.blick.app.data.repository.StopRepository
 import se.blick.app.domain.model.CommuteRoutine
 import se.blick.app.domain.model.JourneyLocation
 import se.blick.app.domain.model.RoutineType
+import se.blick.app.domain.model.RoutineLabel
 import se.blick.app.domain.model.Site
 import se.blick.app.domain.model.TransportMode
 import se.blick.app.domain.usecase.RoutineDurationValidationResult
@@ -97,6 +98,7 @@ data class RoutineCreateUiState(
     val startTime: LocalTime = LocalTime.of(7, 0),
     val endTime: LocalTime = LocalTime.of(9, 0),
     val name: String = "",
+    val selectedLabel: RoutineLabel? = null,
     val isSaving: Boolean = false,
     val saveFailed: Boolean = false,
     /** True once [RoutineRepository.save] has genuinely succeeded but the immediately-following
@@ -297,6 +299,7 @@ class RoutineCreateViewModel @Inject constructor(
                 startTime = existing.startTime,
                 endTime = existing.endTime,
                 name = existing.name,
+                selectedLabel = existing.label,
             )
         }
         val syntheticSite = Site(
@@ -631,6 +634,10 @@ class RoutineCreateViewModel @Inject constructor(
         _uiState.update { it.copy(name = name) }
     }
 
+    fun setLabel(label: RoutineLabel?) {
+        _uiState.update { it.copy(selectedLabel = label) }
+    }
+
     /** Records that the production notification-permission rationale (see
      * [se.blick.app.ui.notification.rememberNotificationPermissionGate]) has now been shown
      * once, so it is never shown again regardless of the user's answer. Updates local state
@@ -738,6 +745,7 @@ class RoutineCreateViewModel @Inject constructor(
                         journeyDestinationName = journeyDestination.name,
                         allowedJourneyTransportModes = existing?.allowedJourneyTransportModes
                             ?: se.blick.app.domain.model.DEFAULT_JOURNEY_TRANSPORT_MODES,
+                        label = state.selectedLabel,
                     )
                 } else {
                     val selectedDirection = direction ?: return@launch
@@ -756,6 +764,7 @@ class RoutineCreateViewModel @Inject constructor(
                         endTime = state.endTime,
                         enabled = existing?.enabled ?: true,
                         pausedDate = existing?.pausedDate,
+                        label = state.selectedLabel,
                     )
                 }
 
