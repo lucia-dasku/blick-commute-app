@@ -1,7 +1,12 @@
 import type { RawDeviation } from "../services/upstreamTypes.js";
 import type { DisruptionEffect } from "../models/disruption.js";
+import type { Site } from "../models/site.js";
 import { normalizeDisruption } from "../normalize/normalizeDisruption.js";
 import { scopePolicyForEffect, type ResolvedLegScope, type ScopeSet } from "./journeyDisruptionScope.js";
+import { parseStructuredDisruptionSegment, type ParsedSegmentCandidate } from "./journeySegmentParser.js";
+import { actualLegEdgesKey, isRequestedCorridorTrusted, type ActualLineEdgeEvidence } from "./requestedCorridor.js";
+import { edgeSetsIntersect, type StopAreaEdgeKey } from "./lineTopologyGraph.js";
+import type { LineSegmentResolution, LineTopologyDirectory } from "../services/lineTopologyDirectory.js";
 
 /** A Journey Planner disruption notice as already produced by `normalizeJourney.ts`'s own
  * `disruptionNotices` — the input side of this module's own combination step (see
@@ -362,9 +367,385 @@ export function resolveJourneyDisruptions(
  *   automatically benefits the moment SL starts populating it, with no further code change
  *   required — but today, EVERY `CONFIRMED` outcome that depends on structured stop evidence
  *   comes from a `scope.stop_areas` intersection, never `scope.stop_points`.
- * - A deviation with `scope.lines` but no stop scope at all can still only ever reach
- *   `LINE_RELEVANT`, exactly as before this feature (rule 4 above) — this module still never
- *   parses SL's own free text (e.g. "mellan T-Centralen och Kungsträdgården") as a routing
- *   authority, and does not add GTFS or any other static-schedule dependency to guess around a
- *   genuine absence of upstream structure.
+ * - A deviation with `scope.lines` but no stop scope at all still reaches only `LINE_RELEVANT`
+ *   from THIS function (rule 4 above) — that remains the synchronous, structured-evidence-only
+ *   contract `resolveDeviationRelevance`/`resolveJourneyDisruptions` have always had, and every
+ *   existing caller of those two functions keeps exactly that behavior, unchanged. A newer,
+ *   OPTIONAL, ADDITIVE layer — `resolveDeviationRelevanceAsync`/`resolveJourneyDisruptionsAsync`,
+ *   further below — can upgrade specifically that `LINE_RELEVANT`-with-no-stop-scope case to
+ *   `CONFIRMED`/UNRELATED when SL's own free text names the affected segment in the one
+ *   evidence-backed grammar `journeySegmentParser.ts` recognizes ("mellan A och B") AND that
+ *   segment resolves unambiguously against real GTFS-derived line topology (see
+ *   `services/lineTopologyDirectory.ts`) — never a guess, and never reached at all unless a
+ *   caller explicitly opts in by supplying a `SegmentEvidenceContext`.
  */
+
+/**
+ * Optional collaborators for the segment-parsing relevance enhancement (see
+ * `resolveDeviationRelevanceAsync`'s own doc). Entirely opt-in: `routes/journeyDisruptions.ts`
+ * omits this whenever `LineTopologyDirectory` itself has nothing to offer (no `disruptionContext`
+ * resolved, or the topology directory was never wired up), in which case
+ * `resolveJourneyDisruptionsAsync` behaves byte-for-byte like the synchronous
+ * `resolveJourneyDisruptions`.
+ */
+export interface SegmentEvidenceContext {
+  topologyDirectory: LineTopologyDirectory;
+  /** PRIMARY's own real travelled edges, grouped by `${transportMode}:${lineDesignation}`, each
+   * carrying its own COMPLETE/PARTIAL completeness — see `requestedCorridor.ts`'s own
+   * `buildActualLegEdgesByLine`/`ActualLineEdgeEvidence` doc. */
+  actualLegEdgesByLine: ReadonlyMap<string, ActualLineEdgeEvidence>;
+  /** Present only when the routine's own requested origin/destination BOTH resolved to a real,
+   * confirmed SL Transport `Site` (see `services/journeyEndpointSiteResolver.ts`) — absent means
+   * the requested-corridor half of this enhancement (item 14 of this feature's own spec) is
+   * unavailable for this request; actual-PRIMARY-edge evidence alone still applies. May be a
+   * lazy, memoized provider rather than an already-resolved value — see
+   * `routes/journeyDisruptions.ts`'s own doc on why this resolution should not happen eagerly on
+   * every request regardless of whether it ends up needed. */
+  requestedEndpoints?: { originSite: Site; destinationSite: Site } | (() => Promise<{ originSite: Site; destinationSite: Site } | null>);
+}
+
+/** Resolves [requestedEndpoints] regardless of whether it is an already-known value or a lazy,
+ * memoized provider function — see {@link SegmentEvidenceContext.requestedEndpoints}'s own doc. */
+async function resolveRequestedEndpoints(
+  requestedEndpoints: SegmentEvidenceContext["requestedEndpoints"],
+): Promise<{ originSite: Site; destinationSite: Site } | null> {
+  if (requestedEndpoints == null) return null;
+  if (typeof requestedEndpoints === "function") return requestedEndpoints();
+  return requestedEndpoints;
+}
+
+/**
+ * Every distinct `(transportMode, lineDesignation)` PAIR this enhancement must evaluate
+ * independently, per item 24 of this feature's own spec ("do not assume the topology of line 10
+ * == line 11") — and, critically, per the production-readiness review's own item 16: mode and
+ * designation must stay INSEPARABLE throughout segment resolution, the exact same identity
+ * `resolveDeviationRelevance`'s own line-matching rule already uses
+ * (`line.transport_mode === leg.transportMode && line.designation === leg.lineDesignation`,
+ * mirrored exactly below).
+ *
+ * An earlier version of this function reconstructed matched lines from [base]'s own
+ * `matchedLineDesignations: string[]` — already lossy (mode information discarded, see that
+ * field's own doc) — via `legScopes.find(leg => leg.lineDesignation === designation)`, a
+ * DESIGNATION-ONLY lookup. When [legScopes] contains two legs sharing one designation on
+ * DIFFERENT modes (e.g. Metro 13 and Bus 13, a real, unremarkable SL coincidence), `.find()`
+ * would silently return whichever leg happened to appear FIRST in the array — even when
+ * [deviation]'s own `scope.lines` only genuinely matched the OTHER mode. This function instead
+ * derives matched pairs directly from [deviation]'s own `scope.lines` and [legScopes], never
+ * through the lossy intermediate — confirmed-fixed by `segmentEvidenceEndToEnd.test.ts`'s own
+ * "bug repro (item E)" regression.
+ */
+function matchedLinePairsFor(deviation: RawDeviation, legScopes: readonly ResolvedLegScope[]): Array<{ transportMode: string; lineDesignation: string }> {
+  const lines = deviation.scope.lines ?? [];
+  const seen = new Set<string>();
+  const result: Array<{ transportMode: string; lineDesignation: string }> = [];
+  for (const leg of legScopes) {
+    const matchesThisLeg = lines.some((line) => line.transport_mode === leg.transportMode && line.designation === leg.lineDesignation);
+    if (!matchesThisLeg) continue;
+    const key = actualLegEdgesKey(leg.transportMode, leg.lineDesignation);
+    if (seen.has(key)) continue;
+    seen.add(key);
+    result.push({ transportMode: leg.transportMode, lineDesignation: leg.lineDesignation });
+  }
+  return result;
+}
+
+/**
+ * The requested normal corridor's own topology resolution for one line, resolved ONCE per line
+ * (never once per candidate): corridor RESOLUTION depends only on [transportMode] +
+ * [lineDesignation] + the requested origin/destination, never on which specific affected segment
+ * is being evaluated — only corridor TRUST does (see `requestedCorridor.ts`'s own
+ * `isRequestedCorridorTrusted` doc), which is why that check takes each candidate's own endpoints
+ * as a separate, per-call argument in {@link evaluateCandidateAgainstEvidence} below rather than
+ * being decided once here.
+ */
+async function resolveRequestedCorridorForLine(
+  transportMode: string,
+  lineDesignation: string,
+  segmentContext: SegmentEvidenceContext,
+): Promise<LineSegmentResolution | null> {
+  const requestedEndpoints = await resolveRequestedEndpoints(segmentContext.requestedEndpoints);
+  if (requestedEndpoints == null) return null;
+  return segmentContext.topologyDirectory.resolveEndpointsCorridor(
+    transportMode,
+    lineDesignation,
+    requestedEndpoints.originSite,
+    requestedEndpoints.destinationSite,
+  );
+}
+
+/**
+ * One resolved affected candidate's own outcome against this line's available evidence — see
+ * `evaluateLineSegmentEvidence`'s own doc for how these combine, across every candidate, into the
+ * final CONFIRMED/UNRELATED/LINE_RELEVANT verdict.
+ *
+ * - `"CONFIRMED"`: [candidateEdges] overlaps [actualEvidence]'s own real travelled edges —
+ *   regardless of completeness, production-readiness review item 11: one structurally known real
+ *   edge is sufficient positive evidence even from a `"PARTIAL"` leg — OR overlaps a requested
+ *   corridor that {@link isRequestedCorridorTrusted} trusts specifically with respect to THIS
+ *   candidate's own two endpoints (the reroute/truncation-extension case).
+ * - `"NON_OVERLAPPING_PROVEN"`: a requested corridor IS trusted for this exact candidate, and
+ *   [candidateEdges] does NOT overlap it — a genuine, structurally-grounded negative.
+ * - `"UNPROVEN"`: neither of the above — no requested corridor exists at all, or one exists but is
+ *   not trusted with respect to THIS candidate's own endpoints. [actualEvidence] alone, however
+ *   complete, can NEVER by itself produce a proven non-overlap — see `requestedCorridor.ts`'s own
+ *   `ActualLineEdgeEvidence` doc for why a "complete" account of PRIMARY's CURRENT path proves
+ *   nothing about the disruption's relevance to the passenger's ORIGINALLY intended route: Journey
+ *   Planner may have already rerouted PRIMARY around the very disruption being evaluated.
+ */
+function evaluateCandidateAgainstEvidence(
+  candidateEdges: ReadonlySet<StopAreaEdgeKey>,
+  candidateStopAreaA: number,
+  candidateStopAreaB: number,
+  actualEvidence: ActualLineEdgeEvidence | undefined,
+  requestedCorridor: LineSegmentResolution | null,
+): "CONFIRMED" | "NON_OVERLAPPING_PROVEN" | "UNPROVEN" {
+  if (actualEvidence && edgeSetsIntersect(candidateEdges, actualEvidence.edges)) return "CONFIRMED";
+
+  if (requestedCorridor && requestedCorridor.status === "RESOLVED") {
+    const trusted = isRequestedCorridorTrusted({
+      requestedCorridorOrderedStopAreaIds: requestedCorridor.orderedStopAreaIds,
+      actualRunsOnThisLine: actualEvidence?.orderedRuns ?? [],
+      affectedStopAreaA: candidateStopAreaA,
+      affectedStopAreaB: candidateStopAreaB,
+    });
+    if (trusted) {
+      return edgeSetsIntersect(candidateEdges, requestedCorridor.edges) ? "CONFIRMED" : "NON_OVERLAPPING_PROVEN";
+    }
+  }
+
+  return "UNPROVEN";
+}
+
+/**
+ * One matched line's own segment-parsing evaluation — item 17.B of this feature's own spec.
+ * [candidates] (from `journeySegmentParser.ts`) are tried against [transportMode] +
+ * [lineDesignation]'s own topology independently: a candidate that resolves against a
+ * STRUCTURALLY DIFFERENT line (see the real Blue-line/Green-line fixture in
+ * `journeySegmentParser.test.ts`) simply fails to resolve here and contributes nothing, never a
+ * false match.
+ *
+ * UNRELATED is deliberately harder to prove than CONFIRMED — the single most important property
+ * of this function (production-readiness review, item 11: known overlap is stronger evidence than
+ * known non-overlap). Each candidate's own outcome is ultimately decided by
+ * {@link evaluateCandidateAgainstEvidence} (trust — and therefore what a non-overlap can prove —
+ * is a PER-CANDIDATE question, never a per-line one; see that function's own doc), then combined:
+ *
+ * - `CONFIRMED`: as soon as ANY candidate's own outcome is `"CONFIRMED"`, that is sufficient
+ *   positive evidence on its own, regardless of what any OTHER candidate did — a second, unrelated
+ *   candidate that happens to be AMBIGUOUS, UNRESOLVED, or merely `"UNPROVEN"` on this same line
+ *   cannot weaken or withdraw a genuine overlap already found.
+ * - `UNRELATED`: only when at least one candidate actually resolved AND EVERY resolved candidate's
+ *   own outcome was `"NON_OVERLAPPING_PROVEN"`. An AMBIGUOUS or UNRESOLVED candidate — or a
+ *   resolved candidate that stayed `"UNPROVEN"` because no requested corridor was trustworthy for
+ *   IT specifically — always prevents this: any one of them might be the real, relevant segment,
+ *   and this feature's own spec repeatedly rules out guessing past that uncertainty.
+ * - `LINE_RELEVANT`: every other case — no candidate resolved at all, or resolution was mixed
+ *   without any overlap already found. The existing conservative, line-scoped presentation applies
+ *   unchanged.
+ *
+ * ## Evaluation order is deliberately lazy about requested-endpoint resolution
+ *
+ * {@link resolveRequestedCorridorForLine} ultimately calls out to
+ * `JourneyEndpointSiteResolver`/Journey Planner (via `SegmentEvidenceContext.requestedEndpoints` —
+ * a real, non-free lookup even though it's memoized per HTTP request, see that field's own doc).
+ * An earlier version of this function resolved the requested corridor UNCONDITIONALLY, before ever
+ * checking whether any candidate even resolved or already overlapped actual PRIMARY — paying that
+ * cost even when it could never change the outcome. This version resolves candidates against
+ * topology FIRST and only reaches for requested-endpoint evidence once it's already established
+ * that the answer could plausibly depend on it:
+ *
+ * 1. Resolve every candidate. No candidate RESOLVED at all -> `LINE_RELEVANT` immediately; nothing
+ *    else can possibly confirm or disprove, so requested endpoints are never touched.
+ * 2. Check every RESOLVED candidate against actual PRIMARY's own edges directly. Any overlap ->
+ *    `CONFIRMED` immediately, again without ever touching requested endpoints — actual overlap
+ *    alone is already sufficient positive evidence (see {@link evaluateCandidateAgainstEvidence}'s
+ *    own doc).
+ * 3. Requested-corridor trust ({@link isRequestedCorridorTrusted}) can only ever succeed given AT
+ *    LEAST one real actual run on this exact line — with zero actual runs, no corridor could ever
+ *    become trusted regardless of what it turns out to contain. In that case: `LINE_RELEVANT`,
+ *    without resolving requested endpoints for an answer already known to be unhelpful.
+ * 4. Only now — once corridor evidence could plausibly change the outcome — is
+ *    {@link resolveRequestedCorridorForLine} (and therefore the requested-endpoints provider)
+ *    actually invoked, exactly once for this line.
+ *
+ * Deliberately does NOT skip corridor resolution merely because SOME candidate is unresolved/
+ * ambiguous while another is resolved-and-non-overlapping: a mixed unresolved + resolved-but-
+ * unproven set of candidates can still reach `CONFIRMED` once the corridor confirms the resolved
+ * one (positive evidence needs only one candidate to succeed — see the class-level doc above), so
+ * that case still needs the corridor. Only the specific cases where the corridor is PROVABLY unable
+ * to change anything (no candidate resolved at all; or a resolved candidate already overlaps
+ * actual; or no actual run exists to ever be trusted) skip the lookup.
+ */
+async function evaluateLineSegmentEvidence(
+  candidates: readonly ParsedSegmentCandidate[],
+  transportMode: string,
+  lineDesignation: string,
+  segmentContext: SegmentEvidenceContext,
+): Promise<"CONFIRMED" | "UNRELATED" | "LINE_RELEVANT"> {
+  const actualEvidence = segmentContext.actualLegEdgesByLine.get(actualLegEdgesKey(transportMode, lineDesignation));
+
+  type ResolvedSegment = Extract<LineSegmentResolution, { status: "RESOLVED" }>;
+  const resolvedCandidates: ResolvedSegment[] = [];
+  let anyUnresolvedOrAmbiguous = false;
+
+  for (const candidate of candidates) {
+    const resolution = await segmentContext.topologyDirectory.resolveSegment(transportMode, lineDesignation, candidate.stopA, candidate.stopB);
+    if (resolution.status === "RESOLVED") resolvedCandidates.push(resolution);
+    else anyUnresolvedOrAmbiguous = true;
+  }
+  if (resolvedCandidates.length === 0) return "LINE_RELEVANT";
+
+  if (actualEvidence) {
+    for (const candidate of resolvedCandidates) {
+      if (edgeSetsIntersect(candidate.edges, actualEvidence.edges)) return "CONFIRMED";
+    }
+  }
+
+  if ((actualEvidence?.orderedRuns.length ?? 0) === 0) return "LINE_RELEVANT";
+
+  const requestedCorridor = await resolveRequestedCorridorForLine(transportMode, lineDesignation, segmentContext);
+
+  let everyResolvedProvenNonOverlapping = !anyUnresolvedOrAmbiguous;
+  for (const candidate of resolvedCandidates) {
+    // Re-checks actual overlap first (see evaluateCandidateAgainstEvidence's own doc) -- already
+    // ruled out for every candidate here by the direct check above, so this always falls through
+    // to the corridor-trust half in practice; kept as the one place that decision is made rather
+    // than duplicating it.
+    const outcome = evaluateCandidateAgainstEvidence(candidate.edges, candidate.stopAreaA, candidate.stopAreaB, actualEvidence, requestedCorridor);
+    if (outcome === "CONFIRMED") return "CONFIRMED";
+    if (outcome !== "NON_OVERLAPPING_PROVEN") everyResolvedProvenNonOverlapping = false;
+  }
+
+  if (everyResolvedProvenNonOverlapping) return "UNRELATED";
+  return "LINE_RELEVANT";
+}
+
+/**
+ * The async, opt-in upgrade of {@link resolveDeviationRelevance} — identical in every respect
+ * (including its own return shape and every one of its five existing rules) EXCEPT for one
+ * additional, strictly-later step: when the synchronous result is `LINE_RELEVANT` specifically
+ * because [deviation] had `scope.lines` but NO `scope.stop_areas`/`scope.stop_points` at all (the
+ * exact case item 17 of this feature's own spec scopes this enhancement to — never a
+ * `LINE_RELEVANT` that already reflects SOME, merely `"PARTIAL"`, structured stop evidence), this
+ * attempts to parse and resolve an affected segment from [deviation]'s own free text and upgrade
+ * the result to `CONFIRMED` or UNRELATED (`null`) — see `evaluateLineSegmentEvidence`'s own doc
+ * for the full per-line evaluation this delegates to, independently for every one of
+ * [matchedLineDesignations] (item 24: never assumes two different lines share one topology).
+ *
+ * Gated to `TRAVELLED_PATH`-policy effects only (see `journeyDisruptionScope.ts`'s own
+ * `scopePolicyForEffect`): this enhancement proves ONLY "the affected segment lies on the path the
+ * vehicle actually travelled," which is irrelevant to an `ACCESS_POINTS` effect (a broken lift, a
+ * closed entrance, a moved stop) — those affect a passenger only at a stop they actually board,
+ * alight, or transfer at, never merely pass through onboard. Without this gate, a pass-through
+ * segment's own edge overlap would wrongly upgrade e.g. an `ACCESSIBILITY_ISSUE` at an intermediate
+ * station to `CONFIRMED` even though the passenger never leaves the vehicle there — an
+ * `ACCESS_POINTS` effect can still reach `CONFIRMED`, but only via the pre-existing structured
+ * `scope.stop_areas`/`scope.stop_points` comparison in {@link resolveDeviationRelevance} itself
+ * (rule 5), never via this text-segment path.
+ *
+ * `undefined` [segmentContext] (the default) makes this function behave byte-for-byte like
+ * `resolveDeviationRelevance` — every existing caller of the synchronous function is completely
+ * unaffected by this addition. When multiple matched lines each produce a different verdict, the
+ * strongest wins in this order: any `CONFIRMED` wins outright; otherwise, `UNRELATED` only when
+ * EVERY matched line independently resolved to `UNRELATED` (a genuine, structurally-proven
+ * disproof on every one of them); any remaining uncertainty keeps the original `LINE_RELEVANT` —
+ * never converts uncertainty into `UNRELATED` (this feature's own spec, item 17's closing rule).
+ */
+export async function resolveDeviationRelevanceAsync(
+  deviation: RawDeviation,
+  effect: DisruptionEffect,
+  legScopes: readonly ResolvedLegScope[],
+  journeyWindow: JourneyTimeWindow | null,
+  segmentContext?: SegmentEvidenceContext,
+): Promise<{ relevance: DisruptionRelevance; matchedLineDesignations: string[] } | null> {
+  const base = resolveDeviationRelevance(deviation, effect, legScopes, journeyWindow);
+  if (base == null || base.relevance !== "LINE_RELEVANT" || segmentContext == null) return base;
+  if (scopePolicyForEffect(effect) !== "TRAVELLED_PATH") return base;
+
+  const stopAreaIds = deviation.scope.stop_areas?.map((a) => a.id) ?? [];
+  const stopPointIds = deviation.scope.stop_points?.map((p) => p.id) ?? [];
+  if (stopAreaIds.length > 0 || stopPointIds.length > 0) return base;
+
+  const normalized = normalizeDisruption(deviation);
+  const parsed = parseStructuredDisruptionSegment(normalized.message);
+  if (parsed.status !== "PARSED") return base;
+
+  const lines = matchedLinePairsFor(deviation, legScopes);
+  if (lines.length === 0) return base;
+
+  const evaluations = await Promise.all(
+    lines.map((line) => evaluateLineSegmentEvidence(parsed.candidates, line.transportMode, line.lineDesignation, segmentContext)),
+  );
+
+  if (evaluations.includes("CONFIRMED")) return { relevance: "CONFIRMED", matchedLineDesignations: base.matchedLineDesignations };
+  if (evaluations.every((e) => e === "UNRELATED")) return null;
+  return base;
+}
+
+/**
+ * The async, opt-in upgrade of {@link resolveJourneyDisruptions} — identical merge/dedupe logic,
+ * calling {@link resolveDeviationRelevanceAsync} per deviation instead of the synchronous
+ * function. `undefined` [segmentContext] makes this behave byte-for-byte like the synchronous
+ * version; `routes/journeyDisruptions.ts` is the one production caller, and is also the only
+ * place that ever constructs a real {@link SegmentEvidenceContext}.
+ */
+export async function resolveJourneyDisruptionsAsync(
+  journeyPlannerNotices: readonly JourneyPlannerNoticeInput[],
+  deviations: readonly RawDeviation[],
+  legScopes: readonly ResolvedLegScope[],
+  journeyWindow: JourneyTimeWindow | null,
+  segmentContext?: SegmentEvidenceContext,
+): Promise<ResolvedJourneyDisruption[]> {
+  const seenDeviationIds = new Set<string>();
+  const deviationResults: ResolvedJourneyDisruption[] = [];
+  for (const raw of deviations) {
+    const id = String(raw.deviation_case_id);
+    if (seenDeviationIds.has(id)) continue;
+    const normalized = normalizeDisruption(raw);
+    const resolved = await resolveDeviationRelevanceAsync(raw, normalized.effect, legScopes, journeyWindow, segmentContext);
+    if (resolved == null) continue;
+    seenDeviationIds.add(id);
+    deviationResults.push({
+      id,
+      headline: normalized.message.header,
+      details: normalized.message.details,
+      effect: normalized.effect,
+      relevance: resolved.relevance,
+      source: "SL_DEVIATIONS",
+      matchedLineDesignations: resolved.matchedLineDesignations,
+    });
+  }
+
+  const seenJpText = new Set<string>();
+  const jpResults: ResolvedJourneyDisruption[] = [];
+  for (const notice of journeyPlannerNotices) {
+    if (seenJpText.has(notice.text)) continue;
+    seenJpText.add(notice.text);
+    jpResults.push({
+      headline: notice.text,
+      effect: notice.effect,
+      relevance: "CONFIRMED",
+      source: "JOURNEY_PLANNER",
+      matchedLineDesignations: [],
+    });
+  }
+
+  const deviationByHeadline = new Map(deviationResults.map((d) => [d.headline, d] as const));
+  const consumedHeadlines = new Set<string>();
+  const merged: ResolvedJourneyDisruption[] = [];
+
+  for (const jp of jpResults) {
+    const matchingDeviation = deviationByHeadline.get(jp.headline);
+    if (matchingDeviation) {
+      merged.push({ ...matchingDeviation, relevance: "CONFIRMED" });
+      consumedHeadlines.add(jp.headline);
+    } else {
+      merged.push(jp);
+    }
+  }
+  for (const d of deviationResults) {
+    if (!consumedHeadlines.has(d.headline)) merged.push(d);
+  }
+
+  return merged;
+}

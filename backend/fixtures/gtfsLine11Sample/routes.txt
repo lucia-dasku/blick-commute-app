@@ -1,0 +1,3 @@
+route_id,agency_id,route_short_name,route_long_name,route_type
+9011001000011000,9000,11,Blå linjen,401
+9011001000401000,9000,401,Buss 401,700

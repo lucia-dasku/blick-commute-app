@@ -33,6 +33,11 @@ import javax.inject.Inject
  * [JourneyRepository.getRelevantDeviationNotices]'s own doc. Trailing and defaulted to null, like
  * every other addition to this use case, so no existing positional call site elsewhere in this
  * codebase can have a later positional argument silently rebind to a new parameter instead.
+ *
+ * [journeyOriginId]/[journeyDestinationId] are the routine's own
+ * [se.blick.app.domain.model.CommuteRoutine.journeyOriginId]/`.journeyDestinationId` — see
+ * [JourneyRepository.getRelevantDeviationNotices]'s own doc for exactly what the backend does
+ * with them. Also trailing/defaulted to null for the same reason as the parameters above.
  */
 class GetJourneyDisruptionRelevanceUseCase @Inject constructor(
     private val repository: JourneyRepository,
@@ -44,6 +49,11 @@ class GetJourneyDisruptionRelevanceUseCase @Inject constructor(
         disruptionContext: JourneyDisruptionContext? = null,
         departureTime: Instant? = null,
         arrivalTime: Instant? = null,
+        journeyOriginId: String? = null,
+        journeyDestinationId: String? = null,
     ): List<ResolvedJourneyDisruption> =
-        repository.getRelevantDeviationNotices(primaryLegs, originSiteId, journeyPlannerNotices, disruptionContext, departureTime, arrivalTime)
+        repository.getRelevantDeviationNotices(
+            primaryLegs, originSiteId, journeyPlannerNotices, disruptionContext, departureTime, arrivalTime,
+            journeyOriginId, journeyDestinationId,
+        )
 }

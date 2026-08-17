@@ -19,6 +19,8 @@ import { createGooglePlayPurchaseVerifier } from "./services/googlePlayPurchaseV
 import { createJourneyRoutes } from "./routes/journeys.js";
 import { createJourneyDisruptionsRoute } from "./routes/journeyDisruptions.js";
 import { createSlJourneyPlannerClient } from "./services/slJourneyPlannerClient.js";
+import { createGtfsFeedSource, createGtfsStopIdResolver, createLineTopologyDirectory, type LineTopologyDirectory } from "./services/lineTopologyDirectory.js";
+import { createJourneyEndpointSiteResolver, type JourneyEndpointSiteResolver } from "./services/journeyEndpointSiteResolver.js";
 
 /**
  * Builds the Hono app with real (network-calling) service implementations. Kept as a
@@ -52,7 +54,49 @@ export function createApp() {
   // See services/stopPointDirectory.ts's own "Caching" doc for why this reuses the same
   // Redis-backed Cache/DistributedLock as Deviations above, despite SL Transport's own
   // stop-points endpoint carrying no comparable strict fair-use requirement.
+  // Also serves the segment-parsing enhancement's own name-based StopArea lookup
+  // (`findStopAreaIdsByName`, passed to createLineTopologyDirectory below as its `nameIndex`) from
+  // this SAME cached snapshot — see stopPointDirectory.ts's own "One upstream snapshot, two
+  // derived indexes" doc for why this is one shared snapshot, not two independently-cached ones.
   const stopPointDirectory = createStopPointDirectory(slTransportClient, sharedRedisCache, sharedRedisLock, new InFlightDeduper());
+
+  const slJourneyPlannerClient = createSlJourneyPlannerClient();
+
+  // The segment-parsing disruption-relevance enhancement (see routes/journeyDisruptions.ts's own
+  // "segment-parsing relevance enhancement" doc) is wired ONLY when TRAFIKLAB_API_KEY is
+  // configured (production-readiness review, item 21) — both collaborators stay `undefined`
+  // otherwise, which routes/journeyDisruptions.ts's own doc guarantees behaves byte-for-byte like
+  // this enhancement never existed: zero GTFS work, zero segment-topology cache checks, zero
+  // requested-endpoint resolver construction, for a request that will only ever reach
+  // LINE_RELEVANT for a line-only deviation anyway. This deliberately does NOT wire the OLD
+  // permanently-inert placeholders (`createUnavailableGtfsFeedSource`/
+  // `createUnprovenGtfsStopIdResolver`) as a fallback — production-readiness review, item 21: "Do
+  // not retain [them] as production architecture once the real implementation exists." They
+  // remain exported from lineTopologyDirectory.ts purely as documented, tested fakes for that
+  // module's own test suite.
+  //
+  // IMPORTANT (human-operator-facing, not something this code can enforce): "TRAFIKLAB_API_KEY is
+  // configured" is NOT the same claim as "the GTFS-stop-id identity bridge has been verified".
+  // createGtfsStopIdResolver's own doc documents a genuine, evidence-backed HYPOTHESIS (matching
+  // class-id prefixes between SL Transport's own `gid` and GTFS Regional's own `stop_id`, both
+  // from SL's pubtrans/NOPTIS source system) — not a proven fact. Before setting this key in any
+  // real deployment, run scripts/verifyGtfsStopIdentityBridge.ts against the real feed and review
+  // its resolved/unresolved/ambiguous results; this backend has no way to enforce that step
+  // itself, since verification is an inherently manual, one-time judgment call a boolean
+  // environment variable cannot capture on its own.
+  let lineTopologyDirectory: LineTopologyDirectory | undefined;
+  let journeyEndpointSiteResolver: JourneyEndpointSiteResolver | undefined;
+  if (config.trafiklabApiKey) {
+    lineTopologyDirectory = createLineTopologyDirectory(
+      createGtfsFeedSource(),
+      createGtfsStopIdResolver(stopPointDirectory),
+      stopPointDirectory,
+      sharedRedisCache,
+      sharedRedisLock,
+      new InFlightDeduper(),
+    );
+    journeyEndpointSiteResolver = createJourneyEndpointSiteResolver(slJourneyPlannerClient, siteDirectory, sharedRedisCache);
+  }
 
   const app = new Hono().basePath("/api/v1");
 
@@ -61,13 +105,18 @@ export function createApp() {
   app.route("/departures", createDeparturesRoute(slTransportClient));
   app.route("/disruptions", createDisruptionsRoute(deviationsSnapshotService, siteDirectory));
   app.route("/billing", createBillingRoute(createGooglePlayPurchaseVerifier(config.googlePlay)));
-  app.route("/journeys", createJourneyRoutes(createSlJourneyPlannerClient()));
+  app.route("/journeys", createJourneyRoutes(slJourneyPlannerClient));
   // A separate top-level mount, not nested inside createJourneyRoutes -- see
   // createJourneyDisruptionsRoute's own doc for why this must stay a genuinely independent
   // route/HTTP call rather than a field on /api/v1/journeys itself. Reuses the SAME
   // deviationsSnapshotService/siteDirectory/stopPointDirectory instances -- no new upstream SL
   // request is introduced by this route's existence beyond what those services already make.
-  app.route("/journeys/disruptions", createJourneyDisruptionsRoute(deviationsSnapshotService, siteDirectory, stopPointDirectory));
+  // lineTopologyDirectory/journeyEndpointSiteResolver power the segment-parsing enhancement --
+  // see that route's own doc; both remain safely inert until TRAFIKLAB_API_KEY is configured.
+  app.route(
+    "/journeys/disruptions",
+    createJourneyDisruptionsRoute(deviationsSnapshotService, siteDirectory, stopPointDirectory, lineTopologyDirectory, journeyEndpointSiteResolver),
+  );
 
   app.notFound(notFoundHandler);
   app.onError(onError);

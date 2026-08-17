@@ -33,8 +33,12 @@ falls back to the in-memory `Cache`/`DistributedLock` implementations, which is 
 for local development (see "Redis (Upstash) setup" below for when you'd want to set them
 locally anyway — mainly to reproduce a production-only bug). The other optional env vars
 are `UPSTREAM_TIMEOUT_MS` (default `10000`), which controls how long the backend waits
-for SL Transport/SL Deviations before returning `UPSTREAM_TIMEOUT` (504), and `PORT`
-(default `8787`, local dev server only). All of these are validated eagerly at startup —
+for SL Transport/SL Deviations before returning `UPSTREAM_TIMEOUT` (504), `PORT`
+(default `8787`, local dev server only), and `TRAFIKLAB_API_KEY` (unset by default — powers
+the optional exact-destination segment-parsing disruption-relevance enhancement; see
+`.env.example` and `../docs/api-contract.md`, "Segment-parsing relevance enhancement", for
+why setting it is necessary but not sufficient to trust that enhancement in a real
+deployment). All of these are validated eagerly at startup —
 a non-numeric, non-positive, out-of-range, or (for the Redis pair) partially-set value
 fails immediately with a clear error rather than silently coercing to `NaN`, an unusable
 value, or an unprotected fallback (see `src/config/env.ts`).

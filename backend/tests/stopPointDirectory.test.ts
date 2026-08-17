@@ -126,6 +126,65 @@ describe("createStopPointDirectory — resolution outcomes", () => {
   });
 });
 
+describe("createStopPointDirectory — resolveStopPointGids (GTFS stop_id -> StopArea identity bridge)", () => {
+  it("resolves a known RawStopPoint.gid to its StopArea id", async () => {
+    const directory = freshDirectory([AKALLA, T_CENTRALEN]);
+    const results = await directory.resolveStopPointGids([AKALLA.gid]);
+    expect(results.get(AKALLA.gid)).toEqual({ status: "RESOLVED", gid: AKALLA.gid, stopAreaId: 3271 });
+  });
+
+  it("an unknown gid resolves to UNRESOLVED, never throws", async () => {
+    const directory = freshDirectory([AKALLA]);
+    const results = await directory.resolveStopPointGids(["9022999999999999999"]);
+    expect(results.get("9022999999999999999")).toEqual({ status: "UNRESOLVED", gid: "9022999999999999999" });
+  });
+
+  it("duplicate gid records that agree on StopArea resolve safely (not ambiguous)", async () => {
+    const a = stopPoint({ id: 100, pattern_point_gid: "pp-100a", gid: "9022000000000100", stop_area: { id: 10, name: "Area A", type: "METROSTN" } });
+    const b = stopPoint({ id: 101, pattern_point_gid: "pp-100b", gid: "9022000000000100", stop_area: { id: 10, name: "Area A", type: "METROSTN" } });
+    const directory = freshDirectory([a, b]);
+    const results = await directory.resolveStopPointGids(["9022000000000100"]);
+    expect(results.get("9022000000000100")).toEqual({ status: "RESOLVED", gid: "9022000000000100", stopAreaId: 10 });
+  });
+
+  it("duplicate gid records that DISAGREE on StopArea are AMBIGUOUS, never first-record-wins", async () => {
+    const a = stopPoint({ id: 100, pattern_point_gid: "pp-100a", gid: "9022000000000100", stop_area: { id: 10, name: "Area A", type: "METROSTN" } });
+    const b = stopPoint({ id: 200, pattern_point_gid: "pp-200b", gid: "9022000000000100", stop_area: { id: 20, name: "Area B", type: "METROSTN" } });
+    const directory = freshDirectory([a, b]);
+    const results = await directory.resolveStopPointGids(["9022000000000100"]);
+    expect(results.get("9022000000000100")).toEqual({ status: "AMBIGUOUS", gid: "9022000000000100", stopAreaIds: [10, 20] });
+  });
+
+  it("a real >MAX_SAFE_INTEGER-scale gid stays an exact string throughout", async () => {
+    const huge = stopPoint({ id: 3272, pattern_point_gid: "9025001000003272", gid: "90220010009999999999999" });
+    const directory = freshDirectory([huge]);
+    const results = await directory.resolveStopPointGids(["90220010009999999999999"]);
+    expect(results.get("90220010009999999999999")).toMatchObject({ status: "RESOLVED", stopAreaId: 3272 });
+  });
+
+  it("batch resolution deduplicates repeated input gids", async () => {
+    const directory = freshDirectory([AKALLA, T_CENTRALEN]);
+    const results = await directory.resolveStopPointGids([AKALLA.gid, T_CENTRALEN.gid, AKALLA.gid]);
+    expect(results.size).toBe(2);
+  });
+
+  it("one resolveStopPointGids call loads exactly one StopPoint snapshot (no per-gid upstream fetch)", async () => {
+    const { client, callCount } = scriptedClient([async () => [AKALLA, T_CENTRALEN]]);
+    const directory = createStopPointDirectory(client, new InMemoryCache(), new InMemoryLock(), new InFlightDeduper());
+    await directory.resolveStopPointGids([AKALLA.gid, T_CENTRALEN.gid, "unknown-gid"]);
+    expect(callCount()).toBe(1);
+  });
+
+  it("all three capabilities (resolveMany, findStopAreaIdsByName, resolveStopPointGids) share the SAME cached snapshot -- zero additional fetches across all three", async () => {
+    const { client, callCount } = scriptedClient([async () => [AKALLA, T_CENTRALEN]]);
+    const directory = createStopPointDirectory(client, new InMemoryCache(), new InMemoryLock(), new InFlightDeduper());
+    await directory.resolveMany([AKALLA.pattern_point_gid]);
+    await directory.findStopAreaIdsByName("akalla"); // stop_area.name, not the platform's own longer name
+    await directory.resolveStopPointGids([AKALLA.gid]);
+    expect(callCount()).toBe(1);
+  });
+});
+
 describe("createStopPointDirectory — caching", () => {
   it("fetches once and serves subsequent resolveMany calls from cache within the freshness window", async () => {
     const { client, callCount } = scriptedClient([async () => [AKALLA]]);
@@ -150,9 +209,9 @@ describe("createStopPointDirectory — stale fallback", () => {
 
     // A brand new directory instance (simulating a fresh cold start well past the freshness
     // window) sharing the SAME cache -- but this time the upstream fetch fails.
-    const cacheEntry = await cache.get("sl-transport:stop-point-index:v1");
+    const cacheEntry = await cache.get("sl-transport:stop-point-snapshot:v1");
     expect(cacheEntry).toBeTruthy();
-    await cache.set("sl-transport:stop-point-index:v1", { ...(cacheEntry as object), fetchedAt: "2020-01-01T00:00:00.000Z" }, 60 * 60 * 24 * 7);
+    await cache.set("sl-transport:stop-point-snapshot:v1", { ...(cacheEntry as object), fetchedAt: "2020-01-01T00:00:00.000Z" }, 60 * 60 * 24 * 7);
 
     const directoryB = createStopPointDirectory(client, cache, new InMemoryLock(), new InFlightDeduper());
     const results = await directoryB.resolveMany(["9025001000003272"]);
@@ -238,6 +297,69 @@ describe("createStopPointDirectory — identity resolution uses ONLY pattern_poi
     const result = (await directory.resolveMany(["9025001000003272"])).get("9025001000003272");
     expect(result).not.toHaveProperty("lat");
     expect(result).not.toHaveProperty("lon");
+  });
+});
+
+describe("createStopPointDirectory — findStopAreaIdsByName (merged from the former standalone StopAreaNameIndex)", () => {
+  it("resolves a known name (case/whitespace-normalized) to its StopArea id", async () => {
+    const slussen = stopPoint({ id: 1, pattern_point_gid: "pp-1", stop_area: { id: 1011, name: "Slussen", type: "METROSTN" } });
+    const tcentralen = stopPoint({ id: 2, pattern_point_gid: "pp-2", stop_area: { id: 1051, name: "T-Centralen", type: "METROSTN" } });
+    const directory = freshDirectory([slussen, tcentralen]);
+    expect(await directory.findStopAreaIdsByName("slussen")).toEqual([1011]);
+    expect(await directory.findStopAreaIdsByName("t-centralen")).toEqual([1051]);
+  });
+
+  it("multiple stop-points sharing one StopArea (many platforms) still produce one name entry", async () => {
+    const platforms = [1, 2, 3].map((id) => stopPoint({ id, pattern_point_gid: `pp-${id}`, stop_area: { id: 1011, name: "Slussen", type: "METROSTN" } }));
+    const directory = freshDirectory(platforms);
+    expect(await directory.findStopAreaIdsByName("slussen")).toEqual([1011]);
+  });
+
+  it("a name genuinely shared by two distinct StopAreas returns both, never arbitrarily narrowed", async () => {
+    // Mirrors the real live case (two distinct "Bålsta" sites, verified live 2026-08-16).
+    const a = stopPoint({ id: 1, pattern_point_gid: "pp-1", stop_area: { id: 5299, name: "Bålsta", type: "RAILWSTN" } });
+    const b = stopPoint({ id: 2, pattern_point_gid: "pp-2", stop_area: { id: 9710, name: "Bålsta", type: "RAILWSTN" } });
+    const directory = freshDirectory([a, b]);
+    const result = await directory.findStopAreaIdsByName("bålsta");
+    expect([...result].sort()).toEqual([5299, 9710]);
+  });
+
+  it("an unknown name resolves to an empty array, never throws", async () => {
+    const slussen = stopPoint({ id: 1, pattern_point_gid: "pp-1", stop_area: { id: 1011, name: "Slussen", type: "METROSTN" } });
+    const directory = freshDirectory([slussen]);
+    expect(await directory.findStopAreaIdsByName("nagonstans")).toEqual([]);
+  });
+
+  it("exact match only -- a near-miss name does not resolve", async () => {
+    const slussen = stopPoint({ id: 1, pattern_point_gid: "pp-1", stop_area: { id: 1011, name: "Slussen", type: "METROSTN" } });
+    const directory = freshDirectory([slussen]);
+    expect(await directory.findStopAreaIdsByName("sluss")).toEqual([]);
+    expect(await directory.findStopAreaIdsByName("slussen station")).toEqual([]);
+  });
+
+  it("caches across calls -- repeated findStopAreaIdsByName lookups do not re-fetch stop-points", async () => {
+    const slussen = stopPoint({ id: 1, pattern_point_gid: "pp-1", stop_area: { id: 1011, name: "Slussen", type: "METROSTN" } });
+    const { client, callCount } = scriptedClient([async () => [slussen]]);
+    const directory = createStopPointDirectory(client, new InMemoryCache(), new InMemoryLock(), new InFlightDeduper());
+    await directory.findStopAreaIdsByName("slussen");
+    await directory.findStopAreaIdsByName("slussen");
+    await directory.findStopAreaIdsByName("t-centralen");
+    expect(callCount()).toBe(1);
+  });
+
+  it("one shared snapshot serves both capabilities -- resolveMany warming the snapshot means findStopAreaIdsByName causes zero additional /stop-points calls, and vice versa", async () => {
+    const slussen = stopPoint({ id: 1, pattern_point_gid: "pp-1", stop_area: { id: 1011, name: "Slussen", type: "METROSTN" } });
+    const { client: clientA, callCount: callCountA } = scriptedClient([async () => [slussen]]);
+    const directoryA = createStopPointDirectory(clientA, new InMemoryCache(), new InMemoryLock(), new InFlightDeduper());
+    await directoryA.resolveMany(["pp-1"]); // warms the snapshot via the pattern_point_gid path
+    await directoryA.findStopAreaIdsByName("slussen"); // must reuse the SAME warm snapshot
+    expect(callCountA()).toBe(1);
+
+    const { client: clientB, callCount: callCountB } = scriptedClient([async () => [slussen]]);
+    const directoryB = createStopPointDirectory(clientB, new InMemoryCache(), new InMemoryLock(), new InFlightDeduper());
+    await directoryB.findStopAreaIdsByName("slussen"); // warms the snapshot via the name path this time
+    await directoryB.resolveMany(["pp-1"]); // must reuse the SAME warm snapshot
+    expect(callCountB()).toBe(1);
   });
 });
 

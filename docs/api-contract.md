@@ -327,11 +327,161 @@ against a live 159-deviation snapshot; `scope.stop_areas` (in 89 of 159) and `sc
 still modeled and compared (`src/services/upstreamTypes.ts`'s own `RawDeviationSchema`, reusing the
 same `stop_points` shape the embedded `siteDeviations`/`RawSiteDeviationSchema` already used) so
 this backend benefits
-automatically the moment SL starts populating it, with no further schema change required. A
-deviation with `scope.lines` but no stop scope at all (line-only) can still only ever reach
-`LINE_RELEVANT` — this module still never parses SL's own free text (e.g. "mellan A och B") as a
-routing authority, and does not add GTFS or any other static-schedule dependency to guess around a
-genuine absence of upstream structure.
+automatically the moment SL starts populating it, with no further schema change required.
+
+A deviation with `scope.lines` but no stop scope at all (line-only) reaches `LINE_RELEVANT` from
+the rules above — `resolveDeviationRelevance`/`resolveJourneyDisruptions` (the SYNCHRONOUS core)
+never parse SL's own free text and never touch GTFS; every existing caller of those two functions
+keeps exactly that structured-evidence-only contract, unchanged. An OPTIONAL, ADDITIVE async layer
+(`resolveDeviationRelevanceAsync`/`resolveJourneyDisruptionsAsync`, `resolveJourneyDisruptionsRoute`'s
+own production caller) can upgrade SPECIFICALLY that line-only `LINE_RELEVANT` case further, when a
+`SegmentEvidenceContext` is supplied — see "Segment-parsing relevance enhancement (optional, GTFS
+Regional-backed)" below for the full contract, current status, and why this remains an addition on
+top of the structured model above, never a replacement for it.
+
+#### Segment-parsing relevance enhancement (optional, GTFS Regional-backed)
+
+**The full relevance hierarchy, most authoritative first:**
+
+1. **Structured SL stop scope** (`scope.stop_areas`/`scope.stop_points`, matching rules 1-5 above)
+   — always outranks everything below; the segment parser is never even consulted for a deviation
+   this alone already decides (`resolveDeviationRelevanceAsync` only proceeds past a `LINE_RELEVANT`
+   result that has BOTH `scope.stop_areas` and `scope.stop_points` empty).
+2. **A high-confidence parsed segment + fresh, `COMPLETE` line topology** (this section) — can
+   upgrade that specific `LINE_RELEVANT` result to `CONFIRMED` or (much more conservatively — see
+   below) to omitted (`UNRELATED`/`null`).
+3. **`LINE_RELEVANT`** (the existing baseline) — the safe fallback whenever step 2 cannot produce a
+   confident answer, for any reason (see "Required failure semantics" below). Never `500`, never
+   delayed, never a reason to drop line-level evidence Blick genuinely has.
+
+**Parser**: the ONE grammar `journeySegmentParser.ts` recognizes is `"mellan <A> och <B>"` ("between
+A and B") — the only pattern a live audit of real SL Deviations text has actually demonstrated as
+naming a station pair unambiguously. Both `message.header` and `message.details` are parsed
+independently and their candidates unioned (never short-circuited on whichever field happens to
+match first, and never concatenated together before parsing — each candidate stays clause-local).
+
+**Topology**: `services/lineTopologyDirectory.ts` downloads GTFS Regional (a ZIP archive, real
+in-memory extraction via `services/gtfsZipExtractor.ts`), parses `routes.txt`/`trips.txt`/
+`stop_times.txt`, and builds ONE compact per-`(transportMode, lineDesignation)` topology graph per
+refresh (never rescanning raw GTFS per lookup). Trafiklab's real extended `route_type` scheme (NOT
+the basic GTFS 0-7 codes — confirmed live against Trafiklab's own documentation) is mapped
+explicitly (100-109 → TRAIN, 400-405 → METRO, 700-716 → BUS, 900-906 → TRAM, 1000-1099/1200 →
+FERRY). Every line's own topology carries an explicit `completeness: "COMPLETE" | "PARTIAL"` —
+`"PARTIAL"` (any GTFS stop on that line whose own identity could not be resolved) is treated
+identically to "no topology for this line at all": never authoritative for CONFIRMED/UNRELATED. A
+raw GTFS trip is never bridged across an unresolved stop (an earlier version of this code had
+exactly that fake-edge bug; fixed and regression-tested — see `lineTopologyDirectory.test.ts`'s own
+"never create an edge across a missing GTFS stop" tests).
+
+**GTFS stop-id identity bridge — genuinely unverified**: `services/lineTopologyDirectory.ts`'s own
+`createGtfsStopIdResolver` resolves a GTFS `stop_id` to a StopArea id via
+`StopPointDirectory.resolveStopPointGids` (`RawStopPoint.gid`, the SAME cached `/v1/stop-points`
+snapshot `pattern_point_gid` resolution already uses — see above). The hypothesis that these two
+values are identical rests on genuine but INDIRECT evidence (Trafiklab support documentation
+describing both as sharing the same `9022`-prefixed "Stop point" class-id scheme, both sourced from
+SL's own internal pubtrans/NOPTIS system) — NOT a live cross-check against a real downloaded feed,
+since this backend does not have a `TRAFIKLAB_API_KEY` credential. `scripts/verifyGtfsStopIdentityBridge.ts`
+exists to perform that live audit once a key is available; until it has been run and reviewed, this
+bridge — and therefore the whole segment-parsing enhancement — must not be considered
+production-verified, only production-*capable*.
+
+**Production wiring reflects this honestly**: `app.ts` wires the real `LineTopologyDirectory` and
+`JourneyEndpointSiteResolver` ONLY when `TRAFIKLAB_API_KEY` is configured; both stay `undefined`
+otherwise (zero GTFS network traffic, zero segment-topology cache checks, zero requested-endpoint
+resolver construction — `resolveJourneyDisruptionsAsync` behaves byte-for-byte like the synchronous
+core). Setting the key is a NECESSARY but not SUFFICIENT condition for trusting this enhancement in
+a real deployment — see `app.ts`'s own wiring comment for why that gap cannot be closed by code
+alone.
+
+**The enhancement only ever runs for `TRAVELLED_PATH`-policy effects.** Before any parsing or
+topology work, `resolveDeviationRelevanceAsync` checks
+`journeyDisruptionScope.scopePolicyForEffect(effect) === "TRAVELLED_PATH"`; an `ACCESS_POINTS`
+effect (`ACCESSIBILITY_ISSUE`, `STATION_ACCESS`, `STOP_CHANGE`) returns the synchronous
+`LINE_RELEVANT` base result unchanged. This mechanism proves ONLY "the affected segment lies on
+the path the vehicle actually travelled" — irrelevant to a broken lift or a moved stop, which only
+matter at a stop the passenger actually boards, alights, or transfers at. An `ACCESS_POINTS` effect
+can still reach `CONFIRMED`, but only through the pre-existing structured `scope.stop_areas`/
+`scope.stop_points` comparison (rule 5 of `resolveDeviationRelevance`), never through this
+free-text path — see `disruptionRelevance.test.ts`'s and `segmentEvidenceEndToEnd.test.ts`'s own
+"ACCESS_POINTS gate" regressions, including a Mariatorget-shaped one proving this doesn't regress
+the original Mariatorget accessibility-classification fix.
+
+**CONFIRMED / UNRELATED / LINE_RELEVANT — the exact upgrade rule**, decided per PARSED CANDIDATE
+(never once per line — trust is inherently per-candidate, see requested-corridor evidence below),
+then combined:
+
+- **`CONFIRMED`**: ANY parsed candidate's own resolved edges overlap EITHER PRIMARY's own real
+  travelled edges on the matched line (regardless of completeness — one structurally known real
+  edge is sufficient even from an incomplete path) OR a requested corridor that is trusted
+  specifically with respect to THAT candidate's own two endpoints. A genuine overlap found this way
+  is sufficient on its own; another candidate on the same line being unresolved, ambiguous, or
+  simply unproven can never withdraw it.
+- **`UNRELATED`** (omitted): only when at least one candidate resolved AND EVERY resolved
+  candidate's own outcome was a proven non-overlap against a corridor trusted for THAT candidate.
+  **PRIMARY's own actual edges can NEVER by themselves prove a negative, however complete.**
+  Journey Planner may have already rerouted PRIMARY around the very disruption being evaluated —
+  confirmed live for Akalla → Kungsträdgården during the Metro 11 T-Centralen↔Kungsträdgården
+  closure: PRIMARY reroutes onto Metro 11 only as far as T-Centralen (a fully resolved, complete
+  stop sequence) + Metro 13 + a walk, so a "complete" account of PRIMARY's own CURRENT path simply
+  never goes anywhere near the closed edge — precisely because the closure caused the reroute, not
+  because the closure is irrelevant. Only an independently-reconstructed, trusted requested
+  corridor can supply that negative proof.
+- **`LINE_RELEVANT`**: every other case — the conservative default the whole enhancement degrades
+  to whenever it cannot confidently do better (including: no requested corridor available at all,
+  as in the reroute case above).
+
+**Requested-corridor evidence** (`domain/requestedCorridor.ts`, `isRequestedCorridorTrusted`) lets
+a disruption stay `CONFIRMED` — or, unlike before, also lets it genuinely reach `UNRELATED` — even
+after Journey Planner has already rerouted PRIMARY off the affected line entirely. Both requested
+endpoints (the routine's own `journeyOriginId`/`journeyDestinationId`, resolved via
+`journeyEndpointSiteResolver.resolveSiteId` — an empirically-verified `stopId - 18000000 = site.id`
+arithmetic bridge, re-checked live against an exact-GID-match alternative and confirmed still the
+best available option — see that service's own doc) must still resolve to exactly one StopArea each
+on the matched line's own fresh, `"COMPLETE"` topology, with a unique corridor between them.
+`LineTopologyDirectory.resolveEndpointsCorridor` returns that corridor's own stop sequence ALWAYS
+oriented origin-first, destination-last — regardless of which direction the underlying GTFS trip
+pattern happens to be stored in — because trust itself now depends on genuine ORDERED sequence
+equality, corrected (twice now) from an unordered edge-set comparison:
+
+- An EARLIER version trusted the entire corridor as soon as it shared even one edge anywhere with
+  PRIMARY's own travel — overclaiming (a bus sharing one early edge before transferring away has a
+  corridor whose own remainder was never verified).
+- The IMMEDIATELY PRIOR version tightened that to "the run's edges are a subset of the corridor's
+  edges AND the run's own first-or-last stop matches an affected endpoint" — still not enough: an
+  unordered subset check cannot distinguish a genuine reroute truncation from an ordinary INTERNAL
+  FRAGMENT. Requested `A-B-C-D-E`, actual run `B-C`: the run's edges sit inside the corridor and `C`
+  is a real affected-segment endpoint, so this rule wrongly trusted it — but `B-C` might simply be
+  an ordinary mid-journey transfer, never proving the passenger was ever meant to continue past `C`.
+- The CURRENT rule requires genuine ordered prefix/suffix equality instead (`isExactPrefix`/
+  `isExactSuffix` in `requestedCorridor.ts` — position-by-position array comparison, never an edge
+  set, never sorted ids, never numeric-id direction inference): for AT LEAST ONE of PRIMARY's own
+  real, contiguous travelled runs on that line, either (a) the run is ordered-identical to the
+  ENTIRE requested corridor (trusted unconditionally — a complete, gap-free, independently
+  reconstructed account of PRIMARY's real path), or (b) the run is an EXACT prefix of the requested
+  corridor AND its own last stop is exactly one of the affected candidate's own two endpoints (the
+  Akalla → T-Centralen reroute shape), or (c) the run is an EXACT suffix of the requested corridor
+  AND its own first stop is exactly one of the affected candidate's own two endpoints (the reverse-
+  direction equivalent). An internal fragment — however cleanly its own edges sit inside the
+  corridor — is never trusted merely because one of its own ends happens to coincide with an
+  affected endpoint.
+
+This resolution is LAZY and memoized per request (`routes/journeyDisruptions.ts`): every candidate
+is first resolved against topology and checked for a DIRECT overlap with PRIMARY's own actual edges
+before the requested-endpoints provider is ever invoked — a candidate that resolves nowhere, or
+that already overlaps actual PRIMARY, or a line PRIMARY never touches at all (so requested-corridor
+trust could never succeed regardless of what the corridor turns out to be) all reach their final
+verdict without a single Journey Planner endpoint lookup. Only once corridor evidence could
+plausibly change the outcome is it actually resolved, once per line, reused across every deviation
+in the same request.
+
+**Required failure semantics**: GTFS unavailable/stale/parse failure, a line with no or `"PARTIAL"`
+topology, an unresolved/ambiguous station name, or a requested corridor that fails its own trust
+check all degrade to `LINE_RELEVANT` — never a `500`, and never an incorrect `UNRELATED` from
+incomplete evidence. Trafiklab's own GTFS Regional quota (as low as 50 calls/month on its lowest
+tier) is protected by a daily refresh window, conditional `GET` (`ETag`/`If-None-Match`,
+`Last-Modified`/`If-Modified-Since` — a `304` still counts as one real request, never assumed
+free), and a shared, cross-instance, never-released "attempt claim" bounding even a sustained
+total outage to roughly one wasted upstream attempt per ~24h, not one per worker tick.
 
 **Deduplication**: SL Deviations are deduplicated by `deviation_case_id`; Journey Planner notices
 by exact text (no stable id). Cross-source: when a Journey Planner notice's text exactly matches a

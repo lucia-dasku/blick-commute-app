@@ -3006,6 +3006,8 @@ class RoutineActiveWindowWorkerTest {
             disruptionContext: JourneyDisruptionContext?,
             departureTime: Instant?,
             arrivalTime: Instant?,
+            journeyOriginId: String?,
+            journeyDestinationId: String?,
         ): List<ResolvedJourneyDisruption> {
             receivedDeviationLegsCalls += legs
             receivedOriginSiteId = originSiteId
@@ -3361,6 +3363,8 @@ class RoutineActiveWindowWorkerTest {
                 disruptionContext: JourneyDisruptionContext?,
                 departureTime: Instant?,
                 arrivalTime: Instant?,
+                journeyOriginId: String?,
+                journeyDestinationId: String?,
             ): List<ResolvedJourneyDisruption> {
                 delay(DISRUPTIONS_FETCH_TIMEOUT_MS * 100)
                 return listOf(akallaResolvedDeviation())

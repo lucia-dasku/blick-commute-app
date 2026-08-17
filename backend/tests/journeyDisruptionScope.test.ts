@@ -33,6 +33,12 @@ function fakeDirectory(table: Record<string, { stopPointId: number; stopAreaId: 
       }
       return result;
     },
+    async findStopAreaIdsByName() {
+      return []; // not exercised by this file's own tests (all scope-resolution, no segment parsing)
+    },
+    async resolveStopPointGids() {
+      return new Map(); // not exercised by this file's own tests (no GTFS topology building)
+    },
   };
 }
 

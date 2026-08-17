@@ -205,8 +205,10 @@ function splitIntoClauses(sentence: string): string[] {
 
 /** Produces the normalized units the three compound rules test against — paragraph, then line
  * group (bullet-aware), then sentence, then narrow clause, each independently
- * lowercased/whitespace-collapsed. */
-function segmentIntoUnits(rawText: string): string[] {
+ * lowercased/whitespace-collapsed. Exported so `domain/journeySegmentParser.ts` can reuse the
+ * exact same sentence/clause-local scoping for its own "mellan A och B" segment parsing, rather
+ * than duplicating a second copy of this paragraph/line-group/sentence/clause splitter. */
+export function segmentIntoUnits(rawText: string): string[] {
   const units: string[] = [];
   for (const paragraph of splitIntoParagraphs(rawText)) {
     for (const lineGroup of splitParagraphIntoLineGroups(paragraph)) {
@@ -261,22 +263,27 @@ function suffixPattern(suffix: string): RegExp {
 /**
  * Every supported inflected/conjugated form of "stänga" ("to close") that affirmatively signals a
  * closure: adjective/participle agreement (`stängd`/`stängt`/`stängda` — common/neuter/plural
- * gender, e.g. "hissen är stängd" vs "hissarna är stängda"), present passive (`stängs`), and
- * past/perfect passive (`stängdes`/`stängts`). An explicit, closed set of grammatical forms —
- * never a bare "stäng" stem wildcard, which would also match unrelated words that merely share
- * the stem (see this file's own test suite, "does not match an unrelated stäng- word").
+ * gender, e.g. "hissen är stängd" vs "hissarna är stängda") and present passive (`stängs`). An
+ * explicit, closed set of grammatical forms — never a bare "stäng" stem wildcard, which would also
+ * match unrelated words that merely share the stem (see this file's own test suite, "does not
+ * match an unrelated stäng- word").
+ *
+ * Deliberately does NOT include past/perfect passive (`stängdes`/`stängts`): unlike the four forms
+ * above, no live SL wording has ever demonstrated a need for them, and omitting them keeps this
+ * set to exactly the forms actual evidence supports — see this file's own top-level doc on
+ * precision over keyword recall.
  *
  * Each form is matched as a word-final suffix (see [suffixPattern]), so `"avstängd"`,
- * `"avstängt"`, `"avstängda"`, `"avstängs"`, `"avstängdes"`, and `"avstängts"` all match for free
- * without a separate "av"-prefixed entry — the same mechanism the original two-entry
- * `"stängd"`/`"stängs"` pair already relied on, just applied to the full grammatical family
- * instead of only two of its forms. That incomplete pair missed plural/neuter adjective agreement
- * entirely: a live SL disruption's real header, "Avstängda hissar vid Mariatorget" (deviation
- * 12285394, observed 2026-08-16), fell through to the generic DISRUPTION fallback instead of
+ * `"avstängt"`, `"avstängda"`, and `"avstängs"` all match for free without a separate
+ * "av"-prefixed entry — the same mechanism the original two-entry `"stängd"`/`"stängs"` pair
+ * already relied on, just applied to the full adjective-agreement family instead of only the
+ * common-gender singular. That incomplete pair missed plural/neuter adjective agreement entirely:
+ * a live SL disruption's real header, "Avstängda hissar vid Mariatorget" (deviation 12285394,
+ * observed 2026-08-16), fell through to the generic DISRUPTION fallback instead of
  * ACCESSIBILITY_ISSUE, because "avstängda" is not "avstängd" at a word boundary. See this file's
  * own test suite for the full morphology matrix this was verified against.
  */
-const CLOSED_WORD_FORMS = ["stängd", "stängt", "stängda", "stängs", "stängdes", "stängts"];
+const CLOSED_WORD_FORMS = ["stängd", "stängt", "stängda", "stängs"];
 
 /** True if any [CLOSED_WORD_FORMS] member occurs as an affirmed (non-negated), word-final match —
  * reused by both ACCESSIBILITY_ISSUE and STATION_ACCESS, which differ only in *what* the closure

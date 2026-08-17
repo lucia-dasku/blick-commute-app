@@ -548,8 +548,6 @@ describe("classifyEffectFromText: Swedish closure-word morphology matrix", () =>
     ["singular adjective, no av- prefix: stängd", "Rulltrappan är stängd"],
     ["plural adjective, no av- prefix: stängda", "Rulltrapporna är stängda"],
     ["neuter adjective: avstängt", "Hissområdet är avstängt på grund av ombyggnad."],
-    ["past passive: stängdes", "Hissen stängdes på grund av tekniskt fel"],
-    ["past passive with av- prefix: avstängdes", "Hissen avstängdes på grund av tekniskt fel"],
   ];
   for (const [label, text] of accessibilityPositive) {
     it(`${label} -> ACCESSIBILITY_ISSUE ("${text}")`, () => {
@@ -563,7 +561,6 @@ describe("classifyEffectFromText: Swedish closure-word morphology matrix", () =>
     ["plural adjective: avstängda, attributive before the subject", "Avstängda utgångar vid stationen"],
     ["singular adjective: avstängd (ingång)", "Ingången är avstängd"],
     ["present passive: stängs (pre-existing, unchanged)", "3 augusti stängs en utgång vid Slussen"],
-    ["perfect passive: stängts", "Entrén har stängts på grund av tekniskt fel"],
   ];
   for (const [label, text] of stationAccessPositive) {
     it(`${label} -> STATION_ACCESS ("${text}")`, () => {
@@ -571,11 +568,23 @@ describe("classifyEffectFromText: Swedish closure-word morphology matrix", () =>
     });
   }
 
-  it('an unrelated word sharing only the "stäng-" stem (not any of the six supported grammatical forms) does not trigger a false positive', () => {
+  it('an unrelated word sharing only the "stäng-" stem (not any of the four supported grammatical forms) does not trigger a false positive', () => {
     // "stängningstider" (closing/operating HOURS -- a schedule notice, not a closure/malfunction)
-    // is not "stängd"/"stängt"/"stängda"/"stängs"/"stängdes"/"stängts" at a word boundary --
-    // confirms the fix is an explicit, closed grammatical set, never an uncontrolled stem prefix.
+    // is not "stängd"/"stängt"/"stängda"/"stängs" at a word boundary -- confirms the fix is an
+    // explicit, closed grammatical set, never an uncontrolled stem prefix.
     expect(classifyEffectFromText("Information om hissarnas stängningstider inför helgen")).toBeNull();
+  });
+
+  it('past passive "stängdes" is deliberately NOT a closure trigger -- no live wording has demonstrated a need for it', () => {
+    expect(classifyEffectFromText("Hissen stängdes på grund av tekniskt fel")).toBeNull();
+  });
+
+  it('past passive with av- prefix "avstängdes" is deliberately NOT a closure trigger, for the same reason', () => {
+    expect(classifyEffectFromText("Hissen avstängdes på grund av tekniskt fel")).toBeNull();
+  });
+
+  it('perfect passive "stängts" is deliberately NOT a closure trigger, for the same reason', () => {
+    expect(classifyEffectFromText("Entrén har stängts på grund av tekniskt fel")).toBeNull();
   });
 });
 

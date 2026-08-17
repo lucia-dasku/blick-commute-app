@@ -13,7 +13,8 @@
     "typecheck": "tsc -p tsconfig.json --noEmit",
     "lint": "eslint .",
     "test": "vitest run",
-    "test:watch": "vitest"
+    "test:watch": "vitest",
+    "verify:gtfs-bridge": "tsx scripts/verifyGtfsStopIdentityBridge.ts"
   },
   "dependencies": {
     "@upstash/redis": "^1.38.1",

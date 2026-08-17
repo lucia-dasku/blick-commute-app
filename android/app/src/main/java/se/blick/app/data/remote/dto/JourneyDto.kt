@@ -94,7 +94,19 @@ data class JourneyPlanDto(
  * `legs`/`originSiteId`-only PARTIAL resolution. [departureTime]/[arrivalTime] are PRIMARY's own
  * [JourneyPlanDto.departureTime]/[JourneyPlanDto.arrivalTime] — enabling the backend's temporal-
  * relevance check; omitted entirely simply skips that check, exactly as it was always skipped
- * before this feature existed. */
+ * before this feature existed.
+ *
+ * [journeyOriginId]/[journeyDestinationId] are the routine's own
+ * [se.blick.app.domain.model.CommuteRoutine.journeyOriginId]/`.journeyDestinationId` — the exact
+ * same opaque Journey-Planner location ids already sent as `originId`/`destinationId` to
+ * `GET /api/v1/journeys` when this journey was fetched, resent here completely unchanged. This
+ * app never computes or interprets anything from them — the backend alone resolves them (see
+ * `backend/src/services/journeyEndpointSiteResolver.ts`) to power the segment-parsing relevance
+ * enhancement's own "requested normal corridor" evidence, which is what lets a disruption stay
+ * correctly confirmed even after Journey Planner has already rerouted PRIMARY around the exact
+ * closed segment. Absent for a fixed-site routine (no journey origin/destination at all) or an
+ * older/unrelated call site — the backend already treats that exactly like an unresolvable
+ * identity bridge, never a 400. */
 @Serializable
 data class JourneyDisruptionRelevanceRequestDto(
     val legs: List<JourneyDisruptionRelevanceLegDto>,
@@ -103,6 +115,8 @@ data class JourneyDisruptionRelevanceRequestDto(
     val disruptionContext: JourneyDisruptionContextDto? = null,
     val departureTime: String? = null,
     val arrivalTime: String? = null,
+    val journeyOriginId: String? = null,
+    val journeyDestinationId: String? = null,
 )
 
 /** One already-resolved exact-destination disruption — see

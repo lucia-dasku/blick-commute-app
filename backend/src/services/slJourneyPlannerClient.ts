@@ -9,6 +9,21 @@ const LocationSchema = z.object({
   disassembledName: z.string().optional(),
   type: z.string(),
   matchQuality: z.number().optional(),
+  /** `properties.stopId` — confirmed LIVE (2026-08-16, cross-referenced against 11 real
+   * stations) to equal SL Transport's own `site.id` (see `models/site.ts`) plus a fixed
+   * `18000000` national-numbering offset (Trafiklab's own docs call this SL's "rikshållplats"/
+   * national stop id) — e.g. Akalla: `stopId "18009300"` -> `site.id 9300`, Slussen: `"18009192"`
+   * -> `9192`. Reliable across every metro/train station tested, including two same-named but
+   * distinct real sites ("Bålsta") correctly disambiguated; one honest live exception (a
+   * ferry-only destination, Vaxholm) resolved to no real site at all, treated as an ordinary
+   * "unresolved" rather than assumed to fail the same way everywhere else. This bridge is
+   * verified against the SAME `id` this schema already exposes (`type_sf: "any"` also accepts a
+   * bare `id` as `name_sf`, returning that exact place's own record — confirmed live), which is
+   * what lets `services/journeyEndpointSiteResolver.ts` resolve a bare, already-received
+   * `originId`/`destinationId` back to this same detail without needing Android to persist or
+   * forward any new field of its own. See that service's own doc for the full resolution
+   * contract and why this is deliberately never called from `/api/v1/journeys` itself. */
+  properties: z.object({ stopId: z.string().optional() }).passthrough().optional(),
 }).passthrough();
 
 const StopFinderSchema = z.object({ locations: z.array(LocationSchema).optional() }).passthrough();

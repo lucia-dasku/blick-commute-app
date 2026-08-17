@@ -14,6 +14,8 @@ import type { Site } from "../src/models/site.js";
 import type { ErrorEnvelope, SuccessEnvelope } from "./testHelpers.js";
 import type { ResolvedJourneyDisruption } from "../src/domain/disruptionRelevance.js";
 import { JOURNEY_DISRUPTION_CONTEXT_VERSION, type JourneyDisruptionContext } from "../src/models/journeyDisruptionContext.js";
+import type { LineTopologyDirectory } from "../src/services/lineTopologyDirectory.js";
+import type { JourneyEndpointSiteResolver } from "../src/services/journeyEndpointSiteResolver.js";
 
 function deviation(overrides: {
   id?: number;
@@ -50,6 +52,12 @@ function unusedStopPointDirectory(): StopPointDirectory {
       for (const gid of gids) result.set(gid, { status: "UNRESOLVED", patternPointGid: gid });
       return result;
     },
+    async findStopAreaIdsByName() {
+      return [];
+    },
+    async resolveStopPointGids() {
+      return new Map();
+    },
   };
 }
 
@@ -66,10 +74,22 @@ function fakeStopPointDirectory(table: Record<string, { stopPointId: number; sto
       }
       return result;
     },
+    async findStopAreaIdsByName() {
+      return [];
+    },
+    async resolveStopPointGids() {
+      return new Map();
+    },
   };
 }
 
-function buildTestApp(deviations: RawDeviation[], sites: Site[] = [], stopPointDirectory: StopPointDirectory = unusedStopPointDirectory()) {
+function buildTestApp(
+  deviations: RawDeviation[],
+  sites: Site[] = [],
+  stopPointDirectory: StopPointDirectory = unusedStopPointDirectory(),
+  lineTopologyDirectory?: LineTopologyDirectory,
+  journeyEndpointSiteResolver?: JourneyEndpointSiteResolver,
+) {
   const fetchAllDeviations = vi.fn(async () => deviations);
   const fakeDeviationsClient: SlDeviationsClient = { fetchAllDeviations };
   const fakeSiteDirectory: SiteDirectory = {
@@ -83,7 +103,10 @@ function buildTestApp(deviations: RawDeviation[], sites: Site[] = [], stopPointD
   const snapshotService = createDeviationsSnapshotService(fakeDeviationsClient, new InMemoryCache(), new InMemoryLock());
 
   const app = new Hono().basePath("/api/v1");
-  app.route("/journeys/disruptions", createJourneyDisruptionsRoute(snapshotService, fakeSiteDirectory, stopPointDirectory));
+  app.route(
+    "/journeys/disruptions",
+    createJourneyDisruptionsRoute(snapshotService, fakeSiteDirectory, stopPointDirectory, lineTopologyDirectory, journeyEndpointSiteResolver),
+  );
   app.notFound(notFoundHandler);
   app.onError(onError);
 
@@ -461,5 +484,91 @@ describe("POST /api/v1/journeys/disruptions — temporal relevance", () => {
     const res = await post(app, { legs: [{ transportMode: "METRO", lineDesignation: "11" }], journeyPlannerNotices: [] });
     const body = (await res.json()) as SuccessEnvelope<{ disruptions: ResolvedJourneyDisruption[] }>;
     expect(body.data.disruptions).toHaveLength(1);
+  });
+});
+
+describe("POST /api/v1/journeys/disruptions — requested-endpoint resolution is lazy (production-readiness review, item 22)", () => {
+  it("journeyOriginId/journeyDestinationId are supplied, but with zero deviations at all, resolveSiteId is never called", async () => {
+    let resolveSiteIdCallCount = 0;
+    const spyResolver: JourneyEndpointSiteResolver = {
+      async resolveSiteId() {
+        resolveSiteIdCallCount++;
+        return 9300;
+      },
+    };
+    const inertTopologyDirectory: LineTopologyDirectory = {
+      async resolveSegment() {
+        return { status: "UNRESOLVED" };
+      },
+      async resolveEndpointsCorridor() {
+        return { status: "UNRESOLVED" };
+      },
+    };
+    const { app } = buildTestApp([], [], unusedStopPointDirectory(), inertTopologyDirectory, spyResolver);
+    const res = await post(app, {
+      legs: [{ transportMode: "METRO", lineDesignation: "11" }],
+      journeyPlannerNotices: [],
+      journeyOriginId: "9091001000009300",
+      journeyDestinationId: "9091001000009340",
+    });
+    expect(res.status).toBe(200);
+    expect(resolveSiteIdCallCount).toBe(0); // no deviations at all -- nothing ever needed requested-corridor evidence
+  });
+
+  it("a deviation that resolves via structured stop scope alone (CONFIRMED synchronously, never reaching the segment parser) also never triggers resolveSiteId, even though a segmentContext IS built", async () => {
+    let resolveSiteIdCallCount = 0;
+    const spyResolver: JourneyEndpointSiteResolver = {
+      async resolveSiteId() {
+        resolveSiteIdCallCount++;
+        return 9300;
+      },
+    };
+    const inertTopologyDirectory: LineTopologyDirectory = {
+      async resolveSegment() {
+        return { status: "UNRESOLVED" };
+      },
+      async resolveEndpointsCorridor() {
+        return { status: "UNRESOLVED" };
+      },
+    };
+    // A deviation WITH scope.stop_areas intersecting the journey's own resolved boarding stop --
+    // resolveDeviationRelevance's own synchronous rule 5 already reaches CONFIRMED directly;
+    // resolveDeviationRelevanceAsync's own doc: only a LINE_RELEVANT-with-no-stop-scope result
+    // ever proceeds to the async segment-parsing path (and therefore ever needs requestedEndpoints
+    // at all) -- a segmentContext is still constructed (richResolution succeeds below), but its
+    // own lazy provider is never invoked.
+    const stopScoped = deviation({
+      id: 1,
+      lines: [{ designation: "11", transportMode: "METRO" }],
+      stopAreaIds: [3271],
+    });
+    const stopPointDirectory = fakeStopPointDirectory({ "pp-1": { stopPointId: 1, stopAreaId: 3271 } });
+    const { app } = buildTestApp([stopScoped], [], stopPointDirectory, inertTopologyDirectory, spyResolver);
+    const disruptionContext: JourneyDisruptionContext = {
+      version: JOURNEY_DISRUPTION_CONTEXT_VERSION,
+      journeyStart: "Start",
+      journeyEnd: "End",
+      legs: [
+        {
+          transportMode: "METRO",
+          lineDesignation: "11",
+          boardingPatternPointGid: "pp-1",
+          alightingPatternPointGid: "pp-1",
+          stopPatternPointGids: ["pp-1"],
+          stopSequenceComplete: true,
+        },
+      ],
+    };
+    const res = await post(app, {
+      legs: [{ transportMode: "METRO", lineDesignation: "11" }],
+      journeyPlannerNotices: [],
+      disruptionContext,
+      journeyOriginId: "9091001000009300",
+      journeyDestinationId: "9091001000009340",
+    });
+    expect(res.status).toBe(200);
+    const body = (await res.json()) as SuccessEnvelope<{ disruptions: ResolvedJourneyDisruption[] }>;
+    expect(body.data.disruptions[0]?.relevance).toBe("CONFIRMED"); // resolved synchronously, via structured stop scope
+    expect(resolveSiteIdCallCount).toBe(0); // the async segment-parsing path (and its lazy provider) was never reached
   });
 });

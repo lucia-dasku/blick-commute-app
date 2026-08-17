@@ -4,6 +4,7 @@ Thumbs.db
 *.log
 .vscode/
 .idea/
+node_modules/
 
 # Local AI coding tool instructions/config -- personal, not shared via GitHub.
 .claude/

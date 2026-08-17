@@ -148,4 +148,14 @@ export const config = {
     process.env.GOOGLE_PLAY_SERVICE_ACCOUNT_EMAIL,
     process.env.GOOGLE_PLAY_SERVICE_ACCOUNT_PRIVATE_KEY,
   ),
+  /** Trafiklab GTFS Regional requires an API key to download (`GET
+   * https://opendata.samtrafiken.se/gtfs/{operator}/{operator}.zip?key=...` — verified live
+   * against Trafiklab's own current documentation, 2026-08-16; no free/keyless tier exists for
+   * this feed). `undefined` when not configured — `services/lineTopologyDirectory.ts` treats
+   * that exactly like any other topology-unavailable case (never a startup failure, never a
+   * 500): the segment-parsing relevance enhancement it powers is additive over an
+   * already-safe `LINE_RELEVANT` fallback, so simply not having this key yet must never block
+   * `/api/v1/journeys/disruptions`, only leave that one enhancement inactive. See that
+   * service's own doc for the required Vercel environment variable name and setup. */
+  trafiklabApiKey: process.env.TRAFIKLAB_API_KEY,
 } as const;

@@ -1119,6 +1119,7 @@ class RoutineDetailsViewModel @Inject constructor(
                     useCase(
                         primary.legs, routine.siteId, journeys.primaryDisruptionNotices(),
                         primary.disruptionContext, primary.departureTime, primary.arrivalTime,
+                        routine.journeyOriginId, routine.journeyDestinationId,
                     )
                 }
             } catch (e: CancellationException) {

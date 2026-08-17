@@ -65,7 +65,15 @@ interface JourneyRepository {
      * have a later positional argument silently rebind to a new parameter instead. [departureTime]/
      * [arrivalTime] are PRIMARY's own [JourneyPlan.departureTime]/[JourneyPlan.arrivalTime],
      * enabling the backend's own temporal-relevance check — omitted entirely (both default to
-     * null) simply skips that check, exactly as it was always skipped before this feature existed. */
+     * null) simply skips that check, exactly as it was always skipped before this feature existed.
+     *
+     * [journeyOriginId]/[journeyDestinationId] are the routine's own
+     * [se.blick.app.domain.model.CommuteRoutine.journeyOriginId]/`.journeyDestinationId` — the
+     * exact same ids already sent to [getJourneys]' own `originId`/`destinationId`, resent
+     * unchanged so the backend can resolve its own "requested normal corridor" segment-parsing
+     * evidence (see [JourneyDisruptionRelevanceRequestDto]'s own doc). This app never computes or
+     * interprets anything from them. Trailing and defaulted to null for the same reason as every
+     * other parameter above. */
     suspend fun getRelevantDeviationNotices(
         legs: List<JourneyLeg>,
         originSiteId: Long?,
@@ -73,6 +81,8 @@ interface JourneyRepository {
         disruptionContext: JourneyDisruptionContext? = null,
         departureTime: Instant? = null,
         arrivalTime: Instant? = null,
+        journeyOriginId: String? = null,
+        journeyDestinationId: String? = null,
     ): List<ResolvedJourneyDisruption> = emptyList()
 }
 
@@ -114,6 +124,8 @@ class RemoteJourneyRepository @Inject constructor(private val apiClient: BlickAp
         disruptionContext: JourneyDisruptionContext?,
         departureTime: Instant?,
         arrivalTime: Instant?,
+        journeyOriginId: String?,
+        journeyDestinationId: String?,
     ): List<ResolvedJourneyDisruption> {
         // A WALK leg's own transportMode is already TransportMode.UNKNOWN by the time it reaches
         // this domain model (see String.toTransportMode()'s own doc -- Android's TransportMode
@@ -131,6 +143,8 @@ class RemoteJourneyRepository @Inject constructor(private val apiClient: BlickAp
             disruptionContext = disruptionContext?.toDto(),
             departureTime = departureTime?.toString(),
             arrivalTime = arrivalTime?.toString(),
+            journeyOriginId = journeyOriginId,
+            journeyDestinationId = journeyDestinationId,
         )
         return apiClient.getJourneyDisruptionRelevance(request).disruptions.mapNotNull(ResolvedJourneyDisruptionDto::toDomain)
     }

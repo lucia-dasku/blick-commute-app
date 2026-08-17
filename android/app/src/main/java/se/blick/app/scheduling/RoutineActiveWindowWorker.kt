@@ -726,6 +726,7 @@ class RoutineActiveWindowWorker @AssistedInject constructor(
                                 getJourneyDisruptionRelevance(
                                     primary.legs, current.siteId, journeyPlans.primaryDisruptionNotices(),
                                     primary.disruptionContext, primary.departureTime, primary.arrivalTime,
+                                    current.journeyOriginId, current.journeyDestinationId,
                                 )
                             } catch (e: CancellationException) {
                                 throw e

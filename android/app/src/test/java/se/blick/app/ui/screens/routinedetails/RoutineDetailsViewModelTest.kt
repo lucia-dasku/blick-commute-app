@@ -2641,6 +2641,8 @@ class RoutineDetailsViewModelTest {
             disruptionContext: JourneyDisruptionContext?,
             departureTime: Instant?,
             arrivalTime: Instant?,
+            journeyOriginId: String?,
+            journeyDestinationId: String?,
         ): List<ResolvedJourneyDisruption> {
             receivedDeviationLegsCalls += legs
             receivedOriginSiteId = originSiteId
@@ -2926,6 +2928,8 @@ class RoutineDetailsViewModelTest {
             disruptionContext: JourneyDisruptionContext?,
             departureTime: Instant?,
             arrivalTime: Instant?,
+            journeyOriginId: String?,
+            journeyDestinationId: String?,
         ): List<ResolvedJourneyDisruption> {
             val deferred = CompletableDeferred<List<ResolvedJourneyDisruption>>()
             pending += deferred
@@ -3101,6 +3105,8 @@ class RoutineDetailsViewModelTest {
                 disruptionContext: JourneyDisruptionContext?,
                 departureTime: Instant?,
                 arrivalTime: Instant?,
+                journeyOriginId: String?,
+                journeyDestinationId: String?,
             ): List<ResolvedJourneyDisruption> = error("simulated failure")
         }
         val getRankedJourneys = GetRankedJourneysUseCase(throwingRepository, clock)
@@ -3225,6 +3231,8 @@ class RoutineDetailsViewModelTest {
             disruptionContext: JourneyDisruptionContext?,
             departureTime: Instant?,
             arrivalTime: Instant?,
+            journeyOriginId: String?,
+            journeyDestinationId: String?,
         ): List<ResolvedJourneyDisruption> {
             val deferred = CompletableDeferred<List<ResolvedJourneyDisruption>>()
             pending += deferred
@@ -3345,6 +3353,8 @@ class RoutineDetailsViewModelTest {
                 disruptionContext: JourneyDisruptionContext?,
                 departureTime: Instant?,
                 arrivalTime: Instant?,
+                journeyOriginId: String?,
+                journeyDestinationId: String?,
             ): List<ResolvedJourneyDisruption> {
                 delay(DISRUPTIONS_FETCH_TIMEOUT_MS * 10)
                 return listOf(resolvedDisruption())
@@ -3392,6 +3402,8 @@ class RoutineDetailsViewModelTest {
                 disruptionContext: JourneyDisruptionContext?,
                 departureTime: Instant?,
                 arrivalTime: Instant?,
+                journeyOriginId: String?,
+                journeyDestinationId: String?,
             ): List<ResolvedJourneyDisruption> {
                 // A's own lookup resolves immediately; B's own always times out.
                 if (legs.any { it.lineDesignation == "11" }) return listOf(resolvedDisruption(id = "a-disruption"))

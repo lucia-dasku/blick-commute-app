@@ -5,9 +5,10 @@ import { successEnvelope } from "../models/common.js";
 import { DisruptionEffectSchema } from "../models/disruption.js";
 import { JourneyDisruptionContextSchema, JOURNEY_DISRUPTION_CONTEXT_VERSION } from "../models/journeyDisruptionContext.js";
 import {
-  resolveJourneyDisruptions,
+  resolveJourneyDisruptionsAsync,
   type JourneyTimeWindow,
   type ResolvedJourneyDisruption,
+  type SegmentEvidenceContext,
 } from "../domain/disruptionRelevance.js";
 import {
   resolveLegScopes,
@@ -15,10 +16,14 @@ import {
   type ExactJourneyOriginStopArea,
   type ResolvedLegScope,
 } from "../domain/journeyDisruptionScope.js";
+import { buildActualLegEdgesByLine } from "../domain/requestedCorridor.js";
 import { resolveSiteStopAreaIds } from "../services/deviationsFilter.js";
 import type { DeviationsSnapshotService } from "../services/deviationsSnapshotService.js";
 import type { SiteDirectory } from "../services/siteDirectory.js";
-import type { StopPointDirectory } from "../services/stopPointDirectory.js";
+import type { StopPointDirectory, PatternPointGid, StopPointResolution } from "../services/stopPointDirectory.js";
+import type { LineTopologyDirectory } from "../services/lineTopologyDirectory.js";
+import type { JourneyEndpointSiteResolver } from "../services/journeyEndpointSiteResolver.js";
+import type { Site } from "../models/site.js";
 
 const RequestSchema = z.object({
   // The PRIMARY journey's own transit legs (WALK legs and legs with no line designation carry no
@@ -49,6 +54,16 @@ const RequestSchema = z.object({
   // before this feature existed.
   departureTime: z.string().datetime({ offset: true }).optional(),
   arrivalTime: z.string().datetime({ offset: true }).optional(),
+  // Additive (see services/journeyEndpointSiteResolver.ts's own doc): the SAME opaque Journey-
+  // Planner "any" location ids Android already sent as originId/destinationId to the matching
+  // GET /api/v1/journeys call -- resent here unchanged, never computed or interpreted by Android
+  // itself, so this endpoint can resolve them to a verified SL Transport site id and power the
+  // requested-corridor half of the segment-parsing relevance enhancement (item 14 of that
+  // feature's own spec). Absent for an older Android build, or when the routine's own type isn't
+  // EXACT_DESTINATION -- the enhancement simply falls back to actual-PRIMARY-edges-only evidence,
+  // exactly like an unresolvable identity bridge already does.
+  journeyOriginId: z.string().optional(),
+  journeyDestinationId: z.string().optional(),
 });
 
 /**
@@ -113,6 +128,25 @@ function legacyLegScopes(legs: readonly { transportMode: string; lineDesignation
  *    THAT specific, already-controlled failure mode is caught, never an unexpected bug elsewhere
  *    in this route silently downgraded to "PARTIAL" instead of surfacing as a real 5xx.
  *
+ * ## The segment-parsing relevance enhancement
+ *
+ * When a rich (non-legacy) `disruptionContext` resolution succeeds AND [lineTopologyDirectory] is
+ * supplied, every `LINE_RELEVANT` result that reached that state purely because the deviation had
+ * `scope.lines` but no `scope.stop_areas`/`scope.stop_points` at all gets one more chance to
+ * become `CONFIRMED` or UNRELATED — parsing SL's own free text for a `"mellan A och B"` affected
+ * segment and resolving it against real GTFS-derived line topology (see
+ * `domain/disruptionRelevance.ts`'s own `resolveDeviationRelevanceAsync`/
+ * `SegmentEvidenceContext` doc for the full contract, and `services/lineTopologyDirectory.ts`'s
+ * own doc for why [lineTopologyDirectory] may simply be absent in a deployment that hasn't
+ * configured GTFS Regional access yet). [journeyOriginId]/[journeyDestinationId], when present
+ * alongside [journeyEndpointSiteResolver], additionally power that enhancement's own
+ * "requested normal corridor" evidence (item 14 of that feature's own spec) — the one thing that
+ * lets a disruption stay correctly `CONFIRMED` even after Journey Planner has already rerouted
+ * PRIMARY around the exact closed segment. Every one of these four inputs is independently
+ * optional; any combination missing simply narrows or disables the enhancement, never breaks this
+ * route — see `resolveJourneyDisruptionsAsync`'s own doc for why `undefined` reproduces the
+ * pre-existing synchronous behavior exactly.
+ *
  * Response: `{ fetchedAt, disruptions: ResolvedJourneyDisruption[] }` — the fully resolved,
  * deduplicated, already-merged result. Android performs no relevance inference of its own; it
  * renders `relevance`/`effect`/`headline`/`details`/`matchedLineDesignations` exactly as returned.
@@ -121,6 +155,13 @@ export function createJourneyDisruptionsRoute(
   snapshotService: DeviationsSnapshotService,
   siteDirectory: SiteDirectory,
   stopPointDirectory: StopPointDirectory,
+  // Additive, both optional (see each service's own doc): entirely absent in a deployment that
+  // hasn't wired up GTFS Regional access yet (e.g. TRAFIKLAB_API_KEY not configured — see
+  // services/lineTopologyDirectory.ts's own doc) or the Journey Planner endpoint-identity bridge.
+  // `undefined` here makes this route behave byte-for-byte like it did before the segment-parsing
+  // enhancement existed — see resolveJourneyDisruptionsAsync's own doc.
+  lineTopologyDirectory?: LineTopologyDirectory,
+  journeyEndpointSiteResolver?: JourneyEndpointSiteResolver,
 ) {
   const route = new Hono();
 
@@ -133,7 +174,7 @@ export function createJourneyDisruptionsRoute(
     }
     const parsed = RequestSchema.safeParse(raw);
     if (!parsed.success) throw new AppError("VALIDATION_ERROR", "Invalid journey disruption relevance request");
-    const { legs, originSiteId, journeyPlannerNotices, disruptionContext, departureTime, arrivalTime } = parsed.data;
+    const { legs, originSiteId, journeyPlannerNotices, disruptionContext, departureTime, arrivalTime, journeyOriginId, journeyDestinationId } = parsed.data;
 
     // Two deliberately different origin views, computed from the SAME sites fetch (no extra
     // upstream/cache call): `originStopAreaIds` is the pre-existing BROAD per-site membership
@@ -151,9 +192,22 @@ export function createJourneyDisruptionsRoute(
     }
 
     let legScopes: ResolvedLegScope[];
+    // Only a SUCCESSFUL rich resolution (never the legacy fallback) carries genuine ordered
+    // per-leg stop data the segment-parsing enhancement below can build actual travelled edges
+    // from -- see buildActualLegEdgesByLine's own doc for why that needs real StopPointDirectory
+    // resolutions, not the legacy path's synthetic origin-only PARTIAL scope.
+    let richResolution: { context: NonNullable<typeof disruptionContext>; resolutions: ReadonlyMap<PatternPointGid, StopPointResolution> } | null = null;
     if (disruptionContext != null && disruptionContext.version === JOURNEY_DISRUPTION_CONTEXT_VERSION) {
       try {
         legScopes = await resolveLegScopes(disruptionContext, stopPointDirectory, originFallback);
+        // A second, independent resolveMany call for the exact same gids resolveLegScopes just
+        // used -- StopPointDirectory's own snapshot is already cached from that call, so this is
+        // a cheap local map lookup, never a second upstream fetch (see that service's own doc).
+        // Deliberately NOT threaded through journeyDisruptionScope.ts itself, which this feature
+        // keeps completely unchanged -- see domain/requestedCorridor.ts's own doc.
+        const allGids = disruptionContext.legs.flatMap((leg) => leg.stopPatternPointGids);
+        const resolutions = await stopPointDirectory.resolveMany(allGids);
+        richResolution = { context: disruptionContext, resolutions };
       } catch (err) {
         if (!(err instanceof AppError)) throw err;
         legScopes = legacyLegScopes(legs, originStopAreaIds);
@@ -164,12 +218,54 @@ export function createJourneyDisruptionsRoute(
 
     const journeyWindow: JourneyTimeWindow | null = departureTime != null && arrivalTime != null ? { departureTime, arrivalTime } : null;
 
+    // The segment-parsing relevance enhancement's own optional context (see
+    // domain/disruptionRelevance.ts's own SegmentEvidenceContext doc) -- built only when both a
+    // rich (non-legacy) resolution succeeded AND a LineTopologyDirectory was actually wired up;
+    // `undefined` otherwise makes resolveJourneyDisruptionsAsync behave exactly like the
+    // synchronous resolver it wraps.
+    let segmentContext: SegmentEvidenceContext | undefined;
+    if (richResolution != null && lineTopologyDirectory != null) {
+      const actualLegEdgesByLine = buildActualLegEdgesByLine(richResolution.context, richResolution.resolutions);
+
+      // Requested-endpoint resolution is LAZY, not eager (production-readiness review, item 22):
+      // an earlier version of this route always resolved journeyOriginId/journeyDestinationId
+      // here, unconditionally, even for a request with no line-only deviations at all (or none
+      // whose text parses a supported segment) -- pure wasted work in the common case. This
+      // closure is only ever actually invoked by evaluateLineSegmentEvidence
+      // (domain/disruptionRelevance.ts) when a specific line's own evidence genuinely needs
+      // requested-corridor proof, and is memoized within this one request: the FIRST deviation/
+      // line that needs it triggers the resolveSiteId + getAllSites calls; every subsequent one
+      // (a different deviation on the same or another matched line) reuses the same in-flight/
+      // resolved promise, never a second round trip per request.
+      let requestedEndpointsPromise: Promise<{ originSite: Site; destinationSite: Site } | null> | undefined;
+      const getRequestedEndpoints = (): Promise<{ originSite: Site; destinationSite: Site } | null> => {
+        if (journeyOriginId == null || journeyDestinationId == null || journeyEndpointSiteResolver == null) {
+          return Promise.resolve(null);
+        }
+        requestedEndpointsPromise ??= (async () => {
+          const [originSiteId2, destinationSiteId2] = await Promise.all([
+            journeyEndpointSiteResolver.resolveSiteId(journeyOriginId),
+            journeyEndpointSiteResolver.resolveSiteId(journeyDestinationId),
+          ]);
+          if (originSiteId2 == null || destinationSiteId2 == null) return null;
+          const sites = await siteDirectory.getAllSites();
+          const originSite = sites.find((s) => s.siteId === originSiteId2);
+          const destinationSite = sites.find((s) => s.siteId === destinationSiteId2);
+          return originSite != null && destinationSite != null ? { originSite, destinationSite } : null;
+        })();
+        return requestedEndpointsPromise;
+      };
+
+      segmentContext = { topologyDirectory: lineTopologyDirectory, actualLegEdgesByLine, requestedEndpoints: getRequestedEndpoints };
+    }
+
     const snapshot = await snapshotService.getSnapshot();
-    const disruptions: ResolvedJourneyDisruption[] = resolveJourneyDisruptions(
+    const disruptions: ResolvedJourneyDisruption[] = await resolveJourneyDisruptionsAsync(
       journeyPlannerNotices,
       snapshot.deviations,
       legScopes,
       journeyWindow,
+      segmentContext,
     );
 
     // Mirrors /api/v1/journeys' own short edge cache -- this is derived from the same
