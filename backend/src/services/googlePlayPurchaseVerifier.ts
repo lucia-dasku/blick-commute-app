@@ -63,11 +63,13 @@ export interface GooglePlayPurchaseVerifier {
     purchaseToken: string,
     options?: PurchaseVerificationOptions,
   ): Promise<PurchaseVerificationResult>;
+  reviewPendingRefund(orderId: string, pendingRefundToken: string): Promise<void>;
 }
 
 export interface GooglePlayApiClient {
   getProductPurchase(purchaseToken: string): Promise<unknown | undefined>;
   acknowledgeProduct(purchaseToken: string): Promise<void>;
+  reviewRefund(orderId: string, pendingRefundToken: string): Promise<void>;
 }
 
 function base64Url(value: string | Buffer): string {
@@ -180,6 +182,29 @@ export function createGooglePlayApiClient(
       const response = await publisherRequest(purchaseToken, true);
       if (!response.ok) throw new AppError("UPSTREAM_ERROR", "Google Play purchase acknowledgement failed");
     },
+    async reviewRefund(orderId: string, pendingRefundToken: string): Promise<void> {
+      const token = await accessToken();
+      const url = `https://androidpublisher.googleapis.com/androidpublisher/v3/applications/` +
+        `${encodeURIComponent(ANDROID_PACKAGE_NAME)}/orders/${encodeURIComponent(orderId)}:reviewrefund`;
+      let response: Response;
+      try {
+        response = await fetchImpl(url, {
+          method: "POST",
+          headers: {
+            Authorization: `Bearer ${token}`,
+            "Content-Type": "application/json",
+          },
+          body: JSON.stringify({
+            pendingRefundToken,
+            sampleContentProvided: true,
+            refundPreference: "NEUTRAL",
+          }),
+        });
+      } catch {
+        throw new AppError("UPSTREAM_ERROR", "Google Play refund review response failed");
+      }
+      if (!response.ok) throw new AppError("UPSTREAM_ERROR", "Google Play refund review response failed");
+    },
   };
 }
 
@@ -214,6 +239,12 @@ export function createGooglePlayPurchaseVerifier(
   const googlePlay = config && (apiClient ?? createGooglePlayApiClient(config));
 
   return {
+    async reviewPendingRefund(orderId: string, pendingRefundToken: string): Promise<void> {
+      if (!config || !googlePlay) {
+        throw new AppError("UPSTREAM_ERROR", "Purchase verification is temporarily unavailable");
+      }
+      await googlePlay.reviewRefund(orderId, pendingRefundToken);
+    },
     async verifyAndAcknowledge(
       purchaseToken: string,
       options: PurchaseVerificationOptions = {},

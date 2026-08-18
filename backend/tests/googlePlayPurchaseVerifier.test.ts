@@ -45,6 +45,7 @@ function setup(response: unknown | undefined = purchase()) {
   const api: GooglePlayApiClient = {
     getProductPurchase: vi.fn(async () => response),
     acknowledgeProduct: vi.fn(async () => {}),
+    reviewRefund: vi.fn(async () => {}),
   };
   return { store, api, verifier: createGooglePlayPurchaseVerifier(config, store, api, () => checkedAt) };
 }
@@ -139,6 +140,33 @@ function realApiConfig() {
 }
 
 describe("Google Play HTTP client failures", () => {
+  it("submits the minimal neutral refund-review response without usage evidence", async () => {
+    const fetchMock = vi.fn()
+      .mockResolvedValueOnce(new Response(JSON.stringify({ access_token: "access" }), { status: 200 }))
+      .mockResolvedValueOnce(new Response(null, { status: 200 }));
+    await createGooglePlayApiClient(realApiConfig(), fetchMock)
+      .reviewRefund("order-123", "pending-review-token");
+    const [url, init] = fetchMock.mock.calls[1] as unknown as [string, RequestInit];
+    expect(url).toContain("/orders/order-123:reviewrefund");
+    expect(JSON.parse(init.body as string)).toEqual({
+      pendingRefundToken: "pending-review-token",
+      sampleContentProvided: true,
+      refundPreference: "NEUTRAL",
+    });
+  });
+
+  it("sanitizes refund-review API failures without exposing its token", async () => {
+    const fetchMock = vi.fn()
+      .mockResolvedValueOnce(new Response(JSON.stringify({ access_token: "access" }), { status: 200 }))
+      .mockResolvedValueOnce(new Response("upstream body", { status: 500 }));
+    const sensitiveToken = "pending-review-sensitive-value";
+    const error = await createGooglePlayApiClient(realApiConfig(), fetchMock)
+      .reviewRefund("order-123", sensitiveToken)
+      .catch((caught: unknown) => caught);
+    expect(error).toMatchObject({ code: "UPSTREAM_ERROR", message: "Google Play refund review response failed" });
+    expect(JSON.stringify(error)).not.toContain(sensitiveToken);
+  });
+
   it.each([400, 500])("sanitizes a Google HTTP %i response", async (status) => {
     const fetchMock = vi.fn()
       .mockResolvedValueOnce(new Response(JSON.stringify({ access_token: "access", expires_in: 3600 }), { status: 200 }))

@@ -33,9 +33,22 @@ const NotificationSchema = z.object({
     productType: z.literal(2),
     refundType: z.number().int(),
   }).optional(),
+  pendingRefundReviewNotification: z.object({
+    version: z.string().optional(),
+    pendingRefundToken: z.string().min(1).max(4096),
+    orderId: z.string().min(1),
+    refundReason: z.number().int().nonnegative(),
+    obfuscatedAccountId: z.string().optional(),
+    obfuscatedProfileId: z.string().optional(),
+  }).optional(),
   testNotification: z.object({ version: z.string().optional() }).optional(),
 }).superRefine((value, context) => {
-  const count = [value.oneTimeProductNotification, value.voidedPurchaseNotification, value.testNotification]
+  const count = [
+    value.oneTimeProductNotification,
+    value.voidedPurchaseNotification,
+    value.pendingRefundReviewNotification,
+    value.testNotification,
+  ]
     .filter(Boolean).length;
   if (count !== 1) context.addIssue({ code: "custom", message: "Exactly one notification payload is required" });
 });
@@ -101,6 +114,7 @@ export function createGooglePlayRtdnHandler(
       try {
         const oneTime = notification.data.oneTimeProductNotification;
         const voided = notification.data.voidedPurchaseNotification;
+        const pendingRefund = notification.data.pendingRefundReviewNotification;
         if (oneTime) {
           await verifier.verifyAndAcknowledge(oneTime.purchaseToken, {
             forceGoogleRefresh: true,
@@ -115,6 +129,11 @@ export function createGooglePlayRtdnHandler(
             expectedLifecycle: "INACTIVE",
             notificationOrderId: voided.orderId,
           });
+        } else if (pendingRefund) {
+          // A review request is not an authoritative refund. Blick has no account or usage
+          // evidence to submit, so it responds neutrally without changing entitlement. A later
+          // voided-purchase notification still forces the normal Google lifecycle revalidation.
+          await verifier.reviewPendingRefund(pendingRefund.orderId, pendingRefund.pendingRefundToken);
         }
         await store.completeRtdnMessage(envelope.data.message.messageId);
       } catch (error) {

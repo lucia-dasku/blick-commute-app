@@ -35,6 +35,12 @@ interface RoutineScheduler {
      * mid-run enabled/existence re-check (see [RoutineActiveWindowWorker]) handle that. */
     fun cancelActivation(routineId: String)
 
+    /** Diagnostic overload for callers that know why cancellation is deliberate. Existing
+     * implementations and test fakes remain source-compatible through the default delegation. */
+    fun cancelActivation(routineId: String, reason: RoutineCancellationReason) {
+        cancelActivation(routineId)
+    }
+
     /** Reports whether this routine's active-window worker is genuinely `RUNNING` right now —
      * used by [NotificationRecoveryCoordinator] to decide whether it is safe to call
      * [scheduleActivation] at all: that call's `ExistingWorkPolicy.REPLACE` (see

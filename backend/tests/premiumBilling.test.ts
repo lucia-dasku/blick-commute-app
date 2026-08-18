@@ -8,6 +8,7 @@ describe("premium billing verification route", () => {
   it("accepts only the configured lifetime product and returns no-store", async () => {
     const verifier: GooglePlayPurchaseVerifier = {
       async verifyAndAcknowledge() { return { verified: true, state: "PURCHASED", verifiedAt: "2026-08-18T00:00:00.000Z" }; },
+      async reviewPendingRefund() {},
     };
     const response = await createBillingRoute(verifier).request("/verify", {
       method: "POST",
@@ -25,6 +26,7 @@ describe("premium billing verification route", () => {
     let calls = 0;
     const verifier: GooglePlayPurchaseVerifier = {
       async verifyAndAcknowledge() { calls++; return { verified: true, state: "PURCHASED", verifiedAt: "2026-08-18T00:00:00.000Z" }; },
+      async reviewPendingRefund() {},
     };
     const app = createBillingRoute(verifier);
     app.onError((error, c) => c.json({ error: error.message }, 400));
@@ -41,6 +43,7 @@ describe("premium billing verification route", () => {
     let limiterKey = "";
     const verifier: GooglePlayPurchaseVerifier = {
       async verifyAndAcknowledge() { calls++; return { verified: true, state: "PURCHASED", verifiedAt: "2026-08-18T00:00:00.000Z" }; },
+      async reviewPendingRefund() {},
     };
     const app = createBillingRoute(verifier, { allow: async (fingerprint) => {
       limiterKey = fingerprint;
@@ -61,6 +64,7 @@ describe("premium billing verification route", () => {
   it("exposes the authenticated Pub/Sub handler as a no-store 204 endpoint", async () => {
     const verifier: GooglePlayPurchaseVerifier = {
       async verifyAndAcknowledge() { return { verified: false, state: "UNKNOWN", verifiedAt: "2026-08-18T00:00:00.000Z" }; },
+      async reviewPendingRefund() {},
     };
     const handle = vi.fn(async () => {});
     const response = await createBillingRoute(verifier, undefined, { handle }).request("/rtdn", {

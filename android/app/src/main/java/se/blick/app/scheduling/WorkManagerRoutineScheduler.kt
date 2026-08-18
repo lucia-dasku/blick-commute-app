@@ -1,6 +1,7 @@
 package se.blick.app.scheduling
 
 import android.content.Context
+import android.os.Build
 import android.util.Log
 import androidx.work.ExistingWorkPolicy
 import androidx.work.OneTimeWorkRequestBuilder
@@ -83,6 +84,7 @@ class WorkManagerRoutineScheduler @Inject constructor(
                     "${durationValidation.weekday}); refusing to schedule it. Leaving it stored " +
                     "so the user can correct it.",
             )
+            logCancellationRequest(routine.id, "invalid_duration")
             workManager.cancelUniqueWork(uniqueWorkName(routine.id))
             return
         }
@@ -100,6 +102,12 @@ class WorkManagerRoutineScheduler @Inject constructor(
             is NextOccurrence.ActiveNow -> Duration.ZERO
             is NextOccurrence.Upcoming -> Duration.between(now, occurrence.windowStart)
             NextOccurrence.None -> {
+                val reason = when {
+                    !routine.enabled -> "routine_disabled"
+                    routine.pausedDate != null -> "routine_paused_or_no_eligible_occurrence"
+                    else -> "no_eligible_occurrence"
+                }
+                logCancellationRequest(routine.id, reason)
                 workManager.cancelUniqueWork(uniqueWorkName(routine.id))
                 return
             }
@@ -111,10 +119,25 @@ class WorkManagerRoutineScheduler @Inject constructor(
             .addTag(WORK_TAG)
             .build()
 
+        val scheduleReason = if (routine.pausedDate != null) {
+            "routine_paused_reschedule"
+        } else {
+            "initial_or_replacement_reschedule"
+        }
+        Log.i(
+            LOG_TAG,
+            "action=enqueue_replace routineId=${routine.id} workerId=${request.id} " +
+                "scheduleReason=$scheduleReason sdk=${Build.VERSION.SDK_INT}",
+        )
         workManager.enqueueUniqueWork(uniqueWorkName(routine.id), ExistingWorkPolicy.REPLACE, request)
     }
 
     override fun cancelActivation(routineId: String) {
+        cancelActivation(routineId, RoutineCancellationReason.EXPLICIT_APP_CANCELLATION)
+    }
+
+    override fun cancelActivation(routineId: String, reason: RoutineCancellationReason) {
+        logCancellationRequest(routineId, reason.name)
         WorkManager.getInstance(context).cancelUniqueWork(uniqueWorkName(routineId))
     }
 
@@ -122,10 +145,30 @@ class WorkManagerRoutineScheduler @Inject constructor(
      * — its own `.get()` is dispatched onto [Dispatchers.IO] rather than blocking whichever
      * dispatcher this suspend function happens to be called from. */
     override suspend fun isActivationRunning(routineId: String): Boolean = withContext(Dispatchers.IO) {
-        WorkManager.getInstance(context)
+        val workInfos = WorkManager.getInstance(context)
             .getWorkInfosForUniqueWork(uniqueWorkName(routineId))
             .get()
-            .any { it.state == WorkInfo.State.RUNNING }
+        workInfos.forEach { workInfo ->
+            Log.i(
+                LOG_TAG,
+                formatWorkInfoDiagnostic(
+                    routineId = routineId,
+                    workerId = workInfo.id.toString(),
+                    state = workInfo.state.name,
+                    stopReason = workInfoStopReasonOrNull(workInfo),
+                    sdkInt = Build.VERSION.SDK_INT,
+                ),
+            )
+        }
+        workInfos.any { it.state == WorkInfo.State.RUNNING }
+    }
+
+    private fun logCancellationRequest(routineId: String, reason: String) {
+        Log.i(
+            LOG_TAG,
+            "action=cancel_requested routineId=$routineId cancellationReason=$reason " +
+                "sdk=${Build.VERSION.SDK_INT}",
+        )
     }
 
     companion object {

@@ -61,9 +61,10 @@ authenticated RTDN handler and Google revalidation. Complete these external step
   JSON key or private key for Pub/Sub in the repository.
 - Confirm the test notification receives `204`, then monitor Pub/Sub delivery failures and backend
   Google API errors. Configure an appropriate retry policy/dead-letter handling operationally.
-- Exercise completed purchase, pending-to-purchased, duplicate delivery, refund, revoke and
-  cancellation with Play license testers; confirm each is reflected in PostgreSQL and Android on
-  the next foreground verification.
+- Exercise completed purchase, pending-to-purchased, duplicate delivery, pending refund review,
+  final refund, revoke and cancellation with Play license testers. Confirm the review receives a
+  neutral response without changing entitlement, then confirm a final refund/revoke is reflected
+  in PostgreSQL and Android on the next foreground verification.
 
 The app remains accountless: a purchaser restores through the Google account currently available
 to BillingClient. The server intentionally permits repeated verification of the same legitimate
