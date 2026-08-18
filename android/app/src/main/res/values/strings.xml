@@ -5,8 +5,10 @@
     <string name="app_name" translatable="false">Blick</string>
 
     <string name="routine_list_title">Your commute routines</string>
+    <string name="routine_list_subtitle">Stay updated. Always on time.</string>
     <string name="routine_list_empty">No routines yet. Add one to see departures automatically.</string>
     <string name="routine_list_add">Add routine</string>
+    <string name="routine_list_open">Open %1$s</string>
     <string name="routine_list_free_limit_title">Free includes one routine</string>
     <string name="routine_list_free_limit_body">Upgrade to Blick Premium to save multiple routines and compare complete journeys to an exact destination.</string>
     <string name="routine_list_premium_locked">Paused · Premium routine</string>
@@ -182,6 +184,15 @@
     <string name="routine_create_start_time_label">Start time</string>
     <string name="routine_create_end_time_label">End time</string>
     <string name="routine_create_name_label">Routine name</string>
+    <string name="routine_label_field_title">Label (optional)</string>
+    <string name="routine_label_none">No label</string>
+    <string name="routine_label_work">Work</string>
+    <string name="routine_label_home">Home</string>
+    <string name="routine_label_gym">Gym</string>
+    <string name="routine_label_study">Study</string>
+    <string name="routine_label_hobby">Hobby</string>
+    <string name="routine_label_other">Other</string>
+    <string name="brand_wordmark" translatable="false">blick</string>
     <string name="routine_create_error_no_days">Select at least one day.</string>
     <string name="routine_create_error_time_range">Start and end time must be different.</string>
     <string name="routine_create_error_duration_limit">Your active commute window can be up to 5 hours.</string>
@@ -225,6 +236,26 @@
     <string name="settings_language_label">Language</string>
     <string name="settings_language_option_english" translatable="false">English</string>
     <string name="settings_language_option_swedish" translatable="false">Svenska</string>
+    <string name="settings_section_preferences">Preferences</string>
+    <string name="settings_section_commute">Commute</string>
+    <string name="settings_section_premium">Premium</string>
+    <string name="settings_section_support">Support</string>
+    <string name="settings_section_about">About</string>
+    <string name="settings_appearance_label">Appearance</string>
+    <string name="settings_appearance_system">System</string>
+    <string name="settings_appearance_light">Light</string>
+    <string name="settings_appearance_dark">Dark</string>
+    <string name="settings_notifications_label">Notifications</string>
+    <string name="settings_notifications_on">On</string>
+    <string name="settings_notifications_off">Off</string>
+    <string name="settings_notifications_permission_required">Permission required</string>
+    <string name="settings_live_updates_label">Live Updates</string>
+    <string name="settings_live_updates_requires_android_16">Requires Android 16+</string>
+    <string name="settings_premium_label">Blick Premium</string>
+    <string name="settings_premium_status_free">Free</string>
+    <string name="settings_premium_status_premium">Premium</string>
+    <string name="settings_contact_support_label">Contact Blick Labs</string>
+    <string name="settings_support_email_subject">Blick support</string>
     <string name="about_tagline">Blick shows upcoming departures and disruptions for your saved commute.</string>
     <string name="about_version_label">Version %1$s (build %2$d)</string>
     <string name="about_section_data_attribution">Data and attribution</string>
@@ -239,6 +270,7 @@
     <string name="about_privacy_usage">We use this information only to operate, secure and improve Blick. We do not sell personal data or use it for advertising.</string>
     <string name="about_privacy_contact">For privacy questions or deletion requests, contact: contactblicklabs@gmail.com</string>
     <string name="about_privacy_updates">We may update this policy if Blick\'s features or data practices change.</string>
+    <string name="about_privacy_read_more">Read more:</string>
     <string name="about_copyright">© 2026 Blick Labs</string>
     <string name="about_section_open_source_licences">Open-source licences</string>
     <string name="about_open_source_licences_body">Blick uses open-source software. Copyright notices and licence terms for third-party software are available on the Blick Labs website.</string>

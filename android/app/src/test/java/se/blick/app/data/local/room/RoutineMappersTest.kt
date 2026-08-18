@@ -2,6 +2,7 @@ package se.blick.app.data.local.room
 
 import se.blick.app.domain.model.CommuteRoutine
 import se.blick.app.domain.model.ExactDestinationChangesPreference
+import se.blick.app.domain.model.RoutineLabel
 import se.blick.app.domain.model.TransportMode
 import java.time.DayOfWeek
 import java.time.LocalDate
@@ -10,6 +11,37 @@ import org.junit.Test
 import org.junit.Assert.assertEquals
 
 class RoutineMappersTest {
+
+    @Test
+    fun `every optional routine label round-trips through the entity`() {
+        for (label in RoutineLabel.entries) {
+            val routine = sampleRoutine().copy(label = label)
+
+            assertEquals(label, routine.toEntity().toDomain().label)
+        }
+        assertEquals(null, sampleRoutine().toEntity().toDomain().label)
+    }
+
+    @Test
+    fun `an unrecognized persisted label is treated as no label`() {
+        val entity = sampleRoutine().toEntity().copy(label = "NOT_A_LABEL")
+
+        assertEquals(null, entity.toDomain().label)
+    }
+
+    private fun sampleRoutine() = CommuteRoutine(
+        name = "Morning commute",
+        siteId = 1,
+        siteName = "Origin",
+        transportMode = TransportMode.METRO,
+        lineId = 14,
+        lineDesignation = "14",
+        directionCode = 1,
+        destinationLabel = "Destination",
+        activeDays = setOf(DayOfWeek.MONDAY),
+        startTime = LocalTime.of(7, 0),
+        endTime = LocalTime.of(8, 0),
+    )
 
     @Test
     fun `round-trips a routine with a multi-day active set and a paused date through entity and back`() {

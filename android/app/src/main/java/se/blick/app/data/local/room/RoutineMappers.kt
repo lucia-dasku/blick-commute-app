@@ -5,6 +5,7 @@ import se.blick.app.domain.model.DEFAULT_JOURNEY_TRANSPORT_MODES
 import se.blick.app.domain.model.JOURNEY_TRANSPORT_MODE_OPTIONS
 import se.blick.app.domain.model.TransportMode
 import se.blick.app.domain.model.toExactDestinationChangesPreference
+import se.blick.app.domain.model.toRoutineLabelOrNull
 import se.blick.app.domain.model.toTransportMode
 import java.time.DayOfWeek
 import java.time.LocalDate
@@ -49,6 +50,7 @@ fun RoutineEntity.toDomain(): CommuteRoutine = CommuteRoutine(
     journeyDestinationName = journeyDestinationName,
     allowedJourneyTransportModes = allowedJourneyTransportModes.toJourneyTransportModes(),
     changesPreference = changesPreference.toExactDestinationChangesPreference(),
+    label = label.toRoutineLabelOrNull(),
 )
 
 fun CommuteRoutine.toEntity(): RoutineEntity = RoutineEntity(
@@ -73,4 +75,5 @@ fun CommuteRoutine.toEntity(): RoutineEntity = RoutineEntity(
     journeyDestinationName = journeyDestinationName,
     allowedJourneyTransportModes = allowedJourneyTransportModes.toPersistedJourneyTransportModes(),
     changesPreference = changesPreference.name,
+    label = label?.name,
 )

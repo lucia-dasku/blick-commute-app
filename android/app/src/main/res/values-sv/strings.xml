@@ -4,8 +4,10 @@
          unchanged in every locale, so the default values/strings.xml entry is used as-is. -->
 
     <string name="routine_list_title">Dina pendlingsrutiner</string>
+    <string name="routine_list_subtitle">Håll dig uppdaterad. Alltid i tid.</string>
     <string name="routine_list_empty">Inga rutiner än. Lägg till en för att se avgångar automatiskt.</string>
     <string name="routine_list_add">Lägg till rutin</string>
+    <string name="routine_list_open">Öppna %1$s</string>
     <string name="routine_list_free_limit_title">Gratis innehåller en rutin</string>
     <string name="routine_list_free_limit_body">Uppgradera till Blick Premium för att spara flera rutiner och jämföra kompletta resor till en exakt destination.</string>
     <string name="routine_list_premium_locked">Pausad · Premiumrutin</string>
@@ -150,6 +152,14 @@
     <string name="routine_create_start_time_label">Starttid</string>
     <string name="routine_create_end_time_label">Sluttid</string>
     <string name="routine_create_name_label">Rutinnamn</string>
+    <string name="routine_label_field_title">Etikett (valfritt)</string>
+    <string name="routine_label_none">Ingen etikett</string>
+    <string name="routine_label_work">Arbete</string>
+    <string name="routine_label_home">Hem</string>
+    <string name="routine_label_gym">Gym</string>
+    <string name="routine_label_study">Studier</string>
+    <string name="routine_label_hobby">Hobby</string>
+    <string name="routine_label_other">Övrigt</string>
     <string name="routine_create_error_no_days">Välj minst en dag.</string>
     <string name="routine_create_error_time_range">Start- och sluttiden måste vara olika.</string>
     <string name="routine_create_error_duration_limit">Rutinen kan vara aktiv i högst 5 timmar.</string>
@@ -177,6 +187,26 @@
          overridden here — see values/strings.xml's own comment: both must stay identical
          ("English"/"Svenska") in every locale. -->
     <string name="settings_language_label">Språk</string>
+    <string name="settings_section_preferences">Preferenser</string>
+    <string name="settings_section_commute">Pendling</string>
+    <string name="settings_section_premium">Premium</string>
+    <string name="settings_section_support">Support</string>
+    <string name="settings_section_about">Om</string>
+    <string name="settings_appearance_label">Utseende</string>
+    <string name="settings_appearance_system">System</string>
+    <string name="settings_appearance_light">Ljust</string>
+    <string name="settings_appearance_dark">Mörkt</string>
+    <string name="settings_notifications_label">Aviseringar</string>
+    <string name="settings_notifications_on">På</string>
+    <string name="settings_notifications_off">Av</string>
+    <string name="settings_notifications_permission_required">Behörighet krävs</string>
+    <string name="settings_live_updates_label">Liveuppdateringar</string>
+    <string name="settings_live_updates_requires_android_16">Kräver Android 16+</string>
+    <string name="settings_premium_label">Blick Premium</string>
+    <string name="settings_premium_status_free">Gratis</string>
+    <string name="settings_premium_status_premium">Premium</string>
+    <string name="settings_contact_support_label">Kontakta Blick Labs</string>
+    <string name="settings_support_email_subject">Blick-support</string>
     <string name="about_tagline">Blick visar kommande avgångar och trafikstörningar för din sparade pendling.</string>
     <string name="about_version_label">Version %1$s (byggnummer %2$d)</string>
     <string name="about_section_data_attribution">Data och källhänvisning</string>
@@ -191,6 +221,7 @@
     <string name="about_privacy_usage">Vi använder denna information endast för att driva, skydda och förbättra Blick. Vi säljer inte personuppgifter och använder dem inte för reklam.</string>
     <string name="about_privacy_contact">Vid frågor om integritet eller begäran om radering, kontakta: contactblicklabs@gmail.com</string>
     <string name="about_privacy_updates">Vi kan uppdatera denna policy om Blicks funktioner eller datahantering ändras.</string>
+    <string name="about_privacy_read_more">Läs mer:</string>
     <string name="about_copyright">© 2026 Blick Labs</string>
     <string name="about_section_open_source_licences">Licenser för öppen källkod</string>
     <string name="about_open_source_licences_body">Blick använder programvara med öppen källkod. Upphovsrättsmeddelanden och licensvillkor för tredjepartsprogramvara finns tillgängliga på webbplatsen för Blick Labs.</string>

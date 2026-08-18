@@ -10,14 +10,18 @@ import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.setValue
+import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import androidx.navigation.compose.rememberNavController
 import dagger.hilt.android.AndroidEntryPoint
+import se.blick.app.data.local.datastore.AppSettings
+import se.blick.app.data.local.datastore.AppSettingsDataStore
 import se.blick.app.locale.withAppLocale
 import se.blick.app.notification.NotificationIntentCoordinator
 import se.blick.app.notification.RoutineNotificationIds
 import se.blick.app.ui.navigation.BlickNavHost
 import se.blick.app.ui.navigation.Routes
 import se.blick.app.ui.theme.BlickTheme
+import javax.inject.Inject
 
 /**
  * Single Activity hosting the whole Compose Navigation graph (see [BlickNavHost]).
@@ -86,6 +90,8 @@ import se.blick.app.ui.theme.BlickTheme
 @AndroidEntryPoint
 class MainActivity : AppCompatActivity() {
 
+    @Inject lateinit var appSettingsDataStore: AppSettingsDataStore
+
     private var pendingRoutineId by mutableStateOf<String?>(null)
 
     override fun attachBaseContext(newBase: Context) {
@@ -97,7 +103,10 @@ class MainActivity : AppCompatActivity() {
         enableEdgeToEdge()
         pendingRoutineId = NotificationIntentCoordinator.consumeRoutineId(intent)
         setContent {
-            BlickTheme {
+            val appSettings by appSettingsDataStore.settings.collectAsStateWithLifecycle(
+                initialValue = AppSettings(),
+            )
+            BlickTheme(useDarkTheme = appSettings.useDarkTheme) {
                 val navController = rememberNavController()
                 LaunchedEffect(pendingRoutineId) {
                     val routineId = pendingRoutineId ?: return@LaunchedEffect

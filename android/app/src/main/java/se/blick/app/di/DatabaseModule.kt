@@ -13,6 +13,7 @@ import se.blick.app.data.local.room.MIGRATION_3_4
 import se.blick.app.data.local.room.MIGRATION_4_5
 import se.blick.app.data.local.room.MIGRATION_5_6
 import se.blick.app.data.local.room.MIGRATION_6_7
+import se.blick.app.data.local.room.MIGRATION_7_8
 import se.blick.app.data.local.room.RoutineDao
 import se.blick.app.data.local.room.BlickDatabase
 import se.blick.app.data.local.room.RoutineOccurrenceRuntimeDao
@@ -28,7 +29,15 @@ object DatabaseModule {
     @Singleton
     fun provideDatabase(@ApplicationContext context: Context): BlickDatabase =
         Room.databaseBuilder(context, BlickDatabase::class.java, "blick.db")
-            .addMigrations(MIGRATION_1_2, MIGRATION_2_3, MIGRATION_3_4, MIGRATION_4_5, MIGRATION_5_6, MIGRATION_6_7)
+            .addMigrations(
+                MIGRATION_1_2,
+                MIGRATION_2_3,
+                MIGRATION_3_4,
+                MIGRATION_4_5,
+                MIGRATION_5_6,
+                MIGRATION_6_7,
+                MIGRATION_7_8,
+            )
             .build()
 
     @Provides

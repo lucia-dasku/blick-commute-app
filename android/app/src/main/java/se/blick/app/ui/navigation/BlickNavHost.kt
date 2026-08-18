@@ -10,6 +10,9 @@ import androidx.navigation.compose.NavHost
 import androidx.navigation.compose.composable
 import androidx.navigation.compose.rememberNavController
 import se.blick.app.ui.screens.about.AboutScreen
+import se.blick.app.ui.screens.about.DataAttributionScreen
+import se.blick.app.ui.screens.about.OpenSourceLicencesScreen
+import se.blick.app.ui.screens.about.PrivacyPolicyScreen
 import se.blick.app.ui.screens.premium.PremiumScreen
 import se.blick.app.ui.screens.routinecreate.RoutineCreateScreen
 import se.blick.app.ui.screens.routinedetails.RoutineDetailsScreen
@@ -35,7 +38,22 @@ fun BlickNavHost(navController: NavHostController = rememberNavController()) {
             )
         }
         composable(Routes.About.route) {
-            AboutScreen(onBack = { navController.popBackStack() })
+            AboutScreen(
+                onBack = { navController.popBackStack() },
+                onOpenPremium = { navController.navigate(Routes.Premium.route) },
+                onOpenPrivacyPolicy = { navController.navigate(Routes.PrivacyPolicy.route) },
+                onOpenDataAttribution = { navController.navigate(Routes.DataAttribution.route) },
+                onOpenOpenSourceLicences = { navController.navigate(Routes.OpenSourceLicences.route) },
+            )
+        }
+        composable(Routes.PrivacyPolicy.route) {
+            PrivacyPolicyScreen(onBack = { navController.popBackStack() })
+        }
+        composable(Routes.DataAttribution.route) {
+            DataAttributionScreen(onBack = { navController.popBackStack() })
+        }
+        composable(Routes.OpenSourceLicences.route) {
+            OpenSourceLicencesScreen(onBack = { navController.popBackStack() })
         }
         composable(Routes.Premium.route) {
             PremiumScreen(onBack = { navController.popBackStack() })

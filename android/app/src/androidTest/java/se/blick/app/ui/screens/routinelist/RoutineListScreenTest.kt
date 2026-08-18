@@ -18,6 +18,7 @@ import androidx.test.ext.junit.runners.AndroidJUnit4
 import java.time.DayOfWeek
 import java.time.LocalTime
 import org.junit.Assert.assertEquals
+import org.junit.Assert.assertTrue
 import org.junit.Rule
 import org.junit.Test
 import org.junit.runner.RunWith
@@ -25,6 +26,8 @@ import se.blick.app.R
 import se.blick.app.billing.EntitlementState
 import se.blick.app.domain.model.CommuteRoutine
 import se.blick.app.domain.model.TransportMode
+import se.blick.app.domain.model.RoutineLabel
+import se.blick.app.ui.components.visuals
 
 /**
  * Instrumented Compose UI test for the restored Add-routine control AND the deliberate
@@ -271,6 +274,129 @@ class RoutineListScreenTest {
         composeRule.onNodeWithText("14").assertDoesNotExist()
         // The rest of the row still renders normally -- omitting the badge is not a wider failure.
         composeRule.onNodeWithText("Morning commute").assertExists()
+    }
+
+    @Test
+    fun labeledRoutineShowsLocalizedLabelBadgeAboveItsName() {
+        composeRule.setContent {
+            RoutineListContent(
+                uiState = RoutineListUiState(
+                    routines = listOf(sampleRoutine().copy(label = RoutineLabel.WORK)),
+                    isLoading = false,
+                ),
+                onAddRoutine = {},
+                onOpenRoutine = {},
+            )
+        }
+
+        composeRule.onNodeWithTag("routine_label_badge_work", useUnmergedTree = true).assertExists()
+        composeRule.onNodeWithTag("routine_label_icon_work", useUnmergedTree = true).assertIsDisplayed()
+        composeRule.onNodeWithTag("routine_label_strip_work", useUnmergedTree = true).assertIsDisplayed()
+        composeRule.onNodeWithTag("routine_card_chevron", useUnmergedTree = true).assertIsDisplayed()
+        composeRule.onNodeWithText(composeRule.activity.getString(R.string.routine_label_work)).assertIsDisplayed()
+        composeRule.onNodeWithText("Morning commute").assertIsDisplayed()
+        composeRule.onNodeWithText("Weekdays · 07:00–09:00").assertIsDisplayed()
+
+        val density = composeRule.activity.resources.displayMetrics.density
+        val card = composeRule.onNodeWithTag(
+            "labeled_routine_card_work",
+            useUnmergedTree = true,
+        ).fetchSemanticsNode().boundsInRoot
+        val strip = composeRule.onNodeWithTag(
+            "routine_label_strip_work",
+            useUnmergedTree = true,
+        ).fetchSemanticsNode().boundsInRoot
+        val icon = composeRule.onNodeWithTag(
+            "routine_label_icon_work",
+            useUnmergedTree = true,
+        ).fetchSemanticsNode().boundsInRoot
+        val route = composeRule.onNodeWithText(
+            "Morning commute",
+            useUnmergedTree = true,
+        ).fetchSemanticsNode().boundsInRoot
+        val chevron = composeRule.onNodeWithTag(
+            "routine_card_chevron",
+            useUnmergedTree = true,
+        ).fetchSemanticsNode().boundsInRoot
+
+        assertEquals(112f * density, card.height, 2f * density)
+        assertEquals(4f * density, strip.width, 1f * density)
+        assertEquals(58f * density, icon.width, 2f * density)
+        assertEquals(58f * density, icon.height, 2f * density)
+        assertTrue(icon.right < route.left)
+        assertTrue(route.right <= chevron.left)
+        assertEquals(card.center.y, icon.center.y, 2f * density)
+        assertEquals(card.center.y, chevron.center.y, 2f * density)
+    }
+
+    @Test
+    fun unlabeledRoutineRendersNormallyWithoutALabelBadge() {
+        composeRule.setContent {
+            RoutineListContent(
+                uiState = RoutineListUiState(routines = listOf(sampleRoutine()), isLoading = false),
+                onAddRoutine = {},
+                onOpenRoutine = {},
+            )
+        }
+
+        RoutineLabel.entries.forEach { label ->
+            composeRule.onNodeWithTag(
+                "routine_label_badge_${label.name.lowercase()}",
+                useUnmergedTree = true,
+            ).assertDoesNotExist()
+            composeRule.onNodeWithTag(
+                "routine_label_strip_${label.name.lowercase()}",
+                useUnmergedTree = true,
+            ).assertDoesNotExist()
+        }
+        composeRule.onNodeWithTag("labeled_routine_card_work", useUnmergedTree = true).assertDoesNotExist()
+        composeRule.onNodeWithText("Morning commute").assertIsDisplayed()
+    }
+
+    @Test
+    fun labeledRoutineCardStillOpensTheExistingRoutineDestination() {
+        var openedRoutineId: String? = null
+        composeRule.setContent {
+            RoutineListContent(
+                uiState = RoutineListUiState(
+                    routines = listOf(sampleRoutine(id = "labeled-1").copy(label = RoutineLabel.HOME)),
+                    isLoading = false,
+                ),
+                onAddRoutine = {},
+                onOpenRoutine = { openedRoutineId = it },
+            )
+        }
+
+        composeRule.onNodeWithTag("labeled_routine_card_home").performClick()
+
+        assertEquals("labeled-1", openedRoutineId)
+    }
+
+    @Test
+    fun routinesScreenShowsTheBlickWordmark() {
+        composeRule.setContent {
+            RoutineListContent(
+                uiState = RoutineListUiState(routines = emptyList(), isLoading = false),
+                onAddRoutine = {},
+                onOpenRoutine = {},
+            )
+        }
+
+        composeRule.onNodeWithTag("blick_wordmark").assertIsDisplayed()
+        composeRule.onNodeWithText("blick").assertIsDisplayed()
+        composeRule.onNodeWithText(
+            composeRule.activity.getString(R.string.routine_list_subtitle),
+        ).assertIsDisplayed()
+    }
+
+    @Test
+    fun everyRoutineLabelHasADistinctCentralIconAndColorIdentity() {
+        val lightVisuals = RoutineLabel.entries.map { it.visuals(darkTheme = false) }
+        val darkVisuals = RoutineLabel.entries.map { it.visuals(darkTheme = true) }
+
+        assertEquals(RoutineLabel.entries.size, lightVisuals.map { it.iconResourceId }.toSet().size)
+        assertEquals(RoutineLabel.entries.size, lightVisuals.map { it.accent }.toSet().size)
+        assertEquals(RoutineLabel.entries.size, darkVisuals.map { it.accent }.toSet().size)
     }
 
     @Test

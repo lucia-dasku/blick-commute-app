@@ -12,7 +12,7 @@ import androidx.sqlite.db.SupportSQLiteDatabase
         RoutineWorkOwnershipEntity::class,
         RoutineOccurrenceRuntimeEntity::class,
     ],
-    version = 7,
+    version = 8,
     exportSchema = true,
 )
 abstract class BlickDatabase : RoomDatabase() {
@@ -118,5 +118,12 @@ val MIGRATION_5_6: Migration = object : Migration(5, 6) {
 val MIGRATION_6_7: Migration = object : Migration(6, 7) {
     override fun migrate(db: SupportSQLiteDatabase) {
         db.execSQL("ALTER TABLE `routines` ADD COLUMN `changesPreference` TEXT NOT NULL DEFAULT 'BOTH'")
+    }
+}
+
+/** Adds optional display-only organization metadata. Existing rows remain unlabeled. */
+val MIGRATION_7_8: Migration = object : Migration(7, 8) {
+    override fun migrate(db: SupportSQLiteDatabase) {
+        db.execSQL("ALTER TABLE `routines` ADD COLUMN `label` TEXT")
     }
 }

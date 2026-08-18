@@ -7,6 +7,12 @@ import java.util.UUID
 
 enum class RoutineType { LINE_DIRECTION, EXACT_DESTINATION }
 
+enum class RoutineLabel { WORK, HOME, GYM, STUDY, HOBBY, OTHER }
+
+/** A missing or unrecognized persisted value is treated as no label. */
+fun String?.toRoutineLabelOrNull(): RoutineLabel? =
+    this?.let { runCatching { RoutineLabel.valueOf(it) }.getOrNull() }
+
 /**
  * An exact-destination routine's persisted choice of which exact-destination journeys are
  * eligible at all — [DIRECT_ONLY] (zero-change journeys only), [BOTH] (the pre-existing,
@@ -76,4 +82,6 @@ data class CommuteRoutine(
      * [RoutineType.LINE_DIRECTION] routine (which never reads this field at all) is therefore
      * unaffected by this field's mere existence. */
     val changesPreference: ExactDestinationChangesPreference = ExactDestinationChangesPreference.BOTH,
+    /** Optional organization metadata; it has no effect on commute behavior. */
+    val label: RoutineLabel? = null,
 )
