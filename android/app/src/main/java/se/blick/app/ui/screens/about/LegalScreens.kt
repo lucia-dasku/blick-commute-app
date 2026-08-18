@@ -23,7 +23,8 @@ import se.blick.app.R
 import se.blick.app.ui.components.BlickTopBar
 
 private const val TRAFIKLAB_URL = "https://www.trafiklab.se/"
-private const val BLICK_LEGAL_URL = "https://blick-labs.vercel.app/blick-privacy"
+internal const val PRIVACY_POLICY_URL = "https://blick-labs.vercel.app/blick-privacy"
+internal const val OPEN_SOURCE_LICENCES_URL = "https://blick-labs.vercel.app/licenses.html"
 internal const val PRIVACY_POLICY_LINK_TAG = "privacy-policy-link"
 
 @Composable
@@ -45,7 +46,7 @@ fun PrivacyPolicyScreen(onBack: () -> Unit) {
         Spacer(Modifier.height(16.dp))
         Text(stringResource(R.string.about_privacy_read_more), style = MaterialTheme.typography.bodyMedium)
         TextButton(
-            onClick = { context.startActivity(Intent(Intent.ACTION_VIEW, BLICK_LEGAL_URL.toUri())) },
+            onClick = { context.startActivity(Intent(Intent.ACTION_VIEW, PRIVACY_POLICY_URL.toUri())) },
             modifier = Modifier.testTag(PRIVACY_POLICY_LINK_TAG),
         ) {
             Text(stringResource(R.string.about_section_privacy_policy))
@@ -75,7 +76,7 @@ fun OpenSourceLicencesScreen(onBack: () -> Unit) {
     LegalContent(title = stringResource(R.string.about_section_open_source_licences), onBack = onBack) {
         Text(stringResource(R.string.about_open_source_licences_body), style = MaterialTheme.typography.bodyLarge)
         TextButton(
-            onClick = { context.startActivity(Intent(Intent.ACTION_VIEW, BLICK_LEGAL_URL.toUri())) },
+            onClick = { context.startActivity(Intent(Intent.ACTION_VIEW, OPEN_SOURCE_LICENCES_URL.toUri())) },
         ) {
             Text(stringResource(R.string.about_open_source_licences_action))
         }

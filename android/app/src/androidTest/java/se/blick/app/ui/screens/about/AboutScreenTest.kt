@@ -11,6 +11,7 @@ import androidx.compose.ui.test.performClick
 import androidx.compose.ui.test.performScrollTo
 import androidx.test.ext.junit.runners.AndroidJUnit4
 import org.junit.Assert.assertEquals
+import org.junit.Assert.assertNotEquals
 import org.junit.Rule
 import org.junit.Test
 import org.junit.runner.RunWith
@@ -205,5 +206,12 @@ class AboutScreenTest {
         composeRule.onNodeWithText(composeRule.activity.getString(R.string.about_open_source_licences_body)).assertExists()
         composeRule.onNodeWithText(composeRule.activity.getString(R.string.about_open_source_licences_action))
             .assertHasClickAction()
+    }
+
+    @Test
+    fun legalDestinationsUseDifferentExpectedUrls() {
+        assertEquals("https://blick-labs.vercel.app/blick-privacy", PRIVACY_POLICY_URL)
+        assertEquals("https://blick-labs.vercel.app/licenses.html", OPEN_SOURCE_LICENCES_URL)
+        assertNotEquals(PRIVACY_POLICY_URL, OPEN_SOURCE_LICENCES_URL)
     }
 }
