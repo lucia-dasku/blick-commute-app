@@ -1,5 +1,11 @@
 import { describe, expect, it } from "vitest";
-import { readPort, readUpstreamTimeoutMs, readRedisConfig } from "../src/config/env.js";
+import {
+  readDatabaseConfig,
+  readGooglePlayRtdnConfig,
+  readPort,
+  readRedisConfig,
+  readUpstreamTimeoutMs,
+} from "../src/config/env.js";
 
 describe("readPort", () => {
   it("defaults to 8787 when unset", () => {
@@ -122,5 +128,24 @@ describe("readRedisConfig", () => {
     expect(() => readRedisConfig("", "secret-token", "development")).toThrow(
       /must both be set, or both left unset/,
     );
+  });
+});
+
+describe("billing runtime configuration", () => {
+  it("accepts PostgreSQL and rejects non-database URLs", () => {
+    expect(readDatabaseConfig("postgresql://user:pass@example.invalid/blick")).toEqual({
+      connectionString: "postgresql://user:pass@example.invalid/blick",
+    });
+    expect(readDatabaseConfig(undefined)).toBeUndefined();
+    expect(() => readDatabaseConfig("https://example.invalid")).toThrow("DATABASE_URL");
+  });
+
+  it("requires the RTDN HTTPS audience and identity together", () => {
+    expect(readGooglePlayRtdnConfig(undefined, undefined)).toBeUndefined();
+    expect(() => readGooglePlayRtdnConfig("https://example.invalid/rtdn", undefined)).toThrow();
+    expect(() => readGooglePlayRtdnConfig("http://example.invalid/rtdn", "pubsub@example.invalid")).toThrow("HTTPS");
+    expect(readGooglePlayRtdnConfig("https://example.invalid/rtdn", "pubsub@example.invalid")).toEqual({
+      audience: "https://example.invalid/rtdn", serviceAccountEmail: "pubsub@example.invalid",
+    });
   });
 });

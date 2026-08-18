@@ -33,7 +33,7 @@ export function onError(err: Error, c: Context) {
     }
     return c.json(
       errorEnvelope(err.code, err.message),
-      err.httpStatus as 400 | 404 | 429 | 500 | 502 | 503 | 504,
+      err.httpStatus as 400 | 401 | 404 | 429 | 500 | 502 | 503 | 504,
     );
   }
 

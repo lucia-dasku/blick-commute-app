@@ -23,8 +23,11 @@ curl "http://localhost:8787/api/v1/journeys?originId=...&destinationId=...&trans
 
 No API key or `.env` values are required to exercise the transit endpoints locally — all
 three SL upstreams are keyless (see `.env.example`). Billing verification deliberately fails
-with a sanitized upstream error until `GOOGLE_PLAY_PACKAGE_NAME`,
-`GOOGLE_PLAY_SERVICE_ACCOUNT_EMAIL`, and `GOOGLE_PLAY_SERVICE_ACCOUNT_PRIVATE_KEY` are set.
+with a sanitized upstream error until the Google Play credentials and `DATABASE_URL` are set.
+Run `npm run migrate:billing` once against the provisioned PostgreSQL database before enabling
+billing traffic. Raw purchase tokens are never stored; the database contains only their SHA-256
+fingerprints and the lifecycle fields documented in `../docs/api-contract.md`. Authenticated RTDN
+also requires `GOOGLE_PLAY_RTDN_AUDIENCE` and `GOOGLE_PLAY_RTDN_SERVICE_ACCOUNT_EMAIL`.
 The shared Upstash
 Redis cache/lock that protects SL Deviations in production (see
 `../docs/api-contract.md`, "Caching and fair use") is **optional** here: with

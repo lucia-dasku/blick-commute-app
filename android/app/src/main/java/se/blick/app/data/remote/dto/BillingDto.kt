@@ -13,4 +13,5 @@ data class PurchaseVerificationResponseDto(
     val productId: String,
     val verified: Boolean,
     val state: String,
+    val verifiedAt: String,
 )

@@ -26,6 +26,7 @@ import se.blick.app.BuildConfig
 import se.blick.app.data.remote.BlickApiClient
 import javax.inject.Inject
 import javax.inject.Singleton
+import java.time.Instant
 import kotlin.coroutines.resume
 
 @Singleton
@@ -118,7 +119,7 @@ class GooglePlayPremiumEntitlementRepository @Inject constructor(
             try {
                 val verification = apiClient.verifyPurchase(PREMIUM_PRODUCT_ID, purchased.purchaseToken)
                 if (verification.verified && verification.state == "PURCHASED") {
-                    cacheVerified(true)
+                    cacheVerified(true, Instant.parse(verification.verifiedAt).toEpochMilli())
                     _entitlement.value = BillingEntitlementReducer.reduce(
                         PurchaseObservation.PURCHASED, VerificationObservation.VERIFIED, lastVerifiedPremium(),
                     )
@@ -196,16 +197,40 @@ class GooglePlayPremiumEntitlementRepository @Inject constructor(
             }
         }
 
-    private fun cacheVerified(premium: Boolean) {
-        preferences.edit().putBoolean(KEY_PREMIUM, premium).putBoolean(KEY_HAS_VALUE, true).apply()
+    private fun cacheVerified(premium: Boolean, verifiedAtMillis: Long = 0L) {
+        preferences.edit()
+            .putBoolean(KEY_PREMIUM, premium)
+            .putBoolean(KEY_HAS_VALUE, true)
+            .putLong(KEY_VERIFIED_AT, if (premium) verifiedAtMillis else 0L)
+            .apply()
     }
 
     private fun lastVerifiedPremium(): Boolean =
-        preferences.getBoolean(KEY_HAS_VALUE, false) && preferences.getBoolean(KEY_PREMIUM, false)
+        isVerifiedPremiumCacheFresh(
+            hasValue = preferences.getBoolean(KEY_HAS_VALUE, false),
+            premium = preferences.getBoolean(KEY_PREMIUM, false),
+            verifiedAtMillis = preferences.getLong(KEY_VERIFIED_AT, 0L),
+            nowMillis = System.currentTimeMillis(),
+        )
 
     private companion object {
         const val KEY_PREMIUM = "last_verified_premium"
         const val KEY_HAS_VALUE = "has_verified_entitlement"
+        const val KEY_VERIFIED_AT = "last_google_verified_at"
         const val KEY_DEBUG_PREMIUM = "debug_premium_override"
     }
+}
+
+internal const val PREMIUM_OFFLINE_GRACE_MS = 24L * 60L * 60L * 1_000L
+private const val MAX_CLOCK_SKEW_MS = 5L * 60L * 1_000L
+
+internal fun isVerifiedPremiumCacheFresh(
+    hasValue: Boolean,
+    premium: Boolean,
+    verifiedAtMillis: Long,
+    nowMillis: Long,
+): Boolean {
+    if (!hasValue || !premium || verifiedAtMillis <= 0L) return false
+    val age = nowMillis - verifiedAtMillis
+    return age >= -MAX_CLOCK_SKEW_MS && age <= PREMIUM_OFFLINE_GRACE_MS
 }

@@ -14,11 +14,14 @@
     "lint": "eslint .",
     "test": "vitest run",
     "test:watch": "vitest",
+    "migrate:billing": "tsx scripts/migrateBilling.ts",
     "verify:gtfs-bridge": "tsx scripts/verifyGtfsStopIdentityBridge.ts"
   },
   "dependencies": {
     "@upstash/redis": "^1.38.1",
+    "google-auth-library": "^10.3.0",
     "hono": "^4.6.14",
+    "postgres": "^3.4.7",
     "zod": "^3.24.1"
   },
   "devDependencies": {

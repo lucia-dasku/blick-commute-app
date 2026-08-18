@@ -16,6 +16,9 @@ import { RedisCache, RedisLock } from "./lib/redisClient.js";
 import { config } from "./config/env.js";
 import { createBillingRoute } from "./routes/billing.js";
 import { createGooglePlayPurchaseVerifier } from "./services/googlePlayPurchaseVerifier.js";
+import { PostgresPurchaseStateStore } from "./billing/postgresPurchaseStateStore.js";
+import { InMemoryBillingRateLimiter, RedisBillingRateLimiter } from "./billing/billingRateLimiter.js";
+import { createGooglePlayRtdnHandler, createGoogleRtdnAuthenticator } from "./billing/googlePlayRtdn.js";
 import { createJourneyRoutes } from "./routes/journeys.js";
 import { createJourneyDisruptionsRoute } from "./routes/journeyDisruptions.js";
 import { createSlJourneyPlannerClient } from "./services/slJourneyPlannerClient.js";
@@ -104,7 +107,21 @@ export function createApp() {
   app.route("/stops", createStopsRoute(siteDirectory));
   app.route("/departures", createDeparturesRoute(slTransportClient));
   app.route("/disruptions", createDisruptionsRoute(deviationsSnapshotService, siteDirectory));
-  app.route("/billing", createBillingRoute(createGooglePlayPurchaseVerifier(config.googlePlay)));
+  const purchaseStore = config.database
+    ? new PostgresPurchaseStateStore(config.database.connectionString)
+    : undefined;
+  const purchaseVerifier = createGooglePlayPurchaseVerifier(config.googlePlay, purchaseStore);
+  const billingRateLimiter = redisClient
+    ? new RedisBillingRateLimiter(redisClient)
+    : new InMemoryBillingRateLimiter();
+  const rtdnHandler = config.googlePlayRtdn && config.googlePlay && purchaseStore
+    ? createGooglePlayRtdnHandler(
+      createGoogleRtdnAuthenticator(config.googlePlayRtdn),
+      purchaseStore,
+      purchaseVerifier,
+    )
+    : undefined;
+  app.route("/billing", createBillingRoute(purchaseVerifier, billingRateLimiter, rtdnHandler));
   app.route("/journeys", createJourneyRoutes(slJourneyPlannerClient));
   // A separate top-level mount, not nested inside createJourneyRoutes -- see
   // createJourneyDisruptionsRoute's own doc for why this must stay a genuinely independent

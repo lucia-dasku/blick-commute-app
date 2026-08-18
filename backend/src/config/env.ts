@@ -47,6 +47,34 @@ export interface GooglePlayConfig {
   privateKey: string;
 }
 
+export interface DatabaseConfig { connectionString: string }
+export interface GooglePlayRtdnConfig { audience: string; serviceAccountEmail: string }
+
+export function readDatabaseConfig(raw: string | undefined): DatabaseConfig | undefined {
+  const connectionString = raw?.trim();
+  if (!connectionString) return undefined;
+  const url = new URL(connectionString);
+  if (url.protocol !== "postgres:" && url.protocol !== "postgresql:") {
+    throw new Error("DATABASE_URL must use the postgres or postgresql protocol");
+  }
+  return { connectionString };
+}
+
+export function readGooglePlayRtdnConfig(
+  audienceRaw: string | undefined,
+  emailRaw: string | undefined,
+): GooglePlayRtdnConfig | undefined {
+  const audience = audienceRaw?.trim();
+  const serviceAccountEmail = emailRaw?.trim();
+  if (!audience && !serviceAccountEmail) return undefined;
+  if (!audience || !serviceAccountEmail) {
+    throw new Error("GOOGLE_PLAY_RTDN_AUDIENCE and GOOGLE_PLAY_RTDN_SERVICE_ACCOUNT_EMAIL must both be set");
+  }
+  const url = new URL(audience);
+  if (url.protocol !== "https:") throw new Error("GOOGLE_PLAY_RTDN_AUDIENCE must be an HTTPS URL");
+  return { audience, serviceAccountEmail };
+}
+
 /** Credentials are optional so local development and non-billing tests remain usable. The
  * verification endpoint reports a sanitized temporary-unavailable response when they are not
  * configured. A partial configuration is rejected eagerly because it can never work. */
@@ -147,6 +175,11 @@ export const config = {
     process.env.GOOGLE_PLAY_PACKAGE_NAME,
     process.env.GOOGLE_PLAY_SERVICE_ACCOUNT_EMAIL,
     process.env.GOOGLE_PLAY_SERVICE_ACCOUNT_PRIVATE_KEY,
+  ),
+  database: readDatabaseConfig(process.env.DATABASE_URL),
+  googlePlayRtdn: readGooglePlayRtdnConfig(
+    process.env.GOOGLE_PLAY_RTDN_AUDIENCE,
+    process.env.GOOGLE_PLAY_RTDN_SERVICE_ACCOUNT_EMAIL,
   ),
   /** Trafiklab GTFS Regional requires an API key to download (`GET
    * https://opendata.samtrafiken.se/gtfs/{operator}/{operator}.zip?key=...` — verified live
