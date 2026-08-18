@@ -3,6 +3,9 @@
 package se.blick.app.ui.screens.about
 
 import android.content.Intent
+import android.os.Build
+import androidx.annotation.StringRes
+import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
@@ -10,142 +13,193 @@ import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
+import androidx.compose.foundation.layout.heightIn
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.rememberScrollState
+import androidx.compose.foundation.selection.selectable
+import androidx.compose.foundation.selection.selectableGroup
 import androidx.compose.foundation.verticalScroll
+import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.automirrored.filled.KeyboardArrowRight
+import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.ExperimentalMaterial3Api
-import androidx.compose.material3.FilterChip
 import androidx.compose.material3.HorizontalDivider
+import androidx.compose.material3.Icon
 import androidx.compose.material3.MaterialTheme
+import androidx.compose.material3.RadioButton
 import androidx.compose.material3.Scaffold
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.DisposableEffect
+import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableStateOf
+import androidx.compose.runtime.remember
+import androidx.compose.runtime.setValue
+import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.res.stringResource
+import androidx.compose.ui.semantics.Role
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.unit.dp
 import androidx.core.net.toUri
 import androidx.hilt.navigation.compose.hiltViewModel
+import androidx.lifecycle.Lifecycle
+import androidx.lifecycle.LifecycleEventObserver
+import androidx.lifecycle.compose.LocalLifecycleOwner
+import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import se.blick.app.BuildConfig
 import se.blick.app.R
+import se.blick.app.billing.EntitlementState
+import se.blick.app.billing.hasPremiumAccess
 import se.blick.app.locale.currentBlickLocale
+import se.blick.app.notification.NotificationAvailability
 import se.blick.app.ui.components.BlickTopBar
+import se.blick.app.ui.notification.launchLiveUpdateSettings
+import se.blick.app.ui.notification.notificationSettingsIntent
+import se.blick.app.ui.theme.AppearanceMode
 
-/** The Trafiklab.se link this screen opens — see docs/api-contract.md §9 (Licensing and
- * attribution): "the attribution should link to Trafiklab.se where practicable." */
-private const val TRAFIKLAB_URL = "https://www.trafiklab.se/"
+private const val SUPPORT_EMAIL = "contactblicklabs@gmail.com"
+internal const val LANGUAGE_OPTION_EN_TAG = "settings-language-en"
+internal const val LANGUAGE_OPTION_SV_TAG = "settings-language-sv"
 
-/** The Blick Labs webpage this screen's "Open-source licences" section links to. */
-private const val OPEN_SOURCE_LICENSES_URL = "https://blick-labs.vercel.app/blick-privacy"
-
-/**
- * Settings/About: Blick's own language picker first, then the one place
- * [R.string.attribution_text] and the privacy policy are actually shown to the user (see
- * docs/api-contract.md §9) — reachable from the settings action in
- * [se.blick.app.ui.screens.routinelist.RoutineListScreen]'s top app bar. Deliberately simple: a
- * "Language" section (English/Svenska), the app's own tagline and version, a "Data and
- * attribution" section (attribution text, a link to Trafiklab.se, and an explicit
- * non-affiliation disclaimer), the full privacy policy, an "Open-source licences" section
- * linking to the Blick Labs website ([OPEN_SOURCE_LICENSES_URL]), and finally a centered
- * copyright line as the very last thing on the screen.
- *
- * Thin [AboutViewModel]-resolving wrapper around [AboutContent] — pulled apart exactly like
- * [se.blick.app.ui.screens.routinelist.RoutineListScreen]/`RoutineListContent`, so
- * `AboutScreenTest` can keep exercising the real UI directly with a plain lambda, no
- * Hilt test rule needed.
- */
 @Composable
-fun AboutScreen(onBack: () -> Unit, viewModel: AboutViewModel = hiltViewModel()) {
-    AboutContent(onBack = onBack, onLanguageSelected = viewModel::onLanguageSelected)
+fun AboutScreen(
+    onBack: () -> Unit,
+    onOpenPremium: () -> Unit,
+    onOpenPrivacyPolicy: () -> Unit,
+    onOpenDataAttribution: () -> Unit,
+    onOpenOpenSourceLicences: () -> Unit,
+    viewModel: AboutViewModel = hiltViewModel(),
+) {
+    val state by viewModel.uiState.collectAsStateWithLifecycle()
+    val lifecycleOwner = LocalLifecycleOwner.current
+    val context = LocalContext.current
+    val supportSubject = stringResource(R.string.settings_support_email_subject)
+
+    DisposableEffect(lifecycleOwner, viewModel) {
+        val observer = LifecycleEventObserver { _, event ->
+            if (event == Lifecycle.Event.ON_RESUME) viewModel.refreshNotificationAvailability()
+        }
+        lifecycleOwner.lifecycle.addObserver(observer)
+        onDispose { lifecycleOwner.lifecycle.removeObserver(observer) }
+    }
+
+    AboutContent(
+        state = state,
+        onBack = onBack,
+        onLanguageSelected = viewModel::onLanguageSelected,
+        onAppearanceSelected = viewModel::onAppearanceSelected,
+        onOpenNotifications = { context.startActivity(notificationSettingsIntent(context)) },
+        onOpenLiveUpdates = { launchLiveUpdateSettings(context) },
+        onOpenPremium = onOpenPremium,
+        onContactSupport = { context.startActivity(supportEmailIntent(supportSubject)) },
+        onOpenPrivacyPolicy = onOpenPrivacyPolicy,
+        onOpenDataAttribution = onOpenDataAttribution,
+        onOpenOpenSourceLicences = onOpenOpenSourceLicences,
+    )
 }
 
-/** Stateless — see [AboutScreen]'s own doc on why this split exists. */
-@Composable
-internal fun AboutContent(onBack: () -> Unit, onLanguageSelected: (String) -> Unit) {
-    val context = LocalContext.current
+internal fun supportEmailIntent(subject: String): Intent = Intent(
+    Intent.ACTION_SENDTO,
+    "mailto:$SUPPORT_EMAIL".toUri().buildUpon().appendQueryParameter("subject", subject).build(),
+)
 
-    Scaffold(
-        topBar = {
-            BlickTopBar(title = stringResource(R.string.about_title), onBack = onBack)
-        },
-    ) { padding ->
+@Composable
+internal fun AboutContent(
+    state: AboutUiState = AboutUiState(),
+    sdkInt: Int = Build.VERSION.SDK_INT,
+    onBack: () -> Unit,
+    onLanguageSelected: (String) -> Unit,
+    onAppearanceSelected: (AppearanceMode) -> Unit = {},
+    onOpenNotifications: () -> Unit = {},
+    onOpenLiveUpdates: () -> Unit = {},
+    onOpenPremium: () -> Unit = {},
+    onContactSupport: () -> Unit = {},
+    onOpenPrivacyPolicy: () -> Unit = {},
+    onOpenDataAttribution: () -> Unit = {},
+    onOpenOpenSourceLicences: () -> Unit = {},
+) {
+    var showLanguageDialog by remember { mutableStateOf(false) }
+    var showAppearanceDialog by remember { mutableStateOf(false) }
+    val currentLanguage = currentBlickLocale().language
+
+    Scaffold(topBar = { BlickTopBar(title = stringResource(R.string.about_title), onBack = onBack) }) { padding ->
         Column(
             Modifier
                 .fillMaxSize()
                 .verticalScroll(rememberScrollState())
                 .padding(padding)
-                .padding(16.dp),
+                .padding(horizontal = 20.dp, vertical = 12.dp),
         ) {
-            LanguageSection(onLanguageSelected = onLanguageSelected)
-            Spacer(Modifier.height(20.dp))
-            HorizontalDivider()
-            Spacer(Modifier.height(20.dp))
+            SettingsSectionTitle(R.string.settings_section_preferences)
+            SettingsRow(
+                label = stringResource(R.string.settings_language_label),
+                value = stringResource(
+                    if (currentLanguage == "sv") R.string.settings_language_option_swedish
+                    else R.string.settings_language_option_english,
+                ),
+                onClick = { showLanguageDialog = true },
+            )
+            SettingsRow(
+                label = stringResource(R.string.settings_appearance_label),
+                value = stringResource(appearanceLabelRes(state.appearanceMode)),
+                onClick = { showAppearanceDialog = true },
+            )
 
-            Text(stringResource(R.string.app_name), style = MaterialTheme.typography.headlineSmall)
-            Spacer(Modifier.height(4.dp))
-            Text(stringResource(R.string.about_tagline), style = MaterialTheme.typography.bodyMedium)
-            Spacer(Modifier.height(4.dp))
+            SettingsSectionTitle(R.string.settings_section_commute)
+            SettingsRow(
+                label = stringResource(R.string.settings_notifications_label),
+                value = stringResource(notificationLabelRes(state.notificationAvailability)),
+                onClick = onOpenNotifications,
+            )
+            SettingsRow(
+                label = stringResource(R.string.settings_live_updates_label),
+                value = stringResource(liveUpdatesLabelRes(state.liveUpdatesEnabled, sdkInt)),
+                onClick = onOpenLiveUpdates,
+            )
+
+            SettingsSectionTitle(R.string.settings_section_premium)
+            SettingsRow(
+                label = stringResource(R.string.settings_premium_label),
+                value = stringResource(
+                    if (state.entitlement.hasPremiumAccess) R.string.settings_premium_status_premium
+                    else R.string.settings_premium_status_free,
+                ),
+                onClick = onOpenPremium,
+            )
+
+            SettingsSectionTitle(R.string.settings_section_support)
+            SettingsRow(
+                label = stringResource(R.string.settings_contact_support_label),
+                onClick = onContactSupport,
+            )
+
+            SettingsSectionTitle(R.string.settings_section_about)
+            SettingsRow(
+                label = stringResource(R.string.about_section_privacy_policy),
+                onClick = onOpenPrivacyPolicy,
+            )
+            SettingsRow(
+                label = stringResource(R.string.about_section_data_attribution),
+                onClick = onOpenDataAttribution,
+            )
+            SettingsRow(
+                label = stringResource(R.string.about_section_open_source_licences),
+                onClick = onOpenOpenSourceLicences,
+            )
+
+            Spacer(Modifier.height(24.dp))
             Text(
                 stringResource(R.string.about_version_label, BuildConfig.VERSION_NAME, BuildConfig.VERSION_CODE),
-                style = MaterialTheme.typography.bodyMedium,
-                color = MaterialTheme.colorScheme.secondary,
-            )
-
-            Spacer(Modifier.height(20.dp))
-            Text(stringResource(R.string.about_section_data_attribution), style = MaterialTheme.typography.titleMedium)
-            Spacer(Modifier.height(8.dp))
-            Text(stringResource(R.string.attribution_text), style = MaterialTheme.typography.bodyMedium)
-            TextButton(
-                onClick = {
-                    context.startActivity(Intent(Intent.ACTION_VIEW, TRAFIKLAB_URL.toUri()))
-                },
-            ) {
-                Text(stringResource(R.string.about_trafiklab_link))
-            }
-            Text(
-                stringResource(R.string.about_disclaimer),
                 style = MaterialTheme.typography.bodySmall,
                 color = MaterialTheme.colorScheme.secondary,
+                textAlign = TextAlign.Center,
+                modifier = Modifier.fillMaxWidth(),
             )
-
-            Spacer(Modifier.height(20.dp))
-            Text(stringResource(R.string.about_section_privacy_policy), style = MaterialTheme.typography.titleMedium)
-            Spacer(Modifier.height(8.dp))
-            Text(
-                stringResource(R.string.about_privacy_last_updated),
-                style = MaterialTheme.typography.bodySmall,
-                color = MaterialTheme.colorScheme.secondary,
-            )
-            Spacer(Modifier.height(8.dp))
-            Text(stringResource(R.string.about_privacy_operator), style = MaterialTheme.typography.bodyMedium)
-            Spacer(Modifier.height(8.dp))
-            Text(stringResource(R.string.about_privacy_no_account), style = MaterialTheme.typography.bodyMedium)
-            Spacer(Modifier.height(8.dp))
-            Text(stringResource(R.string.about_privacy_local_storage), style = MaterialTheme.typography.bodyMedium)
-            Spacer(Modifier.height(8.dp))
-            Text(stringResource(R.string.about_privacy_backend), style = MaterialTheme.typography.bodyMedium)
-            Spacer(Modifier.height(8.dp))
-            Text(stringResource(R.string.about_privacy_usage), style = MaterialTheme.typography.bodyMedium)
-            Spacer(Modifier.height(8.dp))
-            Text(stringResource(R.string.about_privacy_contact), style = MaterialTheme.typography.bodyMedium)
-            Spacer(Modifier.height(8.dp))
-            Text(stringResource(R.string.about_privacy_updates), style = MaterialTheme.typography.bodyMedium)
-
-            Spacer(Modifier.height(20.dp))
-            Text(stringResource(R.string.about_section_open_source_licences), style = MaterialTheme.typography.titleMedium)
-            Spacer(Modifier.height(8.dp))
-            Text(stringResource(R.string.about_open_source_licences_body), style = MaterialTheme.typography.bodyMedium)
-            TextButton(
-                onClick = {
-                    context.startActivity(Intent(Intent.ACTION_VIEW, OPEN_SOURCE_LICENSES_URL.toUri()))
-                },
-            ) {
-                Text(stringResource(R.string.about_open_source_licences_action))
-            }
-
-            Spacer(Modifier.height(20.dp))
+            Spacer(Modifier.height(6.dp))
             Text(
                 stringResource(R.string.about_copyright),
                 style = MaterialTheme.typography.bodySmall,
@@ -153,40 +207,167 @@ internal fun AboutContent(onBack: () -> Unit, onLanguageSelected: (String) -> Un
                 textAlign = TextAlign.Center,
                 modifier = Modifier.fillMaxWidth(),
             )
+            Spacer(Modifier.height(16.dp))
         }
+    }
+
+    if (showLanguageDialog) {
+        LanguageDialog(
+            selectedLanguage = currentLanguage,
+            onDismiss = { showLanguageDialog = false },
+            onSelected = {
+                showLanguageDialog = false
+                onLanguageSelected(it)
+            },
+        )
+    }
+    if (showAppearanceDialog) {
+        AppearanceDialog(
+            selectedMode = state.appearanceMode,
+            onDismiss = { showAppearanceDialog = false },
+            onSelected = {
+                showAppearanceDialog = false
+                onAppearanceSelected(it)
+            },
+        )
     }
 }
 
-/**
- * Blick's own explicit English/Svenska choice — exactly two options, per the product decision
- * to not surface a third "system default" choice in this UI (see [AboutViewModel]'s own doc on
- * why [androidx.appcompat.app.AppCompatDelegate] is the actual source of truth, not any state
- * owned here). [currentLanguage] runs [currentBlickLocale] — the same effective-locale rule
- * [se.blick.app.ui.screens.routinecreate.RoutineCreateScreen]/
- * [se.blick.app.ui.screens.routinedetails.RoutineDetailsScreen] use for weekday/time formatting
- * — rather than a second, separately-tracked "which language is selected" flag: that normalizes
- * an explicit choice or, absent one, the device's ordered system locale list (falling back to
- * English for an unsupported one, e.g. Lithuanian) down to whichever of Blick's two languages is
- * actually showing, so the selected chip is never out of sync with — and never silently agrees
- * with neither of — what the rest of this screen's own text is actually rendered in.
- * [FilterChip], the same selectable-option control [WeekdaySelector][se.blick.app.ui.screens.routinecreate.WeekdaySelector]
- * already uses elsewhere in this app, rather than a new selection control.
- */
 @Composable
-private fun LanguageSection(onLanguageSelected: (String) -> Unit) {
-    val currentLanguage = currentBlickLocale().language
-    Text(stringResource(R.string.settings_language_label), style = MaterialTheme.typography.titleMedium)
-    Spacer(Modifier.height(8.dp))
-    Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-        FilterChip(
-            selected = currentLanguage == "en",
-            onClick = { onLanguageSelected("en") },
-            label = { Text(stringResource(R.string.settings_language_option_english)) },
-        )
-        FilterChip(
-            selected = currentLanguage == "sv",
-            onClick = { onLanguageSelected("sv") },
-            label = { Text(stringResource(R.string.settings_language_option_swedish)) },
-        )
+private fun SettingsSectionTitle(@StringRes titleRes: Int) {
+    Spacer(Modifier.height(16.dp))
+    Text(
+        text = stringResource(titleRes),
+        style = MaterialTheme.typography.labelLarge,
+        color = MaterialTheme.colorScheme.primary,
+        modifier = Modifier.padding(horizontal = 4.dp, vertical = 6.dp),
+    )
+}
+
+@Composable
+private fun SettingsRow(label: String, value: String? = null, onClick: () -> Unit) {
+    Column {
+        Row(
+            modifier = Modifier
+                .fillMaxWidth()
+                .heightIn(min = 56.dp)
+                .clickable(role = Role.Button, onClick = onClick)
+                .padding(horizontal = 4.dp, vertical = 14.dp),
+            verticalAlignment = Alignment.CenterVertically,
+        ) {
+            Text(label, style = MaterialTheme.typography.bodyLarge, modifier = Modifier.weight(1f))
+            if (value != null) {
+                Text(
+                    value,
+                    style = MaterialTheme.typography.bodyMedium,
+                    color = MaterialTheme.colorScheme.secondary,
+                )
+            }
+            Icon(
+                imageVector = Icons.AutoMirrored.Filled.KeyboardArrowRight,
+                contentDescription = null,
+                tint = MaterialTheme.colorScheme.secondary,
+            )
+        }
+        HorizontalDivider(color = MaterialTheme.colorScheme.outlineVariant)
     }
+}
+
+@Composable
+private fun LanguageDialog(
+    selectedLanguage: String,
+    onDismiss: () -> Unit,
+    onSelected: (String) -> Unit,
+) {
+    AlertDialog(
+        onDismissRequest = onDismiss,
+        title = { Text(stringResource(R.string.settings_language_label)) },
+        text = {
+            Column(Modifier.selectableGroup()) {
+                RadioOption(
+                    label = stringResource(R.string.settings_language_option_english),
+                    selected = selectedLanguage == "en",
+                    onClick = { onSelected("en") },
+                    modifier = Modifier.testTag(LANGUAGE_OPTION_EN_TAG),
+                )
+                RadioOption(
+                    label = stringResource(R.string.settings_language_option_swedish),
+                    selected = selectedLanguage == "sv",
+                    onClick = { onSelected("sv") },
+                    modifier = Modifier.testTag(LANGUAGE_OPTION_SV_TAG),
+                )
+            }
+        },
+        confirmButton = {},
+        dismissButton = { TextButton(onClick = onDismiss) { Text(stringResource(R.string.action_cancel)) } },
+    )
+}
+
+@Composable
+private fun AppearanceDialog(
+    selectedMode: AppearanceMode,
+    onDismiss: () -> Unit,
+    onSelected: (AppearanceMode) -> Unit,
+) {
+    AlertDialog(
+        onDismissRequest = onDismiss,
+        title = { Text(stringResource(R.string.settings_appearance_label)) },
+        text = {
+            Column(Modifier.selectableGroup()) {
+                AppearanceMode.entries.forEach { mode ->
+                    RadioOption(
+                        label = stringResource(appearanceLabelRes(mode)),
+                        selected = selectedMode == mode,
+                        onClick = { onSelected(mode) },
+                    )
+                }
+            }
+        },
+        confirmButton = {},
+        dismissButton = { TextButton(onClick = onDismiss) { Text(stringResource(R.string.action_cancel)) } },
+    )
+}
+
+@Composable
+private fun RadioOption(
+    label: String,
+    selected: Boolean,
+    onClick: () -> Unit,
+    modifier: Modifier = Modifier,
+) {
+    Row(
+        modifier = modifier
+            .fillMaxWidth()
+            .heightIn(min = 52.dp)
+            .selectable(selected = selected, role = Role.RadioButton, onClick = onClick)
+            .padding(horizontal = 4.dp),
+        verticalAlignment = Alignment.CenterVertically,
+        horizontalArrangement = Arrangement.spacedBy(12.dp),
+    ) {
+        RadioButton(selected = selected, onClick = null)
+        Text(label, style = MaterialTheme.typography.bodyLarge)
+    }
+}
+
+@StringRes
+internal fun appearanceLabelRes(mode: AppearanceMode): Int = when (mode) {
+    AppearanceMode.System -> R.string.settings_appearance_system
+    AppearanceMode.Light -> R.string.settings_appearance_light
+    AppearanceMode.Dark -> R.string.settings_appearance_dark
+}
+
+@StringRes
+internal fun notificationLabelRes(availability: NotificationAvailability): Int = when (availability) {
+    NotificationAvailability.Available -> R.string.settings_notifications_on
+    NotificationAvailability.PermissionMissing -> R.string.settings_notifications_permission_required
+    NotificationAvailability.AppDisabled,
+    NotificationAvailability.ChannelDisabled,
+    -> R.string.settings_notifications_off
+}
+
+@StringRes
+internal fun liveUpdatesLabelRes(enabled: Boolean, sdkInt: Int): Int = when {
+    sdkInt < Build.VERSION_CODES.BAKLAVA -> R.string.settings_live_updates_requires_android_16
+    enabled -> R.string.settings_notifications_on
+    else -> R.string.settings_notifications_off
 }

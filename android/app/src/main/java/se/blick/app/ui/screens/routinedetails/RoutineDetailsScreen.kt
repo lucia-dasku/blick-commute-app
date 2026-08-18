@@ -3,7 +3,6 @@
 package se.blick.app.ui.screens.routinedetails
 
 import android.Manifest
-import android.content.ActivityNotFoundException
 import android.content.Context
 import android.content.Intent
 import android.content.pm.PackageManager
@@ -99,7 +98,6 @@ import se.blick.app.notification.NotificationPostResult
 import se.blick.app.ui.components.BlickTopBar
 import se.blick.app.ui.components.LineBadge
 import se.blick.app.ui.notification.notificationSettingsIntent
-import se.blick.app.ui.notification.promotedNotificationSettingsIntent
 import se.blick.app.ui.notification.rememberNotificationPermissionGate
 import se.blick.app.widget.LINE_BADGE_GREEN
 
@@ -1126,11 +1124,11 @@ internal fun shouldOfferLiveUpdateSettingsLink(isLiveUpdatePromotable: Boolean, 
  * a real Android runtime resolving intents.
  */
 internal fun launchLiveUpdateSettings(context: Context, startActivity: (Intent) -> Unit) {
-    try {
-        startActivity(promotedNotificationSettingsIntent(context))
-    } catch (e: ActivityNotFoundException) {
-        startActivity(notificationSettingsIntent(context))
-    }
+    se.blick.app.ui.notification.launchLiveUpdateSettings(
+        context = context,
+        sdkInt = Build.VERSION_CODES.BAKLAVA,
+        startActivity = startActivity,
+    )
 }
 
 /**

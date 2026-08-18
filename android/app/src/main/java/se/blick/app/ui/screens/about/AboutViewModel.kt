@@ -5,37 +5,80 @@ import androidx.core.os.LocaleListCompat
 import androidx.lifecycle.ViewModel
 import androidx.lifecycle.viewModelScope
 import dagger.hilt.android.lifecycle.HiltViewModel
+import kotlinx.coroutines.flow.MutableStateFlow
+import kotlinx.coroutines.flow.SharingStarted
+import kotlinx.coroutines.flow.combine
+import kotlinx.coroutines.flow.stateIn
 import kotlinx.coroutines.launch
+import se.blick.app.billing.EntitlementState
+import se.blick.app.billing.PremiumEntitlementRepository
+import se.blick.app.data.local.datastore.AppSettingsDataStore
+import se.blick.app.notification.NotificationAvailability
+import se.blick.app.notification.NotificationAvailabilityChecker
+import se.blick.app.notification.PromotedNotificationChecker
+import se.blick.app.ui.theme.AppearanceMode
 import se.blick.app.widget.RoutineWidgetUpdater
 import se.blick.app.widget.runWidgetUpdateSafely
 import javax.inject.Inject
 
-/**
- * Owns Blick's own explicit English/Svenska language selection — see
- * [se.blick.app.locale.withAppLocale]'s own doc for why [AppCompatDelegate.setApplicationLocales]
- * is the single source of truth, not a new [se.blick.app.data.local.datastore.AppSettingsDataStore]
- * field. Persistence, Activity recreation, and (Android 13+) system Settings integration all
- * come from AppCompat/the platform itself — this ViewModel's only real job is the one side
- * effect that doesn't happen automatically: refreshing the home-screen widget's own
- * already-placed instances, so an inactive/static widget updates immediately too rather than
- * waiting for its next unrelated refresh.
- */
+data class AboutUiState(
+    val appearanceMode: AppearanceMode = AppearanceMode.System,
+    val entitlement: EntitlementState = EntitlementState.Loading,
+    val notificationAvailability: NotificationAvailability = NotificationAvailability.Available,
+    val liveUpdatesEnabled: Boolean = false,
+)
+
+/** Owns the small pieces of state displayed by Settings while keeping their existing sources
+ * authoritative: AppCompat for language, Preferences DataStore for appearance, Android for
+ * notification capability, and the billing repository for Premium. */
 @HiltViewModel
 class AboutViewModel @Inject constructor(
     private val routineWidgetUpdater: RoutineWidgetUpdater,
+    private val appSettingsDataStore: AppSettingsDataStore,
+    premiumEntitlementRepository: PremiumEntitlementRepository,
+    private val notificationAvailabilityChecker: NotificationAvailabilityChecker,
+    private val promotedNotificationChecker: PromotedNotificationChecker,
 ) : ViewModel() {
 
-    /** [languageTag] is always "en" or "sv" — see [AboutScreen]'s own two-chip Language section.
-     * Synchronous, like [AppCompatDelegate.setApplicationLocales] itself — the actual UI change
-     * (this Activity recreating, on Android 8-12; the platform doing so on its own on 13+) is
-     * not something this function waits on or needs to. */
+    private val notificationAvailability = MutableStateFlow(notificationAvailabilityChecker.check())
+    private val liveUpdatesEnabled = MutableStateFlow(promotedNotificationChecker.isPromotable())
+
+    val uiState = combine(
+        appSettingsDataStore.settings,
+        premiumEntitlementRepository.entitlement,
+        notificationAvailability,
+        liveUpdatesEnabled,
+    ) { settings, entitlement, notifications, liveUpdates ->
+        AboutUiState(
+            appearanceMode = AppearanceMode.from(settings.useDarkTheme),
+            entitlement = entitlement,
+            notificationAvailability = notifications,
+            liveUpdatesEnabled = liveUpdates,
+        )
+    }.stateIn(
+        scope = viewModelScope,
+        started = SharingStarted.Eagerly,
+        initialValue = AboutUiState(
+            notificationAvailability = notificationAvailability.value,
+            entitlement = premiumEntitlementRepository.entitlement.value,
+            liveUpdatesEnabled = liveUpdatesEnabled.value,
+        ),
+    )
+
     fun onLanguageSelected(languageTag: String) {
         AppCompatDelegate.setApplicationLocales(LocaleListCompat.forLanguageTags(languageTag))
-        // Best-effort, and deliberately NOT routineWidgetUpdater.reconcile() -- see
-        // RoutineWidgetUpdater.refreshPresentation's own doc: this must never re-derive or
-        // change what an active widget is showing, only redraw it in the new language.
         viewModelScope.launch {
             runWidgetUpdateSafely { routineWidgetUpdater.refreshPresentation() }
         }
+    }
+
+    fun onAppearanceSelected(mode: AppearanceMode) {
+        viewModelScope.launch { appSettingsDataStore.setUseDarkTheme(mode.useDarkTheme) }
+    }
+
+    /** Re-read on resume so returning from Android Settings immediately reflects any change. */
+    fun refreshNotificationAvailability() {
+        notificationAvailability.value = notificationAvailabilityChecker.check()
+        liveUpdatesEnabled.value = promotedNotificationChecker.isPromotable()
     }
 }

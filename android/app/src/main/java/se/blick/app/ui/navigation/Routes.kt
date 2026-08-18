@@ -4,6 +4,9 @@ sealed class Routes(val route: String) {
     data object RoutineList : Routes("routine-list")
     data object RoutineCreate : Routes("routine-create")
     data object About : Routes("about")
+    data object PrivacyPolicy : Routes("privacy-policy")
+    data object DataAttribution : Routes("data-attribution")
+    data object OpenSourceLicences : Routes("open-source-licences")
     data object Premium : Routes("premium")
 
     /** Same screen/ViewModel as [RoutineCreate] (see RoutineCreateViewModel's edit-mode

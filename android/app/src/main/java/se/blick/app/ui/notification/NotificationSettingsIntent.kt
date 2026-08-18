@@ -1,7 +1,9 @@
 package se.blick.app.ui.notification
 
+import android.content.ActivityNotFoundException
 import android.content.Context
 import android.content.Intent
+import android.os.Build
 import android.provider.Settings
 
 /** The standard system intent to open this app's own notification settings screen — used by
@@ -26,3 +28,22 @@ fun notificationSettingsIntent(context: Context): Intent =
 fun promotedNotificationSettingsIntent(context: Context): Intent =
     Intent(Settings.ACTION_APP_NOTIFICATION_PROMOTION_SETTINGS)
         .putExtra(Settings.EXTRA_APP_PACKAGE, context.packageName)
+
+/** Opens Android's dedicated Live Update settings on Android 16+, with the ordinary per-app
+ * notification page as the correct fallback on older versions and OEM builds without the
+ * dedicated destination. */
+fun launchLiveUpdateSettings(
+    context: Context,
+    sdkInt: Int = Build.VERSION.SDK_INT,
+    startActivity: (Intent) -> Unit = context::startActivity,
+) {
+    if (sdkInt < Build.VERSION_CODES.BAKLAVA) {
+        startActivity(notificationSettingsIntent(context))
+        return
+    }
+    try {
+        startActivity(promotedNotificationSettingsIntent(context))
+    } catch (_: ActivityNotFoundException) {
+        startActivity(notificationSettingsIntent(context))
+    }
+}
