@@ -262,7 +262,7 @@
     <string name="about_trafiklab_link">Trafiklab.se</string>
     <string name="about_disclaimer">Blick is an independent app and is not affiliated with, operated by or endorsed by SL or Trafiklab.</string>
     <string name="about_section_privacy_policy">Privacy Policy</string>
-    <string name="about_privacy_last_updated">Last updated: 10 August 2026</string>
+    <string name="about_privacy_last_updated">Last updated: 13 August 2026</string>
     <string name="about_privacy_operator">Blick is operated by Blick Labs.</string>
     <string name="about_privacy_no_account">Blick does not require an account and does not collect your name, email address, precise location, contacts or advertising ID. Blick contains no advertising or analytics.</string>
     <string name="about_privacy_local_storage">Your routines, preferences and cached departure information are stored locally on your device and are not backed up. You can remove this information by deleting your routine, clearing Blick\'s app data or uninstalling the app.</string>
