@@ -190,6 +190,7 @@ class AboutScreenTest {
     fun privacyDestinationStillShowsExistingPolicy() {
         composeRule.setContent { PrivacyPolicyScreen(onBack = {}) }
 
+        composeRule.onNodeWithText(composeRule.activity.getString(R.string.about_privacy_last_updated)).assertExists()
         composeRule.onNodeWithText(composeRule.activity.getString(R.string.about_privacy_no_account)).assertExists()
         composeRule.onNodeWithText(composeRule.activity.getString(R.string.about_privacy_contact)).performScrollTo().assertExists()
         composeRule.onNodeWithText(composeRule.activity.getString(R.string.about_privacy_read_more))

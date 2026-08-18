@@ -1,5 +1,6 @@
 import { describe, expect, it } from "vitest";
 import type { SuccessEnvelope } from "./testHelpers.js";
+import vercelConfig from "../vercel.json" with { type: "json" };
 
 /**
  * Imports the actual Vercel entry point (`api/index.ts`) — not a re-built copy of
@@ -9,6 +10,13 @@ import type { SuccessEnvelope } from "./testHelpers.js";
  * exports (see docs/api-contract.md, "Vercel readiness").
  */
 describe("Vercel entry point (api/index.ts)", () => {
+  it("disables framework auto-detection and rewrites only API requests to the function", () => {
+    expect(vercelConfig.framework).toBeNull();
+    expect(vercelConfig.rewrites).toEqual([
+      { source: "/api/(.*)", destination: "/api/index" },
+    ]);
+  });
+
   it("exports a Hono app (default export) that responds to GET /api/v1/health", async () => {
     const mod = await import("../api/index.js");
     const app = mod.default;
@@ -52,4 +60,14 @@ describe("Vercel entry point (api/index.ts)", () => {
     const res = await app.request("/api/v1/does-not-exist");
     expect(res.status).toBe(404);
   });
+
+  it.each(["/robots.txt", "/this-route-does-not-exist"])(
+    "returns a normal 404 if the function directly receives unmatched public path %s",
+    async (path) => {
+      const mod = await import("../api/index.js");
+      const app = mod.default;
+      const res = await app.request(path);
+      expect(res.status).toBe(404);
+    },
+  );
 });

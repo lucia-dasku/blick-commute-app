@@ -49,6 +49,9 @@ jobs:
       - name: assembleDebug
         run: ./gradlew assembleDebug --stacktrace
 
+      - name: bundleRelease
+        run: ./gradlew bundleRelease --stacktrace
+
       - name: lintDebug
         run: ./gradlew lintDebug --stacktrace
 
