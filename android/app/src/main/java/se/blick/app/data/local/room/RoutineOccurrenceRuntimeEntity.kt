@@ -44,10 +44,12 @@ import androidx.room.PrimaryKey
  * This row is deliberately left in place once an occurrence's cap is reached, rather than
  * cleared — see `RoutineActiveWindowWorker.doWork`'s own comment on why clearing it would let a
  * replacement worker or reboot-recovered process, for this SAME still-open occurrence, wrongly
- * treat it as fresh and grant a brand new allowance. It is cleared normally for every OTHER way
- * an occurrence can end (window closed naturally, notifications unavailable, a handled failure),
- * and a genuinely NEW occurrence (a different [occurrenceWindowEndEpochMilli]) always replaces an
- * old row outright via the normal upsert regardless of whether it was ever cleared.
+ * treat it as fresh and grant a brand new allowance. It is also left in place when an unexpected
+ * worker exception asks WorkManager to retry, because that retry still belongs to this same
+ * occurrence. It is cleared normally when the window closes naturally or notifications become
+ * unavailable, and a genuinely NEW occurrence (a different [occurrenceWindowEndEpochMilli])
+ * always replaces an old row outright via the normal upsert regardless of whether it was ever
+ * cleared.
  */
 @Entity(
     tableName = "routine_occurrence_runtime",
