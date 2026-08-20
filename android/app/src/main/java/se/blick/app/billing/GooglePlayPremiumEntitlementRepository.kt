@@ -22,6 +22,7 @@ import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.suspendCancellableCoroutine
+import kotlinx.coroutines.withTimeoutOrNull
 import se.blick.app.BuildConfig
 import se.blick.app.data.remote.BlickApiClient
 import javax.inject.Inject
@@ -59,15 +60,14 @@ class GooglePlayPremiumEntitlementRepository @Inject constructor(
             _entitlement.value = EntitlementState.Premium
             return
         }
-        try {
+        runBoundedPremiumRefresh(
+            lastVerifiedPremium = ::lastVerifiedPremium,
+            updateEntitlement = { _entitlement.value = it },
+        ) {
             ensureConnected()
             queryProduct()
             val purchases = queryPurchases()
             applyPurchases(purchases)
-        } catch (e: CancellationException) {
-            throw e
-        } catch (_: Exception) {
-            _entitlement.value = EntitlementState.TemporarilyUnavailable(lastVerifiedPremium())
         }
     }
 
@@ -218,6 +218,41 @@ class GooglePlayPremiumEntitlementRepository @Inject constructor(
         const val KEY_HAS_VALUE = "has_verified_entitlement"
         const val KEY_VERIFIED_AT = "last_google_verified_at"
         const val KEY_DEBUG_PREMIUM = "debug_premium_override"
+    }
+}
+
+/**
+ * Overall wall-clock bound for one Play entitlement refresh: Billing connection, product query,
+ * purchase query, and (when a purchase exists) backend verification together. The backend call
+ * already has its own 10-second whole-call timeout; the remaining five seconds allow the normally
+ * fast Play operations to complete without letting startup/foreground recovery wait indefinitely.
+ */
+internal const val PREMIUM_REFRESH_TIMEOUT_MS = 15_000L
+
+/**
+ * Runs the complete entitlement refresh under one bound and converts only this bound's expiry, or
+ * an ordinary Billing/backend failure, to the existing cache-aware fail-soft state.
+ * [withTimeoutOrNull] returns null only for the timeout it creates; parent cancellation and a
+ * timeout thrown by nested work still propagate as [CancellationException].
+ */
+internal suspend fun runBoundedPremiumRefresh(
+    timeoutMillis: Long = PREMIUM_REFRESH_TIMEOUT_MS,
+    lastVerifiedPremium: () -> Boolean,
+    updateEntitlement: (EntitlementState) -> Unit,
+    refresh: suspend () -> Unit,
+) {
+    try {
+        val completed = withTimeoutOrNull(timeoutMillis) {
+            refresh()
+            true
+        } ?: false
+        if (!completed) {
+            updateEntitlement(EntitlementState.TemporarilyUnavailable(lastVerifiedPremium()))
+        }
+    } catch (e: CancellationException) {
+        throw e
+    } catch (_: Exception) {
+        updateEntitlement(EntitlementState.TemporarilyUnavailable(lastVerifiedPremium()))
     }
 }
 

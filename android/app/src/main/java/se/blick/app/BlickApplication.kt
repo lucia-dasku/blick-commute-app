@@ -68,8 +68,9 @@ class BlickApplication : Application(), Configuration.Provider {
     override fun onCreate() {
         super.onCreate()
         applicationScope.launch {
-            premiumEntitlementRepository.refresh()
-            notificationRecoveryCoordinator.onAppStart()
+            refreshPremiumBeforeRecovery(premiumEntitlementRepository) {
+                notificationRecoveryCoordinator.onAppStart()
+            }
         }
         registerTimeZoneChangeReceiver()
         registerForegroundRecovery()
@@ -80,8 +81,9 @@ class BlickApplication : Application(), Configuration.Provider {
             object : DefaultLifecycleObserver {
                 override fun onStart(owner: LifecycleOwner) {
                     applicationScope.launch {
-                        premiumEntitlementRepository.refresh()
-                        notificationRecoveryCoordinator.onForeground()
+                        refreshPremiumBeforeRecovery(premiumEntitlementRepository) {
+                            notificationRecoveryCoordinator.onForeground()
+                        }
                     }
                 }
             },
@@ -101,4 +103,13 @@ class BlickApplication : Application(), Configuration.Provider {
             ContextCompat.RECEIVER_NOT_EXPORTED,
         )
     }
+}
+
+/** Refreshes entitlement to a fresh or cache-aware fail-soft state before tier-sensitive recovery. */
+internal suspend fun refreshPremiumBeforeRecovery(
+    premiumEntitlementRepository: PremiumEntitlementRepository,
+    recover: suspend () -> Unit,
+) {
+    premiumEntitlementRepository.refresh()
+    recover()
 }
