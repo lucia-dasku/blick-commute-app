@@ -1,5 +1,7 @@
 package se.blick.app.ui.screens.routinedetails
 
+import android.Manifest
+import android.os.Build
 import androidx.activity.ComponentActivity
 import androidx.compose.runtime.MutableState
 import androidx.compose.runtime.getValue
@@ -10,6 +12,7 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.test.assertCountEquals
 import androidx.compose.ui.test.assertIsEnabled
 import androidx.compose.ui.test.assertIsNotEnabled
+import androidx.compose.ui.test.assertIsSelected
 import androidx.compose.ui.test.junit4.v2.createAndroidComposeRule
 import androidx.compose.ui.test.onAllNodesWithText
 import androidx.compose.ui.test.onNodeWithContentDescription
@@ -17,10 +20,12 @@ import androidx.compose.ui.test.onNodeWithText
 import androidx.compose.ui.test.performClick
 import androidx.compose.ui.test.performScrollTo
 import androidx.test.ext.junit.runners.AndroidJUnit4
+import androidx.test.platform.app.InstrumentationRegistry
 import java.time.DayOfWeek
 import java.time.Instant
 import java.time.LocalTime
 import org.junit.Rule
+import org.junit.Before
 import org.junit.Test
 import org.junit.Assert.assertEquals
 import org.junit.runner.RunWith
@@ -61,6 +66,17 @@ class RoutineDetailsScreenTest {
 
     @get:Rule
     val composeRule = createAndroidComposeRule<ComponentActivity>()
+
+    @Before
+    fun grantNotificationPermissionForDebugNotificationTests() {
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
+            val instrumentation = InstrumentationRegistry.getInstrumentation()
+            instrumentation.uiAutomation.grantRuntimePermission(
+                instrumentation.targetContext.packageName,
+                Manifest.permission.POST_NOTIFICATIONS,
+            )
+        }
+    }
 
     private fun sampleRoutine() = CommuteRoutine(
         id = "r1",
@@ -1208,7 +1224,9 @@ class RoutineDetailsScreenTest {
 
         val delaysLabel = composeRule.activity.getString(R.string.notification_disruption_effect_delays)
         val showLabel = composeRule.activity.getString(R.string.debug_show_test_notification)
-        composeRule.onNodeWithText(delaysLabel).performScrollTo().performClick()
+        val delaysChip = composeRule.onNodeWithText(delaysLabel)
+        delaysChip.performScrollTo().performClick()
+        delaysChip.assertIsSelected()
         composeRule.onNodeWithText(showLabel).performScrollTo().performClick()
 
         assertEquals(listOf(DisruptionEffect.DELAYS), requestedEffects)
@@ -1256,8 +1274,12 @@ class RoutineDetailsScreenTest {
         val delaysLabel = composeRule.activity.getString(R.string.notification_disruption_effect_delays)
         val realLabel = composeRule.activity.getString(R.string.debug_disruption_effect_real)
         val showLabel = composeRule.activity.getString(R.string.debug_show_test_notification)
-        composeRule.onNodeWithText(delaysLabel).performScrollTo().performClick()
-        composeRule.onNodeWithText(realLabel).performScrollTo().performClick()
+        val delaysChip = composeRule.onNodeWithText(delaysLabel)
+        delaysChip.performScrollTo().performClick()
+        delaysChip.assertIsSelected()
+        val realChip = composeRule.onNodeWithText(realLabel)
+        realChip.performScrollTo().performClick()
+        realChip.assertIsSelected()
         composeRule.onNodeWithText(showLabel).performScrollTo().performClick()
 
         assertEquals(emptyList<DisruptionEffect>(), requestedEffects)

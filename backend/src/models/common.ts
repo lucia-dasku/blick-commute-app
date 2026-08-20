@@ -29,6 +29,8 @@ export type TransportMode = z.infer<typeof TransportModeSchema>;
 
 export const ErrorCodeSchema = z.enum([
   "VALIDATION_ERROR",
+  "AUTHENTICATION_ERROR",
+  "RATE_LIMITED",
   "UPSTREAM_ERROR",
   "UPSTREAM_TIMEOUT",
   "UPSTREAM_RATE_LIMITED",

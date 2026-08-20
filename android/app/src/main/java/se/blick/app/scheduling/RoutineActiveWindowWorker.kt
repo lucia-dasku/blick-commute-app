@@ -323,12 +323,24 @@ class RoutineActiveWindowWorker @AssistedInject constructor(
         }
         val routine = routineRepository.getById(routineId)
         if (routine == null) {
+            Log.i(
+                LOG_TAG,
+                formatActiveWindowOutcomeDiagnostic(
+                    routineId, id.toString(), ActiveWindowRunOutcome.ROUTINE_DELETED, Build.VERSION.SDK_INT,
+                ),
+            )
             // Deleted (or never existed) -- nothing to schedule, and the widget must not be
             // left showing a routine that no longer exists.
             runWidgetUpdateSafely { routineWidgetUpdater.reconcile() }
             return Result.success()
         }
         if (!routine.enabled) {
+            Log.i(
+                LOG_TAG,
+                formatActiveWindowOutcomeDiagnostic(
+                    routineId, id.toString(), ActiveWindowRunOutcome.ROUTINE_DISABLED, Build.VERSION.SDK_INT,
+                ),
+            )
             runWidgetUpdateSafely { routineWidgetUpdater.reconcile() }
             return Result.success()
         }
@@ -481,7 +493,8 @@ class RoutineActiveWindowWorker @AssistedInject constructor(
         var notificationsBecameUnavailable = false
         var handledFailure = false
         var hitHardRuntimeCap = false
-        var lastKnownRoutine = routine
+        var runOutcome = ActiveWindowRunOutcome.WINDOW_COMPLETED
+        var lastKnownRoutine: CommuteRoutine = routine
         // Persists across loop ticks -- see the main loop's own comment on why a timed-out or
         // failed disruptions fetch falls back to this rather than dropping to "no disruption
         // shown" for one tick. Re-checked against its own validUntil every tick (see the main
@@ -503,10 +516,20 @@ class RoutineActiveWindowWorker @AssistedInject constructor(
                 // reflecting how much real device time this tick's own work actually took.
                 val tickStartElapsedRealtimeMillis = elapsedRealtimeProvider.elapsedRealtimeMillis()
 
-                val current = routineRepository.getById(routineId) ?: break
+                val current = routineRepository.getById(routineId)
+                if (current == null) {
+                    runOutcome = ActiveWindowRunOutcome.ROUTINE_DELETED
+                    break
+                }
                 lastKnownRoutine = current
-                if (!current.enabled) break
-                if (current.pausedDate == zonedNow().toLocalDate()) break
+                if (!current.enabled) {
+                    runOutcome = ActiveWindowRunOutcome.ROUTINE_DISABLED
+                    break
+                }
+                if (current.pausedDate == zonedNow().toLocalDate()) {
+                    runOutcome = ActiveWindowRunOutcome.ROUTINE_PAUSED
+                    break
+                }
                 if (!zonedNow().isBefore(windowEnd)) break
                 // Independent of windowEnd -- see HARD_FOREGROUND_RUNTIME_CAP_MINUTES's own doc
                 // on why real elapsed time can exceed the configured window's clock-face
@@ -522,10 +545,12 @@ class RoutineActiveWindowWorker @AssistedInject constructor(
                             "time limit.",
                     )
                     hitHardRuntimeCap = true
+                    runOutcome = ActiveWindowRunOutcome.HARD_RUNTIME_CAP
                     break
                 }
                 if (notificationAvailabilityChecker.check() != NotificationAvailability.Available) {
                     notificationsBecameUnavailable = true
+                    runOutcome = ActiveWindowRunOutcome.NOTIFICATIONS_UNAVAILABLE
                     // See the pre-loop check's identical call for why this must happen here,
                     // before the loop actually breaks, not be inferred later.
                     notificationRecoveryReporter.reportUnavailable()
@@ -796,6 +821,12 @@ class RoutineActiveWindowWorker @AssistedInject constructor(
             // cancelled this run may already be enqueuing (or intentionally not enqueuing) its
             // own replacement, and resurrecting another scheduled occurrence here could leave
             // obsolete work behind. The `finally` below still cleans up the notification.
+            Log.i(
+                LOG_TAG,
+                formatActiveWindowOutcomeDiagnostic(
+                    routineId, id.toString(), ActiveWindowRunOutcome.WORK_CANCELLED, Build.VERSION.SDK_INT,
+                ),
+            )
             throw e
         } catch (e: Exception) {
             // Any other unexpected failure (e.g. setForeground() itself throwing on this
@@ -805,6 +836,7 @@ class RoutineActiveWindowWorker @AssistedInject constructor(
             // handledFailure = true because the window may still genuinely be open (this
             // failure is unrelated to window timing) -- see rescheduleSkippingToday's own doc.
             handledFailure = true
+            runOutcome = ActiveWindowRunOutcome.UNEXPECTED_FAILURE
         } finally {
             // Ownership was already unconditionally claimed above, before setForeground was
             // even attempted -- so this cleanup always runs, whether the loop ran to completion,
@@ -871,6 +903,11 @@ class RoutineActiveWindowWorker @AssistedInject constructor(
                 Log.w(LOG_TAG, "Failed to clear occurrence runtime state for routine $routineId", e)
             }
         }
+
+        Log.i(
+            LOG_TAG,
+            formatActiveWindowOutcomeDiagnostic(routineId, id.toString(), runOutcome, Build.VERSION.SDK_INT),
+        )
 
         // notificationsBecameUnavailable/handledFailure/hitHardRuntimeCap: the loop broke or the
         // run failed for a reason unrelated to the window itself actually ending, so the window

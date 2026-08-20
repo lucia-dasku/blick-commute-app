@@ -58,6 +58,7 @@ import se.blick.app.scheduling.NextOccurrence
 import se.blick.app.scheduling.NextOccurrenceCalculator
 import se.blick.app.scheduling.NotificationRecoveryReporter
 import se.blick.app.scheduling.RoutineScheduler
+import se.blick.app.scheduling.RoutineCancellationReason
 import se.blick.app.ui.navigation.Routes
 import se.blick.app.widget.RoutineWidgetUpdater
 import se.blick.app.widget.runWidgetUpdateSafely
@@ -781,7 +782,7 @@ class RoutineDetailsViewModel @Inject constructor(
                 if (newEnabled) {
                     routineScheduler.scheduleActivation(updated)
                 } else {
-                    routineScheduler.cancelActivation(updated.id)
+                    routineScheduler.cancelActivation(updated.id, RoutineCancellationReason.USER_DISABLED)
                 }
             } catch (e: CancellationException) {
                 throw e
@@ -949,7 +950,7 @@ class RoutineDetailsViewModel @Inject constructor(
             }
             _uiState.update { it.copy(isDeleting = false) }
             try {
-                routineScheduler.cancelActivation(routine.id)
+                routineScheduler.cancelActivation(routine.id, RoutineCancellationReason.ROUTINE_DELETED)
             } catch (e: CancellationException) {
                 throw e
             } catch (e: Exception) {

@@ -13,9 +13,36 @@ Request JSON: `{ "productId": "blick_premium_lifetime", "purchaseToken": "..." }
 The product ID is closed to that one non-consumable product. The backend exchanges its Google
 service-account assertion for an OAuth access token, calls Android Publisher Product Purchases
 v2 for the configured package, grants entitlement only for a completed, unrefunded purchase,
-and acknowledges an unacknowledged valid purchase through the publisher API. Credentials never
-enter the Android app or repository. Responses use the existing sanitized error envelope and
-`Cache-Control: no-store`.
+and acknowledges an unacknowledged valid purchase through the publisher API. The success data is
+`{ productId, verified, state, verifiedAt }`; `verifiedAt` is the last time Google was queried,
+not the time a cached record was read. A PostgreSQL record keyed by the SHA-256 purchase-token
+fingerprint stores the minimum lifecycle fields needed for entitlement. Raw purchase tokens are
+never persisted. Transaction-scoped advisory locks make duplicate/concurrent verification and
+acknowledgement idempotent. Active records are revalidated with Google at least every six hours;
+pending and inactive records use shorter intervals. The route has a billing-only fixed-window
+limit keyed by the token fingerprint plus a global billing limit. It never uses an IP address as
+purchase identity and does not affect transit endpoints. Credentials never enter the Android app
+or repository. Responses use the existing sanitized error envelope and `Cache-Control: no-store`.
+
+### `POST /api/v1/billing/rtdn`
+
+This is the Google Cloud Pub/Sub push target for Google Play Real-time Developer Notifications,
+not an Android-client API. It requires a Google-signed OIDC bearer token with the exact configured
+audience, verified email and configured push service-account email. The Pub/Sub envelope and
+Google Play payload are validated strictly. Each Pub/Sub message ID is claimed durably; completed
+IDs are idempotent and failed claims may be retried. Purchase, cancellation, refund and revocation
+notifications force a Product Purchases v2 lookup, so notification fields alone never grant or
+remove entitlement. PostgreSQL event times prevent an older delivery from overwriting newer state.
+`pendingRefundReviewNotification` is different: it is a chargeback review request, not a final
+refund. Blick responds through `orders.reviewrefund` with `NEUTRAL`, declares that functionality
+information was provided before purchase, submits no usage evidence, and leaves entitlement
+unchanged. Blick has no account or
+purchase-usage history from which to make a more specific recommendation. The pending-refund token
+is used only for that Google API call and is not persisted. A later voided-purchase notification
+continues through the normal authoritative revalidation path and removes entitlement when Google
+reports that ownership is no longer valid.
+Processed notification claims are retained for 90 days; inactive purchase records are retained
+for 24 months. The endpoint returns `204` after successful or already-completed processing.
 
 ### `GET /api/v1/journeys/locations/search?query=`
 

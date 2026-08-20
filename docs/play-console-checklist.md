@@ -2,7 +2,8 @@
 
 The code uses one non-consumable, one-time product: `blick_premium_lifetime`. The planned
 Swedish base price is 49 SEK, but the app always displays Google Play's localized price.
-Purchase verification is **not production-ready** until every applicable item below is done.
+Repository-side purchase verification is implemented, but launch is **not production-ready**
+until every external provisioning, configuration and internal-track test below is complete.
 
 ## Play Console
 
@@ -29,6 +30,9 @@ Official references: [one-time products](https://developer.android.com/google/pl
   - `GOOGLE_PLAY_PACKAGE_NAME`
   - `GOOGLE_PLAY_SERVICE_ACCOUNT_EMAIL`
   - `GOOGLE_PLAY_SERVICE_ACCOUNT_PRIVATE_KEY` (preserve or restore PEM newlines)
+  - `DATABASE_URL`
+  - `GOOGLE_PLAY_RTDN_AUDIENCE`
+  - `GOOGLE_PLAY_RTDN_SERVICE_ACCOUNT_EMAIL`
 - Keep the existing production Upstash variables configured as documented in
   [`../backend/README.md`](../backend/README.md).
 - Redeploy and confirm `/api/v1/billing/verify` validates a real test purchase and acknowledges
@@ -38,19 +42,34 @@ Official references: [Android Publisher API setup](https://developers.google.com
 [Product Purchases v2 verification](https://developers.google.com/android-publisher/api-ref/rest/v3/purchases.productsv2/getproductpurchasev2),
 and [secure backend integration](https://developer.android.com/google/play/billing/backend).
 
-## Refund/revocation freshness before production
+## Durable billing state and RTDN before production
 
-The current repository re-queries owned purchases and re-verifies tokens at startup, on app
-foreground, after purchase updates, and through Restore purchase. That is sufficient for local
-feature testing but does not provide server-initiated, real-time revocation while the app remains
-closed. Before calling purchase verification production-ready:
+The repository contains the PostgreSQL schema/migration, transaction-safe purchase store,
+authenticated RTDN handler and Google revalidation. Complete these external steps:
 
-- Configure Google Play Real-time Developer Notifications (RTDN) with Pub/Sub.
-- Add durable purchase-token ownership/state storage and an authenticated RTDN consumer in the
-  backend, then re-query Product Purchases v2 for every relevant event. Never trust notification
-  payload fields alone as entitlement proof.
-- Define token retention/deletion and operational alerting. The current app has no Blick account,
-  so cross-user token ownership and abuse controls need an explicit backend design.
+- Provision a production PostgreSQL database, set `DATABASE_URL`, and run
+  `npm run migrate:billing` from the deployed revision before sending billing traffic.
+- Create a Google Cloud Pub/Sub topic in the project linked to Play Console and grant the Google
+  Play notifications service account permission to publish to it. Enter that topic in Play
+  Console's Real-time developer notifications settings and send a test notification.
+- Create a push subscription whose HTTPS endpoint is
+  `https://<production-host>/api/v1/billing/rtdn`. Enable authenticated push with a dedicated,
+  least-privilege service account. Grant the Pub/Sub service agent permission to mint OIDC tokens
+  for that identity as required by Google Cloud.
+- Set the push OIDC audience and `GOOGLE_PLAY_RTDN_AUDIENCE` to that exact endpoint URL, and set
+  `GOOGLE_PLAY_RTDN_SERVICE_ACCOUNT_EMAIL` to the selected push identity. Do not store a token,
+  JSON key or private key for Pub/Sub in the repository.
+- Confirm the test notification receives `204`, then monitor Pub/Sub delivery failures and backend
+  Google API errors. Configure an appropriate retry policy/dead-letter handling operationally.
+- Exercise completed purchase, pending-to-purchased, duplicate delivery, pending refund review,
+  final refund, revoke and cancellation with Play license testers. Confirm the review receives a
+  neutral response without changing entitlement, then confirm a final refund/revoke is reflected
+  in PostgreSQL and Android on the next foreground verification.
+
+The app remains accountless: a purchaser restores through the Google account currently available
+to BillingClient. The server intentionally permits repeated verification of the same legitimate
+token and therefore cannot bind ownership to a Blick identity or distinguish people sharing the
+same Google account/device access.
 
 Official reference: [Real-time Developer Notifications](https://developer.android.com/google/play/billing/rtdn-reference).
 
