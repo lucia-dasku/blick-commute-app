@@ -83,8 +83,10 @@ interface RoutineWidgetUpdater {
 
     /** Called only from the worker's own `finally` block, mirroring
      * [se.blick.app.notification.RoutineNotifier.remove] exactly — the active window has just
-     * ended (normally, on a handled failure, or because it's no longer eligible), so the widget
-     * goes back to [RoutineWidgetUiState.NoActiveCommute] unconditionally, with no extra lookup. */
+     * ended normally or is no longer eligible, so the widget goes back to
+     * [RoutineWidgetUiState.NoActiveCommute] unconditionally, with no extra lookup. An unexpected
+     * worker exception uses [reconcile] instead because WorkManager will retry while the window
+     * may still be active. */
     suspend fun clear()
 
     /** Called from every routine-lifecycle mutation site that happens OUTSIDE the worker's loop

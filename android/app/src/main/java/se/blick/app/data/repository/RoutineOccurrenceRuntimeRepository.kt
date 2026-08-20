@@ -18,13 +18,15 @@ interface RoutineOccurrenceRuntimeRepository {
     suspend fun save(routineId: String, state: RoutineOccurrenceRuntimeState)
 
     /** Removes any recorded state for [routineId] — a harmless no-op if none exists. Called once
-     * an occurrence's WINDOW is genuinely over (it ended naturally, notifications became
-     * unavailable, or a failure was handled) so a later, genuinely NEW occurrence never has to
-     * share space with stale data (though its different
+     * an occurrence's WINDOW is genuinely over (it ended naturally or notifications became
+     * unavailable) so a later, genuinely NEW occurrence never has to share space with stale data
+     * (though its different
      * [RoutineOccurrenceRuntimeState.occurrenceWindowEndEpochMilli] would already make old state
-     * irrelevant on its own). Deliberately NOT called when the hard real-elapsed-time cap is why
-     * a run stopped — that occurrence's window has NOT actually ended, only its runtime budget
-     * has, so the exhausted record is left in place; see
+     * irrelevant on its own). Deliberately NOT called when an unexpected worker exception returns
+     * [androidx.work.ListenableWorker.Result.Retry], because that retry belongs to the same
+     * occurrence and must continue its original runtime accounting. Also deliberately not called
+     * when the hard real-elapsed-time cap is why a run stopped — that occurrence's window has NOT
+     * actually ended, only its runtime budget has, so the exhausted record is left in place; see
      * `se.blick.app.scheduling.RoutineActiveWindowWorker.doWork`'s own comment on why clearing it
      * there would let a replacement worker or reboot-recovered process wrongly treat this SAME
      * still-open occurrence as fresh. */

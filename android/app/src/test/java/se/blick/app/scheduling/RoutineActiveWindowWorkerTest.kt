@@ -193,9 +193,11 @@ class RoutineActiveWindowWorkerTest {
      * under test even starts. */
     private class FakeRoutineOccurrenceRuntimeRepository : RoutineOccurrenceRuntimeRepository {
         private val stored = mutableMapOf<String, RoutineOccurrenceRuntimeState>()
+        val savedStates = mutableListOf<Pair<String, RoutineOccurrenceRuntimeState>>()
         val clearedRoutineIds = mutableListOf<String>()
         override suspend fun get(routineId: String): RoutineOccurrenceRuntimeState? = stored[routineId]
         override suspend fun save(routineId: String, state: RoutineOccurrenceRuntimeState) {
+            savedStates += routineId to state
             stored[routineId] = state
         }
         override suspend fun clear(routineId: String) {
@@ -614,9 +616,11 @@ class RoutineActiveWindowWorkerTest {
         bootCountProvider: BootCountProvider = FakeBootCountProvider(),
         getRankedJourneys: se.blick.app.domain.usecase.GetRankedJourneysUseCase? = null,
         getJourneyDisruptionRelevance: se.blick.app.domain.usecase.GetJourneyDisruptionRelevanceUseCase? = null,
+        runAttemptCount: Int = 0,
     ): RoutineActiveWindowWorker =
         TestListenableWorkerBuilder<RoutineActiveWindowWorker>(context)
             .setInputData(workDataOf(RoutineActiveWindowWorker.KEY_ROUTINE_ID to routineId))
+            .setRunAttemptCount(runAttemptCount)
             .setWorkerFactory(object : WorkerFactory() {
                 override fun createWorker(
                     appContext: Context,
@@ -946,7 +950,7 @@ class RoutineActiveWindowWorkerTest {
     }
 
     @Test
-    fun `an occurrence already at exactly 330 minutes of real elapsed time is detected as exhausted before foreground even starts`() = runTest {
+    fun `a retry whose persisted occurrence is exhausted does not enter foreground or grant a fresh allowance`() = runTest {
         val clock = TickingClock(Instant.parse("2026-07-27T05:00:00Z"), zone)
         val testRoutine = routine()
         val repository = ScriptedRoutineRepository(clock) { testRoutine }
@@ -987,6 +991,8 @@ class RoutineActiveWindowWorkerTest {
         assertTrue(notifier.shown.isEmpty())
         assertEquals(0, notifier.removeCallCount)
         assertTrue(ownershipRepository.claimedIds.isEmpty())
+        assertTrue(runtimeRepository.savedStates.isEmpty())
+        assertTrue(runtimeRepository.clearedRoutineIds.isEmpty())
         assertEquals(LocalDate.of(2026, 7, 27), scheduler.scheduledRoutines.single().pausedDate)
         // rescheduleSkippingToday -- not a plain rescheduleNext, which would recompute the SAME
         // still-open occurrence and cause WorkManagerRoutineScheduler to enqueue it with a zero
@@ -1657,13 +1663,14 @@ class RoutineActiveWindowWorkerTest {
     }
 
     @Test
-    fun `a handled failure with a stale pausedDate from yesterday -- today is still skipped, no zero-delay loop`() = runTest {
+    fun `an unexpected failure with a stale pausedDate returns retry without manually rescheduling`() = runTest {
         val clock = TickingClock(Instant.parse("2026-07-27T05:00:00Z"), zone)
         val routine = routine().copy(pausedDate = LocalDate.of(2026, 7, 26))
         val repository = ScriptedRoutineRepository(clock) { routine }
         val notifier = RecordingNotifier()
         val scheduler = RecordingScheduler()
         val widgetUpdater = RecordingWidgetUpdater()
+        val runtimeRepository = FakeRoutineOccurrenceRuntimeRepository()
         val failingBuilder = mockk<RoutineNotificationBuilder>()
         every { failingBuilder.build(any()) } throws RuntimeException("boom during foreground setup")
 
@@ -1676,12 +1683,15 @@ class RoutineActiveWindowWorkerTest {
             clock,
             notificationBuilder = failingBuilder,
             widgetUpdater = widgetUpdater,
+            routineOccurrenceRuntimeRepository = runtimeRepository,
         )
         val result = worker.doWork()
 
-        assertTrue(result is ListenableWorker.Result.Success)
-        assertNoZeroDelayReschedule(scheduler, clock)
-        assertEquals(LocalDate.of(2026, 7, 27), scheduler.scheduledRoutines.single().pausedDate)
+        assertTrue(result is ListenableWorker.Result.Retry)
+        assertTrue(scheduler.scheduledRoutines.isEmpty())
+        assertTrue(runtimeRepository.clearedRoutineIds.isEmpty())
+        assertEquals(1, widgetUpdater.reconcileCallCount)
+        assertEquals(0, widgetUpdater.clearCallCount)
     }
 
     @Test
@@ -2002,10 +2012,10 @@ class RoutineActiveWindowWorkerTest {
         assertEquals(1, scheduler.scheduledRoutines.size)
     }
 
-    // ---- Handled terminal failures still clean up and reschedule (Fix 2) ----
+    // ---- Unexpected failures ask WorkManager to retry without ending today's occurrence ----
 
     @Test
-    fun `a failure building the foreground notification after a successful ownership claim is handled -- no loop, no crash, still reschedules, ownership-aware cleanup runs`() = runTest {
+    fun `a foreground-construction failure returns retry without manual rescheduling and preserves runtime state`() = runTest {
         val clock = TickingClock(Instant.parse("2026-07-27T05:00:00Z"), zone)
         val routine = routine()
         val repository = ScriptedRoutineRepository(clock) { routine }
@@ -2013,6 +2023,7 @@ class RoutineActiveWindowWorkerTest {
         val scheduler = RecordingScheduler()
         val widgetUpdater = RecordingWidgetUpdater()
         val ownershipRepository = FakeRoutineWorkOwnershipRepository()
+        val runtimeRepository = FakeRoutineOccurrenceRuntimeRepository()
         val failingBuilder = mockk<RoutineNotificationBuilder>()
         every { failingBuilder.build(any()) } throws RuntimeException("boom during foreground setup")
 
@@ -2026,29 +2037,65 @@ class RoutineActiveWindowWorkerTest {
             notificationBuilder = failingBuilder,
             widgetUpdater = widgetUpdater,
             routineWorkOwnershipRepository = ownershipRepository,
+            routineOccurrenceRuntimeRepository = runtimeRepository,
         )
         val result = worker.doWork()
 
-        assertTrue(result is ListenableWorker.Result.Success)
+        assertTrue(result is ListenableWorker.Result.Retry)
         assertTrue(notifier.shown.isEmpty())
         // Ownership is claimed BEFORE setForeground is ever attempted -- this run claimed it
         // successfully even though building the foreground notification (part of the very next
         // statement) then failed. See the class doc's "if ownership succeeds but setForeground
         // subsequently fails, safely clean/reconcile" paragraph -- this is exactly that case.
         assertEquals(listOf(routine.id to worker.id.toString()), ownershipRepository.claimedIds)
-        // Since ownership was already claimed, the `finally` block's cleanup is no longer gated
-        // on setForeground having succeeded -- it runs unconditionally (subject only to the
-        // ownership check, which reports true here, the default), removing whatever content may
-        // exist and clearing the widget, exactly like any other handled-failure exit.
+        // Since ownership was already claimed, cleanup runs subject to the ownership check even
+        // though foreground construction failed. The notification is removed, while the widget
+        // is reconciled to ActiveRoutine/Loading for the retry gap rather than falsely cleared.
         assertEquals(1, notifier.removeCallCount)
-        assertEquals(1, scheduler.scheduledRoutines.size)
-        assertEquals(0, widgetUpdater.reconcileCallCount)
-        assertEquals(1, widgetUpdater.clearCallCount)
-        assertNoZeroDelayReschedule(scheduler, clock)
+        assertTrue(scheduler.scheduledRoutines.isEmpty())
+        assertEquals(1, widgetUpdater.reconcileCallCount)
+        assertEquals(0, widgetUpdater.clearCallCount)
+        assertTrue(runtimeRepository.clearedRoutineIds.isEmpty())
+        assertTrue(runtimeRepository.peek(routine.id) != null)
     }
 
     @Test
-    fun `an unexpected failure updating the notification mid-loop is handled -- cleans up, reschedules, and skips today (no zero-delay loop)`() = runTest {
+    fun `an old failed worker that lost ownership cannot remove or reconcile over newer content`() = runTest {
+        val clock = TickingClock(Instant.parse("2026-07-27T05:00:00Z"), zone)
+        val routine = routine()
+        val repository = ScriptedRoutineRepository(clock) { routine }
+        val notifier = RecordingNotifier()
+        val scheduler = RecordingScheduler()
+        val widgetUpdater = RecordingWidgetUpdater()
+        val runtimeRepository = FakeRoutineOccurrenceRuntimeRepository()
+        val failingBuilder = mockk<RoutineNotificationBuilder>()
+        every { failingBuilder.build(any()) } throws RuntimeException("boom during foreground setup")
+
+        val worker = buildWorker(
+            routine.id,
+            repository,
+            GetLiveDeparturesUseCase(FakeDepartureRepository { error("unused") }, clock),
+            notifier,
+            scheduler,
+            clock,
+            notificationBuilder = failingBuilder,
+            widgetUpdater = widgetUpdater,
+            routineWorkOwnershipRepository = FakeRoutineWorkOwnershipRepository(isOwnerResult = false),
+            routineOccurrenceRuntimeRepository = runtimeRepository,
+        )
+        val result = worker.doWork()
+
+        assertTrue(result is ListenableWorker.Result.Retry)
+        assertEquals(0, notifier.removeCallCount)
+        assertEquals(0, widgetUpdater.reconcileCallCount)
+        assertEquals(0, widgetUpdater.clearCallCount)
+        assertTrue(scheduler.scheduledRoutines.isEmpty())
+        assertTrue(runtimeRepository.clearedRoutineIds.isEmpty())
+        assertTrue(runtimeRepository.peek(routine.id) != null)
+    }
+
+    @Test
+    fun `an unexpected notification update failure returns retry and reconciles without manual rescheduling`() = runTest {
         val clock = TickingClock(Instant.parse("2026-07-27T05:00:00Z"), zone)
         val routine = routine()
         val repository = ScriptedRoutineRepository(clock) { routine }
@@ -2056,6 +2103,8 @@ class RoutineActiveWindowWorkerTest {
         // real mid-loop failure rather than one on the very first attempt).
         val notifier = RecordingNotifier(throwOnShowCall = 2)
         val scheduler = RecordingScheduler()
+        val widgetUpdater = RecordingWidgetUpdater()
+        val runtimeRepository = FakeRoutineOccurrenceRuntimeRepository()
         val departures = FakeDepartureRepository { DeparturesResult(clock.instant(), 9145, listOf(sampleDeparture())) }
 
         val worker = buildWorker(
@@ -2065,16 +2114,66 @@ class RoutineActiveWindowWorkerTest {
             notifier,
             scheduler,
             clock,
+            widgetUpdater = widgetUpdater,
+            routineOccurrenceRuntimeRepository = runtimeRepository,
         )
         val result = worker.doWork()
 
-        assertTrue(result is ListenableWorker.Result.Success)
+        assertTrue(result is ListenableWorker.Result.Retry)
         assertEquals(1, notifier.shown.size) // only the first, successful tick
-        // setForeground DID succeed this time -- enteredForeground is true, so the `finally`
-        // still removes the notification despite the mid-loop failure.
         assertEquals(1, notifier.removeCallCount)
-        assertEquals(1, scheduler.scheduledRoutines.size)
-        assertNoZeroDelayReschedule(scheduler, clock)
+        assertTrue(scheduler.scheduledRoutines.isEmpty())
+        assertTrue(runtimeRepository.clearedRoutineIds.isEmpty())
+        assertEquals(1, widgetUpdater.reconcileCallCount)
+        assertEquals(0, widgetUpdater.clearCallCount)
+    }
+
+    @Test
+    fun `a WorkManager retry reuses the original occurrence runtime state and repeated failures keep returning retry`() = runTest {
+        val clock = TickingClock(Instant.parse("2026-07-27T05:00:00Z"), zone)
+        val routine = routine(startTime = LocalTime.of(7, 0), endTime = LocalTime.of(12, 0))
+        val runtimeRepository = FakeRoutineOccurrenceRuntimeRepository()
+        val elapsedRealtime = FakeElapsedRealtimeProvider(startMillis = 123_000L)
+        val failingBuilder = mockk<RoutineNotificationBuilder>()
+        every { failingBuilder.build(any()) } throws RuntimeException("repeatable foreground setup failure")
+
+        val firstWorker = buildWorker(
+            routine.id,
+            ScriptedRoutineRepository(clock, advanceSecondsPerCall = 0) { routine },
+            GetLiveDeparturesUseCase(FakeDepartureRepository { error("unused") }, clock),
+            RecordingNotifier(),
+            RecordingScheduler(),
+            clock,
+            notificationBuilder = failingBuilder,
+            routineOccurrenceRuntimeRepository = runtimeRepository,
+            elapsedRealtimeProvider = elapsedRealtime,
+            runAttemptCount = 0,
+        )
+        val firstResult = firstWorker.doWork()
+        val originalState = runtimeRepository.peek(routine.id)
+
+        elapsedRealtime.millis += Duration.ofMinutes(45).toMillis()
+        val retryScheduler = RecordingScheduler()
+        val retryWorker = buildWorker(
+            routine.id,
+            ScriptedRoutineRepository(clock, advanceSecondsPerCall = 0) { routine },
+            GetLiveDeparturesUseCase(FakeDepartureRepository { error("unused") }, clock),
+            RecordingNotifier(),
+            retryScheduler,
+            clock,
+            notificationBuilder = failingBuilder,
+            routineOccurrenceRuntimeRepository = runtimeRepository,
+            elapsedRealtimeProvider = elapsedRealtime,
+            runAttemptCount = 1,
+        )
+        val retryResult = retryWorker.doWork()
+
+        assertTrue(firstResult is ListenableWorker.Result.Retry)
+        assertTrue(retryResult is ListenableWorker.Result.Retry)
+        assertEquals(1, runtimeRepository.savedStates.size)
+        assertEquals(originalState, runtimeRepository.peek(routine.id))
+        assertTrue(runtimeRepository.clearedRoutineIds.isEmpty())
+        assertTrue(retryScheduler.scheduledRoutines.isEmpty())
     }
 
     // ---- Real cancellation never resurrects obsolete work (Fix 2) ----
@@ -2088,6 +2187,7 @@ class RoutineActiveWindowWorkerTest {
         val repository = ScriptedRoutineRepository(clock, advanceSecondsPerCall = 0) { routine }
         val notifier = RecordingNotifier()
         val scheduler = RecordingScheduler()
+        val runtimeRepository = FakeRoutineOccurrenceRuntimeRepository()
         val departures = FakeDepartureRepository { DeparturesResult(clock.instant(), 9145, listOf(sampleDeparture())) }
 
         val worker = buildWorker(
@@ -2097,6 +2197,7 @@ class RoutineActiveWindowWorkerTest {
             notifier,
             scheduler,
             clock,
+            routineOccurrenceRuntimeRepository = runtimeRepository,
         )
 
         val job = launch { worker.doWork() }
@@ -2111,6 +2212,7 @@ class RoutineActiveWindowWorkerTest {
         assertTrue(scheduler.scheduledRoutines.isEmpty())
         // Cleanup still happens even on a real cancellation.
         assertEquals(1, notifier.removeCallCount)
+        assertTrue(runtimeRepository.clearedRoutineIds.isEmpty())
     }
 
     // ---- Widget failures are best-effort: never cut the loop short, never crash a `finally`,

@@ -239,10 +239,12 @@ internal fun effectiveHardCapMinutes(routine: CommuteRoutine, windowStart: Zoned
  * rethrown unconverted, WITHOUT rescheduling — rescheduling here would resurrect obsolete work
  * that whatever triggered the cancellation may already be in the middle of replacing or
  * cancelling outright. Any other unexpected exception (a failure entering foreground execution,
- * or anything else unhandled mid-loop) is caught, treated as a normal end of this run, and still
- * proceeds to clean up the notification and reschedule the next eligible occurrence — the same
- * as a normal window-end completion. [routineNotifier.remove] runs in a `finally`, whichever of
- * these paths is taken — but ONLY if this run is still the recorded content owner at that point
+ * or anything else unhandled mid-loop) is caught and returned to WorkManager as [Result.retry]
+ * after ownership-safe notification cleanup and widget reconciliation. It does NOT clear this
+ * occurrence's persisted runtime budget or manually enqueue replacement work: WorkManager's own
+ * retry keeps the same authoritative request and the next execution reuses the original runtime
+ * accounting. [routineNotifier.remove] runs in a `finally`, whichever of these paths is taken —
+ * but ONLY if this run is still the recorded content owner at that point
  * (see [claimContentOwnership] and [se.blick.app.data.repository.RoutineWorkOwnershipRepository]'s
  * own doc): a cancelled run that has since been superseded by a replacement (e.g. editing this
  * active routine, which cancels this worker and immediately starts a new one for the same
@@ -491,7 +493,7 @@ class RoutineActiveWindowWorker @AssistedInject constructor(
         }
 
         var notificationsBecameUnavailable = false
-        var handledFailure = false
+        var unexpectedFailure: Throwable? = null
         var hitHardRuntimeCap = false
         var runOutcome = ActiveWindowRunOutcome.WINDOW_COMPLETED
         var lastKnownRoutine: CommuteRoutine = routine
@@ -830,13 +832,19 @@ class RoutineActiveWindowWorker @AssistedInject constructor(
             throw e
         } catch (e: Exception) {
             // Any other unexpected failure (e.g. setForeground() itself throwing on this
-            // device/OEM, or an unhandled error mid-loop) -- treated as a normal end of this
-            // run rather than an unhandled crash with no next occurrence ever scheduled. Falls
-            // through to the reschedule call below, same as a normal window-end completion.
-            // handledFailure = true because the window may still genuinely be open (this
-            // failure is unrelated to window timing) -- see rescheduleSkippingToday's own doc.
-            handledFailure = true
+            // device/OEM, or an unhandled error mid-loop) may be transient while this SAME
+            // occurrence is still open. Preserve the Throwable for the retry-only terminal path
+            // below rather than overloading the skip-today behavior used by notification
+            // unavailability and the hard runtime cap.
+            unexpectedFailure = e
             runOutcome = ActiveWindowRunOutcome.UNEXPECTED_FAILURE
+            Log.e(
+                LOG_TAG,
+                "action=worker_exception routineId=$routineId workerId=$id sdk=${Build.VERSION.SDK_INT} " +
+                    "runAttemptCount=$runAttemptCount exceptionClass=${e.javaClass.name} " +
+                    "exceptionMessage=${e.message}",
+                e,
+            )
         } finally {
             // Ownership was already unconditionally claimed above, before setForeground was
             // even attempted -- so this cleanup always runs, whether the loop ran to completion,
@@ -874,10 +882,26 @@ class RoutineActiveWindowWorker @AssistedInject constructor(
                     // unconverted, but swallows anything else so it can never mask whatever this
                     // `finally` was already unwinding.
                     runWidgetUpdateSafely { routineWidgetUpdater.showNotificationsUnavailable(lastKnownRoutine) }
+                } else if (unexpectedFailure != null) {
+                    // The active window may still be open and WorkManager is going to retry this
+                    // same request. Re-derive an honest ActiveRoutine/Loading state from current
+                    // routine data instead of falsely clearing the widget to NoActiveCommute.
+                    runWidgetUpdateSafely { routineWidgetUpdater.reconcile() }
                 } else {
                     runWidgetUpdateSafely { routineWidgetUpdater.clear() }
                 }
             }
+        }
+
+        if (unexpectedFailure != null) {
+            // No runtime-state clear and no RoutineScheduler call here. WorkManager owns retry
+            // and backoff for this same request, whose next execution will re-read and reuse the
+            // matching occurrence runtime record (or safely reject it if its cap is exhausted).
+            Log.i(
+                LOG_TAG,
+                formatActiveWindowOutcomeDiagnostic(routineId, id.toString(), runOutcome, Build.VERSION.SDK_INT),
+            )
+            return Result.retry()
         }
 
         // This occurrence is over one way or another -- EXCEPT via the hard cap, its runtime
@@ -909,12 +933,13 @@ class RoutineActiveWindowWorker @AssistedInject constructor(
             formatActiveWindowOutcomeDiagnostic(routineId, id.toString(), runOutcome, Build.VERSION.SDK_INT),
         )
 
-        // notificationsBecameUnavailable/handledFailure/hitHardRuntimeCap: the loop broke or the
-        // run failed for a reason unrelated to the window itself actually ending, so the window
-        // may still be genuinely open (windowEnd, per the routine's configured local time, may
-        // not have been reached yet) -- see rescheduleSkippingToday's own doc for why a plain
-        // rescheduleNext here would loop.
-        if (notificationsBecameUnavailable || handledFailure || hitHardRuntimeCap) {
+        // notificationsBecameUnavailable/hitHardRuntimeCap: the loop broke for a reason unrelated
+        // to the window itself actually ending, so the window may still be genuinely open
+        // (windowEnd, per the routine's configured local time, may not have been reached yet) --
+        // see rescheduleSkippingToday's own doc for why a plain rescheduleNext here would loop.
+        // Unexpected exceptions returned above through Result.retry() and never reach this
+        // manual-rescheduling branch.
+        if (notificationsBecameUnavailable || hitHardRuntimeCap) {
             rescheduleSkippingToday(routineId)
         } else {
             rescheduleNext(routineId)
@@ -934,8 +959,9 @@ class RoutineActiveWindowWorker @AssistedInject constructor(
 
     /** Like [rescheduleNext], except today's occurrence is treated as ineligible for THIS one
      * scheduling calculation — used when the reason this run is ending is notifications being
-     * unavailable (at startup or discovered mid-loop) or a handled failure (e.g. [setForeground]
-     * itself throwing), none of which mean the window itself has ended. Without this, plain
+     * unavailable (at startup or discovered mid-loop) or the hard runtime cap being exhausted,
+     * neither of which means the window itself has ended. Unexpected exceptions deliberately do
+     * not use this method; they return [Result.retry] instead. Without this, plain
      * [rescheduleNext] would ask [RoutineScheduler] to recompute the SAME still-open occurrence,
      * which [WorkManagerRoutineScheduler] schedules with a ZERO initial delay for
      * [NextOccurrence.ActiveNow] — causing this worker to re-run almost immediately, hit the
