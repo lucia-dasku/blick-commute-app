@@ -35,10 +35,6 @@
     <string name="premium_active">Premium är aktivt för detta Google Play-konto.</string>
     <string name="premium_pending">Ditt köp väntar. Premium låses upp när Google Play har bekräftat betalningen.</string>
     <string name="premium_unavailable">Google Play är tillfälligt otillgängligt. Tidigare verifierad åtkomst behålls.</string>
-    <string name="premium_debug_note">Endast för utvecklartestning. Den lokala inställningen simulerar inte ett Google Play-köp och finns inte i releaseversioner.</string>
-    <string name="premium_debug_enable">Utvecklare: Lås upp Premium</string>
-    <string name="premium_debug_disable">Utvecklare: Återgå till Free</string>
-    <string name="premium_debug_active">Premium är aktivt genom debuginställningen för testning.</string>
 
     <string name="routine_create_title">Ny rutin</string>
     <string name="action_back">Tillbaka</string>
@@ -168,7 +164,7 @@
     <string name="routine_create_save_error">Kunde inte spara din rutin. Kontrollera din anslutning och försök igen.</string>
     <string name="routine_create_scheduling_error">Rutinen sparades, men det gick inte att ställa in aviseringar. Försök igen.</string>
     <string name="routine_create_existing_not_found">Rutinen kunde inte hittas. Den kan redan ha tagits bort.</string>
-    <string name="routine_create_limit_reached">Du kan bara ha en rutin under den här betaversionen. Ta bort din befintliga rutin innan du skapar en ny.</string>
+    <string name="routine_create_limit_reached">Free-planen stöder en rutin. Ta bort din befintliga rutin innan du skapar en ny.</string>
 
     <string name="transport_mode_bus">Buss</string>
     <string name="transport_mode_metro">Tunnelbana</string>
@@ -257,18 +253,6 @@
     <string name="notification_disruption_effect_disruption">Trafikstörning</string>
     <string name="notification_action_stop">Stoppa</string>
 
-    <string name="debug_notification_section_heading">Felsökning: aviseringstest</string>
-    <string name="debug_disruption_effect_picker_label">Störningseffekt att testa (valfritt)</string>
-    <string name="debug_disruption_effect_real">Verklig</string>
-    <string name="debug_show_test_notification">Visa/uppdatera testavisering</string>
-    <string name="debug_remove_test_notification">Ta bort testavisering</string>
-    <string name="debug_notification_posted">Testavisering skickad.</string>
-    <string name="debug_notification_promoted_suffix"> Kvalificerad för en framhävd Live Update på låsskärmen — den faktiska placeringen (t.ex. Samsungs Now Bar) avgörs av Android/tillverkaren och kan inte bekräftas inifrån appen.</string>
-    <string name="debug_notification_not_promoted_suffix"> Inte kvalificerad för framhävning just nu — kräver Android 16+ med Live Updates aktiverat; visas som en vanlig pågående avisering.</string>
-    <string name="debug_notification_removed">Testavisering borttagen.</string>
-    <string name="debug_notification_permission_denied">Aviseringsbehörighet nekad — kan inte visa testaviseringen.</string>
-    <string name="debug_notification_disabled">Skickades inte — aviseringar är avstängda för den här appen. Aktivera dem i systeminställningarna och försök igen.</string>
-    <string name="debug_notification_failed">Kunde inte skicka testaviseringen. Försök igen.</string>
 
     <string name="widget_no_active_commute">Ingen aktiv pendling.</string>
     <string name="widget_description">Visar nästa avgångar när din pendlingsrutin är aktiv.</string>

@@ -1,0 +1,20 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <string name="premium_debug_note">Endast för utvecklartestning. Den lokala inställningen simulerar inte ett Google Play-köp och finns inte i releaseversioner.</string>
+    <string name="premium_debug_enable">Utvecklare: Lås upp Premium</string>
+    <string name="premium_debug_disable">Utvecklare: Återgå till Free</string>
+    <string name="premium_debug_active">Premium är aktivt genom debuginställningen för testning.</string>
+
+    <string name="debug_notification_section_heading">Felsökning: aviseringstest</string>
+    <string name="debug_disruption_effect_picker_label">Störningseffekt att testa (valfritt)</string>
+    <string name="debug_disruption_effect_real">Verklig</string>
+    <string name="debug_show_test_notification">Visa/uppdatera testavisering</string>
+    <string name="debug_remove_test_notification">Ta bort testavisering</string>
+    <string name="debug_notification_posted">Testavisering skickad.</string>
+    <string name="debug_notification_promoted_suffix"> Kvalificerad för en framhävd Live Update på låsskärmen — den faktiska placeringen (t.ex. Samsungs Now Bar) avgörs av Android/tillverkaren och kan inte bekräftas inifrån appen.</string>
+    <string name="debug_notification_not_promoted_suffix"> Inte kvalificerad för framhävning just nu — kräver Android 16+ med Live Updates aktiverat; visas som en vanlig pågående avisering.</string>
+    <string name="debug_notification_removed">Testavisering borttagen.</string>
+    <string name="debug_notification_permission_denied">Aviseringsbehörighet nekad — kan inte visa testaviseringen.</string>
+    <string name="debug_notification_disabled">Skickades inte — aviseringar är avstängda för den här appen. Aktivera dem i systeminställningarna och försök igen.</string>
+    <string name="debug_notification_failed">Kunde inte skicka testaviseringen. Försök igen.</string>
+</resources>

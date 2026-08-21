@@ -42,9 +42,7 @@ fun PremiumScreen(onBack: () -> Unit, viewModel: PremiumViewModel = hiltViewMode
             Text("• ${stringResource(R.string.premium_feature_once)}")
             Spacer(Modifier.height(8.dp))
             when (state.entitlement) {
-                EntitlementState.Premium -> Text(stringResource(
-                    if (state.debugOverrideEnabled) R.string.premium_debug_active else R.string.premium_active,
-                ))
+                EntitlementState.Premium -> PremiumActiveStatus(state.debugOverrideEnabled)
                 EntitlementState.Pending -> Text(stringResource(R.string.premium_pending))
                 is EntitlementState.TemporarilyUnavailable -> Text(stringResource(R.string.premium_unavailable))
                 else -> Unit
@@ -60,19 +58,11 @@ fun PremiumScreen(onBack: () -> Unit, viewModel: PremiumViewModel = hiltViewMode
             OutlinedButton(onClick = viewModel::restore, modifier = Modifier.fillMaxWidth()) {
                 Text(stringResource(R.string.premium_restore))
             }
-            if (state.debugOverrideAvailable) {
-                Spacer(Modifier.height(8.dp))
-                Text(
-                    stringResource(R.string.premium_debug_note),
-                    style = MaterialTheme.typography.bodySmall,
-                    color = MaterialTheme.colorScheme.secondary,
-                )
-                OutlinedButton(onClick = viewModel::toggleDebugPremium, modifier = Modifier.fillMaxWidth()) {
-                    Text(stringResource(
-                        if (state.debugOverrideEnabled) R.string.premium_debug_disable else R.string.premium_debug_enable,
-                    ))
-                }
-            }
+            PremiumDeveloperOverrideControls(
+                available = state.debugOverrideAvailable,
+                enabled = state.debugOverrideEnabled,
+                onToggle = viewModel::toggleDebugPremium,
+            )
         }
     }
 }

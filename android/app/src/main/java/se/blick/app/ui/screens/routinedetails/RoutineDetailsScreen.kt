@@ -2,13 +2,9 @@
 
 package se.blick.app.ui.screens.routinedetails
 
-import android.Manifest
 import android.content.Context
 import android.content.Intent
-import android.content.pm.PackageManager
 import android.os.Build
-import androidx.activity.compose.rememberLauncherForActivityResult
-import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Arrangement
@@ -22,7 +18,6 @@ import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
-import androidx.compose.foundation.horizontalScroll
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.verticalScroll
@@ -62,12 +57,10 @@ import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.LocalLifecycleOwner
 import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.unit.dp
-import androidx.core.content.ContextCompat
 import androidx.hilt.navigation.compose.hiltViewModel
 import androidx.lifecycle.Lifecycle
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import androidx.lifecycle.repeatOnLifecycle
-import se.blick.app.BuildConfig
 import se.blick.app.R
 import se.blick.app.domain.model.CommuteRoutine
 import se.blick.app.domain.model.Disruption
@@ -75,7 +68,6 @@ import se.blick.app.domain.model.DisruptionEffect
 import se.blick.app.domain.model.DisruptionPresentation
 import se.blick.app.domain.model.ResolvedJourneyDisruption
 import se.blick.app.domain.model.toPresentation
-import se.blick.app.notification.disruptionEffectLabelRes
 import se.blick.app.domain.model.ExactDestinationChangesPreference
 import se.blick.app.domain.usecase.DisruptionsState
 import se.blick.app.domain.usecase.LiveDeparturesState
@@ -88,6 +80,7 @@ import se.blick.app.domain.model.JourneyPlan
 import se.blick.app.domain.model.JourneyRole
 import se.blick.app.domain.model.JOURNEY_TRANSPORT_MODE_OPTIONS
 import se.blick.app.domain.model.RoutineType
+import se.blick.app.ui.theme.RoutineDestructiveRed
 import java.time.Duration
 import java.time.Instant
 import java.time.ZoneId
@@ -692,7 +685,7 @@ internal fun RoutineDetailsContent(
             dotColor = when {
                 isPausedToday -> null
                 routine.enabled -> LINE_BADGE_GREEN
-                else -> MaterialTheme.colorScheme.error
+                else -> RoutineDestructiveRed
             },
         )
 
@@ -718,22 +711,15 @@ internal fun RoutineDetailsContent(
             onRetryScheduling = onRetryScheduling,
         )
 
-        // Debug-only manual notification trigger (Part 6 of the ongoing-notification
-        // foundation milestone) — see RoutineDetailsViewModel.showDebugTestNotification's
-        // doc comment. BuildConfig.DEBUG is compile-time-constant, so R8 strips this whole
-        // block (and the section below) out of a release build entirely.
-        if (BuildConfig.DEBUG) {
-            Spacer(Modifier.height(20.dp))
-            HorizontalDivider()
-            Spacer(Modifier.height(16.dp))
-            DebugNotificationSection(
-                canShow = departuresState !is LiveDeparturesState.Loading,
-                onShow = onShowDebugNotification,
-                onShowForEffect = onShowDebugNotificationForEffect,
-                onRemove = onRemoveDebugNotification,
-                isLiveUpdatePromotable = isLiveUpdatePromotable,
-            )
-        }
+        // The debug source set renders the manual notification tools here; the release
+        // implementation emits no UI and has no developer resources.
+        DebugNotificationSection(
+            canShow = departuresState !is LiveDeparturesState.Loading,
+            onShow = onShowDebugNotification,
+            onShowForEffect = onShowDebugNotificationForEffect,
+            onRemove = onRemoveDebugNotification,
+            isLiveUpdatePromotable = isLiveUpdatePromotable,
+        )
     }
 }
 
@@ -763,116 +749,13 @@ private fun DebugNotificationSection(
     onRemove: () -> Unit,
     isLiveUpdatePromotable: () -> Boolean,
 ) {
-    val context = LocalContext.current
-    var resultMessage by remember { mutableStateOf<String?>(null) }
-    // null = the real disruption (whichever one this routine actually has right now, if any) --
-    // the existing, unchanged "Show test notification" behavior. Selecting one of the nine
-    // DisruptionEffect chips below switches to that effect's own synthetic sample instead, for
-    // the classifier tester (see RoutineDetailsViewModel.showDebugTestNotification's own doc).
-    var selectedEffect by remember { mutableStateOf<DisruptionEffect?>(null) }
-
-    // Resolved here, in composable scope, rather than via context.getString(...) inside the
-    // callbacks below -- LocalContext.current reads don't get invalidated on a Configuration
-    // change, so a getString() call made lazily inside a lambda can return a stale value;
-    // stringResource() here is recomposed correctly and the resolved String is then just
-    // captured by the lambdas like any other value.
-    val permissionDeniedMessage = stringResource(R.string.debug_notification_permission_denied)
-    val removedMessage = stringResource(R.string.debug_notification_removed)
-    val promotedSuffix = stringResource(R.string.debug_notification_promoted_suffix)
-    val notPromotedSuffix = stringResource(R.string.debug_notification_not_promoted_suffix)
-    val realDisruptionLabel = stringResource(R.string.debug_disruption_effect_real)
-
-    fun messageFor(result: NotificationPostResult?): String {
-        val base = result.toDebugMessage(context)
-        if (result !is NotificationPostResult.Posted) return base
-        return base + if (isLiveUpdatePromotable()) promotedSuffix else notPromotedSuffix
-    }
-
-    fun showForCurrentSelection(): NotificationPostResult? = selectedEffect?.let(onShowForEffect) ?: onShow()
-
-    val permissionLauncher = rememberLauncherForActivityResult(
-        ActivityResultContracts.RequestPermission(),
-    ) { granted ->
-        resultMessage = if (granted) {
-            messageFor(showForCurrentSelection())
-        } else {
-            permissionDeniedMessage
-        }
-    }
-
-    Column {
-        Text(stringResource(R.string.debug_notification_section_heading), style = MaterialTheme.typography.titleSmall)
-        Spacer(Modifier.height(8.dp))
-
-        Text(stringResource(R.string.debug_disruption_effect_picker_label), style = MaterialTheme.typography.bodySmall)
-        Spacer(Modifier.height(4.dp))
-        Row(
-            modifier = Modifier.fillMaxWidth().horizontalScroll(rememberScrollState()),
-            horizontalArrangement = Arrangement.spacedBy(8.dp),
-        ) {
-            FilterChip(
-                selected = selectedEffect == null,
-                onClick = { selectedEffect = null },
-                label = { Text(realDisruptionLabel) },
-            )
-            DisruptionEffect.entries.forEach { effect ->
-                FilterChip(
-                    selected = selectedEffect == effect,
-                    onClick = { selectedEffect = effect },
-                    label = { Text(stringResource(disruptionEffectLabelRes(effect))) },
-                )
-            }
-        }
-        Spacer(Modifier.height(8.dp))
-
-        Button(
-            onClick = {
-                val needsPermissionRequest = Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU &&
-                    ContextCompat.checkSelfPermission(context, Manifest.permission.POST_NOTIFICATIONS) !=
-                    PackageManager.PERMISSION_GRANTED
-                if (needsPermissionRequest) {
-                    permissionLauncher.launch(Manifest.permission.POST_NOTIFICATIONS)
-                } else {
-                    resultMessage = messageFor(showForCurrentSelection())
-                }
-            },
-            enabled = canShow,
-            modifier = Modifier.fillMaxWidth(),
-        ) {
-            Text(stringResource(R.string.debug_show_test_notification))
-        }
-        Spacer(Modifier.height(8.dp))
-
-        OutlinedButton(
-            onClick = {
-                onRemove()
-                resultMessage = removedMessage
-            },
-            modifier = Modifier.fillMaxWidth(),
-        ) {
-            Text(stringResource(R.string.debug_remove_test_notification))
-        }
-
-        resultMessage?.let { message ->
-            Spacer(Modifier.height(4.dp))
-            Text(message, style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.secondary)
-        }
-    }
-}
-
-/**
- * Maps the notifier's real [NotificationPostResult] to user-facing debug text — the only
- * place in [DebugNotificationSection] allowed to produce the "posted" message, and only for
- * [NotificationPostResult.Posted]. A null result (no routine loaded — see
- * [RoutineDetailsViewModel.showDebugTestNotification]) falls back to the same generic
- * failure wording as [NotificationPostResult.Failed]: this branch should be unreachable in
- * practice since [DebugNotificationSection]'s "Show" button is disabled until a routine is
- * loaded, but it must never silently claim success either way.
- */
-internal fun NotificationPostResult?.toDebugMessage(context: android.content.Context): String = when (this) {
-    NotificationPostResult.Posted -> context.getString(R.string.debug_notification_posted)
-    NotificationPostResult.NotificationsDisabled -> context.getString(R.string.debug_notification_disabled)
-    NotificationPostResult.Failed, null -> context.getString(R.string.debug_notification_failed)
+    DebugNotificationToolsContent(
+        canShow = canShow,
+        onShow = onShow,
+        onShowForEffect = onShowForEffect,
+        onRemove = onRemove,
+        isLiveUpdatePromotable = isLiveUpdatePromotable,
+    )
 }
 
 /**
@@ -1040,7 +923,7 @@ private fun RoutineActionsSection(
             Button(
                 onClick = onRequestDelete,
                 enabled = !isDeleting,
-                colors = ButtonDefaults.buttonColors(containerColor = MaterialTheme.colorScheme.error),
+                colors = ButtonDefaults.buttonColors(containerColor = RoutineDestructiveRed),
                 modifier = Modifier.fillMaxWidth(),
             ) {
                 Text(stringResource(R.string.routine_details_delete_action))
@@ -1132,7 +1015,7 @@ internal fun launchLiveUpdateSettings(context: Context, startActivity: (Intent) 
 }
 
 /**
- * Production (not [BuildConfig.DEBUG]-gated) hint shown only when base notification delivery
+ * Production hint shown only when base notification delivery
  * is already [NotificationAvailability.Available] but Live Update promotion specifically is
  * not — see [se.blick.app.notification.PromotedNotificationChecker]'s own doc for why "not
  * eligible" only ever means "currently not eligible," never "broken," since
