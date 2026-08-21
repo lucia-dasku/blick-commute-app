@@ -964,7 +964,7 @@ class RoutineDetailsViewModel @Inject constructor(
     }
 
     /**
-     * Debug-only manual trigger (see `BuildConfig.DEBUG`-gated UI in
+     * Debug-only manual trigger (see the debug-source-set UI hosted by
      * [se.blick.app.ui.screens.routinedetails.RoutineDetailsScreen]) for verifying
      * [RoutineNotifier] end-to-end before any scheduler exists to call it automatically.
      * Reuses the already-loaded [RoutineDetailsUiState.routine] and
@@ -992,6 +992,7 @@ class RoutineDetailsViewModel @Inject constructor(
      * own state is touched.
      */
     fun showDebugTestNotification(debugEffectOverride: DisruptionEffect? = null): NotificationPostResult? {
+        if (!DEBUG_NOTIFICATION_TOOLS_AVAILABLE) return null
         val state = _uiState.value
         val routine = state.routine ?: return null
         val realDisruption = if (routine.type == RoutineType.EXACT_DESTINATION) {
@@ -1009,6 +1010,7 @@ class RoutineDetailsViewModel @Inject constructor(
     /** Debug-only counterpart to [showDebugTestNotification], so [RoutineNotifier.remove]
      * can also be manually verified. */
     fun removeDebugTestNotification() {
+        if (!DEBUG_NOTIFICATION_TOOLS_AVAILABLE) return
         routineNotifier.remove()
     }
 

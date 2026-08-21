@@ -143,6 +143,12 @@ fun RoutineLabelSelector(
             selected = selectedLabel == null,
             onClick = { onLabelSelected(null) },
             label = { Text(stringResource(R.string.routine_label_none)) },
+            border = FilterChipDefaults.filterChipBorder(
+                enabled = true,
+                selected = selectedLabel == null,
+                selectedBorderColor = MaterialTheme.colorScheme.primary,
+                selectedBorderWidth = 2.dp,
+            ),
             modifier = Modifier.testTag("routine_label_option_none"),
         )
         RoutineLabel.entries.forEach { label ->
@@ -166,6 +172,12 @@ fun RoutineLabelSelector(
                     selectedContainerColor = visuals.accent.copy(alpha = 0.18f),
                     selectedLabelColor = visuals.accent,
                     selectedLeadingIconColor = visuals.accent,
+                ),
+                border = FilterChipDefaults.filterChipBorder(
+                    enabled = true,
+                    selected = selectedLabel == label,
+                    selectedBorderColor = visuals.accent,
+                    selectedBorderWidth = 2.dp,
                 ),
                 modifier = Modifier.testTag("routine_label_option_${label.name.lowercase()}"),
             )

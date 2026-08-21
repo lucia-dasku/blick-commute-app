@@ -11,6 +11,10 @@ plugins {
 android {
     namespace = "se.blick.app"
 
+    val productionBackendBaseUrl = "https://blick-backend.vercel.app/"
+    val debugBackendBaseUrl = (project.findProperty("BLICK_BACKEND_BASE_URL") as String?)
+        ?: productionBackendBaseUrl
+
     // Pinned to concrete current-stable numbers verified during scaffolding
     // (2026-07-27) — see android/README.md for sources. Not left as "latest stable".
     compileSdk = 36
@@ -24,27 +28,19 @@ android {
 
         testInstrumentationRunner = "androidx.test.runner.AndroidJUnitRunner"
 
-        // Backend base URL, overridable via the `BLICK_BACKEND_BASE_URL` Gradle property
-        // (gradle.properties, local.properties, -P flag, or CI secret) — see
-        // NetworkModule.kt and android/README.md "Pointing at a deployed backend".
-        //
-        // Defaults to the actual deployed backend (not a placeholder): a 2026-07-28
-        // production incident traced a "no stops found" bug all the way back to this
-        // defaulting to an intentionally-unreachable placeholder host, which silently
-        // meant "every build that doesn't explicitly set a machine-local Gradle property
-        // talks to nothing" — including, in practice, every build run from Android
-        // Studio's Run button, since Gradle-property overrides are easy to lose track of
-        // across machines/IDE syncs. The override still exists for local development
-        // against a non-production backend (e.g. `./gradlew assembleDebug
-        // -PBLICK_BACKEND_BASE_URL=http://10.0.2.2:8787/` for a locally-run backend).
-        val backendBaseUrl = (project.findProperty("BLICK_BACKEND_BASE_URL") as String?)
-            ?: "https://blick-backend.vercel.app/"
-        buildConfigField("String", "BACKEND_BASE_URL", "\"$backendBaseUrl\"")
+        // BACKEND_BASE_URL is assigned per build type below. Debug may use the documented
+        // local Gradle-property override; release is always pinned to production.
     }
 
     buildTypes {
+        debug {
+            // Local/staging endpoint overrides are intentionally debug-only. The release
+            // variant below is pinned to the production verification backend.
+            buildConfigField("String", "BACKEND_BASE_URL", "\"$debugBackendBaseUrl\"")
+        }
         release {
             isMinifyEnabled = false
+            buildConfigField("String", "BACKEND_BASE_URL", "\"$productionBackendBaseUrl\"")
             proguardFiles(getDefaultProguardFile("proguard-android-optimize.txt"), "proguard-rules.pro")
         }
     }

@@ -23,7 +23,6 @@ import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.suspendCancellableCoroutine
 import kotlinx.coroutines.withTimeoutOrNull
-import se.blick.app.BuildConfig
 import se.blick.app.data.remote.BlickApiClient
 import javax.inject.Inject
 import javax.inject.Singleton
@@ -41,11 +40,9 @@ class GooglePlayPremiumEntitlementRepository @Inject constructor(
     override val entitlement: StateFlow<EntitlementState> = _entitlement.asStateFlow()
     private val _localizedPrice = MutableStateFlow<String?>(null)
     override val localizedPrice: StateFlow<String?> = _localizedPrice.asStateFlow()
-    private val _debugOverrideEnabled = MutableStateFlow(
-        BuildConfig.DEBUG && preferences.getBoolean(KEY_DEBUG_PREMIUM, false),
-    )
+    private val _debugOverrideEnabled = MutableStateFlow(readDebugPremiumOverride(preferences))
     override val debugOverrideEnabled: StateFlow<Boolean> = _debugOverrideEnabled.asStateFlow()
-    override val debugOverrideAvailable: Boolean = BuildConfig.DEBUG
+    override val debugOverrideAvailable: Boolean = DEBUG_PREMIUM_OVERRIDE_AVAILABLE
     private var productDetails: ProductDetails? = null
     private var offerToken: String? = null
 
@@ -89,8 +86,8 @@ class GooglePlayPremiumEntitlementRepository @Inject constructor(
     }
 
     override fun setDebugPremium(enabled: Boolean) {
-        if (!BuildConfig.DEBUG) return
-        preferences.edit().putBoolean(KEY_DEBUG_PREMIUM, enabled).apply()
+        if (!DEBUG_PREMIUM_OVERRIDE_AVAILABLE) return
+        writeDebugPremiumOverride(preferences, enabled)
         _debugOverrideEnabled.value = enabled
         if (enabled) {
             _entitlement.value = EntitlementState.Premium
@@ -217,7 +214,6 @@ class GooglePlayPremiumEntitlementRepository @Inject constructor(
         const val KEY_PREMIUM = "last_verified_premium"
         const val KEY_HAS_VALUE = "has_verified_entitlement"
         const val KEY_VERIFIED_AT = "last_google_verified_at"
-        const val KEY_DEBUG_PREMIUM = "debug_premium_override"
     }
 }
 

@@ -9,3 +9,4 @@ val CalmBlue80 = Color(0xFFA9C7E0)
 val Neutral40 = Color(0xFF5C6068)
 val Neutral80 = Color(0xFFC5C8CF)
 val AttentionAmber40 = Color(0xFF8A5A00) // reserved for genuine disruptions only
+val RoutineDestructiveRed = Color(0xFFCE3134)

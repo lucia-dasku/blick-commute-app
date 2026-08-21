@@ -36,10 +36,6 @@
     <string name="premium_active">Premium is active on this Google Play account.</string>
     <string name="premium_pending">Your purchase is pending. Premium will unlock after Google Play confirms payment.</string>
     <string name="premium_unavailable">Google Play is temporarily unavailable. Previously verified access is preserved.</string>
-    <string name="premium_debug_note">Developer testing only. This local override does not simulate a Google Play purchase and is unavailable in release builds.</string>
-    <string name="premium_debug_enable">Developer: Unlock Premium</string>
-    <string name="premium_debug_disable">Developer: Return to Free</string>
-    <string name="premium_debug_active">Premium is active through the debug testing override.</string>
 
     <string name="routine_create_title">New routine</string>
     <string name="action_back">Back</string>
@@ -204,7 +200,7 @@
          doc on schedulingFailed vs. saveFailed). -->
     <string name="routine_create_scheduling_error">Routine saved, but notification setup failed. Try again.</string>
     <string name="routine_create_existing_not_found">This routine could not be found. It may have already been deleted.</string>
-    <string name="routine_create_limit_reached">You can only have one routine during this beta. Delete your existing routine before creating a new one.</string>
+    <string name="routine_create_limit_reached">The Free plan supports one routine. Delete your existing routine before creating a new one.</string>
 
     <string name="transport_mode_bus">Bus</string>
     <string name="transport_mode_metro">Metro</string>
@@ -346,22 +342,6 @@
          StopRoutineNotificationReceiver) — stops today's active window early, same effect
          as "pause for today" on the routine details screen. -->
     <string name="notification_action_stop">Stop</string>
-
-    <!-- Debug-only manual notification trigger (RoutineDetailsScreen, BuildConfig.DEBUG-gated
-         — see Part 6 of the ongoing-notification foundation milestone). Never shown in a
-         release build, but still a string resource per this app's usual convention. -->
-    <string name="debug_notification_section_heading">Debug: notification testing</string>
-    <string name="debug_disruption_effect_picker_label">Disruption effect to test (optional)</string>
-    <string name="debug_disruption_effect_real">Real</string>
-    <string name="debug_show_test_notification">Show/update test notification</string>
-    <string name="debug_remove_test_notification">Remove test notification</string>
-    <string name="debug_notification_posted">Test notification posted.</string>
-    <string name="debug_notification_promoted_suffix"> Eligible for a promoted lock-screen Live Update — actual placement (e.g. Samsung\'s Now Bar) is decided by Android/the OEM and can\'t be confirmed from inside the app.</string>
-    <string name="debug_notification_not_promoted_suffix"> Not eligible for promotion right now — requires Android 16+ with Live Updates enabled; showing as a regular ongoing notification.</string>
-    <string name="debug_notification_removed">Test notification removed.</string>
-    <string name="debug_notification_permission_denied">Notification permission denied — can\'t show the test notification.</string>
-    <string name="debug_notification_disabled">Not posted — notifications are disabled for this app. Enable them in system settings and try again.</string>
-    <string name="debug_notification_failed">Couldn\'t post the test notification. Try again.</string>
 
     <!-- Home-screen widget (widget/BlickRoutineWidget.kt) — shown outside any active routine
          window. Most other widget state text reuses the notification_*/routine_details_departure_*
