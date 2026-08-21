@@ -185,7 +185,7 @@
     <string name="routine_label_work">Work</string>
     <string name="routine_label_home">Home</string>
     <string name="routine_label_gym">Gym</string>
-    <string name="routine_label_study">Study</string>
+    <string name="routine_label_study">School</string>
     <string name="routine_label_hobby">Hobby</string>
     <string name="routine_label_other">Other</string>
     <string name="brand_wordmark" translatable="false">blick</string>

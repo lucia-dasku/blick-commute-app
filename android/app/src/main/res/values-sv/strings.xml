@@ -153,7 +153,7 @@
     <string name="routine_label_work">Arbete</string>
     <string name="routine_label_home">Hem</string>
     <string name="routine_label_gym">Gym</string>
-    <string name="routine_label_study">Studier</string>
+    <string name="routine_label_study">Skola</string>
     <string name="routine_label_hobby">Hobby</string>
     <string name="routine_label_other">Övrigt</string>
     <string name="routine_create_error_no_days">Välj minst en dag.</string>
