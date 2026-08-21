@@ -809,11 +809,12 @@ end to end on-device:** three reported UI issues, fixed without changing any app
 behaviour:
 
 - **Launcher icon margins.** `ic_launcher_foreground`'s five per-density PNGs (no vector
-  source exists to reuse — see `ic_launcher_monochrome.xml`'s own doc) had their content
-  uniformly shrunk 10% and re-centered on the same canvas (a plain resize-and-recenter, so
-  colours and relative proportions are pixel-identical, just smaller and better-padded);
+  source exists to reuse — see `ic_launcher_monochrome.xml`'s own doc) render their content
+  at 83% of its original footprint and re-center it on the same canvas (a plain
+  resize-and-recenter, so colours and relative proportions are unchanged, just smaller and
+  better-padded);
   `ic_launcher_monochrome.xml`'s vector paths got the equivalent transform via a `<group
-  android:scaleX="0.9" android:scaleY="0.9" android:pivotX="54" android:pivotY="54">`
+  android:scaleX="0.83" android:scaleY="0.83" android:pivotX="54" android:pivotY="54">`
   wrapper, kept in sync with the same factor by hand since the two layers have no shared
   source. Verified on the physical device's own app-drawer icon (this launcher's squircle
   mask) after reinstalling, and separately by compositing the same updated background/

@@ -13,13 +13,13 @@
     android:height="108dp"
     android:viewportWidth="108"
     android:viewportHeight="108">
-    <!-- Scaled 0.9x around the icon's center to match ic_launcher_foreground's own
-         10%-shrink-for-more-padding pass (its per-density PNGs have no vector source to
+    <!-- Scaled 0.83x around the icon's center to match ic_launcher_foreground's own
+         83%-of-original safe-margin pass (its per-density PNGs have no vector source to
          apply a matching transform to directly, so this group is hand-kept in sync with
          that same factor instead). -->
     <group
-        android:scaleX="0.9"
-        android:scaleY="0.9"
+        android:scaleX="0.83"
+        android:scaleY="0.83"
         android:pivotX="54"
         android:pivotY="54">
         <!-- Clock-face ring -->
