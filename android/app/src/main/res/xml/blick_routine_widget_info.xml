@@ -1,59 +1,17 @@
 <?xml version="1.0" encoding="utf-8"?>
-<!--
-    android:updatePeriodMillis="0" is deliberate and load-bearing — Android's own widget-update
-    scheduler must never fire here. Every update is pushed programmatically by
-    RoutineWidgetUpdater, driven only by RoutineActiveWindowWorker's existing ~30-second loop and
-    the routine-lifecycle call sites listed on RoutineWidgetUpdater.reconcile — see that
-    interface's own doc. android:resizeMode="horizontal|vertical" plus the min/target/max
-    dimensions below support ordinary resizing on every launcher; BlickRoutineWidget explicitly
-    overrides sizeMode to SizeMode.Exact (NOT GlanceAppWidget's own default, which is
-    SizeMode.Single and would not recompose on resize) so the layout recomposes with the live
-    exact size on every resize, with no fixed responsive-size set declared here.
-
-    minResizeWidth/minResizeHeight were raised (from 120dp/60dp) to genuinely match what
-    BlickRoutineWidget's own compact layout needs, checked against androidx.glance.appwidget
-    .components.Scaffold's real source (Scaffold applies ONLY 12dp of HORIZONTAL padding via
-    `GlanceModifier.padding(horizontal = horizontalPadding)` — no vertical padding, and this
-    widget passes no titleBar). At the OLD minResizeHeight=60dp, the compact layout's own content
-    (header row ~17dp + 6dp spacing + the 24sp bold countdown's own ~31dp line height ≈ 54dp) already
-    left only ~6dp of slack before Scaffold's zero vertical padding, well under what real device
-    font-scale accessibility settings (up to ~130-200%) need — raised to 80dp for real headroom.
-    At the OLD minResizeWidth=120dp, content width after Scaffold's 24dp (12dp × 2 sides) of
-    horizontal padding was only 96dp, tight for the line badge + separator + even a short
-    destination name — raised to 160dp (144dp of headroom in the compact-width layout
-    BlickRoutineWidget.kt's own COMPACT_WIDTH_THRESHOLD=220dp already switches to below this
-    point). minWidth/minHeight (the default, non-resized placement size) were left unchanged —
-    both already sit comfortably above these same compact-content estimates. Full pixel-level
-    on-device confirmation of these exact floors was not achieved: the connected device's own
-    OEM launcher (Lenovo's TabUILauncher) does not support scripted widget placement/resizing at
-    all (only physical, by-hand interaction — see android/README.md's "Widget re-audit" section
-    for the same pre-existing limitation on this exact launcher), so these values are grounded in
-    Scaffold's real source and this layout's own font-size constants, not a rendered screenshot.
-
-    android:previewImage/previewLayout give the widget picker a real, populated preview instead
-    of falling back to the bare app icon (the previous, unintentional behavior with neither
-    attribute set). previewLayout (API 31+) is a plain Android view layout the picker inflates
-    directly for a live, theme-correct preview — NOT the real Glance/Compose widget, which can't
-    be referenced here; see res/layout/widget_preview_standard.xml's own doc for why it shows the
-    COMPACT rendering (this provider's own declared minWidth=180dp is always below
-    BlickRoutineWidget.kt's isCompactLayout width threshold of 220dp, so compact is what this
-    size guarantees regardless of a specific launcher's real grid math) and
-    res/drawable-nodpi/widget_preview_standard.png for the same content as a static previewImage
-    fallback on API <31. See blick_routine_widget_info_compact.xml and
-    blick_routine_widget_info_large.xml for the two other picker-selectable sizes added
-    alongside this one, all three backed by the same BlickRoutineWidget GlanceAppWidget class
-    (see BlickRoutineWidget.kt's own doc on why multiple AppWidgetProviderInfo/receivers can
-    safely share one GlanceAppWidget).
--->
+<!-- Canonical 3x2 Standard entry. SizeMode.Exact lets the shared renderer use the bounds a
+     launcher actually reports while these min/max values keep this provider in the Standard
+     tier. updatePeriodMillis="0" is deliberate: Android never starts an additional widget
+     schedule; RoutineWidgetUpdater remains the only writer. -->
 <appwidget-provider xmlns:android="http://schemas.android.com/apk/res/android"
-    android:minWidth="180dp"
-    android:minHeight="90dp"
+    android:minWidth="220dp"
+    android:minHeight="120dp"
     android:targetCellWidth="3"
     android:targetCellHeight="2"
-    android:minResizeWidth="160dp"
-    android:minResizeHeight="80dp"
-    android:maxResizeWidth="360dp"
-    android:maxResizeHeight="270dp"
+    android:minResizeWidth="220dp"
+    android:minResizeHeight="110dp"
+    android:maxResizeWidth="299dp"
+    android:maxResizeHeight="219dp"
     android:updatePeriodMillis="0"
     android:initialLayout="@layout/glance_default_loading_layout"
     android:previewLayout="@layout/widget_preview_standard"

@@ -11,6 +11,8 @@
     <color name="widget_preview_line_badge_red">#DB2925</color>
     <color name="widget_preview_line_badge_text">#FFFFFF</color>
     <color name="widget_preview_live_dot">#38803F</color>
+    <color name="widget_preview_label_home">#16834B</color>
+    <color name="widget_preview_label_container">#E7F3EC</color>
     <color name="widget_preview_disruption_background">#F6DEDC</color>
     <color name="widget_preview_disruption_text">#8A2A22</color>
 </resources>

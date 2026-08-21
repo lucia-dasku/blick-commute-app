@@ -15,6 +15,7 @@ import se.blick.app.R
 import se.blick.app.domain.model.DisruptionEffect
 import se.blick.app.domain.model.ExactDestinationChangesPreference
 import se.blick.app.domain.model.JourneyRole
+import se.blick.app.domain.model.RoutineLabel
 import se.blick.app.domain.model.TransportMode
 import se.blick.app.notification.disruptionEffectLabelRes
 import java.time.Instant
@@ -31,8 +32,8 @@ import java.time.format.DateTimeFormatter
  * calls them and that the header badge, body, and [RoutineWidgetContent.Journeys.changesPreference]
  * all agree on what actually renders.
  *
- * A non-compact size (see [isCompactLayout]'s own thresholds) is used throughout so the
- * secondary row is never dropped for being compact, only for genuinely having expired or been
+ * The standard 3x2 size is used throughout so the secondary row is never dropped for size, only
+ * for genuinely having expired or been
  * promoted — otherwise a compact-mode false negative could be mistaken for this bug being fixed.
  */
 @RunWith(RobolectricTestRunner::class)
@@ -75,18 +76,22 @@ class BlickRoutineWidgetRenderTest {
         disruptionHeadline: String? = null,
         disruptionUncertainLineDesignations: List<String> = emptyList(),
         disruptionEffect: DisruptionEffect? = null,
+        label: RoutineLabel? = null,
+        stationName: String = "Fruangen",
+        directionLabel: String = "Arlanda",
     ) = RoutineWidgetUiState.ActiveRoutine(
         RoutineWidgetModel(
             routineId = "r1",
             routineName = "Airport commute",
-            stationName = "Fruängen",
-            directionLabel = "Arlanda",
+            stationName = stationName,
+            directionLabel = directionLabel,
             content = RoutineWidgetContent.Journeys(primary, secondary, changesPreference),
             lineDesignation = primary.lineDesignation,
             transportMode = primary.transportMode,
             disruptionHeadline = disruptionHeadline,
             disruptionUncertainLineDesignations = disruptionUncertainLineDesignations,
             disruptionEffect = disruptionEffect,
+            label = label,
         ),
     )
 
@@ -101,6 +106,159 @@ class BlickRoutineWidgetRenderTest {
     private fun lineRelevantSingleText(line: String) = context.getString(R.string.notification_disruption_line_relevant_single_format, line)
     private fun lineRelevantGenericText() = context.getString(R.string.notification_disruption_line_relevant_generic)
     private fun effectText(effect: DisruptionEffect) = context.getString(disruptionEffectLabelRes(effect))
+
+    // ---- Canonical launcher sizes: the real Glance tree exposes the exact fields assigned to
+    // each supported tier. Pure rule tests separately pin the small route to two lines. ----
+
+    @Test
+    fun `2x2 shows label route dominant countdown badge and Direct without secondary details`() =
+        runGlanceAppWidgetUnitTest {
+            setContext(context)
+            setAppWidgetSize(DpSize(180.dp, 130.dp))
+            val primary = journeyRow(now.plusSeconds(240), lineDesignation = "13", transportMode = TransportMode.METRO)
+            val next = journeyRow(now.plusSeconds(780), lineDesignation = "13", role = JourneyRole.NEXT)
+            provideComposable {
+                BlickWidgetContent(
+                    activeRoutineState(
+                        primary,
+                        next,
+                        label = RoutineLabel.HOME,
+                        stationName = "Slussen",
+                        directionLabel = "Skanstull",
+                    ),
+                    now,
+                )
+            }
+
+            onNode(hasTextEqualTo("Home")).assertExists()
+            onNode(hasTextEqualTo("Slussen → Skanstull")).assertExists()
+            onNode(hasTextEqualTo(countdownText(4))).assertExists()
+            onNode(hasTextEqualTo("13")).assertExists()
+            onNode(hasText(directText())).assertExists()
+            onNode(hasTextEqualTo(nextLabelText())).assertDoesNotExist()
+            onNode(hasTextEqualTo(context.getString(R.string.widget_journey_depart_label))).assertDoesNotExist()
+            onNode(hasTextEqualTo(context.getString(R.string.widget_journey_arrive_label))).assertDoesNotExist()
+        }
+
+    @Test
+    fun `2x2 keeps a long two-stop route in the render tree without awkward manual truncation`() =
+        runGlanceAppWidgetUnitTest {
+            setContext(context)
+            setAppWidgetSize(DpSize(180.dp, 130.dp))
+            val primary = journeyRow(now.plusSeconds(240), lineDesignation = "13", transportMode = TransportMode.METRO)
+            provideComposable {
+                BlickWidgetContent(
+                    activeRoutineState(
+                        primary,
+                        null,
+                        stationName = "T-Centralen",
+                        directionLabel = "Malarhojden",
+                    ),
+                    now,
+                )
+            }
+
+            onNode(hasTextEqualTo("T-Centralen → Malarhojden")).assertExists()
+            onNode(hasTextEqualTo(countdownText(4))).assertExists()
+        }
+
+    @Test
+    fun `3x2 shows label route composition divider and Next but omits journey times`() =
+        runGlanceAppWidgetUnitTest {
+            setContext(context)
+            setAppWidgetSize(DpSize(260.dp, 150.dp))
+            val primary = journeyRow(now.plusSeconds(180), lineDesignation = "13", transportMode = TransportMode.METRO)
+            val next = journeyRow(now.plusSeconds(780), lineDesignation = "13", role = JourneyRole.NEXT)
+            provideComposable { BlickWidgetContent(activeRoutineState(primary, next, label = RoutineLabel.WORK), now) }
+
+            onNode(hasTextEqualTo("Work")).assertExists()
+            onNode(hasTextEqualTo(countdownText(3))).assertExists()
+            onNode(hasTextEqualTo(nextLabelText())).assertExists()
+            onNode(hasTextEqualTo(countdownText(13))).assertExists()
+            onNode(hasTextEqualTo(context.getString(R.string.widget_journey_depart_label))).assertDoesNotExist()
+            onNode(hasTextEqualTo(context.getString(R.string.widget_journey_arrive_label))).assertDoesNotExist()
+        }
+
+    @Test
+    fun `4x4 shows label full route current journey times and Next`() =
+        runGlanceAppWidgetUnitTest {
+            setContext(context)
+            setAppWidgetSize(DpSize(340.dp, 280.dp))
+            val primary = journeyRow(now.plusSeconds(180), lineDesignation = "13", transportMode = TransportMode.METRO)
+            val next = journeyRow(now.plusSeconds(780), lineDesignation = "13", role = JourneyRole.NEXT)
+            provideComposable {
+                BlickWidgetContent(
+                    activeRoutineState(
+                        primary,
+                        next,
+                        label = RoutineLabel.HOME,
+                        stationName = "T-Centralen",
+                        directionLabel = "Malarhojden",
+                    ),
+                    now,
+                )
+            }
+
+            onNode(hasTextEqualTo("Home")).assertExists()
+            onNode(hasTextEqualTo("T-Centralen → Malarhojden")).assertExists()
+            onNode(hasTextEqualTo(countdownText(3))).assertExists()
+            onNode(hasTextEqualTo(context.getString(R.string.widget_journey_depart_label))).assertExists()
+            onNode(hasTextEqualTo(arrivalFormatter.format(primary.departureTime))).assertExists()
+            onNode(hasTextEqualTo(context.getString(R.string.widget_journey_arrive_label))).assertExists()
+            onNode(hasTextEqualTo(arrivalFormatter.format(primary.arrivalTime))).assertExists()
+            onNode(hasTextEqualTo(nextLabelText())).assertExists()
+            onNode(hasTextEqualTo(countdownText(13))).assertExists()
+        }
+
+    @Test
+    fun `4x4 without a label or disruption leaves both optional areas absent`() =
+        runGlanceAppWidgetUnitTest {
+            setContext(context)
+            setAppWidgetSize(DpSize(340.dp, 280.dp))
+            val primary = journeyRow(now.plusSeconds(180), lineDesignation = "13")
+            provideComposable { BlickWidgetContent(activeRoutineState(primary, null), now) }
+
+            onNode(hasTextEqualTo("Home")).assertDoesNotExist()
+            onNode(hasTextEqualTo(context.getString(R.string.routine_label_work))).assertDoesNotExist()
+            onNode(hasText(lineRelevantGenericText())).assertDoesNotExist()
+        }
+
+    @Test
+    fun `4x4 shows the existing real disruption message at the bottom`() =
+        runGlanceAppWidgetUnitTest {
+            setContext(context)
+            setAppWidgetSize(DpSize(340.dp, 300.dp))
+            val primary = journeyRow(now.plusSeconds(180), lineDesignation = "13")
+            val message = "Reduced service between Slussen and Skanstull"
+            provideComposable {
+                BlickWidgetContent(
+                    activeRoutineState(
+                        primary,
+                        null,
+                        disruptionHeadline = message,
+                        disruptionEffect = DisruptionEffect.DELAYS,
+                    ),
+                    now,
+                )
+            }
+
+            onNode(hasTextEqualTo(message)).assertExists()
+            onNode(hasText(effectText(DisruptionEffect.DELAYS))).assertDoesNotExist()
+        }
+
+    @Test
+    @Config(qualifiers = "sv")
+    fun `4x4 localizes the School label and time headings in Swedish`() =
+        runGlanceAppWidgetUnitTest {
+            setContext(context)
+            setAppWidgetSize(DpSize(340.dp, 280.dp))
+            val primary = journeyRow(now.plusSeconds(180), lineDesignation = "13")
+            provideComposable { BlickWidgetContent(activeRoutineState(primary, null, label = RoutineLabel.STUDY), now) }
+
+            onNode(hasTextEqualTo("Skola")).assertExists()
+            onNode(hasTextEqualTo("Avgång")).assertExists()
+            onNode(hasTextEqualTo("Ankomst")).assertExists()
+        }
 
     // ---- resolveEffectiveModel: the same 4-case matrix BlickRoutineWidgetTest proves as a pure
     // function -- this is the complementary proof that ActiveRoutineContent truly calls it and
@@ -371,8 +529,8 @@ class BlickRoutineWidgetRenderTest {
     // disruptionStripText's own doc: SL's free text is never machine-translated, so it stays
     // reserved for Routine Details' own full-text display). A LINE_RELEVANT one instead renders
     // the same conservative "Line X disruption" label the notification shows -- see the
-    // Akalla -> T-Centralen false-positive this exists to prevent. All at a non-compact size (see
-    // this file's own class doc) so the strip is never dropped merely for lack of room. ----
+    // Akalla -> T-Centralen false-positive this exists to prevent. All use a tall Standard size,
+    // where the compact summary is present; Large has separate real-message coverage above. ----
 
     @Test
     fun `a CONFIRMED disruption renders its classified effect's localized category, never the raw SL headline`() =
@@ -524,7 +682,7 @@ class BlickRoutineWidgetRenderTest {
     fun `a compact size never renders the disruption strip, CONFIRMED or LINE_RELEVANT alike`() =
         runGlanceAppWidgetUnitTest {
             setContext(context)
-            // Below COMPACT_HEIGHT_THRESHOLD -- see isCompactLayout's own thresholds.
+            // Below the canonical 3x2 height threshold, so this resolves to the small tier.
             setAppWidgetSize(DpSize(300.dp, 90.dp))
             val primary = journeyRow(now.plusSeconds(300), lineDesignation = "14")
             provideComposable {

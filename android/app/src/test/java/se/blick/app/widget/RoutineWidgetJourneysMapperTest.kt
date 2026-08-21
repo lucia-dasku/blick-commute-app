@@ -11,6 +11,7 @@ import se.blick.app.domain.model.ExactDestinationChangesPreference
 import se.blick.app.domain.model.JourneyLeg
 import se.blick.app.domain.model.JourneyPlan
 import se.blick.app.domain.model.JourneyRole
+import se.blick.app.domain.model.RoutineLabel
 import se.blick.app.domain.model.RoutineType
 import se.blick.app.domain.model.TransportMode
 import java.time.DayOfWeek
@@ -27,7 +28,10 @@ class RoutineWidgetJourneysMapperTest {
 
     private val now = Instant.parse("2026-08-10T22:12:00Z")
 
-    private fun routine(changesPreference: ExactDestinationChangesPreference = ExactDestinationChangesPreference.BOTH) = CommuteRoutine(
+    private fun routine(
+        changesPreference: ExactDestinationChangesPreference = ExactDestinationChangesPreference.BOTH,
+        label: RoutineLabel? = null,
+    ) = CommuteRoutine(
         id = "r1",
         name = "Airport commute",
         siteId = 9145,
@@ -46,7 +50,24 @@ class RoutineWidgetJourneysMapperTest {
         journeyDestinationId = "destination-id",
         journeyDestinationName = "Arlanda",
         changesPreference = changesPreference,
+        label = label,
     )
+
+    @Test fun `the saved routine label is carried into a current journey widget model`() {
+        val current = journey("current", now.plusSeconds(60), now.plusSeconds(60))
+
+        val state = decideJourneysWidgetState(routine(label = RoutineLabel.STUDY), listOf(current), now)
+
+        val model = (state as RoutineWidgetUiState.ActiveRoutine).model
+        assertEquals(RoutineLabel.STUDY, model.label)
+    }
+
+    @Test fun `the saved routine label is carried into an empty journey widget model`() {
+        val state = decideJourneysWidgetState(routine(label = RoutineLabel.HOME), emptyList(), now)
+
+        val model = (state as RoutineWidgetUiState.ActiveRoutine).model
+        assertEquals(RoutineLabel.HOME, model.label)
+    }
 
     private fun journey(
         id: String,

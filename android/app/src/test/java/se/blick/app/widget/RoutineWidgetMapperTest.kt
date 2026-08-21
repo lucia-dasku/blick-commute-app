@@ -10,6 +10,7 @@ import se.blick.app.domain.model.DisruptionEffect
 import se.blick.app.domain.model.DisruptionMessage
 import se.blick.app.domain.model.DisruptionPresentation
 import se.blick.app.domain.model.DisruptionPriority
+import se.blick.app.domain.model.RoutineLabel
 import se.blick.app.domain.model.TransportMode
 import se.blick.app.domain.model.toPresentation
 import se.blick.app.domain.usecase.LiveDeparturesSnapshot
@@ -35,6 +36,7 @@ class RoutineWidgetMapperTest {
         destinationLabel: String? = "Fruängen",
         transportMode: TransportMode = TransportMode.METRO,
         lineDesignation: String? = "14",
+        label: RoutineLabel? = null,
     ) = CommuteRoutine(
         id = id,
         name = name,
@@ -48,6 +50,7 @@ class RoutineWidgetMapperTest {
         activeDays = setOf(DayOfWeek.MONDAY),
         startTime = LocalTime.of(7, 0),
         endTime = LocalTime.of(9, 0),
+        label = label,
     )
 
     private fun prepared(
@@ -115,6 +118,20 @@ class RoutineWidgetMapperTest {
     fun `a routine with no pinned line designation carries null, not an empty string`() {
         val model = RoutineWidgetMapper.map(routine(lineDesignation = null), LiveDeparturesState.Loading, now)
         assertNull(model.lineDesignation)
+    }
+
+    @Test
+    fun `the saved routine label is carried into the widget model without hardcoding`() {
+        val model = RoutineWidgetMapper.map(routine(label = RoutineLabel.STUDY), LiveDeparturesState.Loading, now)
+
+        assertEquals(RoutineLabel.STUDY, model.label)
+    }
+
+    @Test
+    fun `an unlabeled routine carries null so the widget can collapse the chip`() {
+        val model = RoutineWidgetMapper.map(routine(label = null), LiveDeparturesState.Loading, now)
+
+        assertNull(model.label)
     }
 
     // ---- Loading ----
@@ -319,6 +336,13 @@ class RoutineWidgetMapperTest {
         val model = RoutineWidgetMapper.notificationsUnavailable(routine(transportMode = TransportMode.TRAIN, lineDesignation = "42X"))
         assertEquals("42X", model.lineDesignation)
         assertEquals(TransportMode.TRAIN, model.transportMode)
+    }
+
+    @Test
+    fun `notificationsUnavailable preserves the saved routine label`() {
+        val model = RoutineWidgetMapper.notificationsUnavailable(routine(label = RoutineLabel.HOME))
+
+        assertEquals(RoutineLabel.HOME, model.label)
     }
 
     // ---- topDisruption -- mirrors RoutineNotificationMapper's identical parameter ----

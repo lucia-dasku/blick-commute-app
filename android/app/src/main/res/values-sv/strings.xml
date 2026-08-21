@@ -67,14 +67,16 @@
     <string name="journey_fastest">SNABBAST</string>
     <string name="journey_next">NÄSTA</string>
     <string name="journey_alternative">ALTERNATIV</string>
-    <string name="journey_departure_in">om %1$d min</string>
+    <string name="journey_departure_in">om %1$s</string>
     <string name="journey_direct">Direkt</string>
     <string name="journey_with_changes">Med byten</string>
     <string name="journey_no_direct_available">Ingen direktresa tillgänglig. Slå på Med byten för att se andra resvägar.</string>
     <string name="journey_changes">%1$d byten</string>
     <string name="journey_arrives">Ankomst %1$s</string>
-    <string name="journey_later">%1$d min senare</string>
+    <string name="journey_later">%1$s senare</string>
     <string name="journey_duration_minutes">%1$d min</string>
+    <string name="journey_duration_hours">%1$d tim</string>
+    <string name="journey_duration_hours_minutes">%1$d tim %2$d min</string>
     <string name="journey_expand">Visa hela resan</string>
     <string name="journey_collapse">Dölj hela resan</string>
     <string name="journey_mode_metro">Tunnelbana</string>
@@ -132,7 +134,8 @@
     <string name="routine_create_step_stop">Start och destination</string>
     <string name="routine_create_step_mode">Välj transportmedel</string>
     <string name="routine_create_step_direction">Välj linje och riktning</string>
-    <string name="routine_create_step_schedule">Dagar och tid</string>
+    <string name="routine_create_step_schedule">Skapa rutin</string>
+    <string name="routine_edit_step_schedule">Dagar och tid</string>
     <string name="routine_create_step_label">Steg %1$d av %2$d</string>
 
     <string name="routine_create_no_results">Inga hållplatser hittades.</string>
@@ -145,8 +148,12 @@
     <string name="direction_unknown_destination">Okänt resmål</string>
 
     <string name="routine_create_days_label">Aktiva dagar</string>
+    <string name="routine_create_time_window_title">Tid</string>
+    <string name="routine_create_start_label">Från</string>
+    <string name="routine_create_end_label">Till</string>
     <string name="routine_create_start_time_label">Starttid</string>
     <string name="routine_create_end_time_label">Sluttid</string>
+    <string name="routine_create_time_control_description">%1$s, %2$s. Dubbeltryck för att ändra.</string>
     <string name="routine_create_name_label">Rutinnamn</string>
     <string name="routine_label_field_title">Etikett (valfritt)</string>
     <string name="routine_label_none">Ingen etikett</string>
@@ -256,7 +263,7 @@
 
     <string name="widget_no_active_commute">Ingen aktiv pendling.</string>
     <string name="widget_description">Visar nästa avgångar när din pendlingsrutin är aktiv.</string>
-    <string name="widget_label_compact">Blick Kompakt</string>
+    <string name="widget_label_compact">Blick Liten</string>
     <string name="widget_label_standard">Blick Standard</string>
     <string name="widget_label_large">Blick Stor</string>
     <string name="widget_notifications_unavailable">Slå på aviseringar för att se live-avgångar här.</string>
@@ -268,5 +275,11 @@
         <item quantity="one">Ankomst %1$s • %2$d byte</item>
         <item quantity="other">Ankomst %1$s • %2$d byten</item>
     </plurals>
+    <plurals name="widget_journey_changes">
+        <item quantity="one">%1$d byte</item>
+        <item quantity="other">%1$d byten</item>
+    </plurals>
+    <string name="widget_journey_depart_label">Avgång</string>
+    <string name="widget_journey_arrive_label">Ankomst</string>
     <string name="widget_stale_indicator">Inaktuell</string>
 </resources>

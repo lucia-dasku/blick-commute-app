@@ -382,14 +382,17 @@ private fun JourneyComparisonSection(
                                 // top-level departureTime, for both this eligibility check and this
                                 // countdown -- see that function's own doc.
                                 val minutes = countdownMinutes(now, journey.effectiveFirstDeparture())
-                                Text(stringResource(R.string.journey_departure_in, minutes), style = MaterialTheme.typography.titleMedium)
+                                Text(
+                                    stringResource(R.string.journey_departure_in, formatJourneyMinutes(minutes)),
+                                    style = MaterialTheme.typography.titleMedium,
+                                )
                             }
                             val changes = if (journey.transferCount == 0) stringResource(R.string.journey_direct)
                                 else stringResource(R.string.journey_changes, journey.transferCount)
                             val arrival = DateTimeFormatter.ofPattern("HH:mm").withZone(ZoneId.systemDefault()).format(journey.arrivalTime)
                             val later = Duration.between(fastestArrival, journey.arrivalTime).toMinutes()
                             Text(if (index == 0) "$changes · ${stringResource(R.string.journey_arrives, arrival)}"
-                                else "$changes · ${stringResource(R.string.journey_arrives, arrival)} · ${stringResource(R.string.journey_later, later)}")
+                                else "$changes · ${stringResource(R.string.journey_arrives, arrival)} · ${stringResource(R.string.journey_later, formatJourneyMinutes(later))}")
                             if (expanded) {
                                 journey.legs.forEach { leg ->
                                     Text("${leg.originName} → ${leg.destinationName}${leg.lineDesignation?.let { " · $it" }.orEmpty()}")
@@ -404,7 +407,7 @@ private fun JourneyComparisonSection(
                             // with the departure this card actually displays.
                             val durationMinutes = Duration.between(journey.effectiveFirstDeparture(), journey.arrivalTime).toMinutes()
                             Text(
-                                "⏱ ${stringResource(R.string.journey_duration_minutes, durationMinutes)}",
+                                "⏱ ${formatJourneyMinutes(durationMinutes)}",
                                 style = MaterialTheme.typography.bodySmall,
                                 color = MaterialTheme.colorScheme.secondary,
                             )
@@ -413,6 +416,19 @@ private fun JourneyComparisonSection(
                 }
             }
         }
+    }
+}
+
+@Composable
+private fun formatJourneyMinutes(minutes: Long): String {
+    if (minutes < 60) return stringResource(R.string.journey_duration_minutes, minutes)
+
+    val hours = minutes / 60
+    val remainingMinutes = minutes % 60
+    return if (remainingMinutes == 0L) {
+        stringResource(R.string.journey_duration_hours, hours)
+    } else {
+        stringResource(R.string.journey_duration_hours_minutes, hours, remainingMinutes)
     }
 }
 

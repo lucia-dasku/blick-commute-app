@@ -9,6 +9,7 @@ import org.junit.Test
 import se.blick.app.domain.model.DisruptionEffect
 import se.blick.app.domain.model.ExactDestinationChangesPreference
 import se.blick.app.domain.model.JourneyRole
+import se.blick.app.domain.model.RoutineLabel
 import se.blick.app.domain.model.TransportMode
 import java.time.Instant
 
@@ -48,6 +49,31 @@ class RoutineWidgetPreferencesTest {
         val model = RoutineWidgetModel("r1", "Morning commute", "Fruängen", null, RoutineWidgetContent.Loading)
         val restored = roundTrip(RoutineWidgetUiState.ActiveRoutine(model)) as RoutineWidgetUiState.ActiveRoutine
         assertNull(restored.model.directionLabel)
+    }
+
+    @Test
+    fun `the saved routine label round-trips exactly`() {
+        val model = RoutineWidgetModel(
+            routineId = "r1",
+            routineName = "Morning commute",
+            stationName = "Fruangen",
+            directionLabel = "T-Centralen",
+            content = RoutineWidgetContent.Loading,
+            label = RoutineLabel.STUDY,
+        )
+
+        val restored = roundTrip(RoutineWidgetUiState.ActiveRoutine(model)) as RoutineWidgetUiState.ActiveRoutine
+
+        assertEquals(RoutineLabel.STUDY, restored.model.label)
+    }
+
+    @Test
+    fun `a missing routine label remains null for previously persisted widget state`() {
+        val model = RoutineWidgetModel("r1", "Morning commute", "Fruangen", "T-Centralen", RoutineWidgetContent.Loading)
+
+        val restored = roundTrip(RoutineWidgetUiState.ActiveRoutine(model)) as RoutineWidgetUiState.ActiveRoutine
+
+        assertNull(restored.model.label)
     }
 
     @Test

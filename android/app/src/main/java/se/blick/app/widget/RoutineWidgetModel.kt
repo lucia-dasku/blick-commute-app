@@ -3,6 +3,7 @@ package se.blick.app.widget
 import se.blick.app.domain.model.DisruptionEffect
 import se.blick.app.domain.model.ExactDestinationChangesPreference
 import se.blick.app.domain.model.JourneyRole
+import se.blick.app.domain.model.RoutineLabel
 import se.blick.app.domain.model.TransportMode
 import java.time.Instant
 
@@ -81,6 +82,9 @@ data class RoutineWidgetModel(
      * [BlickRoutineWidget]'s own `disruptionStripText`) until the worker's next tick overwrites
      * it with a real effect, rather than crashing or falling back to raw SL text. */
     val disruptionEffect: DisruptionEffect? = null,
+    /** Optional routine organization label. It affects presentation only and is omitted cleanly
+     * when the saved routine has no label. */
+    val label: RoutineLabel? = null,
 )
 
 /** Mirrors [se.blick.app.notification.RoutineNotificationContent] one-for-one, except [Live] and

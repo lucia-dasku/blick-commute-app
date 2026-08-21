@@ -1,32 +1,16 @@
 <?xml version="1.0" encoding="utf-8"?>
-<!--
-    The smallest of the three picker-selectable Blick widget sizes (see
-    blick_routine_widget_info.xml and blick_routine_widget_info_large.xml for the other two,
-    and BlickRoutineWidgetReceiverCompact in BlickRoutineWidget.kt for the receiver pointing at
-    this file). android:maxResizeWidth/maxResizeHeight are deliberately capped strictly BELOW
-    BlickRoutineWidget.kt's own isCompactLayout thresholds (COMPACT_WIDTH_THRESHOLD=220dp,
-    COMPACT_HEIGHT_THRESHOLD=110dp — both a strict `<`, not `<=`) so THIS specific provider
-    entry is guaranteed to always render the compact layout (header + big countdown only) no
-    matter how far a user resizes an instance placed from this picker entry — unlike the
-    default/standard provider, which can be resized past those thresholds into the fuller
-    layout. Capping at exactly 220dp/110dp (an earlier version of this file did) would NOT
-    guarantee that: at precisely that size, `height < 110.dp || width < 220.dp` is false on
-    BOTH sides, so the real widget would render the fuller layout at its own declared maximum
-    resize — the one size this provider most needs to keep compact. 219dp/109dp (1dp under
-    each) closes that off-by-one gap. minWidth/minHeight/minResizeWidth/minResizeHeight reuse
-    the existing default provider's own already-vetted minResizeWidth/minResizeHeight floor
-    (160dp/80dp) — see that file's own long comment for the Scaffold-padding analysis behind
-    those exact numbers; this file does not re-derive new ones.
--->
+<!-- Canonical 2x2 Small entry. Width remains below the Standard tier boundary, so launcher
+     variance cannot accidentally select the denser 3x2 layout. updatePeriodMillis stays zero:
+     updates continue to come only from RoutineWidgetUpdater's existing worker-driven path. -->
 <appwidget-provider xmlns:android="http://schemas.android.com/apk/res/android"
     android:minWidth="160dp"
-    android:minHeight="80dp"
+    android:minHeight="120dp"
     android:targetCellWidth="2"
-    android:targetCellHeight="1"
+    android:targetCellHeight="2"
     android:minResizeWidth="160dp"
-    android:minResizeHeight="80dp"
+    android:minResizeHeight="110dp"
     android:maxResizeWidth="219dp"
-    android:maxResizeHeight="109dp"
+    android:maxResizeHeight="179dp"
     android:updatePeriodMillis="0"
     android:initialLayout="@layout/glance_default_loading_layout"
     android:previewLayout="@layout/widget_preview_compact"

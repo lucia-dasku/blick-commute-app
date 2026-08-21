@@ -4,6 +4,7 @@ import android.content.ComponentName
 import android.content.Context
 import android.widget.FrameLayout
 import android.widget.RemoteViews
+import org.xmlpull.v1.XmlPullParser
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertNotNull
 import org.junit.Test
@@ -70,8 +71,25 @@ class WidgetPreviewLayoutsTest {
 
     @Test
     fun `each widget size receiver resolves to its own distinct picker label`() {
-        assertEquals("Blick Compact", receiverLabel(BlickRoutineWidgetReceiverCompact::class.java))
+        assertEquals("Blick Small", receiverLabel(BlickRoutineWidgetReceiverCompact::class.java))
         assertEquals("Blick Standard", receiverLabel(BlickRoutineWidgetReceiver::class.java))
         assertEquals("Blick Large", receiverLabel(BlickRoutineWidgetReceiverLarge::class.java))
+    }
+
+    private fun targetCells(providerInfoRes: Int): Pair<Int, Int> {
+        val parser = context.resources.getXml(providerInfoRes)
+        parser.use {
+            while (it.eventType != XmlPullParser.START_TAG && it.eventType != XmlPullParser.END_DOCUMENT) it.next()
+            val namespace = "http://schemas.android.com/apk/res/android"
+            return it.getAttributeIntValue(namespace, "targetCellWidth", -1) to
+                it.getAttributeIntValue(namespace, "targetCellHeight", -1)
+        }
+    }
+
+    @Test
+    fun `provider entries advertise exactly 2x2 3x2 and 4x4`() {
+        assertEquals(2 to 2, targetCells(R.xml.blick_routine_widget_info_compact))
+        assertEquals(3 to 2, targetCells(R.xml.blick_routine_widget_info))
+        assertEquals(4 to 4, targetCells(R.xml.blick_routine_widget_info_large))
     }
 }

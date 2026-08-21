@@ -73,14 +73,16 @@
     <string name="journey_fastest">FASTEST</string>
     <string name="journey_next">NEXT</string>
     <string name="journey_alternative">ALTERNATIVE</string>
-    <string name="journey_departure_in">in %1$d min</string>
+    <string name="journey_departure_in">in %1$s</string>
     <string name="journey_direct">Direct</string>
     <string name="journey_with_changes">With changes</string>
     <string name="journey_no_direct_available">No direct journey available. Turn on With changes to see other routes.</string>
     <string name="journey_changes">%1$d changes</string>
     <string name="journey_arrives">Arrives %1$s</string>
-    <string name="journey_later">%1$d min later</string>
+    <string name="journey_later">%1$s later</string>
     <string name="journey_duration_minutes">%1$d min</string>
+    <string name="journey_duration_hours">%1$d hr</string>
+    <string name="journey_duration_hours_minutes">%1$d hr %2$d min</string>
     <string name="journey_expand">Show complete journey</string>
     <string name="journey_collapse">Hide complete journey</string>
     <string name="journey_mode_metro">Metro</string>
@@ -161,7 +163,8 @@
     <string name="routine_create_step_stop">Origin and destination</string>
     <string name="routine_create_step_mode">Choose a transport mode</string>
     <string name="routine_create_step_direction">Choose a line and direction</string>
-    <string name="routine_create_step_schedule">Days &amp; time</string>
+    <string name="routine_create_step_schedule">Create routine</string>
+    <string name="routine_edit_step_schedule">Days &amp; time</string>
     <string name="routine_create_step_label">Step %1$d of %2$d</string>
 
     <string name="routine_create_no_results">No stops found.</string>
@@ -177,8 +180,12 @@
     <string name="direction_unknown_destination">Unknown destination</string>
 
     <string name="routine_create_days_label">Active days</string>
+    <string name="routine_create_time_window_title">Time</string>
+    <string name="routine_create_start_label">Start</string>
+    <string name="routine_create_end_label">End</string>
     <string name="routine_create_start_time_label">Start time</string>
     <string name="routine_create_end_time_label">End time</string>
+    <string name="routine_create_time_control_description">%1$s, %2$s. Double tap to change.</string>
     <string name="routine_create_name_label">Routine name</string>
     <string name="routine_label_field_title">Label (optional)</string>
     <string name="routine_label_none">No label</string>
@@ -354,7 +361,7 @@
          comes from the RECEIVER component's resolved label, not from anything in the
          appwidget-provider XML resource, so without these all three previously showed the
          same "Blick" application-default label with nothing distinguishing the three sizes. -->
-    <string name="widget_label_compact">Blick Compact</string>
+    <string name="widget_label_compact">Blick Small</string>
     <string name="widget_label_standard">Blick Standard</string>
     <string name="widget_label_large">Blick Large</string>
     <!-- Shown instead of notification_loading when the active window is open but notifications
@@ -380,6 +387,12 @@
         <item quantity="one">Arrive %1$s • %2$d change</item>
         <item quantity="other">Arrive %1$s • %2$d changes</item>
     </plurals>
+    <plurals name="widget_journey_changes">
+        <item quantity="one">%1$d change</item>
+        <item quantity="other">%1$d changes</item>
+    </plurals>
+    <string name="widget_journey_depart_label">Depart</string>
+    <string name="widget_journey_arrive_label">Arrive</string>
     <!-- A short, always-visible header marker for RoutineWidgetContent.Stale — shown
          regardless of compact/full layout or whether any stale departure is still upcoming, see
          StaleIndicator's own doc for why this is the one guaranteed place a stale-data warning

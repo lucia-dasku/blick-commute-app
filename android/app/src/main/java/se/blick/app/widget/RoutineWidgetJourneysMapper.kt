@@ -63,20 +63,27 @@ internal fun decideJourneysWidgetState(
     }
     val primary = rows.firstOrNull() ?: return RoutineWidgetUiState.ActiveRoutine(
         RoutineWidgetModel(
-            routine.id, routine.name, routine.journeyOriginName ?: routine.siteName,
-            routine.journeyDestinationName,
-            if (fetchFailed) RoutineWidgetContent.Unavailable else RoutineWidgetContent.NoUpcomingDepartures(now),
+            routineId = routine.id,
+            routineName = routine.name,
+            stationName = routine.journeyOriginName ?: routine.siteName,
+            directionLabel = routine.journeyDestinationName,
+            content = if (fetchFailed) RoutineWidgetContent.Unavailable else RoutineWidgetContent.NoUpcomingDepartures(now),
+            label = routine.label,
         ),
     )
     return RoutineWidgetUiState.ActiveRoutine(
         RoutineWidgetModel(
-            routine.id, routine.name, routine.journeyOriginName ?: routine.siteName,
-            routine.journeyDestinationName,
-            RoutineWidgetContent.Journeys(primary, rows.getOrNull(1), routine.changesPreference),
-            primary.lineDesignation, primary.transportMode,
+            routineId = routine.id,
+            routineName = routine.name,
+            stationName = routine.journeyOriginName ?: routine.siteName,
+            directionLabel = routine.journeyDestinationName,
+            content = RoutineWidgetContent.Journeys(primary, rows.getOrNull(1), routine.changesPreference),
+            lineDesignation = primary.lineDesignation,
+            transportMode = primary.transportMode,
             disruptionHeadline = disruption?.headline,
             disruptionUncertainLineDesignations = disruption?.uncertainLineDesignations ?: emptyList(),
             disruptionEffect = disruption?.effect,
+            label = routine.label,
         ),
     )
 }
