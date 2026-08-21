@@ -12,6 +12,9 @@ import androidx.datastore.preferences.core.Preferences
 import androidx.glance.GlanceId
 import androidx.glance.GlanceModifier
 import androidx.glance.GlanceTheme
+import androidx.glance.ColorFilter
+import androidx.glance.Image
+import androidx.glance.ImageProvider
 import androidx.glance.LocalContext
 import androidx.glance.LocalSize
 import androidx.glance.action.clickable
@@ -45,10 +48,13 @@ import se.blick.app.R
 import se.blick.app.domain.model.DisruptionEffect
 import se.blick.app.domain.model.ExactDestinationChangesPreference
 import se.blick.app.domain.model.JourneyRole
+import se.blick.app.domain.model.RoutineLabel
 import se.blick.app.domain.usecase.countdownMinutes
 import se.blick.app.domain.usecase.isDepartureCurrent
 import se.blick.app.locale.withAppLocale
 import se.blick.app.notification.disruptionEffectLabelRes
+import se.blick.app.ui.components.stringResourceId
+import se.blick.app.ui.components.visuals
 import java.time.format.DateTimeFormatter
 
 /**
@@ -106,7 +112,7 @@ class BlickRoutineWidget : GlanceAppWidget() {
  * distinctly-sized, distinctly-previewed entries (the pattern real launchers, including
  * Samsung's One UI picker, show as separate size cards, e.g. "2x1"/"2x2"/"4x2") without
  * duplicating any rendering logic: [BlickRoutineWidget] already adapts to its live placed size
- * via [SizeMode.Exact]/[isCompactLayout]/[sizeTierFor] regardless of which receiver placed it.
+ * via [SizeMode.Exact]/[widgetLayoutRulesFor]/[sizeTierFor] regardless of which receiver placed it.
  * This is the officially supported way to offer multiple provider sizes for one Glance widget —
  * [GlanceAppWidgetManager.getGlanceIds] (see [RoutineWidgetUpdater.applyToAllInstances]) looks
  * up instances by [BlickRoutineWidget]'s class, not by receiver, so it already finds instances
@@ -164,36 +170,65 @@ class BlickRoutineWidgetReceiverLarge : GlanceAppWidgetReceiver() {
     }
 }
 
-/** Below this height, only the header (line badge + route) plus the single big countdown
- * reliably fit without clipping (`blick_routine_widget_info.xml`'s declared `minHeight` is
- * 90dp) — the "Next" secondary block and the live/scheduled/cancelled status row are dropped
- * rather than clipped or left to overflow the widget's bounds. */
-private val COMPACT_HEIGHT_THRESHOLD = 110.dp
+private val STANDARD_MIN_WIDTH = 220.dp
+private val STANDARD_MIN_HEIGHT = 110.dp
+private val LARGE_MIN_WIDTH = 300.dp
+private val LARGE_MIN_HEIGHT = 220.dp
+private val SMALL_LABEL_MIN_HEIGHT = 120.dp
+private val STANDARD_DISRUPTION_MIN_HEIGHT = 180.dp
 
-/** Below this width, the secondary "Next" block and status row (see [DepartureMainContent])
- * have too little room to render their own text without wrapping into the countdown's own
- * space or clipping — a narrow-but-tall grid cell (e.g. a single-column placement) needs the
- * same compact layout as a short-but-wide one, not just smaller fonts. Matches [sizeTierFor]'s
- * own smallest width tier boundary (see that function's doc on why 220dp is "a realistic phone
- * grid cell") so anything narrow enough to already get the smallest font tier also drops to
- * the compact layout, not just smaller text within the full one. */
-private val COMPACT_WIDTH_THRESHOLD = 220.dp
+/** Exactly the three supported widget layouts. Launchers report slightly different physical
+ * bounds for the same grid cells, so [widgetLayoutRulesFor] safely falls back to the nearest
+ * smaller layout whenever either dimension cannot support the next tier. */
+internal enum class WidgetLayoutTier { SMALL, STANDARD, LARGE }
 
-/** Whether [ActiveRoutineContent] should render the compact (header + countdown only) layout —
- * a pure function of the widget's live [LocalSize] so it can be unit-tested directly, without a
- * Glance/Robolectric composition. See [COMPACT_HEIGHT_THRESHOLD]/[COMPACT_WIDTH_THRESHOLD] for
- * why EITHER dimension being too small is enough to force it, not just height alone. */
-internal fun isCompactLayout(width: Dp, height: Dp): Boolean =
-    height < COMPACT_HEIGHT_THRESHOLD || width < COMPACT_WIDTH_THRESHOLD
+internal data class WidgetLayoutRules(
+    val tier: WidgetLayoutTier,
+    val routeMaxLines: Int,
+    val showRoutineLabel: Boolean,
+    val showSecondary: Boolean,
+    val showJourneyTimes: Boolean,
+    val showDisruption: Boolean,
+)
 
-/** Font sizes for one responsive breakpoint — chosen by [sizeTierFor] from the widget's live
- * [LocalSize] width on every resize (`SizeMode.Exact`, see [BlickRoutineWidget]'s own doc). The
- * "Design 1" reference mock was captured on a tablet-sized placement, whose widget grid cells
- * are physically much larger than a typical phone's — using those same absolute point sizes
- * unconditionally would overflow or clip badly on an ordinary phone-sized placement, so the
- * countdown/badge/secondary text sizes scale down through [TIER_COMPACT]/[TIER_MEDIUM] for
- * realistic phone widths and only reach the mock's own large sizes at [TIER_EXTRA_LARGE]. */
+internal fun widgetLayoutRulesFor(width: Dp, height: Dp): WidgetLayoutRules {
+    val tier = when {
+        width >= LARGE_MIN_WIDTH && height >= LARGE_MIN_HEIGHT -> WidgetLayoutTier.LARGE
+        width < STANDARD_MIN_WIDTH || height < STANDARD_MIN_HEIGHT -> WidgetLayoutTier.SMALL
+        else -> WidgetLayoutTier.STANDARD
+    }
+    return when (tier) {
+        WidgetLayoutTier.SMALL -> WidgetLayoutRules(
+            tier = tier,
+            routeMaxLines = 2,
+            showRoutineLabel = height >= SMALL_LABEL_MIN_HEIGHT,
+            showSecondary = false,
+            showJourneyTimes = false,
+            showDisruption = false,
+        )
+        WidgetLayoutTier.STANDARD -> WidgetLayoutRules(
+            tier = tier,
+            routeMaxLines = 1,
+            showRoutineLabel = true,
+            showSecondary = true,
+            showJourneyTimes = false,
+            showDisruption = height >= STANDARD_DISRUPTION_MIN_HEIGHT,
+        )
+        WidgetLayoutTier.LARGE -> WidgetLayoutRules(
+            tier = tier,
+            routeMaxLines = 2,
+            showRoutineLabel = true,
+            showSecondary = true,
+            showJourneyTimes = true,
+            showDisruption = true,
+        )
+    }
+}
+
+/** Typography for the same three canonical layouts. */
 private data class WidgetSizeTier(
+    val labelSize: TextUnit,
+    val labelIconSize: Dp,
     val headerSize: TextUnit,
     val badgeSize: TextUnit,
     val countdownSize: TextUnit,
@@ -201,21 +236,23 @@ private data class WidgetSizeTier(
     val statusSize: TextUnit,
 )
 
-private val TIER_COMPACT = WidgetSizeTier(headerSize = 12.sp, badgeSize = 10.sp, countdownSize = 24.sp, secondarySize = 11.sp, statusSize = 10.sp)
-private val TIER_MEDIUM = WidgetSizeTier(headerSize = 13.sp, badgeSize = 11.sp, countdownSize = 32.sp, secondarySize = 12.sp, statusSize = 11.sp)
-private val TIER_LARGE = WidgetSizeTier(headerSize = 15.sp, badgeSize = 13.sp, countdownSize = 44.sp, secondarySize = 14.sp, statusSize = 12.sp)
-private val TIER_EXTRA_LARGE = WidgetSizeTier(headerSize = 17.sp, badgeSize = 14.sp, countdownSize = 58.sp, secondarySize = 16.sp, statusSize = 13.sp)
+private val TIER_SMALL = WidgetSizeTier(
+    labelSize = 10.sp, labelIconSize = 12.dp, headerSize = 12.sp, badgeSize = 10.sp,
+    countdownSize = 28.sp, secondarySize = 11.sp, statusSize = 10.sp,
+)
+private val TIER_STANDARD = WidgetSizeTier(
+    labelSize = 11.sp, labelIconSize = 14.dp, headerSize = 14.sp, badgeSize = 11.sp,
+    countdownSize = 36.sp, secondarySize = 12.sp, statusSize = 10.sp,
+)
+private val TIER_LARGE = WidgetSizeTier(
+    labelSize = 12.sp, labelIconSize = 16.dp, headerSize = 16.sp, badgeSize = 13.sp,
+    countdownSize = 48.sp, secondarySize = 14.sp, statusSize = 12.sp,
+)
 
-/** Phone home-screen widget grid cells are typically well under 220dp per placed instance;
- * beyond ~480dp is realistically only reachable on a tablet-class launcher grid (see
- * `blick_routine_widget_info.xml`'s own `minWidth`/`maxResizeWidth`, and the manual on-device
- * verification note in `android/README.md`'s Full verification pass section for a real
- * measurement of how large this got on an actual tablet). */
-private fun sizeTierFor(width: Dp): WidgetSizeTier = when {
-    width < 220.dp -> TIER_COMPACT
-    width < 320.dp -> TIER_MEDIUM
-    width < 480.dp -> TIER_LARGE
-    else -> TIER_EXTRA_LARGE
+private fun sizeTierFor(layoutTier: WidgetLayoutTier): WidgetSizeTier = when (layoutTier) {
+    WidgetLayoutTier.SMALL -> TIER_SMALL
+    WidgetLayoutTier.STANDARD -> TIER_STANDARD
+    WidgetLayoutTier.LARGE -> TIER_LARGE
 }
 
 // The actual badge color values (LINE_BADGE_PINK/BLUE/RED/GREEN/GREY) and the toBadgeColor()
@@ -263,7 +300,8 @@ internal fun BlickWidgetContent(state: RoutineWidgetUiState, now: java.time.Inst
 @Composable
 private fun NoActiveCommuteContent() {
     val context = LocalContext.current.withAppLocale()
-    val tier = sizeTierFor(LocalSize.current.width)
+    val size = LocalSize.current
+    val tier = sizeTierFor(widgetLayoutRulesFor(size.width, size.height).tier)
     Column(
         modifier = GlanceModifier.fillMaxSize(),
         horizontalAlignment = Alignment.CenterHorizontally,
@@ -291,7 +329,7 @@ private val WIDGET_HORIZONTAL_PADDING = 16.dp
  * shape the ongoing notification's own title and a routine's own default name both use. A
  * relevant disruption, if any, is shown as a distinct, full-bleed muted-red strip along the
  * very bottom edge (see [DisruptionStrip]) — never inline with the rest of the content, and
- * never in [compact] mode, where there simply isn't room.
+ * never in the Small tier, where there simply isn't room.
  *
  * Builds its own chrome (background + corner radius via [androidx.glance.appwidget.appWidgetBackground]/
  * [androidx.glance.appwidget.cornerRadius]) instead of delegating to the shared [Scaffold], which
@@ -317,8 +355,8 @@ private fun ActiveRoutineContent(context: Context, model: RoutineWidgetModel, no
     // Read once per composition: SizeMode.Exact recomposes this whole tree on every resize, so
     // every use below always reflects the widget's current on-screen size.
     val size = LocalSize.current
-    val compact = isCompactLayout(size.width, size.height)
-    val tier = sizeTierFor(size.width)
+    val layout = widgetLayoutRulesFor(size.width, size.height)
+    val tier = sizeTierFor(layout.tier)
     // "{station} → {destination}" -- matches the same pattern the ongoing notification's own
     // title and a routine's own default name both use (see RoutineNotificationBuilder.title,
     // RoutineCreateViewModel.selectDirection); falls back to the station alone when the
@@ -326,15 +364,17 @@ private fun ActiveRoutineContent(context: Context, model: RoutineWidgetModel, no
     val routeText = model.directionLabel?.let { "${model.stationName} → $it" } ?: model.stationName
     // Only ever a Stale case's own doc for why this must be rendered as a short, ALWAYS-visible
     // header marker rather than the fuller body-text sentence WidgetContentBody's Stale branch
-    // already shows in non-compact mode with a next departure -- that longer sentence is dropped
-    // in compact mode, and dropped entirely once every stale departure has since expired
+    // already shows in Standard/Large with a next departure -- that longer sentence is dropped
+    // in Small, and dropped entirely once every stale departure has since expired
     // (WidgetContentBody falls back to a plain "no departures" body then), so without this
     // header-level marker a genuinely failed refresh could look identical to a healthy state in
     // either case.
     val isStale = model.content is RoutineWidgetContent.Stale
-    // No room for the disruption strip in compact mode -- same reasoning as dropping the
-    // secondary station/next-departure block and status row there (see WidgetContentBody).
-    val disruptionStripText = disruptionStripText(context, model)?.takeIf { !compact }
+    val disruptionStripText = disruptionStripText(
+        context = context,
+        model = model,
+        useFullMessage = layout.tier == WidgetLayoutTier.LARGE,
+    ).takeIf { layout.showDisruption }
 
     Box(
         modifier = GlanceModifier
@@ -353,39 +393,56 @@ private fun ActiveRoutineContent(context: Context, model: RoutineWidgetModel, no
                 modifier = GlanceModifier
                     .fillMaxWidth()
                     .defaultWeight()
-                    .padding(horizontal = WIDGET_HORIZONTAL_PADDING, vertical = 14.dp),
-                verticalAlignment = Alignment.CenterVertically,
+                    .padding(
+                        horizontal = WIDGET_HORIZONTAL_PADDING,
+                        vertical = when (layout.tier) {
+                            WidgetLayoutTier.SMALL -> 10.dp
+                            WidgetLayoutTier.STANDARD -> 6.dp
+                            WidgetLayoutTier.LARGE -> 10.dp
+                        },
+                    ),
+                verticalAlignment = if (layout.tier == WidgetLayoutTier.LARGE) Alignment.Top else Alignment.CenterVertically,
             ) {
-                // The routine's own user-given name -- distinct from the station/destination
-                // text the header already shows -- is deliberately NOT repeated here: with the
-                // default auto-suggested name (see RoutineCreateViewModel.selectDirection), it's
-                // exactly "{line} → {destination}", i.e. the same information the header below
-                // already shows via the line badge + destination text, duplicated as plain text
-                // right above it. Dropped entirely rather than only in compact mode.
-                //
-                // showLineBadge = false for Journeys: JourneyCompositionRow (see
-                // WidgetContentBody/JourneyMainContent) already shows this exact same primary
-                // line as its own first badge -- for a direct journey that's the routine's ONLY
-                // badge, so showing it a second time up here would be a plain duplicate; for a
-                // with-changes journey it would also misleadingly suggest only the FIRST leg's
-                // line matters. Every other content state keeps the header's own single badge
-                // exactly as before -- it is that state's only line indicator.
-                WidgetHeader(model, tier, routeText, isStale, showLineBadge = model.content !is RoutineWidgetContent.Journeys)
-                Spacer(modifier = GlanceModifier.height(if (compact) 6.dp else 12.dp))
-                WidgetContentBody(context, model, compact, tier, now)
+                if (layout.showRoutineLabel) {
+                    model.label?.let { label ->
+                        RoutineLabelChip(context, label, tier)
+                        Spacer(
+                            modifier = GlanceModifier.height(
+                                when (layout.tier) {
+                                    WidgetLayoutTier.SMALL -> 4.dp
+                                    WidgetLayoutTier.STANDARD -> 3.dp
+                                    WidgetLayoutTier.LARGE -> 4.dp
+                                },
+                            ),
+                        )
+                    }
+                }
+                WidgetHeader(tier, routeText, isStale, layout.routeMaxLines)
+                Spacer(
+                    modifier = GlanceModifier.height(
+                        when (layout.tier) {
+                            WidgetLayoutTier.SMALL -> 6.dp
+                            WidgetLayoutTier.STANDARD -> 4.dp
+                            WidgetLayoutTier.LARGE -> 6.dp
+                        },
+                    ),
+                )
+                WidgetContentBody(context, model, layout, tier, now)
             }
             if (disruptionStripText != null) {
-                DisruptionStrip(disruptionStripText, tier)
+                DisruptionStrip(
+                    text = disruptionStripText,
+                    tier = tier,
+                    maxLines = if (layout.tier == WidgetLayoutTier.LARGE) 2 else 1,
+                )
             }
         }
     }
 }
 
-/** The widget's own disruption-strip text — never [RoutineWidgetModel.disruptionHeadline]'s raw
- * SL free text, which is carried on the model only for
- * [se.blick.app.ui.screens.routinedetails.RoutineDetailsScreen]'s own full-text display (reached
- * by tapping the widget — see [ActiveRoutineContent]'s own [clickable]) and is never
- * machine-translated. Three cases, checked in this order:
+/** The widget's disruption-strip text. At the Large tier [useFullMessage] is true, so the bottom
+ * area uses the real message already present on [RoutineWidgetModel.disruptionHeadline]. Standard
+ * keeps the existing short localized summary because space is constrained. Its cases are:
  * 1. [RoutineWidgetModel.disruptionUncertainLineDesignations] non-empty (`LINE_RELEVANT`: SL's
  *    line/mode scope matched but the affected segment/stop was not proven to intersect this
  *    exact journey) — a conservative "Line 11 disruption"-style label built from it, via the
@@ -404,10 +461,10 @@ private fun ActiveRoutineContent(context: Context, model: RoutineWidgetModel, no
  *    app version predating that field: the headline is real, but its classification hasn't been
  *    persisted yet (the worker's next ~30-second tick overwrites it with a real effect).
  *
- * Null exactly when [RoutineWidgetModel.disruptionHeadline] is null (no relevant disruption at
- * all) — the one case with nothing to summarize either way. */
-private fun disruptionStripText(context: Context, model: RoutineWidgetModel): String? {
+ * Null exactly when [RoutineWidgetModel.disruptionHeadline] is null. */
+private fun disruptionStripText(context: Context, model: RoutineWidgetModel, useFullMessage: Boolean): String? {
     if (model.disruptionHeadline == null) return null
+    if (useFullMessage) return model.disruptionHeadline
     val designations = model.disruptionUncertainLineDesignations
     return when {
         designations.size == 1 -> context.getString(R.string.notification_disruption_line_relevant_single_format, designations.single())
@@ -417,17 +474,12 @@ private fun disruptionStripText(context: Context, model: RoutineWidgetModel): St
 }
 
 @Composable
-private fun WidgetHeader(model: RoutineWidgetModel, tier: WidgetSizeTier, routeText: String, isStale: Boolean, showLineBadge: Boolean = true) {
+private fun WidgetHeader(tier: WidgetSizeTier, routeText: String, isStale: Boolean, routeMaxLines: Int) {
     Row(modifier = GlanceModifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
-        if (showLineBadge) {
-            model.lineDesignation?.let { line ->
-                LineBadge(line, LineBadgeColorMapping.colorFor(model.transportMode, line), tier.badgeSize)
-                Spacer(modifier = GlanceModifier.width(8.dp))
-            }
-        }
         Text(
             text = routeText,
-            maxLines = 1,
+            maxLines = routeMaxLines,
+            modifier = GlanceModifier.defaultWeight(),
             style = TextStyle(fontWeight = FontWeight.Bold, fontSize = tier.headerSize, color = onBackgroundColor()),
         )
         if (isStale) {
@@ -436,9 +488,41 @@ private fun WidgetHeader(model: RoutineWidgetModel, tier: WidgetSizeTier, routeT
     }
 }
 
+/** Compact label identity shared with the app: same localized name, icon resource, and
+ * light/dark accent/container colors. The icon is decorative because its text sits beside it. */
+@Composable
+private fun RoutineLabelChip(context: Context, label: RoutineLabel, tier: WidgetSizeTier) {
+    val light = label.visuals(darkTheme = false)
+    val dark = label.visuals(darkTheme = true)
+    val accent = androidx.glance.color.ColorProvider(day = light.accent, night = dark.accent)
+    val container = androidx.glance.color.ColorProvider(day = light.container, night = dark.container)
+    Box(
+        modifier = GlanceModifier
+            .background(container)
+            .cornerRadius(7.dp)
+            .padding(horizontal = 6.dp, vertical = 2.dp),
+        contentAlignment = Alignment.Center,
+    ) {
+        Row(verticalAlignment = Alignment.CenterVertically) {
+            Image(
+                provider = ImageProvider(light.iconResourceId),
+                contentDescription = null,
+                modifier = GlanceModifier.size(tier.labelIconSize),
+                colorFilter = ColorFilter.tint(accent),
+            )
+            Spacer(modifier = GlanceModifier.width(4.dp))
+            Text(
+                text = context.getString(label.stringResourceId()),
+                maxLines = 1,
+                style = TextStyle(fontWeight = FontWeight.Bold, fontSize = tier.labelSize, color = accent),
+            )
+        }
+    }
+}
+
 /**
- * [disruptionStripText]'s own short, localized summary — never SL's raw free text (see that
- * function's own doc) — as a distinct, full-bleed band along the very bottom edge, outside the
+ * [disruptionStripText]'s size-appropriate text as a distinct, full-bleed band along the very
+ * bottom edge, outside the
  * main content [Column]'s own padding (see [ActiveRoutineContent]), so it touches the widget's
  * left/right/bottom edges directly rather than sitting inset like the rest of the content.
  * [GlanceTheme.colors.errorContainer]/`onErrorContainer` — the same theme-adaptive "muted red"
@@ -450,7 +534,7 @@ private fun WidgetHeader(model: RoutineWidgetModel, tier: WidgetSizeTier, routeT
  * the disruption's full original SL text is shown; this is not a second, separate tap target.
  */
 @Composable
-private fun DisruptionStrip(text: String, tier: WidgetSizeTier) {
+private fun DisruptionStrip(text: String, tier: WidgetSizeTier, maxLines: Int) {
     Row(
         modifier = GlanceModifier
             .fillMaxWidth()
@@ -460,7 +544,7 @@ private fun DisruptionStrip(text: String, tier: WidgetSizeTier) {
     ) {
         Text(
             text = text,
-            maxLines = 1,
+            maxLines = maxLines,
             modifier = GlanceModifier.defaultWeight(),
             style = TextStyle(fontSize = tier.statusSize, color = GlanceTheme.colors.onErrorContainer),
         )
@@ -475,9 +559,9 @@ private fun DisruptionStrip(text: String, tier: WidgetSizeTier) {
 
 /** A short, fixed marker that this content is stale (the last successful refresh, not a live
  * one) — rendered as part of [WidgetHeader], which is shown identically regardless of
- * [isCompactLayout] or whether any departure is still upcoming, so this is the one place a
+ * layout tier or whether any departure is still upcoming, so this is the one place a
  * stale-data warning is GUARANTEED visible in every layout this widget can render, unlike the
- * fuller body-text sentence [WidgetContentBody]'s `Stale` branch only shows in non-compact mode
+ * fuller body-text sentence [WidgetContentBody]'s `Stale` branch only shows outside the Small tier
  * when a departure is still upcoming. Uses [GlanceTheme.colors.tertiary] — the same
  * "attention, not alarm" role the Routine Details screen's own stale warning uses via
  * `MaterialTheme.colorScheme.tertiary` (see `R.string.routine_details_stale_warning`'s call
@@ -556,15 +640,21 @@ internal fun resolveEffectiveModel(model: RoutineWidgetModel, now: java.time.Ins
 }
 
 @Composable
-private fun WidgetContentBody(context: Context, model: RoutineWidgetModel, compact: Boolean, tier: WidgetSizeTier, now: java.time.Instant) {
+private fun WidgetContentBody(
+    context: Context,
+    model: RoutineWidgetModel,
+    layout: WidgetLayoutRules,
+    tier: WidgetSizeTier,
+    now: java.time.Instant,
+) {
     when (val content = model.content) {
         RoutineWidgetContent.Loading -> BodyText(context.getString(R.string.notification_loading), tier)
-        is RoutineWidgetContent.Live -> DepartureMainContent(context, content.next, content.following, compact, tier)
+        is RoutineWidgetContent.Live -> DepartureMainContent(context, model, content.next, content.following, layout, tier)
         is RoutineWidgetContent.Stale -> {
             val next = content.next
             if (next != null) {
-                if (!compact) BodyText(context.getString(R.string.notification_stale_warning), tier)
-                DepartureMainContent(context, next, content.following, compact, tier)
+                if (layout.tier != WidgetLayoutTier.SMALL) BodyText(context.getString(R.string.notification_stale_warning), tier)
+                DepartureMainContent(context, model, next, content.following, layout, tier)
             } else {
                 BodyText(context.getString(R.string.notification_no_departures), tier)
             }
@@ -573,7 +663,7 @@ private fun WidgetContentBody(context: Context, model: RoutineWidgetModel, compa
         RoutineWidgetContent.Offline -> BodyText(context.getString(R.string.notification_offline), tier)
         RoutineWidgetContent.Unavailable -> BodyText(context.getString(R.string.notification_unavailable), tier)
         RoutineWidgetContent.NotificationsUnavailable -> BodyText(context.getString(R.string.widget_notifications_unavailable), tier)
-        is RoutineWidgetContent.Journeys -> JourneyMainContent(context, content, compact, tier, now)
+        is RoutineWidgetContent.Journeys -> JourneyMainContent(context, content, layout, tier, now)
     }
 }
 
@@ -594,7 +684,8 @@ private fun WidgetContentBody(context: Context, model: RoutineWidgetModel, compa
  *
  * A left-aligned vertical stack: the big countdown, then [JourneyCompositionRow] (line badge(s),
  * "Direct" or "Arrive HH:mm · N change(s)", and — [ExactDestinationChangesPreference.WITH_CHANGES_ONLY]
- * only — the small green "With changes" label), then — outside [compact] heights only, exactly
+ * only — the small green "With changes" label), then — when [WidgetLayoutRules.showSecondary]
+ * allows it, exactly
  * like the plain-departures [DepartureMainContent]'s own secondary row — a [WidgetDivider] and
  * [NextJourneyRow]. The disruption strip stays entirely outside this function (see
  * [ActiveRoutineContent]'s own [DisruptionStrip]), unaffected by any of this.
@@ -603,7 +694,7 @@ private fun WidgetContentBody(context: Context, model: RoutineWidgetModel, compa
 private fun JourneyMainContent(
     context: Context,
     content: RoutineWidgetContent.Journeys,
-    compact: Boolean,
+    layout: WidgetLayoutRules,
     tier: WidgetSizeTier,
     now: java.time.Instant,
 ) {
@@ -631,18 +722,39 @@ private fun JourneyMainContent(
             maxLines = 1,
             style = TextStyle(fontWeight = FontWeight.Bold, fontSize = tier.countdownSize, color = onBackgroundColor()),
         )
-        Spacer(modifier = GlanceModifier.height(4.dp))
-        JourneyCompositionRow(context, content.primary, content.changesPreference, arrivalFormatter, tier)
+        Spacer(
+            modifier = GlanceModifier.height(
+                when (layout.tier) {
+                    WidgetLayoutTier.SMALL -> 4.dp
+                    WidgetLayoutTier.STANDARD -> 2.dp
+                    WidgetLayoutTier.LARGE -> 4.dp
+                },
+            ),
+        )
+        JourneyCompositionRow(
+            context = context,
+            primary = content.primary,
+            changesPreference = content.changesPreference,
+            arrivalFormatter = arrivalFormatter,
+            includeArrivalInComposition = !layout.showJourneyTimes,
+            tier = tier,
+        )
+
+        if (layout.showJourneyTimes) {
+            Spacer(modifier = GlanceModifier.height(6.dp))
+            JourneyTimesRow(context, content.primary, arrivalFormatter, tier)
+        }
 
         // Same final render-time check applied to the secondary row independently -- an expired
         // one is simply omitted (the primary row above is unaffected), never shown as 0 min. Never
-        // shown in compact mode -- see DepartureMainContent's own identical rule for why there's
+        // shown in the Small tier -- see DepartureMainContent's own identical rule for why there's
         // no room for it (or its own divider) there.
-        val secondary = if (compact) null else content.secondary?.takeIf { isDepartureCurrent(now, it.departureTime) }
+        val secondary = if (!layout.showSecondary) null else content.secondary?.takeIf { isDepartureCurrent(now, it.departureTime) }
         if (secondary != null) {
-            Spacer(modifier = GlanceModifier.height(10.dp))
+            val sectionGap = if (layout.tier == WidgetLayoutTier.LARGE) 6.dp else 4.dp
+            Spacer(modifier = GlanceModifier.height(sectionGap))
             WidgetDivider()
-            Spacer(modifier = GlanceModifier.height(10.dp))
+            Spacer(modifier = GlanceModifier.height(sectionGap))
             NextJourneyRow(context, secondary, now, tier)
         }
     }
@@ -660,6 +772,7 @@ private fun JourneyCompositionRow(
     primary: WidgetJourneyRow,
     changesPreference: ExactDestinationChangesPreference,
     arrivalFormatter: DateTimeFormatter,
+    includeArrivalInComposition: Boolean,
     tier: WidgetSizeTier,
 ) {
     val badges = primary.legBadgesOrFallback()
@@ -680,13 +793,22 @@ private fun JourneyCompositionRow(
         }
         if (primary.transferCount > 0) {
             Spacer(modifier = GlanceModifier.height(4.dp))
-            Text(
+            val text = if (includeArrivalInComposition) {
                 context.resources.getQuantityString(
                     R.plurals.widget_journey_arrive_with_changes,
                     primary.transferCount,
                     arrivalFormatter.format(primary.arrivalTime),
                     primary.transferCount,
-                ),
+                )
+            } else {
+                context.resources.getQuantityString(
+                    R.plurals.widget_journey_changes,
+                    primary.transferCount,
+                    primary.transferCount,
+                )
+            }
+            Text(
+                text,
                 maxLines = 1,
                 style = TextStyle(fontSize = tier.secondarySize, color = onSurfaceVariantColor()),
             )
@@ -697,6 +819,42 @@ private fun JourneyCompositionRow(
                 context.getString(R.string.journey_with_changes),
                 maxLines = 1,
                 style = TextStyle(fontWeight = FontWeight.Bold, fontSize = tier.statusSize, color = ColorProvider(LINE_BADGE_GREEN)),
+            )
+        }
+    }
+}
+
+/** Large-only departure/arrival detail, using timestamps already carried on the primary journey. */
+@Composable
+private fun JourneyTimesRow(
+    context: Context,
+    primary: WidgetJourneyRow,
+    timeFormatter: DateTimeFormatter,
+    tier: WidgetSizeTier,
+) {
+    Row(modifier = GlanceModifier.fillMaxWidth()) {
+        Column(modifier = GlanceModifier.defaultWeight(), horizontalAlignment = Alignment.Start) {
+            Text(
+                context.getString(R.string.widget_journey_depart_label),
+                maxLines = 1,
+                style = TextStyle(fontSize = tier.statusSize, color = onSurfaceVariantColor()),
+            )
+            Text(
+                timeFormatter.format(primary.departureTime),
+                maxLines = 1,
+                style = TextStyle(fontWeight = FontWeight.Bold, fontSize = tier.secondarySize, color = onBackgroundColor()),
+            )
+        }
+        Column(modifier = GlanceModifier.defaultWeight(), horizontalAlignment = Alignment.End) {
+            Text(
+                context.getString(R.string.widget_journey_arrive_label),
+                maxLines = 1,
+                style = TextStyle(fontSize = tier.statusSize, color = onSurfaceVariantColor()),
+            )
+            Text(
+                timeFormatter.format(primary.arrivalTime),
+                maxLines = 1,
+                style = TextStyle(fontWeight = FontWeight.Bold, fontSize = tier.secondarySize, color = onBackgroundColor()),
             )
         }
     }
@@ -752,8 +910,8 @@ private fun WidgetDivider() {
 internal fun WidgetJourneyRow.legBadgesOrFallback(): List<WidgetJourneyLegBadge> =
     legBadges.ifEmpty { listOfNotNull(lineDesignation?.let { WidgetJourneyLegBadge(it, transportMode) }) }
 
-/** A clean, left-aligned vertical stack: the big "6 min" countdown, then — outside [compact]
- * heights only, where there simply isn't room — the following departure's own countdown and
+/** A clean, left-aligned vertical stack: the big "6 min" countdown, then — outside the Small
+ * tier, where there simply isn't room — the following departure's own countdown and
  * the live/scheduled/cancelled status row. The station → direction route is shown once, in
  * [WidgetHeader] next to the line badge, not repeated here (see this function's own comment
  * below). Previously a side-by-side layout (countdown on the left, station/next-departure
@@ -763,25 +921,53 @@ internal fun WidgetJourneyRow.legBadgesOrFallback(): List<WidgetJourneyLegBadge>
 @Composable
 private fun DepartureMainContent(
     context: Context,
+    model: RoutineWidgetModel,
     next: WidgetDepartureRow,
     following: WidgetDepartureRow?,
-    compact: Boolean,
+    layout: WidgetLayoutRules,
     tier: WidgetSizeTier,
 ) {
     Column(modifier = GlanceModifier.fillMaxWidth(), horizontalAlignment = Alignment.Start) {
         CountdownText(context, next, tier)
-        if (!compact) {
-            // The station → direction route is deliberately NOT repeated here -- WidgetHeader
-            // already shows it next to the line badge (see ActiveRoutineContent's own
-            // routeText), so a second copy directly below the countdown would just duplicate it.
-            following?.let { row ->
-                Spacer(modifier = GlanceModifier.height(10.dp))
-                val text = context.getString(R.string.widget_next_departure_format, row.minutesRemaining)
-                Text(text = text, maxLines = 1, style = TextStyle(fontSize = tier.secondarySize, color = onSurfaceVariantColor()))
+        Spacer(modifier = GlanceModifier.height(if (layout.tier == WidgetLayoutTier.STANDARD) 2.dp else 4.dp))
+        Row(verticalAlignment = Alignment.CenterVertically) {
+            model.lineDesignation?.let { line ->
+                LineBadge(line, LineBadgeColorMapping.colorFor(model.transportMode, line), tier.badgeSize)
+                Spacer(modifier = GlanceModifier.width(8.dp))
             }
-            Spacer(modifier = GlanceModifier.height(10.dp))
             StatusFooter(context, next, tier)
         }
+        if (layout.showSecondary) {
+            following?.let { row ->
+                val sectionGap = if (layout.tier == WidgetLayoutTier.LARGE) 6.dp else 4.dp
+                Spacer(modifier = GlanceModifier.height(sectionGap))
+                WidgetDivider()
+                Spacer(modifier = GlanceModifier.height(sectionGap))
+                NextDepartureRow(context, row, tier)
+            }
+        }
+    }
+}
+
+@Composable
+private fun NextDepartureRow(context: Context, row: WidgetDepartureRow, tier: WidgetSizeTier) {
+    val value = if (row.isCancelled) {
+        context.getString(R.string.routine_details_departure_cancelled)
+    } else {
+        context.getString(R.string.widget_countdown_minutes_format, row.minutesRemaining)
+    }
+    Row(modifier = GlanceModifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
+        Text(
+            context.getString(R.string.widget_journey_next_label),
+            maxLines = 1,
+            modifier = GlanceModifier.defaultWeight(),
+            style = TextStyle(fontSize = tier.secondarySize, color = onSurfaceVariantColor()),
+        )
+        Text(
+            value,
+            maxLines = 1,
+            style = TextStyle(fontSize = tier.secondarySize, color = onSurfaceVariantColor()),
+        )
     }
 }
 

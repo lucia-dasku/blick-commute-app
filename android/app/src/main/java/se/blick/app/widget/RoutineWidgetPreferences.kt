@@ -12,6 +12,7 @@ import se.blick.app.domain.model.TransportMode
 import se.blick.app.domain.model.toDisruptionEffect
 import se.blick.app.domain.model.toExactDestinationChangesPreference
 import se.blick.app.domain.model.toJourneyRole
+import se.blick.app.domain.model.toRoutineLabelOrNull
 import se.blick.app.domain.model.toTransportMode
 import java.time.Instant
 
@@ -27,6 +28,7 @@ private object WidgetKeys {
     val CONTENT_TYPE = stringPreferencesKey("contentType")
     val ROUTINE_ID = stringPreferencesKey("routineId")
     val ROUTINE_NAME = stringPreferencesKey("routineName")
+    val ROUTINE_LABEL = stringPreferencesKey("routineLabel")
     val STATION_NAME = stringPreferencesKey("stationName")
     val DIRECTION_LABEL = stringPreferencesKey("directionLabel")
     val LINE_DESIGNATION = stringPreferencesKey("lineDesignation")
@@ -125,6 +127,7 @@ internal fun RoutineWidgetUiState.writeInto(prefs: MutablePreferences) {
         is RoutineWidgetUiState.ActiveRoutine -> {
             prefs[WidgetKeys.ROUTINE_ID] = model.routineId
             prefs[WidgetKeys.ROUTINE_NAME] = model.routineName
+            model.label?.let { prefs[WidgetKeys.ROUTINE_LABEL] = it.name }
             prefs[WidgetKeys.STATION_NAME] = model.stationName
             prefs[WidgetKeys.TRANSPORT_MODE] = model.transportMode.name
             model.directionLabel?.let { prefs[WidgetKeys.DIRECTION_LABEL] = it }
@@ -212,6 +215,7 @@ internal fun Preferences.toWidgetUiState(): RoutineWidgetUiState {
 
     val routineId = this[WidgetKeys.ROUTINE_ID] ?: return RoutineWidgetUiState.NoActiveCommute
     val routineName = this[WidgetKeys.ROUTINE_NAME].orEmpty()
+    val routineLabel = this[WidgetKeys.ROUTINE_LABEL].toRoutineLabelOrNull()
     val stationName = this[WidgetKeys.STATION_NAME].orEmpty()
     val directionLabel = this[WidgetKeys.DIRECTION_LABEL]
     val lineDesignation = this[WidgetKeys.LINE_DESIGNATION]
@@ -282,6 +286,7 @@ internal fun Preferences.toWidgetUiState(): RoutineWidgetUiState {
             disruptionHeadline = disruptionHeadline,
             disruptionUncertainLineDesignations = disruptionUncertainLineDesignations,
             disruptionEffect = disruptionEffect,
+            label = routineLabel,
         ),
     )
 }

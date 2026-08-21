@@ -1,49 +1,16 @@
 <?xml version="1.0" encoding="utf-8"?>
-<!--
-    The largest of the three picker-selectable Blick widget sizes (see
-    blick_routine_widget_info.xml and blick_routine_widget_info_compact.xml for the other two,
-    and BlickRoutineWidgetReceiverLarge in BlickRoutineWidget.kt for the receiver pointing at
-    this file). minWidth=320dp is comfortably clear of BlickRoutineWidget.kt's own
-    isCompactLayout width threshold (220dp) — minWidth/minHeight are a true platform-enforced
-    floor, never smaller than declared regardless of a specific launcher's real grid math — so
-    an instance placed from this picker entry is guaranteed to always render the fuller layout
-    (header, big countdown, "Next" row, live/scheduled/cancelled status, and — when relevant —
-    the disruption strip; see ActiveRoutineContent's own doc).
-
-    minHeight=240dp (raised from an earlier 180dp) is sized for
-    res/layout/widget_preview_large.xml's own STATIC content specifically — that preview is a
-    plain Android view layout, not the real widget's adaptive Compose tree, so unlike the real
-    widget (which drops to isCompactLayout content on any real resize, verified on-device) this
-    fixed layout cannot itself shrink to fit; the picker renders it at (and the initial
-    placement uses) this declared minWidth x minHeight box. Summing that layout's own fixed
-    dp spacing (row margins 12+10+10dp, the top section's 14dp vertical padding x2, the
-    disruption strip's 8dp vertical padding x2 = 76dp) plus its text-driven content at 1x font
-    scale (header ~20dp, the 44sp countdown's own line height ~57dp, the 14sp "Next" line
-    ~18dp, the live-status row ~16dp, the 12sp disruption line ~16dp = ~127dp) comes to ~203dp
-    needed at ordinary 100% system font scale alone — already past the old 180dp floor. 240dp
-    keeps ~37dp of headroom at 100% scale and stays comfortable through roughly 130% (matches
-    the same "~130-200%" accessibility font-scale range blick_routine_widget_info_compact.xml's
-    own minResizeHeight reasoning already targets); the two lines most likely to overflow
-    further at larger scale (the route name and the disruption headline) already use
-    maxLines="1" + ellipsize="end" in the layout, so they truncate gracefully with an ellipsis
-    rather than wrapping or spilling past this box at scales beyond that. maxResizeWidth/Height
-    reuse the same 360dp/270dp ceiling every other provider here uses — the one real
-    measurement this project has on an actual tablet launcher (see android/README.md's Full
-    verification pass section) — rather than a new, unverified larger bound; minResizeWidth/
-    minResizeHeight are intentionally left as the smaller, more permissive floor below, since
-    they only bound how far a user can resize the REAL adaptive widget down after placement,
-    which (unlike this static preview) already handles arbitrarily small sizes via its own
-    isCompactLayout fallback.
--->
+<!-- Canonical 4x4 Large entry. Its bounds guarantee the Large tier with route wrapping,
+     journey times, Next, and the optional bottom disruption area. updatePeriodMillis remains
+     zero so this larger presentation does not introduce any independent refresh mechanism. -->
 <appwidget-provider xmlns:android="http://schemas.android.com/apk/res/android"
-    android:minWidth="320dp"
-    android:minHeight="240dp"
+    android:minWidth="300dp"
+    android:minHeight="220dp"
     android:targetCellWidth="4"
-    android:targetCellHeight="3"
+    android:targetCellHeight="4"
     android:minResizeWidth="300dp"
-    android:minResizeHeight="160dp"
+    android:minResizeHeight="220dp"
     android:maxResizeWidth="360dp"
-    android:maxResizeHeight="270dp"
+    android:maxResizeHeight="360dp"
     android:updatePeriodMillis="0"
     android:initialLayout="@layout/glance_default_loading_layout"
     android:previewLayout="@layout/widget_preview_large"

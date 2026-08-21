@@ -3,17 +3,31 @@
 package se.blick.app.ui.screens.routinecreate
 
 import androidx.activity.compose.BackHandler
+import androidx.compose.foundation.BorderStroke
 import androidx.compose.foundation.clickable
+import androidx.compose.foundation.selection.selectable
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.BoxWithConstraints
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Arrangement
+import androidx.compose.foundation.layout.PaddingValues
+import androidx.compose.foundation.layout.consumeWindowInsets
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
+import androidx.compose.foundation.layout.heightIn
+import androidx.compose.foundation.layout.imePadding
+import androidx.compose.foundation.layout.navigationBarsPadding
 import androidx.compose.foundation.layout.padding
+import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.Spacer
+import androidx.compose.foundation.text.KeyboardActions
+import androidx.compose.foundation.text.KeyboardOptions
+import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.automirrored.filled.KeyboardArrowRight
+import androidx.compose.material.icons.filled.DateRange
+import androidx.compose.material.icons.filled.Edit
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.rememberScrollState
@@ -22,7 +36,7 @@ import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.Button
 import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.ExperimentalMaterial3Api
-import androidx.compose.material3.FilterChip
+import androidx.compose.material3.Icon
 import androidx.compose.material3.ListItem
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.OutlinedTextField
@@ -36,12 +50,20 @@ import androidx.compose.runtime.Composable
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
+import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.graphics.luminance
 import androidx.compose.ui.platform.testTag
+import androidx.compose.ui.platform.LocalFocusManager
+import androidx.compose.ui.res.painterResource
 import androidx.compose.ui.res.stringResource
+import androidx.compose.ui.semantics.Role
+import androidx.compose.ui.semantics.contentDescription
+import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.text.style.TextAlign
+import androidx.compose.ui.text.input.ImeAction
 import androidx.compose.ui.unit.dp
 import androidx.hilt.navigation.compose.hiltViewModel
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
@@ -57,6 +79,10 @@ import se.blick.app.ui.components.BlickWizardHeader
 import se.blick.app.ui.components.LineBadge
 import se.blick.app.ui.components.RoutineLabelSelector
 import se.blick.app.ui.notification.rememberNotificationPermissionGate
+import se.blick.app.ui.theme.CalmBlue40
+import se.blick.app.ui.theme.CalmBlue80
+import se.blick.app.ui.theme.Neutral40
+import se.blick.app.ui.theme.Neutral80
 import java.time.DayOfWeek
 import java.time.LocalTime
 import java.time.format.DateTimeFormatter
@@ -108,7 +134,11 @@ fun RoutineCreateScreen(
                     RoutineCreateStep.SCHEDULE -> if (uiState.isExactDestination) 2 else 4
                 }
                 BlickWizardHeader(
-                    title = stepTitle(uiState.step),
+                    title = if (uiState.step == RoutineCreateStep.SCHEDULE && uiState.isEditMode) {
+                        stringResource(R.string.routine_edit_step_schedule)
+                    } else {
+                        stepTitle(uiState.step)
+                    },
                     stepNumber = stepNumber,
                     totalSteps = totalSteps,
                     progress = stepNumber / totalSteps.toFloat(),
@@ -133,53 +163,53 @@ fun RoutineCreateScreen(
                     onDone = onDone,
                 )
             }
-            else -> Column(Modifier.fillMaxSize().padding(padding).padding(16.dp)) {
-                Box(Modifier.weight(1f).fillMaxWidth()) {
-                    when (uiState.step) {
-                        RoutineCreateStep.STOP -> OriginDestinationStep(
-                            uiState = uiState,
-                            onQueryChanged = viewModel::onSiteQueryChanged,
-                            onSelectSite = viewModel::selectOrigin,
-                            onDestinationQueryChanged = viewModel::onDestinationQueryChanged,
-                            onSelectDestination = viewModel::selectDestination,
-                            onContinue = viewModel::continueFromStops,
-                            onRetryStopSearch = viewModel::retryStopSearch,
-                            onRetryDirections = viewModel::retryDirections,
-                            onOpenPremium = onOpenPremium,
-                        )
-                        RoutineCreateStep.TRANSPORT_MODE -> TransportModeStep(
-                            uiState = uiState,
-                            onSelectMode = viewModel::selectTransportMode,
-                        )
-                        RoutineCreateStep.DIRECTION -> DirectionStep(
-                            uiState = uiState,
-                            onSelectDirection = viewModel::selectDirection,
-                        )
-                        RoutineCreateStep.SCHEDULE -> {
-                            // A newly saved routine is, by default, enabled and therefore
-                            // intended to show automatic notifications once its scheduled
-                            // window opens -- save is exactly the "appropriate user-driven
-                            // point" the product doc asks for to request POST_NOTIFICATIONS,
-                            // with a brief rationale first (see rememberNotificationPermissionGate).
-                            val notifyGate = rememberNotificationPermissionGate(
-                                hasSeenRationale = uiState.hasSeenNotificationRationale,
-                                onRationaleSeen = viewModel::markNotificationRationaleSeen,
-                            )
-                            ScheduleStep(
+            else -> {
+                if (uiState.step == RoutineCreateStep.SCHEDULE) {
+                    // A newly saved routine is, by default, enabled and therefore intended to
+                    // show automatic notifications once its scheduled window opens. This is the
+                    // existing user-driven permission gate; the redesigned schedule screen only
+                    // changes presentation around it.
+                    val notifyGate = rememberNotificationPermissionGate(
+                        hasSeenRationale = uiState.hasSeenNotificationRationale,
+                        onRationaleSeen = viewModel::markNotificationRationaleSeen,
+                    )
+                    ScheduleStep(
+                        uiState = uiState,
+                        onToggleDay = viewModel::toggleDay,
+                        onStartTimeChanged = viewModel::setStartTime,
+                        onEndTimeChanged = viewModel::setEndTime,
+                        onNameChanged = viewModel::setName,
+                        onLabelChanged = viewModel::setLabel,
+                        onSave = { notifyGate { viewModel.save(onDone) } },
+                        onRetryScheduling = { viewModel.retryScheduling(onDone) },
+                        modifier = Modifier
+                            .fillMaxSize()
+                            .padding(padding)
+                            .consumeWindowInsets(padding),
+                    )
+                } else {
+                    Box(Modifier.fillMaxSize().padding(padding).padding(16.dp)) {
+                        when (uiState.step) {
+                            RoutineCreateStep.STOP -> OriginDestinationStep(
                                 uiState = uiState,
-                                onToggleDay = viewModel::toggleDay,
-                                onStartTimeChanged = viewModel::setStartTime,
-                                onEndTimeChanged = viewModel::setEndTime,
-                                onNameChanged = viewModel::setName,
-                                onLabelChanged = viewModel::setLabel,
-                                onSave = { notifyGate { viewModel.save(onDone) } },
-                                // Retries only the WorkManager side for the already-saved routine
-                                // -- never re-wrapped in notifyGate, which is specifically about
-                                // the one-time POST_NOTIFICATIONS rationale for a fresh save, not
-                                // this secondary scheduling retry (see RoutineCreateViewModel.save's
-                                // own doc).
-                                onRetryScheduling = { viewModel.retryScheduling(onDone) },
+                                onQueryChanged = viewModel::onSiteQueryChanged,
+                                onSelectSite = viewModel::selectOrigin,
+                                onDestinationQueryChanged = viewModel::onDestinationQueryChanged,
+                                onSelectDestination = viewModel::selectDestination,
+                                onContinue = viewModel::continueFromStops,
+                                onRetryStopSearch = viewModel::retryStopSearch,
+                                onRetryDirections = viewModel::retryDirections,
+                                onOpenPremium = onOpenPremium,
                             )
+                            RoutineCreateStep.TRANSPORT_MODE -> TransportModeStep(
+                                uiState = uiState,
+                                onSelectMode = viewModel::selectTransportMode,
+                            )
+                            RoutineCreateStep.DIRECTION -> DirectionStep(
+                                uiState = uiState,
+                                onSelectDirection = viewModel::selectDirection,
+                            )
+                            RoutineCreateStep.SCHEDULE -> Unit
                         }
                     }
                 }
@@ -423,7 +453,7 @@ internal fun DirectionStep(
 private enum class TimeField { START, END }
 
 @Composable
-private fun ScheduleStep(
+internal fun ScheduleStep(
     uiState: RoutineCreateUiState,
     onToggleDay: (DayOfWeek) -> Unit,
     onStartTimeChanged: (LocalTime) -> Unit,
@@ -432,110 +462,164 @@ private fun ScheduleStep(
     onLabelChanged: (RoutineLabel?) -> Unit,
     onSave: () -> Unit,
     onRetryScheduling: () -> Unit,
+    modifier: Modifier = Modifier,
 ) {
     var editingField by remember { mutableStateOf<TimeField?>(null) }
+    var hasInteractedWithDays by rememberSaveable { mutableStateOf(false) }
     // currentBlickLocale() reads Compose-observable CompositionLocal state internally (not
     // Locale.getDefault(), which does not recompose when the user changes the system locale --
     // see lint id "NonObservableLocale") and normalizes it to Blick's effective English/Svenska
     // presentation locale -- see that function's own doc.
     val locale = currentBlickLocale()
+    val focusManager = LocalFocusManager.current
 
-    Column(Modifier.fillMaxSize().verticalScroll(rememberScrollState())) {
-        Text(stringResource(R.string.routine_create_days_label), style = MaterialTheme.typography.labelLarge)
-        Spacer(Modifier.height(8.dp))
-        WeekdaySelector(activeDays = uiState.activeDays, onToggleDay = onToggleDay, locale = locale)
-        if (!uiState.hasSelectedDays) {
-            Text(
-                stringResource(R.string.routine_create_error_no_days),
-                color = MaterialTheme.colorScheme.error,
-                style = MaterialTheme.typography.bodySmall,
-            )
+    Box(modifier.fillMaxSize()) {
+        LazyColumn(
+            modifier = Modifier.fillMaxSize().imePadding().testTag("schedule-content"),
+            contentPadding = PaddingValues(start = 16.dp, top = 12.dp, end = 16.dp, bottom = 96.dp),
+            verticalArrangement = Arrangement.spacedBy(12.dp),
+        ) {
+            item {
+                ScheduleSectionCard(
+                    icon = { Icon(Icons.Default.DateRange, contentDescription = null) },
+                    title = stringResource(R.string.routine_create_days_label),
+                    modifier = Modifier.testTag("active-days-card"),
+                ) {
+                    WeekdaySelector(
+                        activeDays = uiState.activeDays,
+                        onToggleDay = { day ->
+                            hasInteractedWithDays = true
+                            onToggleDay(day)
+                        },
+                        locale = locale,
+                    )
+                    if (hasInteractedWithDays && !uiState.hasSelectedDays) {
+                        Text(
+                            stringResource(R.string.routine_create_error_no_days),
+                            color = MaterialTheme.colorScheme.error,
+                            style = MaterialTheme.typography.bodySmall,
+                            modifier = Modifier.testTag("active-days-error"),
+                        )
+                    }
+                }
+            }
+
+            item {
+                ScheduleSectionCard(
+                    icon = { Icon(painterResource(R.drawable.ic_clock), contentDescription = null) },
+                    title = stringResource(R.string.routine_create_time_window_title),
+                    modifier = Modifier.testTag("time-window-card"),
+                ) {
+                    Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                        TimeControl(
+                            visibleLabel = stringResource(R.string.routine_create_start_label),
+                            accessibilityLabel = stringResource(R.string.routine_create_start_time_label),
+                            time = uiState.startTime,
+                            onClick = { editingField = TimeField.START },
+                            modifier = Modifier.weight(1f).testTag("start-time-control"),
+                        )
+                        TimeControl(
+                            visibleLabel = stringResource(R.string.routine_create_end_label),
+                            accessibilityLabel = stringResource(R.string.routine_create_end_time_label),
+                            time = uiState.endTime,
+                            onClick = { editingField = TimeField.END },
+                            modifier = Modifier.weight(1f).testTag("end-time-control"),
+                        )
+                    }
+                    if (!uiState.isTimeRangeValid) {
+                        ValidationText(stringResource(R.string.routine_create_error_time_range))
+                    }
+                    if (uiState.durationLimitExceeded) {
+                        ValidationText(stringResource(R.string.routine_create_error_duration_limit))
+                    }
+                    if (uiState.scheduleOverlap) {
+                        ValidationText(stringResource(R.string.routine_create_error_overlap))
+                    }
+                }
+            }
+
+            item {
+                val routineNameDescription = stringResource(R.string.routine_create_name_label)
+                ScheduleSectionCard(
+                    icon = { Icon(Icons.Default.Edit, contentDescription = null) },
+                    title = routineNameDescription,
+                    modifier = Modifier.testTag("routine-name-card"),
+                ) {
+                    OutlinedTextField(
+                        value = uiState.name,
+                        onValueChange = onNameChanged,
+                        singleLine = true,
+                        keyboardOptions = KeyboardOptions(imeAction = ImeAction.Done),
+                        keyboardActions = KeyboardActions(onDone = { focusManager.clearFocus() }),
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .semantics { contentDescription = routineNameDescription }
+                            .testTag("routine-name-field"),
+                    )
+                }
+            }
+
+            item {
+                ScheduleSectionCard(
+                    icon = {
+                        Icon(
+                            painter = painterResource(R.drawable.ic_label_other),
+                            contentDescription = null,
+                        )
+                    },
+                    title = stringResource(R.string.routine_label_field_title),
+                    modifier = Modifier.testTag("routine-label-card"),
+                ) {
+                    RoutineLabelSelector(
+                        selectedLabel = uiState.selectedLabel,
+                        onLabelSelected = onLabelChanged,
+                        modifier = Modifier.fillMaxWidth(),
+                    )
+                }
+            }
+
+            if (uiState.saveFailed) {
+                item { ValidationText(stringResource(R.string.routine_create_save_error)) }
+            }
+
+            // The routine itself is already saved at this point. This existing retry targets
+            // only scheduling and never repeats the Room write.
+            if (uiState.schedulingFailed) {
+                item {
+                    Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                        ValidationText(stringResource(R.string.routine_create_scheduling_error))
+                        Button(
+                            onClick = onRetryScheduling,
+                            enabled = !uiState.isRetryingScheduling,
+                            modifier = Modifier.fillMaxWidth(),
+                        ) {
+                            Text(stringResource(R.string.action_retry))
+                        }
+                    }
+                }
+            }
         }
 
-        Spacer(Modifier.height(16.dp))
-        TimePickerRow(
-            label = stringResource(R.string.routine_create_start_time_label),
-            time = uiState.startTime,
-            onClick = { editingField = TimeField.START },
-        )
-        TimePickerRow(
-            label = stringResource(R.string.routine_create_end_time_label),
-            time = uiState.endTime,
-            onClick = { editingField = TimeField.END },
-        )
-        if (!uiState.isTimeRangeValid) {
-            Text(
-                stringResource(R.string.routine_create_error_time_range),
-                color = MaterialTheme.colorScheme.error,
-                style = MaterialTheme.typography.bodySmall,
-            )
-        }
-        if (uiState.durationLimitExceeded) {
-            Text(
-                stringResource(R.string.routine_create_error_duration_limit),
-                color = MaterialTheme.colorScheme.error,
-                style = MaterialTheme.typography.bodySmall,
-            )
-        }
-        if (uiState.scheduleOverlap) {
-            Text(
-                stringResource(R.string.routine_create_error_overlap),
-                color = MaterialTheme.colorScheme.error,
-            )
-        }
-
-        Spacer(Modifier.height(16.dp))
-        OutlinedTextField(
-            value = uiState.name,
-            onValueChange = onNameChanged,
-            label = { Text(stringResource(R.string.routine_create_name_label)) },
-            singleLine = true,
-            modifier = Modifier.fillMaxWidth(),
-        )
-
-        Spacer(Modifier.height(16.dp))
-        Text(
-            stringResource(R.string.routine_label_field_title),
-            style = MaterialTheme.typography.labelLarge,
-        )
-        Spacer(Modifier.height(8.dp))
-        RoutineLabelSelector(
-            selectedLabel = uiState.selectedLabel,
-            onLabelSelected = onLabelChanged,
-            modifier = Modifier.fillMaxWidth(),
-        )
-
-        if (uiState.saveFailed) {
-            Spacer(Modifier.height(8.dp))
-            Text(
-                stringResource(R.string.routine_create_save_error),
-                color = MaterialTheme.colorScheme.error,
-                style = MaterialTheme.typography.bodySmall,
-            )
-        }
-
-        Spacer(Modifier.height(24.dp))
-        Button(onClick = onSave, enabled = uiState.canSave, modifier = Modifier.fillMaxWidth()) {
-            Text(stringResource(if (uiState.saveFailed) R.string.routine_create_retry else R.string.routine_create_save))
-        }
-
-        // The routine itself is already saved at this point (schedulingFailed and saveFailed
-        // are mutually exclusive in practice) -- a dedicated retry, separate from the Save
-        // button above, which targets only the WorkManager side and never repeats the write.
-        if (uiState.schedulingFailed) {
-            Spacer(Modifier.height(8.dp))
-            Text(
-                stringResource(R.string.routine_create_scheduling_error),
-                color = MaterialTheme.colorScheme.error,
-                style = MaterialTheme.typography.bodySmall,
-            )
-            Spacer(Modifier.height(8.dp))
+        Surface(
+            color = MaterialTheme.colorScheme.surface,
+            shadowElevation = 8.dp,
+            modifier = Modifier
+                .align(Alignment.BottomCenter)
+                .fillMaxWidth()
+                .navigationBarsPadding()
+                .imePadding()
+                .testTag("schedule-sticky-action"),
+        ) {
             Button(
-                onClick = onRetryScheduling,
-                enabled = !uiState.isRetryingScheduling,
-                modifier = Modifier.fillMaxWidth(),
+                onClick = onSave,
+                enabled = uiState.canSave,
+                modifier = Modifier
+                    .padding(horizontal = 16.dp, vertical = 12.dp)
+                    .fillMaxWidth()
+                    .heightIn(min = 52.dp)
+                    .testTag("save-routine-button"),
             ) {
-                Text(stringResource(R.string.action_retry))
+                Text(stringResource(if (uiState.saveFailed) R.string.routine_create_retry else R.string.routine_create_save))
             }
         }
     }
@@ -557,37 +641,39 @@ private fun ScheduleStep(
  * (forcing horizontal scrolling) or squeeze under the 48dp minimum touch-target size on a
  * typical phone — see [WeekdaySelector]'s own doc. Comfortably above what a single row of
  * seven short day labels needs on any tablet or landscape width actually seen in testing. */
-internal val WEEKDAY_SINGLE_ROW_MIN_WIDTH = 400.dp
+internal val WEEKDAY_SINGLE_ROW_MIN_WIDTH = 348.dp
 
 /**
- * All seven [DayOfWeek] values as equally-weighted [FilterChip]s, laid out responsively so
+ * All seven [DayOfWeek] values as equal 48dp-high selectors, laid out responsively so
  * every day is always visible and selectable with no horizontal scrolling, on both phones and
  * tablets: a single row spanning the full width when [BoxWithConstraints]' measured
  * `maxWidth` is at least [WEEKDAY_SINGLE_ROW_MIN_WIDTH] (comfortably true for tablets and
  * landscape phones), otherwise two balanced rows (Monday–Thursday, then Friday–Sunday) so no
  * day ever wraps off-screen or requires scrolling on a narrow phone in portrait.
  *
- * Each [WeekdayRow] gives every chip in it an equal [Modifier.weight] share of the row's
+ * Each [WeekdayRow] gives every selector an equal [Modifier.weight] share of the row's
  * width — the same mechanism that makes both the seven-chip and the four/three-chip split
  * "balanced" (every chip in a row is the same width) and that keeps each day's short label on
  * one line (`maxLines = 1`) even at the narrowest supported width, since dividing by 4 (the
  * narrower of the two split rows) still leaves comfortably more than the 48dp minimum
- * interactive size Material's own [FilterChip] already enforces.
+ * interactive height. The three-day second row keeps an empty fourth slot so its controls
+ * remain exactly the same width as the four-day first row.
  */
 @Composable
 internal fun WeekdaySelector(
     activeDays: Set<DayOfWeek>,
     onToggleDay: (DayOfWeek) -> Unit,
     locale: java.util.Locale,
+    modifier: Modifier = Modifier,
 ) {
     val days = DayOfWeek.values().toList()
-    BoxWithConstraints(Modifier.fillMaxWidth()) {
+    BoxWithConstraints(modifier.fillMaxWidth()) {
         if (maxWidth >= WEEKDAY_SINGLE_ROW_MIN_WIDTH) {
-            WeekdayRow(days, activeDays, onToggleDay, locale)
+            WeekdayRow(days, 7, activeDays, onToggleDay, locale)
         } else {
             Column(verticalArrangement = Arrangement.spacedBy(4.dp)) {
-                WeekdayRow(days.subList(0, 4), activeDays, onToggleDay, locale)
-                WeekdayRow(days.subList(4, 7), activeDays, onToggleDay, locale)
+                WeekdayRow(days.subList(0, 4), 4, activeDays, onToggleDay, locale)
+                WeekdayRow(days.subList(4, 7), 4, activeDays, onToggleDay, locale)
             }
         }
     }
@@ -596,40 +682,112 @@ internal fun WeekdaySelector(
 @Composable
 private fun WeekdayRow(
     days: List<DayOfWeek>,
+    totalSlots: Int,
     activeDays: Set<DayOfWeek>,
     onToggleDay: (DayOfWeek) -> Unit,
     locale: java.util.Locale,
 ) {
-    Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(4.dp)) {
+    val isDarkTheme = MaterialTheme.colorScheme.background.luminance() < 0.5f
+    val selectedBackground = if (isDarkTheme) Neutral40 else CalmBlue80
+    val selectedContent = MaterialTheme.colorScheme.onSurface
+    val selectedOutline = if (isDarkTheme) Neutral80 else CalmBlue40
+
+    Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(2.dp)) {
         days.forEach { day ->
-            FilterChip(
-                selected = day in activeDays,
-                onClick = { onToggleDay(day) },
-                label = {
+            val selected = day in activeDays
+            Surface(
+                color = if (selected) selectedBackground else MaterialTheme.colorScheme.surface,
+                contentColor = if (selected) selectedContent else MaterialTheme.colorScheme.onSurface,
+                shape = MaterialTheme.shapes.small,
+                border = BorderStroke(
+                    width = if (selected) 2.dp else 1.dp,
+                    color = if (selected) selectedOutline else MaterialTheme.colorScheme.outlineVariant,
+                ),
+                modifier = Modifier
+                    .weight(1f)
+                    .height(48.dp)
+                    .selectable(
+                        selected = selected,
+                        onClick = { onToggleDay(day) },
+                        role = Role.Checkbox,
+                    )
+                    .testTag("weekday-${day.name.lowercase()}"),
+            ) {
+                Box(Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
                     Text(
                         day.getDisplayName(TextStyle.SHORT, locale),
+                        style = MaterialTheme.typography.labelMedium,
                         maxLines = 1,
                         softWrap = false,
                     )
-                },
-                modifier = Modifier.weight(1f),
-            )
+                }
+            }
+        }
+        repeat(totalSlots - days.size) {
+            Spacer(Modifier.weight(1f).height(48.dp))
         }
     }
 }
 
 @Composable
-private fun TimePickerRow(label: String, time: LocalTime, onClick: () -> Unit) {
-    Row(
-        modifier = Modifier
-            .fillMaxWidth()
-            .clickable(onClick = onClick)
-            .padding(vertical = 12.dp),
-        horizontalArrangement = Arrangement.SpaceBetween,
+private fun ScheduleSectionCard(
+    icon: @Composable () -> Unit,
+    title: String,
+    modifier: Modifier = Modifier,
+    content: @Composable () -> Unit,
+) {
+    Surface(
+        shape = MaterialTheme.shapes.medium,
+        color = MaterialTheme.colorScheme.background,
+        modifier = modifier.fillMaxWidth(),
     ) {
-        Text(label)
-        Text(time.format(DateTimeFormatter.ofPattern("HH:mm")))
+        Column(Modifier.padding(16.dp), verticalArrangement = Arrangement.spacedBy(12.dp)) {
+            Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(12.dp)) {
+                Box(Modifier.size(24.dp), contentAlignment = Alignment.Center) { icon() }
+                Text(title, style = MaterialTheme.typography.titleMedium, modifier = Modifier.weight(1f))
+            }
+            content()
+        }
     }
+}
+
+@Composable
+private fun TimeControl(
+    visibleLabel: String,
+    accessibilityLabel: String,
+    time: LocalTime,
+    onClick: () -> Unit,
+    modifier: Modifier = Modifier,
+) {
+    val formattedTime = time.format(DateTimeFormatter.ofPattern("HH:mm"))
+    val description = stringResource(R.string.routine_create_time_control_description, accessibilityLabel, formattedTime)
+    Surface(
+        onClick = onClick,
+        shape = MaterialTheme.shapes.medium,
+        color = MaterialTheme.colorScheme.surface,
+        border = BorderStroke(1.dp, MaterialTheme.colorScheme.outlineVariant),
+        modifier = modifier
+            .height(80.dp)
+            .semantics { contentDescription = description },
+    ) {
+        Column(Modifier.fillMaxSize().padding(horizontal = 12.dp, vertical = 10.dp)) {
+            Text(
+                visibleLabel,
+                style = MaterialTheme.typography.labelMedium,
+                color = MaterialTheme.colorScheme.onSurfaceVariant,
+            )
+            Spacer(Modifier.weight(1f))
+            Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
+                Text(formattedTime, style = MaterialTheme.typography.titleLarge, modifier = Modifier.weight(1f))
+                Icon(Icons.AutoMirrored.Filled.KeyboardArrowRight, contentDescription = null, modifier = Modifier.size(20.dp))
+            }
+        }
+    }
+}
+
+@Composable
+private fun ValidationText(text: String) {
+    Text(text, color = MaterialTheme.colorScheme.error, style = MaterialTheme.typography.bodySmall)
 }
 
 @Composable

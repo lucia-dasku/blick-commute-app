@@ -1,50 +1,75 @@
 <?xml version="1.0" encoding="utf-8"?>
-<!--
-    android:previewLayout target for blick_routine_widget_info_large.xml. Same non-compact
-    content as widget_preview_standard.xml, plus DisruptionStrip's own full-bleed bottom band
-    (see BlickRoutineWidget.kt) — the large size is the one place in the picker that shows a
-    relevant disruption, matching how the real widget only ever renders that strip when there
-    is enough room (never in compact mode; see ActiveRoutineContent's own disruptionHeadline).
-
-    previewLayout is inflated through RemoteViews (same restricted view-class allowlist as
-    android:initialLayout and the real widget's own RemoteViews-backed rendering), NOT a plain
-    LayoutInflater pass in this app's own process — every element here must be one of the
-    views/layouts RemoteViews knows how to reconstruct remotely (LinearLayout, TextView,
-    ImageView, etc.). A plain <View> (used here for the "Live" status dot) previously slipped
-    through: it inflates fine locally in Android Studio's own preview/any ordinary layout, but
-    RemoteViews has no reflection entry for the bare android.view.View class, so applying this
-    layout in the launcher/picker process threw at runtime with no local symptom — Samsung's
-    picker surfaced it only as "Couldn't add widget" for this size specifically (the sibling
-    compact/standard previews never hit it, since neither uses a bare View). Fixed by using
-    ImageView with android:src instead — RemoteViews-supported and visually identical for a
-    small solid-color dot. If any future edit here needs a plain colored box/dot again, use
-    ImageView (as below) or a View subclass RemoteViews explicitly supports, never
-    android.view.View itself.
--->
-<!-- tools:ignore="HardcodedText" — see widget_preview_compact.xml's own comment; same
-     deliberately static, non-localized preview-only content. -->
+<!-- Static API 31+ picker preview for the canonical 4x4 Large widget. RemoteViews supports
+     every view used here; keep the disruption as the final, full-width child. -->
+<!-- tools:ignore="HardcodedText" — illustrative preview-only content, never live data. -->
 <LinearLayout xmlns:android="http://schemas.android.com/apk/res/android"
     xmlns:tools="http://schemas.android.com/tools"
     android:layout_width="match_parent"
     android:layout_height="match_parent"
     android:background="@drawable/widget_preview_card_background"
     android:orientation="vertical"
-    tools:ignore="HardcodedText">
+    tools:ignore="HardcodedText,UseAppTint">
 
     <LinearLayout
         android:layout_width="match_parent"
         android:layout_height="0dp"
         android:layout_weight="1"
         android:orientation="vertical"
-        android:gravity="center_vertical"
         android:paddingHorizontal="16dp"
-        android:paddingVertical="14dp">
+        android:paddingVertical="10dp">
 
         <LinearLayout
+            android:layout_width="wrap_content"
+            android:layout_height="wrap_content"
+            android:background="@drawable/widget_preview_label_chip"
+            android:gravity="center_vertical"
+            android:orientation="horizontal"
+            android:paddingHorizontal="6dp"
+            android:paddingVertical="2dp">
+
+            <ImageView
+                android:layout_width="16dp"
+                android:layout_height="16dp"
+                android:contentDescription="@null"
+                android:src="@drawable/ic_label_home"
+                android:tint="@color/widget_preview_label_home" />
+
+            <TextView
+                android:layout_width="wrap_content"
+                android:layout_height="wrap_content"
+                android:layout_marginStart="4dp"
+                android:text="Home"
+                android:textColor="@color/widget_preview_label_home"
+                android:textSize="12sp"
+                android:textStyle="bold" />
+        </LinearLayout>
+
+        <TextView
             android:layout_width="match_parent"
             android:layout_height="wrap_content"
-            android:orientation="horizontal"
-            android:gravity="center_vertical">
+            android:layout_marginTop="4dp"
+            android:ellipsize="end"
+            android:maxLines="2"
+            android:text="T-Centralen → Mälarhöjden"
+            android:textColor="@color/widget_preview_on_background"
+            android:textSize="16sp"
+            android:textStyle="bold" />
+
+        <TextView
+            android:layout_width="wrap_content"
+            android:layout_height="wrap_content"
+            android:layout_marginTop="6dp"
+            android:text="4 min"
+            android:textColor="@color/widget_preview_on_background"
+            android:textSize="48sp"
+            android:textStyle="bold" />
+
+        <LinearLayout
+            android:layout_width="wrap_content"
+            android:layout_height="wrap_content"
+            android:layout_marginTop="3dp"
+            android:gravity="center_vertical"
+            android:orientation="horizontal">
 
             <TextView
                 android:layout_width="wrap_content"
@@ -52,61 +77,98 @@
                 android:background="@drawable/widget_preview_line_badge"
                 android:paddingHorizontal="7dp"
                 android:paddingVertical="2dp"
-                android:text="14"
+                android:text="13"
                 android:textColor="@color/widget_preview_line_badge_text"
-                android:textStyle="bold"
-                android:textSize="13sp" />
+                android:textSize="13sp"
+                android:textStyle="bold" />
+
+            <TextView
+                android:layout_width="wrap_content"
+                android:layout_height="wrap_content"
+                android:layout_marginStart="8dp"
+                android:text="Direct"
+                android:textColor="@color/widget_preview_on_surface_variant"
+                android:textSize="14sp" />
+        </LinearLayout>
+
+        <LinearLayout
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:layout_marginTop="6dp"
+            android:orientation="horizontal">
+
+            <LinearLayout
+                android:layout_width="0dp"
+                android:layout_height="wrap_content"
+                android:layout_weight="1"
+                android:orientation="vertical">
+
+                <TextView
+                    android:layout_width="wrap_content"
+                    android:layout_height="wrap_content"
+                    android:text="Depart"
+                    android:textColor="@color/widget_preview_on_surface_variant"
+                    android:textSize="12sp" />
+
+                <TextView
+                    android:layout_width="wrap_content"
+                    android:layout_height="wrap_content"
+                    android:text="12:14"
+                    android:textColor="@color/widget_preview_on_background"
+                    android:textSize="14sp"
+                    android:textStyle="bold" />
+            </LinearLayout>
+
+            <LinearLayout
+                android:layout_width="0dp"
+                android:layout_height="wrap_content"
+                android:layout_weight="1"
+                android:gravity="end"
+                android:orientation="vertical">
+
+                <TextView
+                    android:layout_width="wrap_content"
+                    android:layout_height="wrap_content"
+                    android:text="Arrive"
+                    android:textColor="@color/widget_preview_on_surface_variant"
+                    android:textSize="12sp" />
+
+                <TextView
+                    android:layout_width="wrap_content"
+                    android:layout_height="wrap_content"
+                    android:text="12:28"
+                    android:textColor="@color/widget_preview_on_background"
+                    android:textSize="14sp"
+                    android:textStyle="bold" />
+            </LinearLayout>
+        </LinearLayout>
+
+        <TextView
+            android:layout_width="match_parent"
+            android:layout_height="1dp"
+            android:layout_marginTop="6dp"
+            android:background="@color/widget_preview_on_surface_variant" />
+
+        <LinearLayout
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:layout_marginTop="5dp"
+            android:orientation="horizontal">
 
             <TextView
                 android:layout_width="0dp"
                 android:layout_height="wrap_content"
                 android:layout_weight="1"
-                android:layout_marginStart="8dp"
-                android:maxLines="1"
-                android:ellipsize="end"
-                android:text="Fruängen → T-Centralen"
-                android:textColor="@color/widget_preview_on_background"
-                android:textStyle="bold"
-                android:textSize="15sp" />
-        </LinearLayout>
-
-        <TextView
-            android:layout_width="wrap_content"
-            android:layout_height="wrap_content"
-            android:layout_marginTop="12dp"
-            android:text="4 min"
-            android:textColor="@color/widget_preview_on_background"
-            android:textStyle="bold"
-            android:textSize="44sp" />
-
-        <TextView
-            android:layout_width="wrap_content"
-            android:layout_height="wrap_content"
-            android:layout_marginTop="10dp"
-            android:text="Next  11 min"
-            android:textColor="@color/widget_preview_on_surface_variant"
-            android:textSize="14sp" />
-
-        <LinearLayout
-            android:layout_width="wrap_content"
-            android:layout_height="wrap_content"
-            android:layout_marginTop="10dp"
-            android:orientation="horizontal"
-            android:gravity="center_vertical">
-
-            <ImageView
-                android:layout_width="8dp"
-                android:layout_height="8dp"
-                android:src="@drawable/widget_preview_live_dot"
-                android:contentDescription="@null" />
+                android:text="Next"
+                android:textColor="@color/widget_preview_on_surface_variant"
+                android:textSize="14sp" />
 
             <TextView
                 android:layout_width="wrap_content"
                 android:layout_height="wrap_content"
-                android:layout_marginStart="6dp"
-                android:text="Live"
+                android:text="13 min"
                 android:textColor="@color/widget_preview_on_surface_variant"
-                android:textSize="12sp" />
+                android:textSize="14sp" />
         </LinearLayout>
     </LinearLayout>
 
@@ -114,8 +176,8 @@
         android:layout_width="match_parent"
         android:layout_height="wrap_content"
         android:background="@drawable/widget_preview_disruption_strip"
-        android:orientation="horizontal"
         android:gravity="center_vertical"
+        android:orientation="horizontal"
         android:paddingHorizontal="16dp"
         android:paddingVertical="8dp">
 
@@ -123,9 +185,9 @@
             android:layout_width="0dp"
             android:layout_height="wrap_content"
             android:layout_weight="1"
-            android:maxLines="1"
             android:ellipsize="end"
-            android:text="Delays on line 14 due to a signal fault"
+            android:maxLines="1"
+            android:text="Delays on line 13 due to a signal fault"
             android:textColor="@color/widget_preview_disruption_text"
             android:textSize="12sp" />
 
@@ -135,7 +197,7 @@
             android:layout_marginStart="4dp"
             android:text="›"
             android:textColor="@color/widget_preview_disruption_text"
-            android:textStyle="bold"
-            android:textSize="12sp" />
+            android:textSize="12sp"
+            android:textStyle="bold" />
     </LinearLayout>
 </LinearLayout>

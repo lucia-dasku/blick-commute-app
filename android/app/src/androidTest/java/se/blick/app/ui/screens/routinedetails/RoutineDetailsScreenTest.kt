@@ -379,6 +379,73 @@ class RoutineDetailsScreenTest {
         composeRule.onNodeWithText("in 5 min").assertDoesNotExist()
     }
 
+    @Test
+    fun countdownAtFiftyNineMinutesFiftyNineSecondsDisplaysOneHour() {
+        val now = Instant.parse("2026-08-13T08:00:00Z")
+        val journey = journeyWithTransfers(
+            id = "hour-boundary",
+            lineDesignation = "577",
+            transferCount = 0,
+            departure = now.plusSeconds(59 * 60 + 59),
+            durationMinutes = 20,
+        )
+
+        setContent(
+            disruptionsState = DisruptionsState.NoDisruptions,
+            routine = exactDestinationRoutine(),
+            journeys = listOf(journey),
+            now = now,
+        )
+
+        val oneHour = composeRule.activity.getString(R.string.journey_duration_hours, 1)
+        composeRule.onNodeWithText(
+            composeRule.activity.getString(R.string.journey_departure_in, oneHour),
+        ).assertExists()
+        composeRule.onNodeWithText("60 min", substring = true).assertDoesNotExist()
+    }
+
+    @Test
+    fun longJourneyCardTimesDisplayHoursAndRemainingMinutes() {
+        val now = Instant.parse("2026-08-13T08:00:00Z")
+        val primary = journeyWithTransfers(
+            id = "primary",
+            lineDesignation = "577",
+            transferCount = 2,
+            departure = now.plusSeconds(20 * 60),
+            durationMinutes = 85,
+            role = JourneyRole.PRIMARY,
+        )
+        val next = journeyWithTransfers(
+            id = "next",
+            lineDesignation = "577",
+            transferCount = 2,
+            departure = now.plusSeconds(139 * 60),
+            durationMinutes = 88,
+            role = JourneyRole.NEXT,
+        )
+
+        setContent(
+            disruptionsState = DisruptionsState.NoDisruptions,
+            routine = exactDestinationRoutine(),
+            journeys = listOf(primary, next),
+            now = now,
+        )
+
+        val departure = composeRule.activity.getString(R.string.journey_duration_hours_minutes, 2, 19)
+        val later = composeRule.activity.getString(R.string.journey_duration_hours_minutes, 2, 2)
+        val primaryDuration = composeRule.activity.getString(R.string.journey_duration_hours_minutes, 1, 25)
+        val nextDuration = composeRule.activity.getString(R.string.journey_duration_hours_minutes, 1, 28)
+        composeRule.onNodeWithText(
+            composeRule.activity.getString(R.string.journey_departure_in, departure),
+        ).assertExists()
+        composeRule.onNodeWithText(
+            composeRule.activity.getString(R.string.journey_later, later),
+            substring = true,
+        ).assertExists()
+        composeRule.onNodeWithText("\u23F1 $primaryDuration").assertExists()
+        composeRule.onNodeWithText("\u23F1 $nextDuration").assertExists()
+    }
+
     // ---- Journeys section: route heading, Direct/With changes filters, per-card duration ----
 
     private fun exactDestinationRoutine(origin: String = "Fruängen", destination: String = "Mariatorget") =

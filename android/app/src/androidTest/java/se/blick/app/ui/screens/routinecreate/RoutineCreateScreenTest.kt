@@ -4,18 +4,30 @@ import androidx.activity.ComponentActivity
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.fillMaxHeight
 import androidx.compose.foundation.layout.requiredWidth
+import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableStateOf
+import androidx.compose.runtime.remember
+import androidx.compose.runtime.setValue
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.test.assertCountEquals
 import androidx.compose.ui.test.assertIsDisplayed
 import androidx.compose.ui.test.assertIsEnabled
 import androidx.compose.ui.test.assertIsNotEnabled
+import androidx.compose.ui.test.assertIsSelected
 import androidx.compose.ui.test.junit4.v2.createAndroidComposeRule
+import androidx.compose.ui.test.onAllNodesWithText
+import androidx.compose.ui.test.onNodeWithContentDescription
 import androidx.compose.ui.test.onNodeWithText
 import androidx.compose.ui.test.onNodeWithTag
 import androidx.compose.ui.test.performClick
+import androidx.compose.ui.test.performImeAction
+import androidx.compose.ui.test.performScrollTo
+import androidx.compose.ui.test.performTextReplacement
 import androidx.compose.ui.unit.Dp
 import androidx.compose.ui.unit.dp
 import androidx.test.ext.junit.runners.AndroidJUnit4
 import java.time.DayOfWeek
+import java.time.LocalTime
 import java.time.format.TextStyle
 import java.util.Locale
 import org.junit.Assert.assertEquals
@@ -24,6 +36,10 @@ import org.junit.Rule
 import org.junit.Test
 import org.junit.runner.RunWith
 import se.blick.app.R
+import se.blick.app.data.repository.DirectionOption
+import se.blick.app.domain.model.Site
+import se.blick.app.domain.model.TransportMode
+import se.blick.app.ui.theme.BlickTheme
 
 /**
  * Instrumented Compose UI test for [WeekdaySelector] — exercises it directly (an `internal`
@@ -35,12 +51,9 @@ import se.blick.app.R
  * width under test regardless of the real test device's own screen size — deliberately, so
  * "narrow" and "wide" here test [WeekdaySelector]'s own responsive *logic* at fixed measured
  * constraints, not whatever width a given physical device happens to have. This matters
- * because a real device is not guaranteed to be either: a Galaxy S23 Ultra's own portrait
- * content width (~384dp at its native density) is itself *narrower* than
- * [WEEKDAY_SINGLE_ROW_MIN_WIDTH] — a perfectly ordinary flagship phone, but not a stand-in
- * for "wide" — so a "wide" case that merely coerced down to whatever the device provides
- * (via plain [androidx.compose.foundation.layout.width]) would silently stop testing the
- * single-row branch at all on that hardware.
+ * because a real device is not guaranteed to be either. The responsive cases explicitly
+ * exercise the 348dp inner-card width available on a Galaxy S23 Ultra-sized viewport and a
+ * narrower 320dp constraint, as well as a tablet constraint.
  *
  * The one thing [requiredWidth] does trade away is [assertIsDisplayed] for the "wide" cases:
  * a forced 900dp width can genuinely exceed a real phone's own visible viewport, and
@@ -63,8 +76,46 @@ class RoutineCreateScreenTest {
 
     private fun setContentAtWidth(width: Dp, activeDays: Set<DayOfWeek> = emptySet(), onToggleDay: (DayOfWeek) -> Unit = {}) {
         composeRule.setContent {
-            Box(Modifier.requiredWidth(width).fillMaxHeight()) {
-                WeekdaySelector(activeDays = activeDays, onToggleDay = onToggleDay, locale = locale)
+            BlickTheme {
+                Box(Modifier.requiredWidth(width).fillMaxHeight()) {
+                    WeekdaySelector(activeDays = activeDays, onToggleDay = onToggleDay, locale = locale)
+                }
+            }
+        }
+    }
+
+    private fun validScheduleState(activeDays: Set<DayOfWeek> = setOf(DayOfWeek.MONDAY)) = RoutineCreateUiState(
+        step = RoutineCreateStep.SCHEDULE,
+        selectedSite = Site(1L, "T-Centralen", null, null, null, emptyList()),
+        selectedTransportMode = TransportMode.METRO,
+        selectedDirection = DirectionOption(13L, "13", TransportMode.METRO, 1, "Malarhojden"),
+        activeDays = activeDays,
+        startTime = LocalTime.of(7, 0),
+        endTime = LocalTime.of(9, 0),
+        name = "T-Centralen to Malarhojden",
+    )
+
+    private fun setScheduleContent(
+        initialState: RoutineCreateUiState = validScheduleState(),
+        darkTheme: Boolean = false,
+    ) {
+        composeRule.setContent {
+            BlickTheme(useDarkTheme = darkTheme) {
+                var state by remember { mutableStateOf(initialState) }
+                ScheduleStep(
+                    uiState = state,
+                    onToggleDay = { day ->
+                        state = state.copy(
+                            activeDays = if (day in state.activeDays) state.activeDays - day else state.activeDays + day,
+                        )
+                    },
+                    onStartTimeChanged = { state = state.copy(startTime = it) },
+                    onEndTimeChanged = { state = state.copy(endTime = it) },
+                    onNameChanged = { state = state.copy(name = it) },
+                    onLabelChanged = { state = state.copy(selectedLabel = it) },
+                    onSave = {},
+                    onRetryScheduling = {},
+                )
             }
         }
     }
@@ -77,6 +128,16 @@ class RoutineCreateScreenTest {
 
         labels.forEach { label ->
             composeRule.onNodeWithText(label).assertIsDisplayed()
+        }
+    }
+
+    @Test
+    fun atGalaxyS23UltraInnerWidth_allSevenDaysShareASingleRow() {
+        setContentAtWidth(348.dp)
+
+        val firstY = composeRule.onNodeWithText(labels[0]).fetchSemanticsNode().boundsInRoot.top
+        labels.drop(1).forEach { label ->
+            assertEquals(firstY, composeRule.onNodeWithText(label).fetchSemanticsNode().boundsInRoot.top, 1f)
         }
     }
 
@@ -107,6 +168,15 @@ class RoutineCreateScreenTest {
         listOf(labels[5], labels[6]).forEach { label ->
             assertEquals(secondRowY, composeRule.onNodeWithText(label).fetchSemanticsNode().boundsInRoot.top, 1f)
         }
+        val mondayWidth = composeRule.onNodeWithText(labels[0]).fetchSemanticsNode().boundsInRoot.width
+        listOf(labels[4], labels[5], labels[6]).forEach { label ->
+            assertEquals(
+                "expected second-row selectors to keep the same width as the first row",
+                mondayWidth,
+                composeRule.onNodeWithText(label).fetchSemanticsNode().boundsInRoot.width,
+                1f,
+            )
+        }
         assertTrue("expected the second row to be below the first", secondRowY > firstRowY)
     }
 
@@ -134,11 +204,138 @@ class RoutineCreateScreenTest {
     fun selectedDaysAreReflectedAtNarrowWidth() {
         setContentAtWidth(320.dp, activeDays = setOf(DayOfWeek.MONDAY, DayOfWeek.SUNDAY))
 
-        // FilterChip's own `selected` semantics are exposed as a toggleable/selected state;
-        // asserting the label still renders for both is enough to prove neither chip's
-        // content was clipped or replaced when selected, at the narrowest supported width.
+        // The selector's selected semantics are exposed as a toggleable/selected state;
+        // asserting the labels still render proves neither selected control is clipped or
+        // replaced at the narrowest supported width.
         composeRule.onNodeWithText(labels[0]).assertIsDisplayed()
         composeRule.onNodeWithText(labels[6]).assertIsDisplayed()
+    }
+
+    @Test
+    fun emptyDays_initiallyHideValidationAndDisableSave() {
+        setScheduleContent(validScheduleState(activeDays = emptySet()))
+
+        composeRule.onNodeWithTag("active-days-error").assertDoesNotExist()
+        composeRule.onNodeWithTag("save-routine-button").assertIsNotEnabled()
+    }
+
+    @Test
+    fun emptyDays_afterInteractionShowValidationUntilADayIsSelected() {
+        setScheduleContent(validScheduleState())
+
+        composeRule.onNodeWithTag("weekday-monday").performClick()
+        composeRule.onNodeWithTag("active-days-error").assertIsDisplayed()
+        composeRule.onNodeWithTag("save-routine-button").assertIsNotEnabled()
+
+        composeRule.onNodeWithTag("weekday-tuesday").performClick()
+        composeRule.onNodeWithTag("active-days-error").assertDoesNotExist()
+        composeRule.onNodeWithTag("save-routine-button").assertIsEnabled()
+    }
+
+    @Test
+    fun timeControlsExposeAccessibleDescriptionAndOpenExistingPicker() {
+        setScheduleContent()
+
+        composeRule.onNodeWithText(composeRule.activity.getString(R.string.routine_create_start_label)).assertIsDisplayed()
+        composeRule.onNodeWithText(composeRule.activity.getString(R.string.routine_create_end_label)).assertIsDisplayed()
+        val startLabel = composeRule.activity.getString(R.string.routine_create_start_time_label)
+        val description = composeRule.activity.getString(
+            R.string.routine_create_time_control_description,
+            startLabel,
+            "07:00",
+        )
+        composeRule.onNodeWithContentDescription(description).performClick()
+
+        composeRule.onNodeWithText(composeRule.activity.getString(android.R.string.ok)).assertIsDisplayed()
+    }
+
+    @Test
+    fun routineNameRemainsSingleLineAndHandlesImeDone() {
+        setScheduleContent()
+
+        val routineNameLabel = composeRule.activity.getString(R.string.routine_create_name_label)
+        composeRule.onAllNodesWithText(routineNameLabel).assertCountEquals(1)
+        composeRule.onNodeWithContentDescription(routineNameLabel).assertExists()
+
+        val nameField = composeRule.onNodeWithTag("routine-name-field")
+        nameField.performScrollTo()
+        nameField.performClick()
+        composeRule.onNodeWithTag("save-routine-button").assertIsDisplayed()
+        nameField.performTextReplacement("Morning commute")
+        nameField.performImeAction()
+
+        composeRule.onNodeWithText("Morning commute").assertIsDisplayed()
+    }
+
+    @Test
+    fun labelCardShowsEveryExistingLabelAndStickySave() {
+        setScheduleContent()
+
+        listOf(
+            R.string.routine_label_none,
+            R.string.routine_label_work,
+            R.string.routine_label_home,
+            R.string.routine_label_gym,
+            R.string.routine_label_study,
+            R.string.routine_label_hobby,
+            R.string.routine_label_other,
+        ).forEach { labelRes ->
+            composeRule.onNodeWithText(composeRule.activity.getString(labelRes)).performScrollTo().assertIsDisplayed()
+        }
+        val school = composeRule.onNodeWithText(composeRule.activity.getString(R.string.routine_label_study))
+        school.performClick()
+        school.assertIsSelected()
+        val noLabel = composeRule.onNodeWithText(composeRule.activity.getString(R.string.routine_label_none))
+        noLabel.performClick()
+        noLabel.assertIsSelected()
+        composeRule.onNodeWithTag("save-routine-button").assertIsDisplayed().assertIsEnabled()
+    }
+
+    @Test
+    fun scheduleCardsRenderInLightAndDarkThemes() {
+        var useDarkTheme by mutableStateOf(false)
+        composeRule.setContent {
+            BlickTheme(useDarkTheme = useDarkTheme) {
+                ScheduleStep(
+                    uiState = validScheduleState(),
+                    onToggleDay = {},
+                    onStartTimeChanged = {},
+                    onEndTimeChanged = {},
+                    onNameChanged = {},
+                    onLabelChanged = {},
+                    onSave = {},
+                    onRetryScheduling = {},
+                )
+            }
+        }
+        composeRule.onNodeWithTag("active-days-card").assertIsDisplayed()
+        composeRule.runOnIdle { useDarkTheme = true }
+        composeRule.onNodeWithTag("active-days-card").assertIsDisplayed()
+    }
+
+    @Test
+    fun createTitleAndSchoolLabelAreLocalizedInEnglishAndSwedish() {
+        val resources = composeRule.activity.resources
+        val english = android.content.res.Configuration(resources.configuration).apply {
+            setLocale(Locale.ENGLISH)
+        }
+        val swedish = android.content.res.Configuration(resources.configuration).apply {
+            setLocale(Locale.forLanguageTag("sv"))
+        }
+
+        val englishContext = composeRule.activity.createConfigurationContext(english)
+        assertEquals("Create routine", englishContext.getString(R.string.routine_create_step_schedule))
+        assertEquals("Days & time", englishContext.getString(R.string.routine_edit_step_schedule))
+        assertEquals("Start", englishContext.getString(R.string.routine_create_start_label))
+        assertEquals("End", englishContext.getString(R.string.routine_create_end_label))
+        assertEquals("School", englishContext.getString(R.string.routine_label_study))
+
+        val swedishContext = composeRule.activity.createConfigurationContext(swedish)
+        assertEquals("Skapa rutin", swedishContext.getString(R.string.routine_create_step_schedule))
+        assertEquals("Dagar och tid", swedishContext.getString(R.string.routine_edit_step_schedule))
+        assertEquals("Från", swedishContext.getString(R.string.routine_create_start_label))
+        assertEquals("Till", swedishContext.getString(R.string.routine_create_end_label))
+        assertEquals("Skola", swedishContext.getString(R.string.routine_label_study))
     }
 
     private fun setUnifiedOriginDestinationContent(hasPremium: Boolean, onOpenPremium: () -> Unit = {}) {

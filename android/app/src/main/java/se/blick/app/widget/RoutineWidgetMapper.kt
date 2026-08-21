@@ -45,6 +45,7 @@ object RoutineWidgetMapper {
             disruptionHeadline = topDisruption?.headline,
             disruptionUncertainLineDesignations = topDisruption?.uncertainLineDesignations ?: emptyList(),
             disruptionEffect = topDisruption?.effect,
+            label = routine.label,
         )
 
     /** No [LiveDeparturesState] counterpart exists for this case — see
@@ -60,6 +61,7 @@ object RoutineWidgetMapper {
             content = RoutineWidgetContent.NotificationsUnavailable,
             lineDesignation = routine.lineDesignation,
             transportMode = routine.transportMode,
+            label = routine.label,
         )
 
     private fun LiveDeparturesState.toWidgetContent(now: Instant): RoutineWidgetContent = when (this) {

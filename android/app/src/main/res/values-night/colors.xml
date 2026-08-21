@@ -6,6 +6,8 @@
     <color name="widget_preview_line_badge_red">#DB2925</color>
     <color name="widget_preview_line_badge_text">#FFFFFF</color>
     <color name="widget_preview_live_dot">#5FAE68</color>
+    <color name="widget_preview_label_home">#83D9A8</color>
+    <color name="widget_preview_label_container">#263A32</color>
     <color name="widget_preview_disruption_background">#4A2A27</color>
     <color name="widget_preview_disruption_text">#F0B8B2</color>
 </resources>

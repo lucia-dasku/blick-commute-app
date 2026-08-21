@@ -13,71 +13,80 @@ import se.blick.app.domain.model.TransportMode
 import java.time.Instant
 
 /**
- * Pure JVM tests for [isCompactLayout] and [LineBadgeColor.toBadgeColor] — no Android/Glance
+ * Pure JVM tests for [widgetLayoutRulesFor] and [LineBadgeColor.toBadgeColor] — no Android/Glance
  * dependency, since [androidx.compose.ui.unit.Dp] and [androidx.compose.ui.graphics.Color] are
  * both plain value classes usable outside any composition or Robolectric runtime, matching this
  * project's other pure-function test files.
  */
 class BlickRoutineWidgetTest {
 
-    // ---- isCompactLayout: width AND height each independently force compact ----
+    // ---- Exactly three canonical tiers, with safe nearest-smaller fallbacks ----
 
     @Test
-    fun `a short and wide size is compact -- height alone is below threshold`() {
-        assertTrue(isCompactLayout(width = 300.dp, height = 80.dp))
+    fun `2x2 bounds select Small with two-line routes and no secondary detail`() {
+        val rules = widgetLayoutRulesFor(width = 180.dp, height = 130.dp)
+
+        assertEquals(WidgetLayoutTier.SMALL, rules.tier)
+        assertEquals(2, rules.routeMaxLines)
+        assertTrue(rules.showRoutineLabel)
+        assertFalse(rules.showSecondary)
+        assertFalse(rules.showJourneyTimes)
+        assertFalse(rules.showDisruption)
     }
 
     @Test
-    fun `a narrow and tall size is compact -- width alone is below threshold`() {
-        assertTrue(isCompactLayout(width = 150.dp, height = 300.dp))
+    fun `a short 2x2 resize omits only the optional label rather than crowding the countdown`() {
+        val rules = widgetLayoutRulesFor(width = 180.dp, height = 119.dp)
+
+        assertEquals(WidgetLayoutTier.SMALL, rules.tier)
+        assertFalse(rules.showRoutineLabel)
     }
 
     @Test
-    fun `both dimensions comfortably above their thresholds is not compact`() {
-        assertFalse(isCompactLayout(width = 300.dp, height = 200.dp))
+    fun `3x2 bounds select Standard with label and Next but no journey times`() {
+        val rules = widgetLayoutRulesFor(width = 260.dp, height = 150.dp)
+
+        assertEquals(WidgetLayoutTier.STANDARD, rules.tier)
+        assertEquals(1, rules.routeMaxLines)
+        assertTrue(rules.showRoutineLabel)
+        assertTrue(rules.showSecondary)
+        assertFalse(rules.showJourneyTimes)
+        assertFalse(rules.showDisruption)
     }
 
     @Test
-    fun `both dimensions below their thresholds is still just compact, not double-compact`() {
-        assertTrue(isCompactLayout(width = 150.dp, height = 80.dp))
+    fun `a taller Standard placement preserves the existing size-appropriate disruption strip`() {
+        val rules = widgetLayoutRulesFor(width = 260.dp, height = 180.dp)
+
+        assertEquals(WidgetLayoutTier.STANDARD, rules.tier)
+        assertTrue(rules.showDisruption)
     }
 
     @Test
-    fun `exactly at the height threshold is not yet compact by height`() {
-        assertFalse(isCompactLayout(width = 300.dp, height = 110.dp))
+    fun `4x4 bounds select Large with full route times Next and disruption`() {
+        val rules = widgetLayoutRulesFor(width = 340.dp, height = 260.dp)
+
+        assertEquals(WidgetLayoutTier.LARGE, rules.tier)
+        assertEquals(2, rules.routeMaxLines)
+        assertTrue(rules.showRoutineLabel)
+        assertTrue(rules.showSecondary)
+        assertTrue(rules.showJourneyTimes)
+        assertTrue(rules.showDisruption)
     }
 
     @Test
-    fun `just below the height threshold is compact`() {
-        assertTrue(isCompactLayout(width = 300.dp, height = 109.dp))
+    fun `large width with insufficient height safely falls back to Standard`() {
+        assertEquals(WidgetLayoutTier.STANDARD, widgetLayoutRulesFor(width = 340.dp, height = 219.dp).tier)
     }
 
     @Test
-    fun `exactly at the width threshold is not yet compact by width`() {
-        assertFalse(isCompactLayout(width = 220.dp, height = 200.dp))
+    fun `large height with insufficient width safely falls back to Standard`() {
+        assertEquals(WidgetLayoutTier.STANDARD, widgetLayoutRulesFor(width = 299.dp, height = 260.dp).tier)
     }
 
     @Test
-    fun `just below the width threshold is compact`() {
-        assertTrue(isCompactLayout(width = 219.dp, height = 200.dp))
-    }
-
-    // ---- res/xml/blick_routine_widget_info_compact.xml's own declared maxResizeWidth/
-    // maxResizeHeight must stay strictly below this function's thresholds, not merely equal to
-    // them -- an earlier version of that file capped at exactly 220dp/110dp, which this
-    // function's own "exactly at the threshold is not yet compact" tests above already prove is
-    // one dp too permissive: at precisely that size, the real widget would render the FULLER
-    // layout at its own declared maximum resize, the one size the "Compact" picker entry most
-    // needs to stay compact. These two constants are hardcoded to match that XML file's own
-    // android:maxResizeWidth/maxResizeHeight exactly (not read from the resource itself, which
-    // would need a Robolectric/Android Context) specifically so a future edit to either side
-    // without the other has a fair chance of being caught here.
-    private val compactProviderMaxResizeWidth = 219.dp
-    private val compactProviderMaxResizeHeight = 109.dp
-
-    @Test
-    fun `the compact provider's own declared maximum resize stays compact`() {
-        assertTrue(isCompactLayout(compactProviderMaxResizeWidth, compactProviderMaxResizeHeight))
+    fun `narrow launcher bounds safely select Small regardless of extra height`() {
+        assertEquals(WidgetLayoutTier.SMALL, widgetLayoutRulesFor(width = 219.dp, height = 260.dp).tier)
     }
 
     // ---- Line-badge colors: WCAG AA 4.5:1 contrast against the white badge text ----
@@ -129,7 +138,7 @@ class BlickRoutineWidgetTest {
 
     // ---- resolveEffectiveModel: render-time alternative-promotion matrix ----
     //
-    // Pure JVM tests, same rationale as isCompactLayout above -- RoutineWidgetModel/
+    // Pure JVM tests, same rationale as widgetLayoutRulesFor above -- RoutineWidgetModel/
     // RoutineWidgetContent/WidgetJourneyRow are plain data classes usable with no Glance/Android
     // dependency at all.
 
