@@ -93,13 +93,14 @@ class BlickRoutineWidgetTest {
     // ---- Inactive-state artwork stays subordinate to content at every supported size. ----
 
     @Test
-    fun `very compact inactive bounds omit skyline while canonical Small uses its simplified asset`() {
+    fun `very compact inactive bounds omit skyline while canonical Small uses the approved asset`() {
         val compact = inactiveWidgetLayoutFor(width = 110.dp, height = 80.dp)
         val canonicalSmall = inactiveWidgetLayoutFor(width = 180.dp, height = 130.dp)
 
         assertNull(compact.skylineResourceId)
-        assertEquals(R.drawable.widget_inactive_skyline, canonicalSmall.skylineResourceId)
-        assertTrue(inactiveSkylineHeightFor(180.dp, canonicalSmall)!! in 23.dp..24.dp)
+        assertEquals(R.drawable.widget_inactive_skyline_approved, canonicalSmall.skylineResourceId)
+        assertTrue(inactiveSkylineHeightFor(180.dp, canonicalSmall)!! in 56.dp..57.dp)
+        assertEquals(22.dp, canonicalSmall.brandingTopPadding)
         assertTrue(compact.logoViewportHeight < canonicalSmall.logoViewportHeight)
     }
 

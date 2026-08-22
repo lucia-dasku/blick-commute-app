@@ -268,9 +268,9 @@ private val INACTIVE_WIDGET_PRIMARY = ColorProvider(Color.White)
 private val INACTIVE_WIDGET_SECONDARY = ColorProvider(Color(0xFFC5C8CF))
 private val INACTIVE_WIDGET_MINT = ColorProvider(Color(0xFF33E4A1))
 
-/** Responsive presentation values for the branded inactive state. Canonical compact bounds use
- * a simplified skyline; exceptionally small or unusually short bounds drop it so the logo and
- * localized status can never be crowded or overlap it. */
+/** Responsive presentation values for the branded inactive state. All canonical sizes use the
+ * approved skyline; exceptionally small or unusually short bounds drop it so the logo and
+ * localized status can never be crowded. */
 internal data class InactiveWidgetLayout(
     val logoViewportWidth: Dp,
     val logoViewportHeight: Dp,
@@ -356,9 +356,9 @@ internal fun inactiveWidgetLayoutFor(width: Dp, height: Dp): InactiveWidgetLayou
             logoBrandGap = 2.dp,
             brandStatusGap = 2.dp,
             horizontalPadding = 8.dp,
-            brandingTopPadding = 10.dp,
-            skylineResourceId = R.drawable.widget_inactive_skyline,
-            skylineAspectRatio = 360f / 52f,
+            brandingTopPadding = 22.dp,
+            skylineResourceId = R.drawable.widget_inactive_skyline_approved,
+            skylineAspectRatio = 2128f / 739f,
         )
     }
 }
