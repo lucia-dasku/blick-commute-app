@@ -261,7 +261,7 @@
     <string name="notification_action_stop">Stoppa</string>
 
 
-    <string name="widget_no_active_commute">Ingen aktiv pendling.</string>
+    <string name="widget_no_active_commute">Ingen aktiv pendling</string>
     <string name="widget_description">Visar nästa avgångar när din pendlingsrutin är aktiv.</string>
     <string name="widget_label_compact">Blick Liten</string>
     <string name="widget_label_standard">Blick Standard</string>

@@ -1,5 +1,6 @@
 package se.blick.app.widget
 
+import android.content.res.Configuration
 import androidx.compose.ui.unit.DpSize
 import androidx.compose.ui.unit.dp
 import androidx.glance.appwidget.testing.unit.runGlanceAppWidgetUnitTest
@@ -21,6 +22,7 @@ import se.blick.app.notification.disruptionEffectLabelRes
 import java.time.Instant
 import java.time.ZoneId
 import java.time.format.DateTimeFormatter
+import java.util.Locale
 
 /**
  * Renders [BlickWidgetContent] — the exact composable [BlickRoutineWidget.provideGlance] calls —
@@ -106,6 +108,51 @@ class BlickRoutineWidgetRenderTest {
     private fun lineRelevantSingleText(line: String) = context.getString(R.string.notification_disruption_line_relevant_single_format, line)
     private fun lineRelevantGenericText() = context.getString(R.string.notification_disruption_line_relevant_generic)
     private fun effectText(effect: DisruptionEffect) = context.getString(disruptionEffectLabelRes(effect))
+
+    // ---- Branded inactive state: real Glance composition at each responsive shape. ----
+
+    @Test
+    fun `compact inactive widget renders its resource-backed brand and status without requiring skyline space`() =
+        runGlanceAppWidgetUnitTest {
+            setContext(context)
+            setAppWidgetSize(DpSize(110.dp, 80.dp))
+            provideComposable { BlickWidgetContent(RoutineWidgetUiState.NoActiveCommute, now) }
+
+            onNode(hasTextEqualTo(context.getString(R.string.app_name))).assertExists()
+            onNode(hasTextEqualTo(context.getString(R.string.widget_no_active_commute))).assertExists()
+        }
+
+    @Test
+    fun `standard inactive widget renders its resource-backed brand and status`() =
+        runGlanceAppWidgetUnitTest {
+            setContext(context)
+            setAppWidgetSize(DpSize(260.dp, 150.dp))
+            provideComposable { BlickWidgetContent(RoutineWidgetUiState.NoActiveCommute, now) }
+
+            onNode(hasTextEqualTo(context.getString(R.string.app_name))).assertExists()
+            onNode(hasTextEqualTo(context.getString(R.string.widget_no_active_commute))).assertExists()
+        }
+
+    @Test
+    fun `large inactive widget renders its resource-backed brand and status`() =
+        runGlanceAppWidgetUnitTest {
+            setContext(context)
+            setAppWidgetSize(DpSize(340.dp, 260.dp))
+            provideComposable { BlickWidgetContent(RoutineWidgetUiState.NoActiveCommute, now) }
+
+            onNode(hasTextEqualTo(context.getString(R.string.app_name))).assertExists()
+            onNode(hasTextEqualTo(context.getString(R.string.widget_no_active_commute))).assertExists()
+        }
+
+    @Test
+    fun `inactive status resources omit punctuation in English and Swedish`() {
+        fun localizedContext(language: String) = context.createConfigurationContext(
+            Configuration(context.resources.configuration).apply { setLocale(Locale.forLanguageTag(language)) },
+        )
+
+        assertEquals("No active commute", localizedContext("en").getString(R.string.widget_no_active_commute))
+        assertEquals("Ingen aktiv pendling", localizedContext("sv").getString(R.string.widget_no_active_commute))
+    }
 
     // ---- Canonical launcher sizes: the real Glance tree exposes the exact fields assigned to
     // each supported tier. Pure rule tests separately pin the small route to two lines. ----

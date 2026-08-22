@@ -157,6 +157,8 @@ fun RoutineListContent(
                         else -> showOneRoutineLimitDialog = true
                     }
                 },
+                containerColor = MaterialTheme.colorScheme.primary,
+                contentColor = MaterialTheme.colorScheme.onPrimary,
             ) {
                 Icon(Icons.Filled.Add, contentDescription = stringResource(R.string.routine_list_add))
             }

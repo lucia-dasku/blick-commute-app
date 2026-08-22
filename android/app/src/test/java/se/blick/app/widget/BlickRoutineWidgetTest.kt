@@ -7,6 +7,7 @@ import org.junit.Assert.assertFalse
 import org.junit.Assert.assertNull
 import org.junit.Assert.assertTrue
 import org.junit.Test
+import se.blick.app.R
 import se.blick.app.domain.model.ExactDestinationChangesPreference
 import se.blick.app.domain.model.JourneyRole
 import se.blick.app.domain.model.TransportMode
@@ -87,6 +88,38 @@ class BlickRoutineWidgetTest {
     @Test
     fun `narrow launcher bounds safely select Small regardless of extra height`() {
         assertEquals(WidgetLayoutTier.SMALL, widgetLayoutRulesFor(width = 219.dp, height = 260.dp).tier)
+    }
+
+    // ---- Inactive-state artwork stays subordinate to content at every supported size. ----
+
+    @Test
+    fun `very compact inactive bounds omit skyline while canonical Small uses the approved asset`() {
+        val compact = inactiveWidgetLayoutFor(width = 110.dp, height = 80.dp)
+        val canonicalSmall = inactiveWidgetLayoutFor(width = 180.dp, height = 130.dp)
+
+        assertNull(compact.skylineResourceId)
+        assertEquals(R.drawable.widget_inactive_skyline_approved, canonicalSmall.skylineResourceId)
+        assertTrue(inactiveSkylineHeightFor(180.dp, canonicalSmall)!! in 65.dp..66.dp)
+        assertEquals(22.dp, canonicalSmall.brandingTopPadding)
+        assertTrue(compact.logoViewportHeight < canonicalSmall.logoViewportHeight)
+    }
+
+    @Test
+    fun `standard inactive bounds show the full skyline at its natural aspect ratio`() {
+        val standard = inactiveWidgetLayoutFor(width = 260.dp, height = 150.dp)
+
+        assertEquals(R.drawable.widget_inactive_skyline_approved, standard.skylineResourceId)
+        assertTrue(inactiveSkylineHeightFor(260.dp, standard)!! in 94.dp..95.dp)
+    }
+
+    @Test
+    fun `large inactive bounds expand branding and full-width skyline without adding a new tier`() {
+        val standard = inactiveWidgetLayoutFor(width = 260.dp, height = 150.dp)
+        val large = inactiveWidgetLayoutFor(width = 340.dp, height = 260.dp)
+
+        assertEquals(R.drawable.widget_inactive_skyline_approved, large.skylineResourceId)
+        assertTrue(inactiveSkylineHeightFor(340.dp, large)!! in 123.dp..124.dp)
+        assertTrue(large.logoViewportHeight > standard.logoViewportHeight)
     }
 
     // ---- Line-badge colors: WCAG AA 4.5:1 contrast against the white badge text ----
