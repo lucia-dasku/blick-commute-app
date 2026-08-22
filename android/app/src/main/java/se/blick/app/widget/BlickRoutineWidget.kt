@@ -267,6 +267,8 @@ private val INACTIVE_WIDGET_BACKGROUND = ColorProvider(Color(0xFF010C2F))
 private val INACTIVE_WIDGET_PRIMARY = ColorProvider(Color.White)
 private val INACTIVE_WIDGET_SECONDARY = ColorProvider(Color(0xFFC5C8CF))
 private val INACTIVE_WIDGET_MINT = ColorProvider(Color(0xFF33E4A1))
+private val INACTIVE_WIDGET_WATER_HEIGHT = 12.dp
+private const val INACTIVE_WIDGET_SKYLINE_DISPLAY_ASPECT_RATIO = 2.75f
 
 /** Responsive presentation values for the branded inactive state. All canonical sizes use the
  * approved skyline; exceptionally small or unusually short bounds drop it so the logo and
@@ -289,7 +291,7 @@ internal data class InactiveWidgetLayout(
  * fixed height. The result spans the usable width and lands exactly on the widget's bottom edge. */
 internal fun inactiveSkylineHeightFor(width: Dp, layout: InactiveWidgetLayout): Dp? {
     val aspectRatio = layout.skylineAspectRatio ?: return null
-    return (width - layout.horizontalPadding - layout.horizontalPadding) / aspectRatio
+    return width / aspectRatio
 }
 
 internal fun inactiveWidgetLayoutFor(width: Dp, height: Dp): InactiveWidgetLayout {
@@ -306,7 +308,7 @@ internal fun inactiveWidgetLayoutFor(width: Dp, height: Dp): InactiveWidgetLayou
             horizontalPadding = 12.dp,
             brandingTopPadding = 24.dp,
             skylineResourceId = R.drawable.widget_inactive_skyline_approved,
-            skylineAspectRatio = 2128f / 739f,
+            skylineAspectRatio = INACTIVE_WIDGET_SKYLINE_DISPLAY_ASPECT_RATIO,
         )
         tier == WidgetLayoutTier.STANDARD && height >= 140.dp -> InactiveWidgetLayout(
             logoViewportWidth = 52.dp,
@@ -319,7 +321,7 @@ internal fun inactiveWidgetLayoutFor(width: Dp, height: Dp): InactiveWidgetLayou
             horizontalPadding = 8.dp,
             brandingTopPadding = 16.dp,
             skylineResourceId = R.drawable.widget_inactive_skyline_approved,
-            skylineAspectRatio = 2128f / 739f,
+            skylineAspectRatio = INACTIVE_WIDGET_SKYLINE_DISPLAY_ASPECT_RATIO,
         )
         tier == WidgetLayoutTier.STANDARD -> InactiveWidgetLayout(
             logoViewportWidth = 40.dp,
@@ -358,7 +360,7 @@ internal fun inactiveWidgetLayoutFor(width: Dp, height: Dp): InactiveWidgetLayou
             horizontalPadding = 8.dp,
             brandingTopPadding = 22.dp,
             skylineResourceId = R.drawable.widget_inactive_skyline_approved,
-            skylineAspectRatio = 2128f / 739f,
+            skylineAspectRatio = INACTIVE_WIDGET_SKYLINE_DISPLAY_ASPECT_RATIO,
         )
     }
 }
@@ -408,24 +410,32 @@ private fun NoActiveCommuteContent() {
     val layout = inactiveWidgetLayoutFor(size.width, size.height)
     val skylineHeight = inactiveSkylineHeightFor(size.width, layout)
     Box(
-        modifier = GlanceModifier
-            .fillMaxSize()
-            .padding(
-                start = layout.horizontalPadding,
-                end = layout.horizontalPadding,
-            ),
+        modifier = GlanceModifier.fillMaxSize(),
         contentAlignment = Alignment.BottomCenter,
     ) {
         if (layout.skylineResourceId != null && skylineHeight != null) {
-            Image(
-                provider = ImageProvider(layout.skylineResourceId),
-                contentDescription = null,
-                modifier = GlanceModifier.fillMaxWidth().height(skylineHeight),
-                contentScale = ContentScale.Fit,
-            )
+            Column(horizontalAlignment = Alignment.CenterHorizontally) {
+                Image(
+                    provider = ImageProvider(layout.skylineResourceId),
+                    contentDescription = null,
+                    modifier = GlanceModifier.fillMaxWidth().height(skylineHeight),
+                    contentScale = ContentScale.Crop,
+                )
+                Image(
+                    provider = ImageProvider(R.drawable.widget_inactive_water),
+                    contentDescription = null,
+                    modifier = GlanceModifier.fillMaxWidth().height(INACTIVE_WIDGET_WATER_HEIGHT),
+                    contentScale = ContentScale.FillBounds,
+                )
+            }
         }
         Box(
-            modifier = GlanceModifier.fillMaxSize(),
+            modifier = GlanceModifier
+                .fillMaxSize()
+                .padding(
+                    start = layout.horizontalPadding,
+                    end = layout.horizontalPadding,
+                ),
             contentAlignment = if (skylineHeight == null) Alignment.Center else Alignment.TopCenter,
         ) {
             Column(
