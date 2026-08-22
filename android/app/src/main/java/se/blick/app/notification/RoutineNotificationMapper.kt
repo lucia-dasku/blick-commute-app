@@ -2,6 +2,7 @@ package se.blick.app.notification
 
 import se.blick.app.domain.model.CommuteRoutine
 import se.blick.app.domain.model.DisruptionPresentation
+import se.blick.app.domain.model.routeLabels
 import se.blick.app.domain.usecase.LiveDeparturesSnapshot
 import se.blick.app.domain.usecase.LiveDeparturesState
 import se.blick.app.domain.usecase.PreparedDeparture
@@ -47,18 +48,20 @@ object RoutineNotificationMapper {
         departuresState: LiveDeparturesState,
         now: Instant,
         topDisruption: DisruptionPresentation? = null,
-    ): RoutineNotificationModel =
-        RoutineNotificationModel(
+    ): RoutineNotificationModel {
+        val routeLabels = routine.routeLabels()
+        return RoutineNotificationModel(
             routineId = routine.id,
-            stationName = routine.siteName,
+            stationName = routeLabels.origin,
             lineLabel = routine.lineDesignation,
-            directionLabel = routine.destinationLabel,
+            directionLabel = routeLabels.destination,
             content = departuresState.toContent(now),
             disruptionHeadline = topDisruption?.headline,
             disruptionDetails = topDisruption?.details,
             disruptionEffect = topDisruption?.effect,
             disruptionUncertainLineDesignations = topDisruption?.uncertainLineDesignations ?: emptyList(),
         )
+    }
 
     private fun LiveDeparturesState.toContent(now: Instant): RoutineNotificationContent = when (this) {
         is LiveDeparturesState.Loading -> RoutineNotificationContent.Loading

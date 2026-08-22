@@ -431,6 +431,7 @@ class RoutineActiveWindowWorkerTest {
          * given — used by the exact-destination tests below to prove the worker passes the SAME
          * already-filtered list (and the same instant) here as it used for the notification. */
         val journeysUpdateCalls = mutableListOf<Pair<List<JourneyPlan>, Instant>>()
+        val journeyRoutinesAtUpdate = mutableListOf<CommuteRoutine>()
         /** Every [updateWithJourneys] call's own [fetchFailed] argument, in the same order as
          * [journeysUpdateCalls] — a separate parallel list (matching [disruptionsAtUpdate]'s own
          * existing pattern alongside [updateCalls]) rather than changing [journeysUpdateCalls]'s
@@ -448,6 +449,7 @@ class RoutineActiveWindowWorkerTest {
         var clearCallCount = 0
         var reconcileCallCount = 0
         override suspend fun updateWithJourneys(routine: CommuteRoutine, journeys: List<JourneyPlan>, now: Instant, fetchFailed: Boolean) {
+            journeyRoutinesAtUpdate += routine
             journeysUpdateCalls += journeys to now
             journeysFetchFailedAtUpdate += fetchFailed
         }
@@ -3794,6 +3796,64 @@ class RoutineActiveWindowWorkerTest {
         // proving both surfaces shared one eligibility decision AND one timestamp, not two
         // independently-read ones that merely happened not to disagree this time.
         assertEquals(notificationDeparture.minutesRemaining, countdownMinutes(nowAtUpdate, upcomingJourney.departureTime))
+    }
+
+    @Test
+    fun `the next active tick posts an edited exact route from Room to both notification and widget`() = runTest {
+        val clock = TickingClock(Instant.parse("2026-07-27T05:00:00Z"), zone)
+        val original = exactDestinationRoutine()
+        val edited = original.copy(
+            siteId = 9301,
+            siteName = "Akalla",
+            journeyOriginId = "akalla-id",
+            journeyOriginName = "Akalla",
+            journeyDestinationId = "slussen-id",
+            journeyDestinationName = "Slussen",
+        )
+        // Initial validation and the first live tick see the old row. The next tick models the
+        // completed Room upsert from edit-save and must use that newly persisted identity.
+        val repository = ScriptedRoutineRepository(clock) { callIndex ->
+            if (callIndex < 2) original else edited
+        }
+        val firstLeg = exactJourney("primary", Instant.parse("2026-07-27T05:05:00Z")).firstLeg.copy(
+            direction = "Kungstradgarden",
+            originName = "Akalla",
+            destinationName = "T-Centralen",
+        )
+        val primary = exactJourney("primary", Instant.parse("2026-07-27T05:05:00Z")).copy(
+            originName = "Akalla",
+            destinationName = "Slussen",
+            firstLeg = firstLeg,
+            legs = listOf(firstLeg),
+        )
+        val notifier = RecordingNotifier()
+        val widgetUpdater = RecordingWidgetUpdater()
+        val worker = buildWorker(
+            edited.id,
+            repository,
+            GetLiveDeparturesUseCase(FakeDepartureRepository { error("unused") }, clock),
+            notifier,
+            RecordingScheduler(),
+            clock,
+            widgetUpdater = widgetUpdater,
+            getRankedJourneys = GetRankedJourneysUseCase(
+                FakeJourneyRepository(listOf(primary)),
+                Clock.fixed(Instant.parse("2026-07-27T05:00:30Z"), zone),
+            ),
+        )
+
+        worker.doWork()
+
+        val updatedNotification = notifier.shown.last()
+        val updatedWidgetRoutine = widgetUpdater.journeyRoutinesAtUpdate.last()
+        assertEquals("Akalla", updatedNotification.stationName)
+        assertEquals("Slussen", updatedNotification.directionLabel)
+        assertEquals("14", updatedNotification.lineLabel)
+        assertEquals("Akalla", updatedWidgetRoutine.journeyOriginName)
+        assertEquals("Slussen", updatedWidgetRoutine.journeyDestinationName)
+        assertEquals(updatedNotification.stationName, updatedWidgetRoutine.journeyOriginName)
+        assertEquals(updatedNotification.directionLabel, updatedWidgetRoutine.journeyDestinationName)
+        assertTrue(updatedNotification.directionLabel != "Kungstradgarden")
     }
 
     @Test

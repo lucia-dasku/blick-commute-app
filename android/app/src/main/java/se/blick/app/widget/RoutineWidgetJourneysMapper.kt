@@ -3,6 +3,7 @@ package se.blick.app.widget
 import se.blick.app.domain.model.CommuteRoutine
 import se.blick.app.domain.model.DisruptionPresentation
 import se.blick.app.domain.model.JourneyPlan
+import se.blick.app.domain.model.routeLabels
 import se.blick.app.domain.usecase.effectiveFirstDeparture
 import se.blick.app.domain.usecase.filterCurrentJourneys
 import java.time.Instant
@@ -49,6 +50,7 @@ internal fun decideJourneysWidgetState(
      * own docs for what each one actually drives at render time. */
     disruption: DisruptionPresentation? = null,
 ): RoutineWidgetUiState {
+    val routeLabels = routine.routeLabels()
     val rows = journeys.filterCurrentJourneys(now).take(2).map { journey ->
         WidgetJourneyRow(
             journey.firstLeg.lineDesignation,
@@ -65,8 +67,8 @@ internal fun decideJourneysWidgetState(
         RoutineWidgetModel(
             routineId = routine.id,
             routineName = routine.name,
-            stationName = routine.journeyOriginName ?: routine.siteName,
-            directionLabel = routine.journeyDestinationName,
+            stationName = routeLabels.origin,
+            directionLabel = routeLabels.destination,
             content = if (fetchFailed) RoutineWidgetContent.Unavailable else RoutineWidgetContent.NoUpcomingDepartures(now),
             label = routine.label,
         ),
@@ -75,8 +77,8 @@ internal fun decideJourneysWidgetState(
         RoutineWidgetModel(
             routineId = routine.id,
             routineName = routine.name,
-            stationName = routine.journeyOriginName ?: routine.siteName,
-            directionLabel = routine.journeyDestinationName,
+            stationName = routeLabels.origin,
+            directionLabel = routeLabels.destination,
             content = RoutineWidgetContent.Journeys(primary, rows.getOrNull(1), routine.changesPreference),
             lineDesignation = primary.lineDesignation,
             transportMode = primary.transportMode,
