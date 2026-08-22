@@ -7,6 +7,7 @@ import org.junit.Assert.assertFalse
 import org.junit.Assert.assertNull
 import org.junit.Assert.assertTrue
 import org.junit.Test
+import se.blick.app.R
 import se.blick.app.domain.model.ExactDestinationChangesPreference
 import se.blick.app.domain.model.JourneyRole
 import se.blick.app.domain.model.TransportMode
@@ -92,28 +93,31 @@ class BlickRoutineWidgetTest {
     // ---- Inactive-state artwork stays subordinate to content at every supported size. ----
 
     @Test
-    fun `very compact inactive bounds use reduced branding and omit skyline`() {
+    fun `very compact inactive bounds omit skyline while canonical Small uses its simplified asset`() {
         val compact = inactiveWidgetLayoutFor(width = 110.dp, height = 80.dp)
         val canonicalSmall = inactiveWidgetLayoutFor(width = 180.dp, height = 130.dp)
 
-        assertNull(compact.skylineHeight)
-        assertNull(canonicalSmall.skylineHeight)
+        assertNull(compact.skylineResourceId)
+        assertEquals(R.drawable.widget_inactive_skyline, canonicalSmall.skylineResourceId)
+        assertTrue(inactiveSkylineHeightFor(180.dp, canonicalSmall)!! in 23.dp..24.dp)
         assertTrue(compact.logoViewportHeight < canonicalSmall.logoViewportHeight)
     }
 
     @Test
-    fun `standard inactive bounds show a restrained skyline`() {
+    fun `standard inactive bounds show the full skyline at its natural aspect ratio`() {
         val standard = inactiveWidgetLayoutFor(width = 260.dp, height = 150.dp)
 
-        assertEquals(28.dp, standard.skylineHeight)
+        assertEquals(R.drawable.widget_inactive_skyline_approved, standard.skylineResourceId)
+        assertTrue(inactiveSkylineHeightFor(260.dp, standard)!! in 84.dp..85.dp)
     }
 
     @Test
-    fun `large inactive bounds expand both branding and skyline without adding a new tier`() {
+    fun `large inactive bounds expand branding and full-width skyline without adding a new tier`() {
         val standard = inactiveWidgetLayoutFor(width = 260.dp, height = 150.dp)
         val large = inactiveWidgetLayoutFor(width = 340.dp, height = 260.dp)
 
-        assertEquals(54.dp, large.skylineHeight)
+        assertEquals(R.drawable.widget_inactive_skyline_approved, large.skylineResourceId)
+        assertTrue(inactiveSkylineHeightFor(340.dp, large)!! in 109.dp..110.dp)
         assertTrue(large.logoViewportHeight > standard.logoViewportHeight)
     }
 

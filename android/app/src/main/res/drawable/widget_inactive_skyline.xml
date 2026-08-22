@@ -1,34 +1,44 @@
 <?xml version="1.0" encoding="utf-8"?>
-<!-- Decorative, transparent Stockholm-inspired skyline for the inactive widget state. The
-     widget's own navy surface remains authoritative; these deliberately low-contrast layers and
-     sparse mint windows provide depth without competing with the logo or status text. -->
+<!-- Transparent Stockholm silhouette for Standard and Large inactive widgets. -->
 <vector xmlns:android="http://schemas.android.com/apk/res/android"
     android:width="360dp"
-    android:height="72dp"
+    android:height="60dp"
     android:viewportWidth="360"
-    android:viewportHeight="72">
+    android:viewportHeight="60">
 
-    <!-- Distant roofline. -->
+    <!-- Rear waterfront roofline in a quiet navy tone. -->
     <path
-        android:fillAlpha="0.50"
+        android:fillAlpha="0.52"
         android:fillColor="#183166"
-        android:pathData="M0,50 L13,50 L13,43 L24,43 L24,48 L34,48 L34,38 L43,38 L43,46 L55,46 L55,41 L68,41 L68,49 L82,49 L82,34 L95,34 L95,45 L107,45 L107,39 L120,39 L120,48 L136,48 L136,31 L146,31 L146,46 L161,46 L161,42 L174,42 L174,50 L190,50 L190,39 L201,39 L201,47 L216,47 L216,43 L230,43 L230,49 L244,49 L244,36 L258,36 L258,47 L272,47 L272,40 L286,40 L286,49 L301,49 L301,32 L314,32 L314,47 L329,47 L329,39 L340,39 L340,50 L360,50 L360,72 L0,72 Z" />
+        android:pathData="M0,60 L0,48 L13,48 L13,45 L28,45 L28,49 L42,49 L42,44 L58,44 L58,48 L76,48 L76,43 L92,43 L92,47 L111,47 L111,44 L126,44 L126,49 L140,49 L140,42 L155,42 L155,47 L172,47 L172,43 L188,43 L188,49 L204,49 L204,44 L221,44 L221,48 L239,48 L239,43 L255,43 L255,47 L273,47 L273,44 L290,44 L290,49 L307,49 L307,43 L323,43 L323,47 L340,47 L340,44 L360,44 L360,60 Z" />
 
-    <!-- Foreground buildings, including a simplified Stadshuset tower and Globen dome. -->
+    <!-- Stadshuset: long civic hall and a dominant, narrow tower at the left. -->
     <path
-        android:fillAlpha="0.82"
+        android:fillAlpha="0.92"
         android:fillColor="#14275B"
-        android:pathData="M0,57 L18,57 L18,48 L29,48 L29,57 L35,57 L35,31 L39,27 L39,20 L41,14 L43,20 L43,27 L48,31 L48,57 L57,57 L57,44 L69,44 L69,57 L78,57 L78,50 L89,50 L89,57 L99,57 L99,41 L113,41 L113,57 L124,57 L124,47 L139,47 L139,57 L151,57 L151,37 L158,29 L165,37 L165,57 L177,57 L177,48 L191,48 L191,57 L201,57 C203,45 214,38 228,38 C242,38 253,45 255,57 L266,57 L266,47 L279,47 L279,57 L289,57 L289,43 L300,43 L300,57 L309,57 L309,35 L317,29 L325,35 L325,57 L336,57 L336,45 L348,45 L348,57 L360,57 L360,72 L0,72 Z" />
+        android:pathData="M4,60 L4,47 L28,47 L28,44 L31,44 L31,20 L34,18 L34,14 L38,12 L38,8 L42,6 L44,1 L46,6 L50,8 L50,12 L54,14 L54,18 L57,20 L57,44 L62,44 L62,47 L72,47 L72,42 L78,39 L116,39 L123,43 L123,60 Z M58,60 L58,49 L68,49 L68,60 Z" />
 
-    <!-- Subtle structural details on the tower and dome. -->
+    <!-- Gamla Stan: compact European roofline, varied gables, and three restrained spires. -->
     <path
-        android:fillAlpha="0.55"
+        android:fillAlpha="0.90"
+        android:fillColor="#14275B"
+        android:pathData="M123,60 L123,48 L132,42 L141,48 L141,60 Z M141,60 L141,45 L153,45 L153,60 Z M153,60 L153,48 L161,43 L169,48 L169,60 Z M169,60 L169,34 L173,30 L176,19 L178,30 L182,34 L182,60 Z M182,60 L182,46 L193,46 L193,60 Z M193,60 L193,48 L202,42 L211,48 L211,60 Z M211,60 L211,45 L222,45 L222,60 Z M222,60 L222,31 L226,27 L229,10 L232,27 L236,31 L236,60 Z M236,60 L236,48 L245,43 L254,48 L254,60 Z M254,60 L254,49 L262,45 L270,49 L270,60 Z M270,60 L270,47 L281,47 L281,60 Z M281,60 L281,49 L290,44 L299,49 L299,60 Z M299,60 L299,36 L303,32 L306,20 L309,32 L313,36 L313,60 Z M313,60 L313,47 L325,47 L325,60 Z M325,60 L325,50 L334,45 L343,50 L343,60 Z M343,60 L343,46 L356,46 L356,60 Z M356,60 L360,60 Z" />
+
+    <!-- A low, secondary Globen dome on the center-right. -->
+    <path
+        android:fillAlpha="0.84"
+        android:fillColor="#183166"
+        android:pathData="M249,60 C251,49 260,42 272,42 C284,42 293,49 295,60 Z" />
+
+    <!-- Subtle architectural depth: roofs, tower cap, dome ribs, and waterfront baseline. -->
+    <path
+        android:fillAlpha="0.68"
         android:fillColor="#23447F"
-        android:pathData="M36,36 L47,36 L47,42 L36,42 Z M38,29 L45,29 L47,34 L36,34 Z M207,55 C209,47 217,43 228,43 C239,43 247,47 250,55 Z" />
+        android:pathData="M31,25 L57,25 L57,29 L31,29 Z M35,18 L53,18 L57,22 L31,22 Z M38,11 L50,11 L54,15 L34,15 Z M76,39 L116,39 L123,43 L72,43 Z M126,48 L132,43 L138,48 Z M156,48 L161,44 L166,48 Z M196,48 L202,43 L208,48 Z M239,48 L245,44 L251,48 Z M284,49 L290,45 L296,49 Z M252,58 C255,50 262,46 272,46 C282,46 289,50 292,58 Z M0,58 L360,58 L360,60 L0,60 Z" />
 
-    <!-- Sparse mint-lit windows and beacons. -->
+    <!-- Sparse Blick-mint lights; landmarks remain mostly dark and decorative. -->
     <path
-        android:fillAlpha="0.72"
+        android:fillAlpha="0.76"
         android:fillColor="#33E4A1"
-        android:pathData="M40,10 L42,10 L42,14 L40,14 Z M40,39 L43,39 L43,42 L40,42 Z M22,52 L24,52 L24,55 L22,55 Z M61,49 L63,49 L63,52 L61,52 Z M68,49 L70,49 L70,53 L68,53 Z M103,46 L106,46 L106,50 L103,50 Z M131,51 L134,51 L134,54 L131,54 Z M155,44 L158,44 L158,49 L155,49 Z M181,53 L184,53 L184,56 L181,56 Z M213,50 L216,50 L216,53 L213,53 Z M221,47 L224,47 L224,50 L221,50 Z M230,47 L233,47 L233,50 L230,50 Z M240,50 L243,50 L243,53 L240,53 Z M273,51 L276,51 L276,54 L273,54 Z M294,48 L297,48 L297,52 L294,52 Z M316,25 L318,25 L318,29 L316,29 Z M315,43 L318,43 L318,47 L315,47 Z M322,43 L325,43 L325,47 L322,47 Z M341,50 L344,50 L344,53 L341,53 Z" />
+        android:pathData="M43,0 L45,0 L45,3 L43,3 Z M41,14 L47,14 L47,19 L41,19 Z M41,31 L44,31 L44,35 L41,35 Z M49,35 L52,35 L52,39 L49,39 Z M12,51 L15,51 L15,54 L12,54 Z M22,51 L25,51 L25,55 L22,55 Z M67,52 L70,52 L70,55 L67,55 Z M82,48 L85,48 L85,52 L82,52 Z M95,48 L98,48 L98,52 L95,52 Z M108,48 L111,48 L111,52 L108,52 Z M132,51 L135,51 L135,55 L132,55 Z M147,49 L150,49 L150,53 L147,53 Z M175,37 L179,37 L179,42 L175,42 Z M187,50 L190,50 L190,54 L187,54 Z M202,49 L205,49 L205,53 L202,53 Z M227,34 L231,34 L231,40 L227,40 Z M241,51 L244,51 L244,55 L241,55 Z M262,52 L265,52 L265,55 L262,55 Z M273,51 L276,51 L276,55 L273,55 Z M285,52 L288,52 L288,55 L285,55 Z M305,40 L309,40 L309,45 L305,45 Z M320,51 L323,51 L323,55 L320,55 Z M336,52 L339,52 L339,55 L336,55 Z M349,50 L352,50 L352,54 L349,54 Z" />
 </vector>
