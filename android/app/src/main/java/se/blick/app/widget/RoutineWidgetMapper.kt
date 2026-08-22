@@ -2,6 +2,7 @@ package se.blick.app.widget
 
 import se.blick.app.domain.model.CommuteRoutine
 import se.blick.app.domain.model.DisruptionPresentation
+import se.blick.app.domain.model.routeLabels
 import se.blick.app.domain.usecase.LiveDeparturesSnapshot
 import se.blick.app.domain.usecase.LiveDeparturesState
 import se.blick.app.domain.usecase.PreparedDeparture
@@ -33,12 +34,13 @@ object RoutineWidgetMapper {
      * own compact disruption strip renders [DisruptionPresentation.effect]'s classified label, not
      * this raw headline; see [RoutineWidgetModel.disruptionEffect]'s own doc.
      */
-    fun map(routine: CommuteRoutine, departuresState: LiveDeparturesState, now: Instant, topDisruption: DisruptionPresentation? = null): RoutineWidgetModel =
-        RoutineWidgetModel(
+    fun map(routine: CommuteRoutine, departuresState: LiveDeparturesState, now: Instant, topDisruption: DisruptionPresentation? = null): RoutineWidgetModel {
+        val routeLabels = routine.routeLabels()
+        return RoutineWidgetModel(
             routineId = routine.id,
             routineName = routine.name,
-            stationName = routine.siteName,
-            directionLabel = routine.destinationLabel,
+            stationName = routeLabels.origin,
+            directionLabel = routeLabels.destination,
             content = departuresState.toWidgetContent(now),
             lineDesignation = routine.lineDesignation,
             transportMode = routine.transportMode,
@@ -47,22 +49,25 @@ object RoutineWidgetMapper {
             disruptionEffect = topDisruption?.effect,
             label = routine.label,
         )
+    }
 
     /** No [LiveDeparturesState] counterpart exists for this case — see
      * [RoutineWidgetContent.NotificationsUnavailable]'s own doc. Still routed through the same
      * routine-identity mapping as [map] so the routine name/station/direction stay visible
      * alongside the honest explanation, rather than falling back to a blank screen. */
-    fun notificationsUnavailable(routine: CommuteRoutine): RoutineWidgetModel =
-        RoutineWidgetModel(
+    fun notificationsUnavailable(routine: CommuteRoutine): RoutineWidgetModel {
+        val routeLabels = routine.routeLabels()
+        return RoutineWidgetModel(
             routineId = routine.id,
             routineName = routine.name,
-            stationName = routine.siteName,
-            directionLabel = routine.destinationLabel,
+            stationName = routeLabels.origin,
+            directionLabel = routeLabels.destination,
             content = RoutineWidgetContent.NotificationsUnavailable,
             lineDesignation = routine.lineDesignation,
             transportMode = routine.transportMode,
             label = routine.label,
         )
+    }
 
     private fun LiveDeparturesState.toWidgetContent(now: Instant): RoutineWidgetContent = when (this) {
         is LiveDeparturesState.Loading -> RoutineWidgetContent.Loading

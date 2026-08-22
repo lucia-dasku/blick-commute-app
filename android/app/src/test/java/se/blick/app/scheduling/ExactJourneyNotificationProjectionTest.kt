@@ -18,7 +18,7 @@ import java.time.LocalTime
 
 class ExactJourneyNotificationProjectionTest {
     @Test
-    fun `notification contains only the fastest journey first leg`() {
+    fun `notification keeps the saved exact route while PRIMARY supplies live line and mode`() {
         val now = Instant.parse("2026-08-10T07:00:00Z")
         val firstLegDeparture = Instant.parse("2026-08-10T07:05:00Z")
         val finalArrival = Instant.parse("2026-08-10T08:10:00Z")
@@ -70,11 +70,13 @@ class ExactJourneyNotificationProjectionTest {
         val model = RoutineNotificationMapper.map(projection.routine, projection.departuresState, now)
         val row = (model.content as RoutineNotificationContent.Live).departures.single()
 
+        assertEquals("Fruangen", model.stationName)
+        assertEquals("Arlanda airport", model.directionLabel)
         assertEquals("14", model.lineLabel)
-        assertEquals("Morsby centrum", model.directionLabel)
+        assertEquals(TransportMode.METRO, projection.routine.transportMode)
         assertEquals(firstLegDeparture, row.effectiveTime)
         assertEquals(5L, row.minutesRemaining)
-        assertFalse(model.toString().contains("Arlanda airport"))
+        assertFalse(model.directionLabel == "Morsby centrum")
         assertFalse(model.toString().contains(finalArrival.toString()))
         assertFalse(model.toString().contains("Later-leg disruption"))
     }

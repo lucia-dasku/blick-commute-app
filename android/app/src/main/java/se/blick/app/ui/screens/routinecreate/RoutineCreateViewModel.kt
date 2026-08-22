@@ -31,6 +31,8 @@ import se.blick.app.domain.model.RoutineType
 import se.blick.app.domain.model.RoutineLabel
 import se.blick.app.domain.model.Site
 import se.blick.app.domain.model.TransportMode
+import se.blick.app.domain.model.formatRoutineName
+import se.blick.app.domain.model.hasAutomaticallyGeneratedName
 import se.blick.app.domain.usecase.RoutineDurationValidationResult
 import se.blick.app.domain.usecase.RoutineDurationValidator
 import se.blick.app.scheduling.RoutineScheduler
@@ -288,9 +290,8 @@ class RoutineCreateViewModel @Inject constructor(
             return
         }
         originalRoutine = existing
-        // The user's existing name is treated as already deliberately set — a later
-        // automatic direction-based suggestion (see selectDirection) must not clobber it.
-        nameManuallyEdited = true
+        // Only a name outside the shared current/legacy generated formats is user-owned.
+        nameManuallyEdited = !existing.hasAutomaticallyGeneratedName()
         _uiState.update {
             it.copy(
                 isLoadingExistingRoutine = false,
@@ -409,7 +410,11 @@ class RoutineCreateViewModel @Inject constructor(
     private fun selectSite(site: Site, advanceAfterLoad: Boolean) {
         activePreselect = null
         _uiState.update { current ->
-            val suggestedName = current.selectedDestination?.let { "${site.name} → ${it.name}" }
+            val destinationName = current.selectedDestination?.name
+                ?: current.selectedDirection?.destinationLabel
+            val suggestedName = destinationName?.let {
+                formatRoutineName(site.name, it)
+            }
             current.copy(
                 siteQuery = site.name,
                 siteResults = emptyList(),
@@ -453,7 +458,10 @@ class RoutineCreateViewModel @Inject constructor(
 
     fun selectDestination(destination: JourneyLocation) {
         _uiState.update { current ->
-            val suggestedName = "${current.selectedSite?.name.orEmpty()} → ${destination.name}".trim()
+            val suggestedName = formatRoutineName(
+                current.journeyOrigin?.name ?: current.selectedSite?.name,
+                destination.name,
+            )
             current.copy(
                 destinationQuery = destination.name,
                 destinationResults = emptyList(),
@@ -474,11 +482,16 @@ class RoutineCreateViewModel @Inject constructor(
                 val match = locations.firstOrNull {
                     it.name.substringBefore(',').trim().equals(normalizedSiteName, ignoreCase = true)
                 } ?: locations.firstOrNull()
-                _uiState.update {
-                    it.copy(
+                _uiState.update { current ->
+                    current.copy(
                         journeyOrigin = match,
                         isResolvingJourneyOrigin = false,
                         journeyOriginResolutionFailed = match == null,
+                        name = if (!nameManuallyEdited && current.selectedDestination != null) {
+                            formatRoutineName(match?.name ?: site.name, current.selectedDestination.name)
+                        } else {
+                            current.name
+                        },
                     )
                 }
             } catch (e: CancellationException) {
@@ -594,10 +607,10 @@ class RoutineCreateViewModel @Inject constructor(
             // since every place this name is shown (the routine list, Routine Details, this
             // wizard's own name field) already shows it via the colored LineBadge right next
             // to it; repeating it as text here would duplicate what the badge already says.
-            val suggestedName = listOfNotNull(
+            val suggestedName = formatRoutineName(
                 current.selectedSite?.name,
-                direction.destinationLabel?.let { "→ $it" },
-            ).joinToString(" ")
+                direction.destinationLabel,
+            )
             current.copy(
                 selectedDirection = direction,
                 name = if (nameManuallyEdited) current.name else suggestedName,

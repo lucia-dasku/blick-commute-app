@@ -1117,9 +1117,10 @@ class RoutineActiveWindowWorker @AssistedInject constructor(
     }
 }
 
-/** Projects up to the two most actionable journeys' own first public-transport legs into the
- * existing simple notification model. Final destination, competing journeys and final arrival
- * deliberately do not enter this projection. */
+/** Projects up to the two most actionable journeys' first public-transport legs into departure
+ * rows while preserving the routine's saved A → B identity for the notification title. Full
+ * journey itineraries and final-arrival details do not enter this compact notification
+ * projection. */
 internal data class ExactJourneyNotificationProjection(
     val routine: CommuteRoutine,
     val departuresState: LiveDeparturesState,
@@ -1158,7 +1159,6 @@ internal fun List<JourneyPlan>.toExactJourneyNotificationProjection(
         routine = routine.copy(
             lineDesignation = primary.firstLeg.lineDesignation,
             transportMode = primary.firstLeg.transportMode,
-            destinationLabel = primary.firstLeg.direction ?: primary.firstLeg.destinationName,
         ),
         departuresState = LiveDeparturesState.Live(LiveDeparturesSnapshot(departures, now)),
     )

@@ -69,6 +69,18 @@ class RoutineWidgetJourneysMapperTest {
         assertEquals(RoutineLabel.HOME, model.label)
     }
 
+    @Test fun `exact journey widget keeps saved A to B identity instead of the PRIMARY first-leg direction`() {
+        val primary = journey("current", now.plusSeconds(60), now.plusSeconds(60))
+
+        val state = decideJourneysWidgetState(routine(), listOf(primary), now)
+
+        val model = (state as RoutineWidgetUiState.ActiveRoutine).model
+        assertEquals(routine().journeyOriginName, model.stationName)
+        assertEquals("Arlanda", model.directionLabel)
+        assertEquals("14", model.lineDesignation)
+        assertEquals(TransportMode.METRO, model.transportMode)
+    }
+
     private fun journey(
         id: String,
         firstLegDeparture: Instant?,

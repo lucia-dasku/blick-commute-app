@@ -1113,6 +1113,28 @@ class RoutineCreateViewModelTest {
         label = label,
     )
 
+    private fun exactExistingRoutine(
+        name: String = "Akalla → T-Centralen",
+    ) = CommuteRoutine(
+        id = "exact-existing",
+        name = name,
+        siteId = 9301,
+        siteName = "Akalla",
+        transportMode = TransportMode.UNKNOWN,
+        lineId = null,
+        lineDesignation = null,
+        directionCode = null,
+        destinationLabel = null,
+        activeDays = setOf(DayOfWeek.MONDAY),
+        startTime = LocalTime.of(7, 30),
+        endTime = LocalTime.of(8, 30),
+        type = RoutineType.EXACT_DESTINATION,
+        journeyOriginId = "akalla-id",
+        journeyOriginName = "Akalla",
+        journeyDestinationId = "centralen-id",
+        journeyDestinationName = "T-Centralen",
+    )
+
     @Test
     fun `edit mode loads the routine by navigation id and pre-fills every editable value`() = runTest(dispatcher) {
         val routine = existingRoutine(label = RoutineLabel.HOME)
@@ -1197,6 +1219,104 @@ class RoutineCreateViewModelTest {
         assertEquals("destination-id", updated?.journeyDestinationId)
         assertEquals(setOf(TransportMode.TRAIN, TransportMode.BUS), updated?.allowedJourneyTransportModes)
         assertEquals("Updated exact commute", updated?.name)
+    }
+
+    @Test
+    fun `automatic exact destination name updates when point A changes`() = runTest(dispatcher) {
+        val routine = exactExistingRoutine()
+        val routines = FakeRoutineRepository(listOf(routine))
+        val vm = viewModel(
+            routines = routines,
+            journeys = FakeJourneyRepository(listOf(JourneyLocation("slussen-id", "Slussen"))),
+            entitlement = FakePremiumEntitlementRepository(EntitlementState.Premium),
+            routineId = routine.id,
+        )
+        dispatcher.scheduler.advanceUntilIdle()
+
+        vm.selectOrigin(slussen)
+        dispatcher.scheduler.advanceUntilIdle()
+
+        assertEquals("Slussen → T-Centralen", vm.uiState.value.name)
+    }
+
+    @Test
+    fun `automatic exact destination name updates when point B changes`() = runTest(dispatcher) {
+        val routine = exactExistingRoutine()
+        val vm = viewModel(
+            routines = FakeRoutineRepository(listOf(routine)),
+            entitlement = FakePremiumEntitlementRepository(EntitlementState.Premium),
+            routineId = routine.id,
+        )
+        dispatcher.scheduler.advanceUntilIdle()
+
+        vm.selectDestination(JourneyLocation("slussen-id", "Slussen"))
+
+        assertEquals("Akalla → Slussen", vm.uiState.value.name)
+    }
+
+    @Test
+    fun `automatic line direction name updates when station and direction change`() = runTest(dispatcher) {
+        val routine = existingRoutine().copy(name = "${fruangen.name} → Segeltorp")
+        val directions = FakeDirectionOptionsSource(
+            mapOf(fruangen.siteId to listOf(busOption, metroOption), slussen.siteId to listOf(metroOption)),
+        )
+        val vm = viewModel(
+            directions = directions,
+            routines = FakeRoutineRepository(listOf(routine)),
+            routineId = routine.id,
+        )
+        dispatcher.scheduler.advanceUntilIdle()
+
+        vm.selectDirection(metroOption)
+        assertEquals("${fruangen.name} → T-Centralen", vm.uiState.value.name)
+
+        vm.selectSite(slussen)
+        assertEquals("Slussen → T-Centralen", vm.uiState.value.name)
+        dispatcher.scheduler.advanceUntilIdle()
+        vm.selectDirection(metroOption)
+        assertEquals("Slussen → T-Centralen", vm.uiState.value.name)
+    }
+
+    @Test
+    fun `custom name remains unchanged when an exact route changes`() = runTest(dispatcher) {
+        val routine = exactExistingRoutine(name = "Morning commute")
+        val vm = viewModel(
+            routines = FakeRoutineRepository(listOf(routine)),
+            entitlement = FakePremiumEntitlementRepository(EntitlementState.Premium),
+            routineId = routine.id,
+        )
+        dispatcher.scheduler.advanceUntilIdle()
+
+        vm.selectDestination(JourneyLocation("slussen-id", "Slussen"))
+
+        assertEquals("Morning commute", vm.uiState.value.name)
+    }
+
+    @Test
+    fun `legacy line designation default is recognized as automatic`() = runTest(dispatcher) {
+        val routine = existingRoutine().copy(name = "705 → Segeltorp")
+        val vm = viewModel(routines = FakeRoutineRepository(listOf(routine)), routineId = routine.id)
+        dispatcher.scheduler.advanceUntilIdle()
+
+        vm.selectDirection(metroOption)
+
+        assertEquals("${fruangen.name} → T-Centralen", vm.uiState.value.name)
+    }
+
+    @Test
+    fun `manual name edit after loading an automatic routine survives later route changes`() = runTest(dispatcher) {
+        val routine = exactExistingRoutine()
+        val vm = viewModel(
+            routines = FakeRoutineRepository(listOf(routine)),
+            entitlement = FakePremiumEntitlementRepository(EntitlementState.Premium),
+            routineId = routine.id,
+        )
+        dispatcher.scheduler.advanceUntilIdle()
+
+        vm.setName("School run")
+        vm.selectDestination(JourneyLocation("slussen-id", "Slussen"))
+
+        assertEquals("School run", vm.uiState.value.name)
     }
 
     @Test
