@@ -31,6 +31,7 @@ import androidx.glance.currentState
 import androidx.glance.layout.Alignment
 import androidx.glance.layout.Box
 import androidx.glance.layout.Column
+import androidx.glance.layout.ContentScale
 import androidx.glance.layout.Row
 import androidx.glance.layout.Spacer
 import androidx.glance.layout.fillMaxSize
@@ -42,6 +43,7 @@ import androidx.glance.layout.width
 import androidx.glance.state.PreferencesGlanceStateDefinition
 import androidx.glance.text.FontWeight
 import androidx.glance.text.Text
+import androidx.glance.text.TextAlign
 import androidx.glance.text.TextStyle
 import androidx.glance.unit.ColorProvider
 import se.blick.app.R
@@ -261,6 +263,92 @@ private fun sizeTierFor(layoutTier: WidgetLayoutTier): WidgetSizeTier = when (la
 // source of truth rather than duplicating these literals. Only this Glance-specific white-text
 // ColorProvider stays here, since androidx.glance.unit.ColorProvider has no standard-Compose use.
 private val BADGE_TEXT_WHITE = ColorProvider(Color.White)
+private val INACTIVE_WIDGET_BACKGROUND = ColorProvider(Color(0xFF010C2F))
+private val INACTIVE_WIDGET_PRIMARY = ColorProvider(Color.White)
+private val INACTIVE_WIDGET_SECONDARY = ColorProvider(Color(0xFFC5C8CF))
+private val INACTIVE_WIDGET_MINT = ColorProvider(Color(0xFF33E4A1))
+
+/** Responsive presentation values for the branded inactive state. The skyline is intentionally
+ * absent at compact sizes, and is also dropped for unusually short Standard bounds reported by
+ * some launchers, so the logo and localized status can never be crowded or overlap it. */
+internal data class InactiveWidgetLayout(
+    val logoViewportWidth: Dp,
+    val logoViewportHeight: Dp,
+    val logoAssetSize: Dp,
+    val brandSize: TextUnit,
+    val statusSize: TextUnit,
+    val logoBrandGap: Dp,
+    val brandStatusGap: Dp,
+    val horizontalPadding: Dp,
+    val verticalPadding: Dp,
+    val skylineHeight: Dp?,
+)
+
+internal fun inactiveWidgetLayoutFor(width: Dp, height: Dp): InactiveWidgetLayout {
+    val tier = widgetLayoutRulesFor(width, height).tier
+    return when {
+        tier == WidgetLayoutTier.LARGE -> InactiveWidgetLayout(
+            logoViewportWidth = 66.dp,
+            logoViewportHeight = 80.dp,
+            logoAssetSize = 156.dp,
+            brandSize = 30.sp,
+            statusSize = 14.sp,
+            logoBrandGap = 6.dp,
+            brandStatusGap = 3.dp,
+            horizontalPadding = 12.dp,
+            verticalPadding = 4.dp,
+            skylineHeight = 54.dp,
+        )
+        tier == WidgetLayoutTier.STANDARD && height >= 140.dp -> InactiveWidgetLayout(
+            logoViewportWidth = 44.dp,
+            logoViewportHeight = 52.dp,
+            logoAssetSize = 102.dp,
+            brandSize = 22.sp,
+            statusSize = 12.sp,
+            logoBrandGap = 2.dp,
+            brandStatusGap = 1.dp,
+            horizontalPadding = 8.dp,
+            verticalPadding = 4.dp,
+            skylineHeight = 28.dp,
+        )
+        tier == WidgetLayoutTier.STANDARD -> InactiveWidgetLayout(
+            logoViewportWidth = 40.dp,
+            logoViewportHeight = 46.dp,
+            logoAssetSize = 90.dp,
+            brandSize = 20.sp,
+            statusSize = 11.sp,
+            logoBrandGap = 2.dp,
+            brandStatusGap = 1.dp,
+            horizontalPadding = 8.dp,
+            verticalPadding = 4.dp,
+            skylineHeight = null,
+        )
+        width < 140.dp || height < 96.dp -> InactiveWidgetLayout(
+            logoViewportWidth = 26.dp,
+            logoViewportHeight = 32.dp,
+            logoAssetSize = 62.dp,
+            brandSize = 16.sp,
+            statusSize = 9.sp,
+            logoBrandGap = 1.dp,
+            brandStatusGap = 1.dp,
+            horizontalPadding = 6.dp,
+            verticalPadding = 2.dp,
+            skylineHeight = null,
+        )
+        else -> InactiveWidgetLayout(
+            logoViewportWidth = 40.dp,
+            logoViewportHeight = 48.dp,
+            logoAssetSize = 94.dp,
+            brandSize = 20.sp,
+            statusSize = 11.sp,
+            logoBrandGap = 2.dp,
+            brandStatusGap = 2.dp,
+            horizontalPadding = 8.dp,
+            verticalPadding = 4.dp,
+            skylineHeight = null,
+        )
+    }
+}
 
 /** [ActiveRoutineContent] builds its own chrome (background/corner radius) instead of using the
  * shared [Scaffold] — see that function's own doc for why: a present disruption needs its own
@@ -291,7 +379,10 @@ internal fun BlickWidgetContent(state: RoutineWidgetUiState, now: java.time.Inst
     val context = LocalContext.current.withAppLocale()
     GlanceTheme {
         when (state) {
-            RoutineWidgetUiState.NoActiveCommute -> Scaffold { NoActiveCommuteContent() }
+            RoutineWidgetUiState.NoActiveCommute -> Scaffold(
+                backgroundColor = INACTIVE_WIDGET_BACKGROUND,
+                horizontalPadding = 0.dp,
+            ) { NoActiveCommuteContent() }
             is RoutineWidgetUiState.ActiveRoutine -> ActiveRoutineContent(context, state.model, now)
         }
     }
@@ -301,13 +392,71 @@ internal fun BlickWidgetContent(state: RoutineWidgetUiState, now: java.time.Inst
 private fun NoActiveCommuteContent() {
     val context = LocalContext.current.withAppLocale()
     val size = LocalSize.current
-    val tier = sizeTierFor(widgetLayoutRulesFor(size.width, size.height).tier)
+    val layout = inactiveWidgetLayoutFor(size.width, size.height)
     Column(
-        modifier = GlanceModifier.fillMaxSize(),
+        modifier = GlanceModifier
+            .fillMaxSize()
+            .padding(
+                horizontal = layout.horizontalPadding,
+                vertical = layout.verticalPadding,
+            ),
         horizontalAlignment = Alignment.CenterHorizontally,
-        verticalAlignment = Alignment.CenterVertically,
     ) {
-        BodyText(context.getString(R.string.widget_no_active_commute), tier)
+        Box(
+            modifier = GlanceModifier.fillMaxWidth().defaultWeight(),
+            contentAlignment = Alignment.Center,
+        ) {
+            Column(horizontalAlignment = Alignment.CenterHorizontally) {
+                // The authoritative adaptive-icon foreground has intentional launcher-mask
+                // padding. A centered oversized image inside this clipped viewport removes only
+                // that transparent padding, just like BlickWordmark does in standard Compose;
+                // the actual logo pixels/path are reused unchanged.
+                Box(
+                    modifier = GlanceModifier.size(
+                        width = layout.logoViewportWidth,
+                        height = layout.logoViewportHeight,
+                    ),
+                    contentAlignment = Alignment.Center,
+                ) {
+                    Image(
+                        provider = ImageProvider(R.drawable.ic_launcher_foreground),
+                        contentDescription = null,
+                        modifier = GlanceModifier.size(layout.logoAssetSize),
+                        colorFilter = ColorFilter.tint(INACTIVE_WIDGET_MINT),
+                    )
+                }
+                Spacer(modifier = GlanceModifier.height(layout.logoBrandGap))
+                Text(
+                    text = context.getString(R.string.app_name),
+                    maxLines = 1,
+                    style = TextStyle(
+                        color = INACTIVE_WIDGET_PRIMARY,
+                        fontSize = layout.brandSize,
+                        fontWeight = FontWeight.Bold,
+                        textAlign = TextAlign.Center,
+                    ),
+                )
+                Spacer(modifier = GlanceModifier.height(layout.brandStatusGap))
+                Text(
+                    text = context.getString(R.string.widget_no_active_commute),
+                    maxLines = 2,
+                    modifier = GlanceModifier.fillMaxWidth(),
+                    style = TextStyle(
+                        color = INACTIVE_WIDGET_SECONDARY,
+                        fontSize = layout.statusSize,
+                        textAlign = TextAlign.Center,
+                    ),
+                )
+            }
+        }
+        layout.skylineHeight?.let { skylineHeight ->
+            Image(
+                provider = ImageProvider(R.drawable.widget_inactive_skyline),
+                contentDescription = null,
+                modifier = GlanceModifier.fillMaxWidth().height(skylineHeight),
+                contentScale = ContentScale.FillBounds,
+            )
+        }
     }
 }
 

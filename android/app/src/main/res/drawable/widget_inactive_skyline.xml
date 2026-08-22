@@ -1,0 +1,34 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- Decorative, transparent Stockholm-inspired skyline for the inactive widget state. The
+     widget's own navy surface remains authoritative; these deliberately low-contrast layers and
+     sparse mint windows provide depth without competing with the logo or status text. -->
+<vector xmlns:android="http://schemas.android.com/apk/res/android"
+    android:width="360dp"
+    android:height="72dp"
+    android:viewportWidth="360"
+    android:viewportHeight="72">
+
+    <!-- Distant roofline. -->
+    <path
+        android:fillAlpha="0.50"
+        android:fillColor="#183166"
+        android:pathData="M0,50 L13,50 L13,43 L24,43 L24,48 L34,48 L34,38 L43,38 L43,46 L55,46 L55,41 L68,41 L68,49 L82,49 L82,34 L95,34 L95,45 L107,45 L107,39 L120,39 L120,48 L136,48 L136,31 L146,31 L146,46 L161,46 L161,42 L174,42 L174,50 L190,50 L190,39 L201,39 L201,47 L216,47 L216,43 L230,43 L230,49 L244,49 L244,36 L258,36 L258,47 L272,47 L272,40 L286,40 L286,49 L301,49 L301,32 L314,32 L314,47 L329,47 L329,39 L340,39 L340,50 L360,50 L360,72 L0,72 Z" />
+
+    <!-- Foreground buildings, including a simplified Stadshuset tower and Globen dome. -->
+    <path
+        android:fillAlpha="0.82"
+        android:fillColor="#14275B"
+        android:pathData="M0,57 L18,57 L18,48 L29,48 L29,57 L35,57 L35,31 L39,27 L39,20 L41,14 L43,20 L43,27 L48,31 L48,57 L57,57 L57,44 L69,44 L69,57 L78,57 L78,50 L89,50 L89,57 L99,57 L99,41 L113,41 L113,57 L124,57 L124,47 L139,47 L139,57 L151,57 L151,37 L158,29 L165,37 L165,57 L177,57 L177,48 L191,48 L191,57 L201,57 C203,45 214,38 228,38 C242,38 253,45 255,57 L266,57 L266,47 L279,47 L279,57 L289,57 L289,43 L300,43 L300,57 L309,57 L309,35 L317,29 L325,35 L325,57 L336,57 L336,45 L348,45 L348,57 L360,57 L360,72 L0,72 Z" />
+
+    <!-- Subtle structural details on the tower and dome. -->
+    <path
+        android:fillAlpha="0.55"
+        android:fillColor="#23447F"
+        android:pathData="M36,36 L47,36 L47,42 L36,42 Z M38,29 L45,29 L47,34 L36,34 Z M207,55 C209,47 217,43 228,43 C239,43 247,47 250,55 Z" />
+
+    <!-- Sparse mint-lit windows and beacons. -->
+    <path
+        android:fillAlpha="0.72"
+        android:fillColor="#33E4A1"
+        android:pathData="M40,10 L42,10 L42,14 L40,14 Z M40,39 L43,39 L43,42 L40,42 Z M22,52 L24,52 L24,55 L22,55 Z M61,49 L63,49 L63,52 L61,52 Z M68,49 L70,49 L70,53 L68,53 Z M103,46 L106,46 L106,50 L103,50 Z M131,51 L134,51 L134,54 L131,54 Z M155,44 L158,44 L158,49 L155,49 Z M181,53 L184,53 L184,56 L181,56 Z M213,50 L216,50 L216,53 L213,53 Z M221,47 L224,47 L224,50 L221,50 Z M230,47 L233,47 L233,50 L230,50 Z M240,50 L243,50 L243,53 L240,53 Z M273,51 L276,51 L276,54 L273,54 Z M294,48 L297,48 L297,52 L294,52 Z M316,25 L318,25 L318,29 L316,29 Z M315,43 L318,43 L318,47 L315,47 Z M322,43 L325,43 L325,47 L322,47 Z M341,50 L344,50 L344,53 L341,53 Z" />
+</vector>

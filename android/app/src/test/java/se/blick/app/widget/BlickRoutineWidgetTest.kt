@@ -89,6 +89,34 @@ class BlickRoutineWidgetTest {
         assertEquals(WidgetLayoutTier.SMALL, widgetLayoutRulesFor(width = 219.dp, height = 260.dp).tier)
     }
 
+    // ---- Inactive-state artwork stays subordinate to content at every supported size. ----
+
+    @Test
+    fun `very compact inactive bounds use reduced branding and omit skyline`() {
+        val compact = inactiveWidgetLayoutFor(width = 110.dp, height = 80.dp)
+        val canonicalSmall = inactiveWidgetLayoutFor(width = 180.dp, height = 130.dp)
+
+        assertNull(compact.skylineHeight)
+        assertNull(canonicalSmall.skylineHeight)
+        assertTrue(compact.logoViewportHeight < canonicalSmall.logoViewportHeight)
+    }
+
+    @Test
+    fun `standard inactive bounds show a restrained skyline`() {
+        val standard = inactiveWidgetLayoutFor(width = 260.dp, height = 150.dp)
+
+        assertEquals(28.dp, standard.skylineHeight)
+    }
+
+    @Test
+    fun `large inactive bounds expand both branding and skyline without adding a new tier`() {
+        val standard = inactiveWidgetLayoutFor(width = 260.dp, height = 150.dp)
+        val large = inactiveWidgetLayoutFor(width = 340.dp, height = 260.dp)
+
+        assertEquals(54.dp, large.skylineHeight)
+        assertTrue(large.logoViewportHeight > standard.logoViewportHeight)
+    }
+
     // ---- Line-badge colors: WCAG AA 4.5:1 contrast against the white badge text ----
     //
     // Reimplements the WCAG relative-luminance/contrast-ratio formula directly here (rather than
