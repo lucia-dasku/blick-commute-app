@@ -790,7 +790,7 @@ private fun PauseTodayButton(
     onResumeToday: () -> Unit,
 ) {
     Column {
-        OutlinedButton(
+        Button(
             onClick = if (isPausedToday) onResumeToday else onPauseToday,
             enabled = !isTogglingPause,
             modifier = Modifier.fillMaxWidth(),
@@ -821,10 +821,10 @@ private fun PauseTodayButton(
  * Pause/resume today is deliberately NOT part of this group any more -- see [PauseTodayButton],
  * now a sibling composable placed directly under the departures list instead.
  *
- * Every action inside, once expanded, keeps its exact pre-existing behaviour, confirmation
- * dialog (delete, handled by the caller via [onRequestDelete]), and styling -- this composable
- * only changes what's visible before the user taps to expand it, never what any individual
- * action itself does.
+ * Every action inside, once expanded, keeps its exact pre-existing behaviour and confirmation
+ * dialog (delete, handled by the caller via [onRequestDelete]) -- this composable only changes
+ * what's visible before the user taps to expand it, never what any individual action itself
+ * does.
  */
 @Composable
 private fun RoutineActionsSection(
@@ -906,14 +906,14 @@ private fun RoutineActionsSection(
                 }
             }
 
-            OutlinedButton(onClick = onEdit, modifier = Modifier.fillMaxWidth()) {
+            Button(onClick = onEdit, modifier = Modifier.fillMaxWidth()) {
                 Text(stringResource(R.string.routine_details_edit_action))
             }
             Spacer(Modifier.height(8.dp))
 
             // Never colour-only: the label itself always states the resulting/current state in
             // words (see the milestone requirement on text scaling + no colour-only status).
-            OutlinedButton(
+            Button(
                 onClick = {
                     if (routine.enabled) onToggleEnabled() else notifyGate { onToggleEnabled() }
                 },
@@ -939,7 +939,10 @@ private fun RoutineActionsSection(
             Button(
                 onClick = onRequestDelete,
                 enabled = !isDeleting,
-                colors = ButtonDefaults.buttonColors(containerColor = RoutineDestructiveRed),
+                colors = ButtonDefaults.buttonColors(
+                    containerColor = RoutineDestructiveRed,
+                    contentColor = Color.White,
+                ),
                 modifier = Modifier.fillMaxWidth(),
             ) {
                 Text(stringResource(R.string.routine_details_delete_action))
