@@ -353,7 +353,7 @@
     <!-- Home-screen widget (widget/BlickRoutineWidget.kt) — shown outside any active routine
          window. Most other widget state text reuses the notification_*/routine_details_departure_*
          strings above verbatim, the same copy for the same states. -->
-    <string name="widget_no_active_commute">No active commute.</string>
+    <string name="widget_no_active_commute">No active commute</string>
     <string name="widget_description">Shows your commute\'s next departures while its active window is open.</string>
     <!-- android:label on each of the three widget-picker <receiver> entries in
          AndroidManifest.xml (see BlickRoutineWidgetReceiver/Compact/Large in
