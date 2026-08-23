@@ -437,6 +437,7 @@ internal fun RoutineDetailsContent(
     // currentBlickLocale() reacts to language/configuration changes and normalizes them to
     // Blick's effective English/Svenska presentation locale -- see that function's own doc.
     val locale = currentBlickLocale()
+    var routineInfoExpanded by remember(routine.id) { mutableStateOf(false) }
 
     // EXACT_DESTINATION's own top-section relevance: the backend's own fully resolved
     // disruption list for whichever journey was PRIMARY at the time of the last successful
@@ -552,14 +553,26 @@ internal fun RoutineDetailsContent(
         HorizontalDivider()
         Spacer(Modifier.height(16.dp))
 
-        // A fixed section heading rather than routine.name -- the routine's own name/route is
-        // still fully identifiable below via the Direction row's own "{siteName} → {destination}"
-        // value (see that row's own comment), just no longer repeated up here too. The same
-        // titleMedium size as this screen's other two section headings ("Next departures",
-        // "Manage routine"), rather than the larger headlineSmall inherited from when this line
-        // showed the routine's own name as a prominent heading.
-        Text(stringResource(R.string.routine_details_info_heading), style = MaterialTheme.typography.titleMedium)
+        // Collapsed by default like Manage routine below. The entire row is tappable; expanding
+        // restores the existing transport, route, schedule, time and status rows unchanged.
+        Row(
+            modifier = Modifier.fillMaxWidth().clickable { routineInfoExpanded = !routineInfoExpanded },
+            verticalAlignment = Alignment.CenterVertically,
+        ) {
+            Text(
+                stringResource(R.string.routine_details_info_heading),
+                style = MaterialTheme.typography.titleMedium,
+                modifier = Modifier.weight(1f),
+            )
+            Icon(
+                imageVector = if (routineInfoExpanded) Icons.Filled.KeyboardArrowUp else Icons.Filled.KeyboardArrowDown,
+                contentDescription = stringResource(
+                    if (routineInfoExpanded) R.string.routine_details_info_collapse else R.string.routine_details_info_expand,
+                ),
+            )
+        }
 
+        if (routineInfoExpanded) {
         Spacer(Modifier.height(12.dp))
         if (routine.type == RoutineType.EXACT_DESTINATION) {
             JourneyTransportModesRow(
@@ -614,6 +627,7 @@ internal fun RoutineDetailsContent(
                 else -> RoutineDestructiveRed
             },
         )
+        }
 
         Spacer(Modifier.height(20.dp))
         HorizontalDivider()

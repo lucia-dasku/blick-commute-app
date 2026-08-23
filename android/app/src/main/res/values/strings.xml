@@ -4,8 +4,7 @@
          is deliberately not overridden there. -->
     <string name="app_name" translatable="false">Blick</string>
 
-    <string name="routine_list_title">Your commute routines</string>
-    <string name="routine_list_subtitle">Stay updated. Always on time.</string>
+    <string name="routine_list_title">YOUR ROUTINES</string>
     <string name="routine_list_empty">No routines yet. Add one to see departures automatically.</string>
     <string name="routine_list_add">Add routine</string>
     <string name="routine_list_open">Open %1$s</string>
@@ -48,6 +47,8 @@
     <string name="action_retry">Try again</string>
 
     <string name="routine_details_info_heading">Routine details</string>
+    <string name="routine_details_info_expand">Show routine details</string>
+    <string name="routine_details_info_collapse">Hide routine details</string>
     <string name="routine_details_mode_label">Transport</string>
     <string name="routine_details_line_label">Line</string>
     <string name="routine_details_direction_label">Direction</string>
@@ -213,6 +214,9 @@
     <string name="routine_label_hobby">Hobby</string>
     <string name="routine_label_other">Other</string>
     <string name="brand_wordmark" translatable="false">blick</string>
+    <string name="brand_home_title" translatable="false">Blick</string>
+    <string name="brand_stockholm_night_subtitle" translatable="false">STOCKHOLM NIGHT</string>
+    <string name="brand_home_subtitle">ALWAYS ON TIME</string>
     <string name="routine_create_error_no_days">Select at least one day.</string>
     <string name="routine_create_error_time_range">Start and end time must be different.</string>
     <string name="routine_create_error_duration_limit">Your active commute window can be up to 5 hours.</string>
@@ -265,6 +269,7 @@
     <string name="settings_appearance_system">System</string>
     <string name="settings_appearance_light">Light</string>
     <string name="settings_appearance_dark">Dark</string>
+    <string name="settings_appearance_stockholm_night">Stockholm night · Premium</string>
     <string name="settings_notifications_label">Notifications</string>
     <string name="settings_notifications_on">On</string>
     <string name="settings_notifications_off">Off</string>

@@ -67,6 +67,49 @@ class AboutScreenTest {
     }
 
     @Test
+    fun premiumUserCanSelectStockholmNightAppearance() {
+        var selected: AppearanceMode? = null
+        composeRule.setContent {
+            AboutContent(
+                state = AboutUiState(entitlement = EntitlementState.Premium),
+                onBack = {},
+                onLanguageSelected = {},
+                onAppearanceSelected = { selected = it },
+            )
+        }
+
+        composeRule.onNodeWithText(composeRule.activity.getString(R.string.settings_appearance_label)).performClick()
+        composeRule.onNodeWithText(
+            composeRule.activity.getString(R.string.settings_appearance_stockholm_night),
+        ).performClick()
+
+        assertEquals(AppearanceMode.StockholmNight, selected)
+    }
+
+    @Test
+    fun freeUserSelectingStockholmNightOpensPremiumInsteadOfChangingAppearance() {
+        var selected: AppearanceMode? = null
+        var premiumOpened = false
+        composeRule.setContent {
+            AboutContent(
+                state = AboutUiState(entitlement = EntitlementState.Free),
+                onBack = {},
+                onLanguageSelected = {},
+                onAppearanceSelected = { selected = it },
+                onOpenPremium = { premiumOpened = true },
+            )
+        }
+
+        composeRule.onNodeWithText(composeRule.activity.getString(R.string.settings_appearance_label)).performClick()
+        composeRule.onNodeWithText(
+            composeRule.activity.getString(R.string.settings_appearance_stockholm_night),
+        ).performClick()
+
+        assertEquals(null, selected)
+        assertEquals(true, premiumOpened)
+    }
+
+    @Test
     fun premiumStateComesFromEntitlementAndRowOpensPremium() {
         var opened = false
         composeRule.setContent {

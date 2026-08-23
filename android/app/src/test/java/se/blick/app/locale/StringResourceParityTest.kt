@@ -17,13 +17,14 @@ import java.io.File
  */
 class StringResourceParityTest {
 
-    // Deliberately never translated -- see values/strings.xml's own comments on each: app_name
-    // is the brand name ("Blick"), unchanged in every locale; Blick's own two language-picker
-    // option labels always name themselves in their own language regardless of which is
-    // currently active, so an "English"/"Svenska" entry must stay identical everywhere too.
+    // Deliberately never translated: the app name and brand-lockup strings are fixed names.
+    // Blick's two language-picker option labels also always name themselves in their own
+    // language, so an "English"/"Svenska" entry must stay identical everywhere.
     private val intentionallyUntranslated = setOf(
         "app_name",
         "brand_wordmark",
+        "brand_home_title",
+        "brand_stockholm_night_subtitle",
         "settings_language_option_english",
         "settings_language_option_swedish",
     )

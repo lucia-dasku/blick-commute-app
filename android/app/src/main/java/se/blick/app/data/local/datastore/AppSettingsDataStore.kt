@@ -5,6 +5,7 @@ import kotlinx.coroutines.flow.Flow
 interface AppSettingsDataStore {
     val settings: Flow<AppSettings>
     suspend fun setUseDarkTheme(useDarkTheme: Boolean?)
+    suspend fun setUseStockholmNightTheme(enabled: Boolean)
     suspend fun setHasSeenNotificationRationale(seen: Boolean)
     suspend fun setHasAcknowledgedAttribution(acknowledged: Boolean)
 }

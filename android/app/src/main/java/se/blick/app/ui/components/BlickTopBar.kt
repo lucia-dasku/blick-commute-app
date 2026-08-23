@@ -11,14 +11,16 @@ import androidx.compose.material3.IconButton
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Text
 import androidx.compose.material3.TopAppBar
+import androidx.compose.material3.TopAppBarDefaults
 import androidx.compose.runtime.Composable
+import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.text.style.TextOverflow
 import se.blick.app.R
+import se.blick.app.ui.theme.LocalStockholmNightTheme
 
 /**
  * Shared non-step screen header -- `[title]` or `[← title]`, used identically by
- * [se.blick.app.ui.screens.routinelist.RoutineListScreen],
  * [se.blick.app.ui.screens.routinedetails.RoutineDetailsScreen],
  * [se.blick.app.ui.screens.about.AboutScreen], and the blocked/loading states of
  * [se.blick.app.ui.screens.routinecreate.RoutineCreateScreen]. Never shows a step label or
@@ -36,6 +38,7 @@ fun BlickTopBar(
     onBack: (() -> Unit)? = null,
     actions: @Composable RowScope.() -> Unit = {},
 ) {
+    val useTransparentContainer = LocalStockholmNightTheme.current
     TopAppBar(
         title = {
             if (title != null) {
@@ -57,5 +60,13 @@ fun BlickTopBar(
             }
         },
         actions = actions,
+        colors = if (useTransparentContainer) {
+            TopAppBarDefaults.topAppBarColors(
+                containerColor = Color.Transparent,
+                scrolledContainerColor = Color.Transparent,
+            )
+        } else {
+            TopAppBarDefaults.topAppBarColors()
+        },
     )
 }

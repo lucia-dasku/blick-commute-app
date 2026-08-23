@@ -13,6 +13,8 @@ import androidx.compose.runtime.setValue
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import androidx.navigation.compose.rememberNavController
 import dagger.hilt.android.AndroidEntryPoint
+import se.blick.app.billing.PremiumEntitlementRepository
+import se.blick.app.billing.hasPremiumAccess
 import se.blick.app.data.local.datastore.AppSettings
 import se.blick.app.data.local.datastore.AppSettingsDataStore
 import se.blick.app.locale.withAppLocale
@@ -21,6 +23,7 @@ import se.blick.app.notification.RoutineNotificationIds
 import se.blick.app.ui.navigation.BlickNavHost
 import se.blick.app.ui.navigation.Routes
 import se.blick.app.ui.theme.BlickTheme
+import se.blick.app.ui.theme.shouldUseStockholmNightTheme
 import javax.inject.Inject
 
 /**
@@ -91,6 +94,7 @@ import javax.inject.Inject
 class MainActivity : AppCompatActivity() {
 
     @Inject lateinit var appSettingsDataStore: AppSettingsDataStore
+    @Inject lateinit var premiumEntitlementRepository: PremiumEntitlementRepository
 
     private var pendingRoutineId by mutableStateOf<String?>(null)
 
@@ -106,7 +110,14 @@ class MainActivity : AppCompatActivity() {
             val appSettings by appSettingsDataStore.settings.collectAsStateWithLifecycle(
                 initialValue = AppSettings(),
             )
-            BlickTheme(useDarkTheme = appSettings.useDarkTheme) {
+            val entitlement by premiumEntitlementRepository.entitlement.collectAsStateWithLifecycle()
+            BlickTheme(
+                useDarkTheme = appSettings.useDarkTheme,
+                useStockholmNightTheme = shouldUseStockholmNightTheme(
+                    requested = appSettings.useStockholmNightTheme,
+                    hasPremiumAccess = entitlement.hasPremiumAccess,
+                ),
+            ) {
                 val navController = rememberNavController()
                 LaunchedEffect(pendingRoutineId) {
                     val routineId = pendingRoutineId ?: return@LaunchedEffect

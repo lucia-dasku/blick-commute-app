@@ -38,6 +38,11 @@ class PreferencesAppSettingsDataStoreTest {
 
         settings.setUseDarkTheme(null)
         assertEquals(null, settings.settings.first().useDarkTheme)
+
+        settings.setUseStockholmNightTheme(true)
+        assertEquals(true, settings.settings.first().useStockholmNightTheme)
+        settings.setUseStockholmNightTheme(false)
+        assertEquals(false, settings.settings.first().useStockholmNightTheme)
     }
 
     @Test
@@ -51,6 +56,7 @@ class PreferencesAppSettingsDataStoreTest {
             PreferenceDataStoreFactory.create(scope = firstScope) { file },
         )
         firstSettings.setUseDarkTheme(true)
+        firstSettings.setUseStockholmNightTheme(true)
         firstScope.cancel()
         testScheduler.advanceUntilIdle()
 
@@ -60,6 +66,7 @@ class PreferencesAppSettingsDataStoreTest {
                 PreferenceDataStoreFactory.create(scope = secondScope) { file },
             )
             assertEquals(true, restoredSettings.settings.first().useDarkTheme)
+            assertEquals(true, restoredSettings.settings.first().useStockholmNightTheme)
         } finally {
             secondScope.cancel()
         }

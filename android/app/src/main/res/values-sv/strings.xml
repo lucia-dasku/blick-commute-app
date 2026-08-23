@@ -3,8 +3,7 @@
     <!-- app_name is deliberately not overridden here — "Blick" is the brand name and stays
          unchanged in every locale, so the default values/strings.xml entry is used as-is. -->
 
-    <string name="routine_list_title">Dina pendlingsrutiner</string>
-    <string name="routine_list_subtitle">Håll dig uppdaterad. Alltid i tid.</string>
+    <string name="routine_list_title">DINA RUTINER</string>
     <string name="routine_list_empty">Inga rutiner än. Lägg till en för att se avgångar automatiskt.</string>
     <string name="routine_list_add">Lägg till rutin</string>
     <string name="routine_list_open">Öppna %1$s</string>
@@ -45,6 +44,8 @@
     <string name="action_retry">Försök igen</string>
 
     <string name="routine_details_info_heading">Rutindetaljer</string>
+    <string name="routine_details_info_expand">Visa rutindetaljer</string>
+    <string name="routine_details_info_collapse">Dölj rutindetaljer</string>
     <string name="routine_details_mode_label">Transportmedel</string>
     <string name="routine_details_line_label">Linje</string>
     <string name="routine_details_direction_label">Riktning</string>
@@ -180,6 +181,7 @@
     <string name="routine_label_study">Skola</string>
     <string name="routine_label_hobby">Hobby</string>
     <string name="routine_label_other">Övrigt</string>
+    <string name="brand_home_subtitle">ALLTID I TID</string>
     <string name="routine_create_error_no_days">Välj minst en dag.</string>
     <string name="routine_create_error_time_range">Start- och sluttiden måste vara olika.</string>
     <string name="routine_create_error_duration_limit">Rutinen kan vara aktiv i högst 5 timmar.</string>
@@ -216,6 +218,7 @@
     <string name="settings_appearance_system">System</string>
     <string name="settings_appearance_light">Ljust</string>
     <string name="settings_appearance_dark">Mörkt</string>
+    <string name="settings_appearance_stockholm_night">Stockholmsnatt · Premium</string>
     <string name="settings_notifications_label">Aviseringar</string>
     <string name="settings_notifications_on">På</string>
     <string name="settings_notifications_off">Av</string>
