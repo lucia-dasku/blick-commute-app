@@ -2,6 +2,8 @@ package se.blick.app.notification
 
 import se.blick.app.domain.model.DisruptionEffect
 import se.blick.app.domain.model.JourneyRole
+import se.blick.app.domain.model.RoutineType
+import se.blick.app.domain.model.TransportMode
 import java.time.Instant
 
 /**
@@ -62,6 +64,31 @@ data class RoutineNotificationModel(
      * disruption, both of which render [disruptionEffect] directly exactly as before this field
      * existed. */
     val disruptionUncertainLineDesignations: List<String> = emptyList(),
+    /** Distinguishes the saved route semantics used by the title. For an exact-destination
+     * routine [stationName]/[directionLabel] are the persisted A/B choices and must never be
+     * replaced visually by a transit leg's headsign. */
+    val routineType: RoutineType = RoutineType.LINE_DIRECTION,
+    /** Structured, current PRIMARY itinerary content for an exact-destination notification.
+     * Null for line-direction routines and whenever there is no still-current backend-labelled
+     * PRIMARY journey. */
+    val exactDestination: ExactDestinationNotificationPresentation? = null,
+)
+
+/** Notification-only projection of the backend-authoritative exact-destination journey roles. */
+data class ExactDestinationNotificationPresentation(
+    val primaryCountdownMinutes: Long,
+    val transitLegs: List<NotificationTransitLeg>,
+    val arrivalTime: Instant,
+    val primaryChangeCount: Int,
+    val nextCountdownMinutes: Long?,
+)
+
+/** One logical public-transport ride in PRIMARY itinerary order. Walking connectors are not
+ * represented by the Android journey model and therefore never become notification rows. */
+data class NotificationTransitLeg(
+    val transportMode: TransportMode,
+    val lineDesignation: String?,
+    val direction: String?,
 )
 
 /**

@@ -67,7 +67,9 @@ class ExactJourneyNotificationProjectionTest {
         val projection = checkNotNull(listOf(plan).toExactJourneyNotificationProjection(routine, now)) {
             "This journey has not departed yet -- a projection was expected"
         }
-        val model = RoutineNotificationMapper.map(projection.routine, projection.departuresState, now)
+        val model = RoutineNotificationMapper.map(
+            projection.routine, projection.departuresState, now, exactJourneys = listOf(plan),
+        )
         val row = (model.content as RoutineNotificationContent.Live).departures.single()
 
         assertEquals("Fruangen", model.stationName)
@@ -77,7 +79,7 @@ class ExactJourneyNotificationProjectionTest {
         assertEquals(firstLegDeparture, row.effectiveTime)
         assertEquals(5L, row.minutesRemaining)
         assertFalse(model.directionLabel == "Morsby centrum")
-        assertFalse(model.toString().contains(finalArrival.toString()))
+        assertEquals(finalArrival, model.exactDestination?.arrivalTime)
         assertFalse(model.toString().contains("Later-leg disruption"))
     }
 
@@ -152,7 +154,9 @@ class ExactJourneyNotificationProjectionTest {
         val projection = checkNotNull(listOf(plan).toExactJourneyNotificationProjection(routine, now)) {
             "A departure exactly at now must still produce a projection"
         }
-        val model = RoutineNotificationMapper.map(projection.routine, projection.departuresState, now)
+        val model = RoutineNotificationMapper.map(
+            projection.routine, projection.departuresState, now, exactJourneys = listOf(plan),
+        )
         val row = (model.content as RoutineNotificationContent.Live).departures.single()
 
         assertEquals(now, row.effectiveTime)
@@ -168,7 +172,9 @@ class ExactJourneyNotificationProjectionTest {
         val projection = checkNotNull(listOf(plan).toExactJourneyNotificationProjection(routine, now)) {
             "This journey has not departed yet -- a projection was expected"
         }
-        val model = RoutineNotificationMapper.map(projection.routine, projection.departuresState, now)
+        val model = RoutineNotificationMapper.map(
+            projection.routine, projection.departuresState, now, exactJourneys = listOf(plan),
+        )
         val row = (model.content as RoutineNotificationContent.Live).departures.single()
 
         assertEquals(1L, row.minutesRemaining)
@@ -187,7 +193,9 @@ class ExactJourneyNotificationProjectionTest {
         val projection = checkNotNull(listOf(primaryPlan, secondPlan).toExactJourneyNotificationProjection(routine, now)) {
             "Two current journeys were supplied -- a projection was expected"
         }
-        val model = RoutineNotificationMapper.map(projection.routine, projection.departuresState, now)
+        val model = RoutineNotificationMapper.map(
+            projection.routine, projection.departuresState, now, exactJourneys = listOf(primaryPlan, secondPlan),
+        )
         val rows = (model.content as RoutineNotificationContent.Live).departures
 
         assertEquals(2, rows.size)
@@ -203,7 +211,9 @@ class ExactJourneyNotificationProjectionTest {
         val third = boundaryPlan(Instant.parse("2026-08-10T07:40:00Z")).second.copy(journeyId = "journey-third")
 
         val projection = checkNotNull(listOf(first, second, third).toExactJourneyNotificationProjection(routine, now))
-        val model = RoutineNotificationMapper.map(projection.routine, projection.departuresState, now)
+        val model = RoutineNotificationMapper.map(
+            projection.routine, projection.departuresState, now, exactJourneys = listOf(first, second, third),
+        )
         val rows = (model.content as RoutineNotificationContent.Live).departures
 
         assertEquals(2, rows.size)
@@ -219,7 +229,9 @@ class ExactJourneyNotificationProjectionTest {
         val projection = checkNotNull(listOf(expired, current).toExactJourneyNotificationProjection(routine, now)) {
             "The second journey is still current -- a projection was expected"
         }
-        val model = RoutineNotificationMapper.map(projection.routine, projection.departuresState, now)
+        val model = RoutineNotificationMapper.map(
+            projection.routine, projection.departuresState, now, exactJourneys = listOf(expired, current),
+        )
         val rows = (model.content as RoutineNotificationContent.Live).departures
 
         assertEquals(1, rows.size)
@@ -239,7 +251,9 @@ class ExactJourneyNotificationProjectionTest {
         val second = nextPlan.copy(journeyId = "journey-next", role = JourneyRole.NEXT)
 
         val projection = checkNotNull(listOf(primaryPlan, second).toExactJourneyNotificationProjection(routine, now))
-        val model = RoutineNotificationMapper.map(projection.routine, projection.departuresState, now)
+        val model = RoutineNotificationMapper.map(
+            projection.routine, projection.departuresState, now, exactJourneys = listOf(primaryPlan, second),
+        )
         val rows = (model.content as RoutineNotificationContent.Live).departures
 
         assertEquals(JourneyRole.PRIMARY, rows[0].journeyRole)
@@ -254,7 +268,9 @@ class ExactJourneyNotificationProjectionTest {
         val second = altPlan.copy(journeyId = "journey-alt", role = JourneyRole.ALTERNATIVE)
 
         val projection = checkNotNull(listOf(primaryPlan, second).toExactJourneyNotificationProjection(routine, now))
-        val model = RoutineNotificationMapper.map(projection.routine, projection.departuresState, now)
+        val model = RoutineNotificationMapper.map(
+            projection.routine, projection.departuresState, now, exactJourneys = listOf(primaryPlan, second),
+        )
         val rows = (model.content as RoutineNotificationContent.Live).departures
 
         assertEquals(JourneyRole.PRIMARY, rows[0].journeyRole)

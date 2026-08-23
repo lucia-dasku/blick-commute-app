@@ -3369,6 +3369,7 @@ class RoutineDetailsViewModelTest {
         val posted = notifier.shown.last()
         assertEquals(DisruptionEffect.NO_SERVICE, posted.disruptionEffect)
         assertEquals("Inställd trafik", posted.disruptionHeadline)
+        assertEquals("11", posted.exactDestination?.transitLegs?.single()?.lineDesignation)
     }
 
     @Test

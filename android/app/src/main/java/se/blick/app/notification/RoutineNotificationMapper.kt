@@ -2,11 +2,17 @@ package se.blick.app.notification
 
 import se.blick.app.domain.model.CommuteRoutine
 import se.blick.app.domain.model.DisruptionPresentation
+import se.blick.app.domain.model.JourneyPlan
+import se.blick.app.domain.model.JourneyRole
+import se.blick.app.domain.model.RoutineType
+import se.blick.app.domain.model.TransportMode
 import se.blick.app.domain.model.routeLabels
 import se.blick.app.domain.usecase.LiveDeparturesSnapshot
 import se.blick.app.domain.usecase.LiveDeparturesState
 import se.blick.app.domain.usecase.PreparedDeparture
 import se.blick.app.domain.usecase.countdownMinutes
+import se.blick.app.domain.usecase.effectiveFirstDeparture
+import se.blick.app.domain.usecase.filterCurrentJourneys
 import java.time.Instant
 
 /**
@@ -48,18 +54,74 @@ object RoutineNotificationMapper {
         departuresState: LiveDeparturesState,
         now: Instant,
         topDisruption: DisruptionPresentation? = null,
+        exactJourneys: List<JourneyPlan> = emptyList(),
     ): RoutineNotificationModel {
         val routeLabels = routine.routeLabels()
+        val exactDestination = if (routine.type == RoutineType.EXACT_DESTINATION) {
+            exactJourneys.toExactDestinationPresentation(now)
+        } else {
+            null
+        }
+        val mappedContent = departuresState.toContent(now)
         return RoutineNotificationModel(
             routineId = routine.id,
             stationName = routeLabels.origin,
             lineLabel = routine.lineDesignation,
             directionLabel = routeLabels.destination,
-            content = departuresState.toContent(now),
+            // A Live exact-destination body without its PRIMARY itinerary is an inconsistent
+            // model and must never fall through to LINE_DIRECTION's generic "X min · Live"
+            // presentation. Real no-current-PRIMARY results are mapped by the worker to
+            // NoUpcomingDepartures before reaching here; this is the fail-safe for a caller
+            // that supplied live rows but omitted/mismatched the authoritative journey list.
+            content = if (
+                routine.type == RoutineType.EXACT_DESTINATION &&
+                mappedContent is RoutineNotificationContent.Live &&
+                exactDestination == null
+            ) {
+                RoutineNotificationContent.Unavailable
+            } else {
+                mappedContent
+            },
             disruptionHeadline = topDisruption?.headline,
             disruptionDetails = topDisruption?.details,
             disruptionEffect = topDisruption?.effect,
             disruptionUncertainLineDesignations = topDisruption?.uncertainLineDesignations ?: emptyList(),
+            routineType = routine.type,
+            exactDestination = exactDestination,
+        )
+    }
+
+    /** Uses roles already assigned by the backend; this is presentation mapping, not local
+     * journey selection. In particular, NEXT is never promoted when PRIMARY has expired. */
+    private fun List<JourneyPlan>.toExactDestinationPresentation(
+        now: Instant,
+    ): ExactDestinationNotificationPresentation? {
+        val current = filterCurrentJourneys(now)
+        val primary = current.firstOrNull { it.role == JourneyRole.PRIMARY } ?: return null
+        val next = current.firstOrNull { it.role == JourneyRole.NEXT }
+        val transitLegs = primary.legs
+            .asSequence()
+            .filter { it.transportMode != TransportMode.UNKNOWN }
+            .map { NotificationTransitLeg(it.transportMode, it.lineDesignation, it.direction) }
+            .fold(mutableListOf<NotificationTransitLeg>()) { result, leg ->
+                if (result.lastOrNull() != leg) result += leg
+                result
+            }
+            .ifEmpty {
+                listOf(
+                    NotificationTransitLeg(
+                        primary.firstLeg.transportMode,
+                        primary.firstLeg.lineDesignation,
+                        primary.firstLeg.direction,
+                    ),
+                )
+            }
+        return ExactDestinationNotificationPresentation(
+            primaryCountdownMinutes = countdownMinutes(now, primary.effectiveFirstDeparture()),
+            transitLegs = transitLegs,
+            arrivalTime = primary.arrivalTime,
+            primaryChangeCount = primary.transferCount,
+            nextCountdownMinutes = next?.let { countdownMinutes(now, it.effectiveFirstDeparture()) },
         )
     }
 

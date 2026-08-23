@@ -21,8 +21,12 @@ import se.blick.app.MainActivity
 import se.blick.app.R
 import se.blick.app.domain.model.DisruptionEffect
 import se.blick.app.domain.model.JourneyRole
+import se.blick.app.domain.model.RoutineType
+import se.blick.app.domain.model.TransportMode
 import se.blick.app.ui.screens.routinedetails.formatDepartureTime
 import java.time.Instant
+import java.time.ZoneId
+import java.time.format.DateTimeFormatter
 import java.util.Locale
 
 /**
@@ -82,6 +86,36 @@ class RoutineNotificationBuilderTest {
         isCancelled: Boolean = false,
         journeyRole: JourneyRole? = null,
     ) = NotificationDepartureRow(lineDesignation, destinationLabel, effectiveTime, minutesRemaining, isRealTime, isCancelled, journeyRole)
+
+    private fun exactModel(
+        exact: ExactDestinationNotificationPresentation,
+        stationName: String = "Slussen",
+        directionLabel: String = "Kungsträdgården",
+    ) = model(
+        stationName = stationName,
+        lineLabel = "19",
+        directionLabel = directionLabel,
+        content = RoutineNotificationContent.Live(listOf(sampleRow())),
+    ).copy(
+        routineType = RoutineType.EXACT_DESTINATION,
+        exactDestination = exact,
+    )
+
+    private fun exactPresentation(
+        legs: List<NotificationTransitLeg> = listOf(
+            NotificationTransitLeg(TransportMode.METRO, "19", "Hässelby strand"),
+            NotificationTransitLeg(TransportMode.METRO, "11", "Kungsträdgården"),
+        ),
+        changes: Int = 1,
+        primaryMinutes: Long = 4,
+        nextMinutes: Long? = 12,
+    ) = ExactDestinationNotificationPresentation(
+        primaryCountdownMinutes = primaryMinutes,
+        transitLegs = legs,
+        arrivalTime = Instant.parse("2026-08-23T09:02:00Z"),
+        primaryChangeCount = changes,
+        nextCountdownMinutes = nextMinutes,
+    )
 
     // ---- Channel ----
 
@@ -169,6 +203,18 @@ class RoutineNotificationBuilderTest {
             context.getString(R.string.notification_title_format, "14", "Slussen", "Fruängen"),
             title(notification),
         )
+    }
+
+    @Test
+    fun `exact title uses only the saved origin and final destination`() {
+        val notification = builder.build(exactModel(exactPresentation()))
+
+        assertEquals(
+            context.getString(R.string.notification_exact_route_title_format, "Slussen", "Kungsträdgården"),
+            title(notification),
+        )
+        assertFalse(title(notification).contains("19"))
+        assertFalse(title(notification).contains("Hässelby strand"))
     }
 
     @Test
@@ -271,12 +317,152 @@ class RoutineNotificationBuilderTest {
         notification.extras.getCharSequence(Notification.EXTRA_TEXT).toString()
 
     @Test
+    fun `exact expanded notification separates countdown boarding transfer final arrival changes and NEXT`() {
+        val exact = exactPresentation()
+        val notification = builder.build(exactModel(exact))
+        val arrival = DateTimeFormatter.ofPattern("HH:mm").withZone(ZoneId.systemDefault()).format(exact.arrivalTime)
+
+        assertEquals(
+            listOf(
+                "⏰ 4 min",
+                "Metro 19 toward Hässelby strand",
+                "Change to Metro 11 toward Kungsträdgården",
+                context.resources.getQuantityString(R.plurals.notification_exact_arrival_with_changes, 1, arrival, 1),
+                context.getString(R.string.notification_next_departure_format, "12 min"),
+            ),
+            bigTextLines(notification),
+        )
+        assertTrue(bigTextLines(notification).none { it.isBlank() })
+        assertEquals(0x23F0, bigTextLines(notification).first().codePointAt(0))
+    }
+
+    @Test
+    fun `exact countdowns at an hour or more use localized hours and remaining minutes`() {
+        val notification = builder.build(
+            exactModel(exactPresentation(primaryMinutes = 1_317, nextMinutes = 122)),
+        )
+
+        assertEquals("⏰ 21 hr 57 min", bigTextLines(notification).first())
+        assertEquals("Next in 2 hr 2 min", bigTextLines(notification).last())
+        assertEquals("21 hr 57 min · Metro 19\nNext in 2 hr 2 min", contentText(notification))
+    }
+
+    @Test
+    fun `exact countdown switches from minutes to hours at sixty minutes`() {
+        val notification = builder.build(
+            exactModel(exactPresentation(primaryMinutes = 60, nextMinutes = 59)),
+        )
+
+        assertEquals("⏰ 1 hr", bigTextLines(notification).first())
+        assertEquals("Next in 59 min", bigTextLines(notification).last())
+    }
+
+    @Test
+    fun `exact collapsed notification keeps countdown and first boarding line without using headsign as title`() {
+        val notification = builder.build(exactModel(exactPresentation()))
+
+        assertEquals("4 min · Metro 19\nNext in 12 min", contentText(notification))
+        assertEquals("Slussen → Kungsträdgården", title(notification))
+    }
+
+    @Test
+    fun `exact direct notification has no transfer row no zero-changes text and no NEXT placeholder`() {
+        val exact = exactPresentation(
+            legs = listOf(NotificationTransitLeg(TransportMode.METRO, "13", "Ropsten")),
+            changes = 0,
+            nextMinutes = null,
+        )
+        val notification = builder.build(exactModel(exact, directionLabel = "T-Centralen"))
+        val lines = bigTextLines(notification)
+
+        assertEquals(3, lines.size)
+        assertEquals("Metro 13 toward Ropsten", lines[1])
+        assertTrue(lines[2].startsWith("Arrive "))
+        assertFalse(lines.joinToString().contains("change"))
+        assertFalse(lines.joinToString().contains("Next"))
+    }
+
+    @Test
+    fun `exact expanded notification renders every transfer in itinerary order`() {
+        val exact = exactPresentation(
+            legs = listOf(
+                NotificationTransitLeg(TransportMode.METRO, "11", "Kungsträdgården"),
+                NotificationTransitLeg(TransportMode.METRO, "17", "Skarpnäck"),
+                NotificationTransitLeg(TransportMode.BUS, "4", "Gullmarsplan"),
+            ),
+            changes = 2,
+        )
+
+        val lines = bigTextLines(builder.build(exactModel(exact)))
+
+        assertEquals("Metro 11 toward Kungsträdgården", lines[1])
+        assertEquals("Change to Metro 17 toward Skarpnäck", lines[2])
+        assertEquals("Change to Bus 4 toward Gullmarsplan", lines[3])
+    }
+
+    @Test
+    fun `exact notification uses Swedish boarding transfer arrival and NEXT wording`() {
+        val swedishContext = context.createConfigurationContext(
+            android.content.res.Configuration(context.resources.configuration).apply {
+                setLocales(android.os.LocaleList(Locale.forLanguageTag("sv")))
+            },
+        )
+        val notification = RoutineNotificationBuilder(swedishContext).build(exactModel(exactPresentation()))
+        val lines = bigTextLines(notification)
+
+        assertEquals("Tunnelbana 19 mot Hässelby strand", lines[1])
+        assertEquals("Byt till Tunnelbana 11 mot Kungsträdgården", lines[2])
+        assertTrue(lines[3].startsWith("Ankomst "))
+        assertEquals("Nästa om 12 min", lines[4])
+    }
+
+    @Test
+    fun `exact long countdown uses Swedish localized hours and minutes`() {
+        val swedishContext = context.createConfigurationContext(
+            android.content.res.Configuration(context.resources.configuration).apply {
+                setLocales(android.os.LocaleList(Locale.forLanguageTag("sv")))
+            },
+        )
+        val notification = RoutineNotificationBuilder(swedishContext).build(
+            exactModel(exactPresentation(primaryMinutes = 1_317, nextMinutes = 122)),
+        )
+
+        assertEquals("⏰ 21 tim 57 min", bigTextLines(notification).first())
+        assertEquals("Nästa om 2 tim 2 min", bigTextLines(notification).last())
+    }
+
+    @Test
+    @Config(sdk = [34], qualifiers = "en-rUS")
+    fun `exact arrival remains 24-hour time even when the locale normally uses AM PM`() {
+        val notification = builder.build(exactModel(exactPresentation()))
+        val arrivalLine = bigTextLines(notification).first { it.startsWith("Arrive ") }
+
+        assertTrue(arrivalLine.matches(Regex("Arrive \\d{2}:\\d{2} · 1 change")))
+        assertFalse(arrivalLine.contains("AM"))
+        assertFalse(arrivalLine.contains("PM"))
+    }
+
+    @Test
+    fun `malformed exact Live model cannot fall back to generic Live status text`() {
+        val notification = builder.build(
+            model(
+                stationName = "Slussen",
+                directionLabel = "Kungsträdgården",
+                content = RoutineNotificationContent.Live(listOf(sampleRow(minutesRemaining = 3))),
+            ).copy(routineType = RoutineType.EXACT_DESTINATION, exactDestination = null),
+        )
+
+        assertEquals(context.getString(R.string.notification_unavailable), contentText(notification))
+        assertFalse(contentText(notification).contains("Live"))
+    }
+
+    @Test
     fun `the primary departure line shows its countdown and Live status`() {
         val notification = builder.build(
             model(content = RoutineNotificationContent.Live(listOf(sampleRow(minutesRemaining = 3, isRealTime = true)))),
         )
         assertEquals(
-            listOf(context.getString(R.string.notification_departure_status_format, 3L, context.getString(R.string.routine_details_departure_live))),
+            listOf(context.getString(R.string.notification_departure_status_format, "3 min", context.getString(R.string.routine_details_departure_live))),
             bigTextLines(notification),
         )
     }
@@ -287,7 +473,7 @@ class RoutineNotificationBuilderTest {
             model(content = RoutineNotificationContent.Live(listOf(sampleRow(minutesRemaining = 18, isRealTime = false)))),
         )
         assertEquals(
-            listOf(context.getString(R.string.notification_departure_status_format, 18L, context.getString(R.string.routine_details_departure_scheduled))),
+            listOf(context.getString(R.string.notification_departure_status_format, "18 min", context.getString(R.string.routine_details_departure_scheduled))),
             bigTextLines(notification),
         )
     }
@@ -303,7 +489,7 @@ class RoutineNotificationBuilderTest {
         )
         val lines = bigTextLines(notification)
         assertEquals(2, lines.size)
-        assertEquals(context.getString(R.string.notification_next_departure_format, 18L), lines[1])
+        assertEquals(context.getString(R.string.notification_next_departure_format, "18 min"), lines[1])
     }
 
     @Test
@@ -344,7 +530,7 @@ class RoutineNotificationBuilderTest {
                 ),
             ),
         )
-        assertEquals(context.getString(R.string.notification_next_departure_format, 18L), bigTextLines(notification)[1])
+        assertEquals(context.getString(R.string.notification_next_departure_format, "18 min"), bigTextLines(notification)[1])
     }
 
     @Test
@@ -356,7 +542,7 @@ class RoutineNotificationBuilderTest {
                 ),
             ),
         )
-        assertEquals(context.getString(R.string.notification_alternative_departure_format, 18L), bigTextLines(notification)[1])
+        assertEquals(context.getString(R.string.notification_alternative_departure_format, "18 min"), bigTextLines(notification)[1])
     }
 
     @Test
@@ -377,7 +563,7 @@ class RoutineNotificationBuilderTest {
         )
         // expandedLines: [staleWarning, primaryLine, secondLine, lastCheckedLine] -- see
         // applyContent's own Stale branch.
-        assertEquals(context.getString(R.string.notification_alternative_departure_format, 18L), bigTextLines(notification)[2])
+        assertEquals(context.getString(R.string.notification_alternative_departure_format, "18 min"), bigTextLines(notification)[2])
     }
 
     @Test
@@ -401,7 +587,7 @@ class RoutineNotificationBuilderTest {
                 ),
             ),
         )
-        assertEquals(context.getString(R.string.notification_next_departure_format, 18L), bigTextLines(notification)[1])
+        assertEquals(context.getString(R.string.notification_next_departure_format, "18 min"), bigTextLines(notification)[1])
     }
 
     // ---- Distinct state content ----
