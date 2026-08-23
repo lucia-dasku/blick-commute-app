@@ -22,20 +22,18 @@ import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.KeyboardArrowRight
 import androidx.compose.material.icons.filled.Add
 import androidx.compose.material.icons.filled.DateRange
-import androidx.compose.material.icons.filled.Settings
 import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.Card
 import androidx.compose.material3.CardDefaults
 import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.FloatingActionButton
 import androidx.compose.material3.Icon
-import androidx.compose.material3.IconButton
 import androidx.compose.material3.ListItem
+import androidx.compose.material3.ListItemDefaults
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Scaffold
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
-import androidx.compose.material3.TopAppBar
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.DisposableEffect
 import androidx.compose.runtime.getValue
@@ -47,6 +45,8 @@ import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.geometry.Rect
+import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.graphics.luminance
 import androidx.compose.ui.hapticfeedback.HapticFeedbackType
 import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.layout.boundsInRoot
@@ -60,19 +60,22 @@ import androidx.compose.ui.semantics.CustomAccessibilityAction
 import androidx.compose.ui.semantics.customActions
 import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.text.font.FontWeight
+import androidx.compose.ui.text.TextStyle
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
+import androidx.compose.ui.unit.sp
 import androidx.hilt.navigation.compose.hiltViewModel
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import se.blick.app.R
 import se.blick.app.billing.hasPremiumAccess
 import se.blick.app.domain.model.CommuteRoutine
-import se.blick.app.ui.components.BlickWordmark
+import se.blick.app.ui.components.BlickHomeHeader
 import se.blick.app.ui.components.LineBadge
 import se.blick.app.ui.components.RoutineLabelIconContainer
 import se.blick.app.ui.components.RoutineLabelPill
 import se.blick.app.ui.components.visuals
+import se.blick.app.ui.theme.LocalStockholmNightTheme
 import se.blick.app.billing.RoutineTierPolicy
 import se.blick.app.domain.model.RoutineType
 import se.blick.app.locale.currentBlickLocale
@@ -84,6 +87,7 @@ import se.blick.app.locale.currentBlickLocale
  * FAB visually floats above the content layer). A plain FAB is ~56dp tall plus its default
  * ~16dp margin; 96dp leaves comfortable clearance without needing to measure the real FAB. */
 private val FAB_CLEARANCE = 96.dp
+private val StockholmNightRoutineSurface = Color(0xD90A1733)
 
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
@@ -135,29 +139,30 @@ fun RoutineListContent(
     var dragPointerY by remember { mutableFloatStateOf(0f) }
     var lastDragTargetId by remember { mutableStateOf<String?>(null) }
     val hapticFeedback = LocalHapticFeedback.current
+    val useStockholmNightHeader = LocalStockholmNightTheme.current
+    val sectionLabelColor = when {
+        useStockholmNightHeader -> Color(0xFF8393AA)
+        MaterialTheme.colorScheme.background.luminance() < 0.5f -> Color.White
+        else -> Color.Black
+    }
 
     Scaffold(
         topBar = {
             Column {
-                TopAppBar(
-                    title = { BlickWordmark() },
-                    actions = {
-                        IconButton(onClick = onOpenAbout) {
-                            Icon(Icons.Filled.Settings, contentDescription = stringResource(R.string.about_action))
-                        }
-                    },
+                BlickHomeHeader(
+                    useStockholmNightBranding = useStockholmNightHeader,
+                    onOpenAbout = onOpenAbout,
                 )
                 Column(Modifier.padding(start = 16.dp, end = 16.dp, bottom = 12.dp)) {
                     Text(
                         text = stringResource(R.string.routine_list_title),
-                        style = MaterialTheme.typography.headlineSmall,
-                        fontWeight = FontWeight.Bold,
-                    )
-                    Text(
-                        text = stringResource(R.string.routine_list_subtitle),
-                        style = MaterialTheme.typography.bodyMedium,
-                        color = MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.72f),
-                        modifier = Modifier.padding(top = 4.dp),
+                        color = sectionLabelColor,
+                        style = TextStyle(
+                            fontSize = 12.sp,
+                            lineHeight = 16.sp,
+                            fontWeight = FontWeight.SemiBold,
+                            letterSpacing = 0.8.sp,
+                        ),
                     )
                 }
             }
@@ -312,6 +317,13 @@ fun RoutineListContent(
                             !routine.enabled -> ({ Text(stringResource(R.string.routine_details_status_disabled)) })
                             else -> null
                         },
+                        colors = ListItemDefaults.colors(
+                            containerColor = if (useStockholmNightHeader) {
+                                StockholmNightRoutineSurface
+                            } else {
+                                MaterialTheme.colorScheme.surface
+                            },
+                        ),
                         modifier = Modifier.clickable { onOpenRoutine(routine.id) },
                         )
                     }
@@ -347,6 +359,7 @@ private fun LabeledRoutineCard(
     onSelectFreeRoutine: (String) -> Unit,
 ) {
     val label = requireNotNull(routine.label)
+    val useStockholmNightSurface = LocalStockholmNightTheme.current
     val visuals = label.visuals(isSystemInDarkTheme())
     val locale = currentBlickLocale()
     val schedule = formatRoutineCardSchedule(
@@ -369,7 +382,13 @@ private fun LabeledRoutineCard(
         Card(
             onClick = { onOpenRoutine(routine.id) },
             shape = RoundedCornerShape(16.dp),
-            colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surface),
+            colors = CardDefaults.cardColors(
+                containerColor = if (useStockholmNightSurface) {
+                    StockholmNightRoutineSurface
+                } else {
+                    MaterialTheme.colorScheme.surface
+                },
+            ),
             elevation = CardDefaults.cardElevation(defaultElevation = 2.dp),
             modifier = Modifier
                 .fillMaxWidth()

@@ -70,6 +70,9 @@ class AboutViewModelTest {
         override suspend fun setUseDarkTheme(useDarkTheme: Boolean?) {
             state.value = state.value.copy(useDarkTheme = useDarkTheme)
         }
+        override suspend fun setUseStockholmNightTheme(enabled: Boolean) {
+            state.value = state.value.copy(useStockholmNightTheme = enabled)
+        }
         override suspend fun setHasSeenNotificationRationale(seen: Boolean) {
             state.value = state.value.copy(hasSeenNotificationRationale = seen)
         }
@@ -150,6 +153,58 @@ class AboutViewModelTest {
         viewModel.onAppearanceSelected(AppearanceMode.System)
         dispatcher.scheduler.runCurrent()
         assertEquals(null, settings.current().useDarkTheme)
+    }
+
+    @Test
+    fun `Premium can select Stockholm night without overwriting the regular fallback`() = runTest(dispatcher) {
+        val settings = FakeSettingsDataStore(AppSettings(useDarkTheme = false))
+        val viewModel = viewModel(settings = settings, entitlement = EntitlementState.Premium)
+
+        viewModel.onAppearanceSelected(AppearanceMode.StockholmNight)
+        dispatcher.scheduler.runCurrent()
+
+        assertEquals(true, settings.current().useStockholmNightTheme)
+        assertEquals(false, settings.current().useDarkTheme)
+    }
+
+    @Test
+    fun `Free cannot activate Stockholm night`() = runTest(dispatcher) {
+        val settings = FakeSettingsDataStore(AppSettings(useDarkTheme = null))
+        val viewModel = viewModel(settings = settings, entitlement = EntitlementState.Free)
+
+        viewModel.onAppearanceSelected(AppearanceMode.StockholmNight)
+        dispatcher.scheduler.runCurrent()
+
+        assertEquals(false, settings.current().useStockholmNightTheme)
+    }
+
+    @Test
+    fun `saved Stockholm night is shown only while Premium access is available`() = runTest(dispatcher) {
+        val stored = FakeSettingsDataStore(
+            AppSettings(useDarkTheme = false, useStockholmNightTheme = true),
+        )
+
+        val premiumViewModel = viewModel(settings = stored, entitlement = EntitlementState.Premium)
+        dispatcher.scheduler.runCurrent()
+        assertEquals(AppearanceMode.StockholmNight, premiumViewModel.uiState.value.appearanceMode)
+
+        val freeViewModel = viewModel(settings = stored, entitlement = EntitlementState.Free)
+        dispatcher.scheduler.runCurrent()
+        assertEquals(AppearanceMode.Light, freeViewModel.uiState.value.appearanceMode)
+    }
+
+    @Test
+    fun `selecting a regular appearance disables Stockholm night`() = runTest(dispatcher) {
+        val settings = FakeSettingsDataStore(
+            AppSettings(useDarkTheme = true, useStockholmNightTheme = true),
+        )
+        val viewModel = viewModel(settings = settings, entitlement = EntitlementState.Premium)
+
+        viewModel.onAppearanceSelected(AppearanceMode.Light)
+        dispatcher.scheduler.runCurrent()
+
+        assertEquals(false, settings.current().useStockholmNightTheme)
+        assertEquals(false, settings.current().useDarkTheme)
     }
 
     @Test

@@ -192,6 +192,12 @@ class RoutineDetailsScreenTest {
 
     private fun heading(): String = composeRule.activity.getString(R.string.routine_details_disruptions_heading)
 
+    private fun expandRoutineInfo() {
+        composeRule.onNodeWithText(
+            composeRule.activity.getString(R.string.routine_details_info_heading),
+        ).performScrollTo().performClick()
+    }
+
     @Test
     fun journeyHeader_showsTransportTypeAfterLineNumber() {
         val departureTime = Instant.now().plusSeconds(5 * 60)
@@ -553,11 +559,9 @@ class RoutineDetailsScreenTest {
             now = now,
         )
 
-        // Appears twice on screen -- once as this section's own heading (what this test
-        // targets), once more in the pre-existing Route detail row further down (unrelated and
-        // deliberately untouched) -- assert on the count rather than a single node, which would
-        // otherwise fail on the ambiguous match.
-        composeRule.onAllNodesWithText("Slussen → Fruängen").assertCountEquals(2)
+        // The collapsed Routine details section hides its duplicate Route row, leaving only
+        // the journeys section heading this test targets.
+        composeRule.onAllNodesWithText("Slussen → Fruängen").assertCountEquals(1)
     }
 
     @Test
@@ -1018,12 +1022,14 @@ class RoutineDetailsScreenTest {
     fun theRoutineHeaderShowsTheSharedLineBadgeForItsOwnLine() {
         // sampleRoutine() has lineDesignation = "14".
         setContent(DisruptionsState.NoDisruptions)
+        expandRoutineInfo()
         composeRule.onNodeWithText("14").assertExists()
     }
 
     @Test
     fun aRoutineWithNoLineDesignationShowsNoLineDetailRow() {
         setContent(DisruptionsState.NoDisruptions, routine = sampleRoutine().copy(lineDesignation = null))
+        expandRoutineInfo()
         val lineLabel = composeRule.activity.getString(R.string.routine_details_line_label)
         composeRule.onNodeWithText(lineLabel).assertDoesNotExist()
     }
@@ -1061,6 +1067,37 @@ class RoutineDetailsScreenTest {
         val pauseLabel = composeRule.activity.getString(R.string.routine_details_pause_today_action)
         composeRule.onNodeWithText(resumeLabel).assertExists()
         composeRule.onNodeWithText(pauseLabel).assertDoesNotExist()
+    }
+
+    // ---- Routine details -- collapsed by default, with the existing rows revealed by the
+    // same whole-header tap pattern used by Manage routine below ----
+
+    @Test
+    fun routineDetailsSection_collapsedByDefault_showsOnlyItsHeading() {
+        setContent(DisruptionsState.NoDisruptions)
+
+        val heading = composeRule.activity.getString(R.string.routine_details_info_heading)
+        val schedule = composeRule.activity.getString(R.string.routine_details_schedule_label)
+        val status = composeRule.activity.getString(R.string.routine_details_status_label)
+        composeRule.onNodeWithText(heading).performScrollTo().assertExists()
+        composeRule.onNodeWithText(schedule).assertDoesNotExist()
+        composeRule.onNodeWithText(status).assertDoesNotExist()
+    }
+
+    @Test
+    fun routineDetailsSection_tappingHeaderRevealsAndHidesExistingRows() {
+        setContent(DisruptionsState.NoDisruptions)
+
+        val heading = composeRule.activity.getString(R.string.routine_details_info_heading)
+        val schedule = composeRule.activity.getString(R.string.routine_details_schedule_label)
+        val status = composeRule.activity.getString(R.string.routine_details_status_label)
+        composeRule.onNodeWithText(heading).performScrollTo().performClick()
+        composeRule.onNodeWithText(schedule).assertExists()
+        composeRule.onNodeWithText(status).assertExists()
+
+        composeRule.onNodeWithText(heading).performScrollTo().performClick()
+        composeRule.onNodeWithText(schedule).assertDoesNotExist()
+        composeRule.onNodeWithText(status).assertDoesNotExist()
     }
 
     // ---- Manage routine -- collapsed by default, expands on tapping anywhere across the
@@ -1137,6 +1174,7 @@ class RoutineDetailsScreenTest {
             journeyDestinationName = "Mariatorget",
         )
         setContent(DisruptionsState.NoDisruptions, routine = exactRoutine)
+        expandRoutineInfo()
 
         val routeLabel = composeRule.activity.getString(R.string.routine_details_route_label)
         composeRule.onNodeWithText(routeLabel).performScrollTo().assertExists()
@@ -1171,6 +1209,7 @@ class RoutineDetailsScreenTest {
             routine = exactRoutine,
             onUpdateJourneyTransportModes = { savedModes = it },
         )
+        expandRoutineInfo()
 
         val metro = composeRule.activity.getString(R.string.transport_mode_metro)
         val bus = composeRule.activity.getString(R.string.transport_mode_bus)

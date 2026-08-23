@@ -30,6 +30,8 @@ import se.blick.app.domain.model.CommuteRoutine
 import se.blick.app.domain.model.TransportMode
 import se.blick.app.domain.model.RoutineLabel
 import se.blick.app.ui.components.visuals
+import se.blick.app.ui.components.BLICK_HOME_HEADER_TAG
+import se.blick.app.ui.theme.BlickTheme
 
 /**
  * Instrumented Compose UI test for the restored Add-routine control AND the deliberate
@@ -375,20 +377,45 @@ class RoutineListScreenTest {
     }
 
     @Test
-    fun routinesScreenShowsTheBlickWordmark() {
+    fun regularThemeShowsTheSharedBlickHomeLockup() {
         composeRule.setContent {
-            RoutineListContent(
-                uiState = RoutineListUiState(routines = emptyList(), isLoading = false),
-                onAddRoutine = {},
-                onOpenRoutine = {},
-            )
+            BlickTheme(useDarkTheme = false) {
+                RoutineListContent(
+                    uiState = RoutineListUiState(routines = emptyList(), isLoading = false),
+                    onAddRoutine = {},
+                    onOpenRoutine = {},
+                )
+            }
         }
 
-        composeRule.onNodeWithTag("blick_wordmark").assertIsDisplayed()
-        composeRule.onNodeWithText("blick").assertIsDisplayed()
+        composeRule.onNodeWithTag(BLICK_HOME_HEADER_TAG).assertIsDisplayed()
         composeRule.onNodeWithText(
-            composeRule.activity.getString(R.string.routine_list_subtitle),
+            composeRule.activity.getString(R.string.brand_home_title),
         ).assertIsDisplayed()
+        composeRule.onNodeWithText(
+            composeRule.activity.getString(R.string.brand_home_subtitle),
+        ).assertIsDisplayed()
+    }
+
+    @Test
+    fun StockholmNightUsesItsDedicatedHeaderWithoutChangingTheRegularHeader() {
+        composeRule.setContent {
+            BlickTheme(useStockholmNightTheme = true) {
+                RoutineListContent(
+                    uiState = RoutineListUiState(routines = emptyList(), isLoading = false),
+                    onAddRoutine = {},
+                    onOpenRoutine = {},
+                )
+            }
+        }
+
+        composeRule.onNodeWithTag(BLICK_HOME_HEADER_TAG).assertIsDisplayed()
+        composeRule.onNodeWithText(
+            composeRule.activity.getString(R.string.brand_stockholm_night_subtitle),
+        ).assertIsDisplayed()
+        composeRule.onNodeWithText(
+            composeRule.activity.getString(R.string.brand_home_subtitle),
+        ).assertDoesNotExist()
     }
 
     @Test

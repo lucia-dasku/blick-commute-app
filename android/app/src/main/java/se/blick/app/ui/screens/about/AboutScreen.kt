@@ -224,7 +224,12 @@ internal fun AboutContent(
     if (showAppearanceDialog) {
         AppearanceDialog(
             selectedMode = state.appearanceMode,
+            hasPremiumAccess = state.entitlement.hasPremiumAccess,
             onDismiss = { showAppearanceDialog = false },
+            onPremiumRequested = {
+                showAppearanceDialog = false
+                onOpenPremium()
+            },
             onSelected = {
                 showAppearanceDialog = false
                 onAppearanceSelected(it)
@@ -306,7 +311,9 @@ private fun LanguageDialog(
 @Composable
 private fun AppearanceDialog(
     selectedMode: AppearanceMode,
+    hasPremiumAccess: Boolean,
     onDismiss: () -> Unit,
+    onPremiumRequested: () -> Unit,
     onSelected: (AppearanceMode) -> Unit,
 ) {
     AlertDialog(
@@ -318,7 +325,13 @@ private fun AppearanceDialog(
                     RadioOption(
                         label = stringResource(appearanceLabelRes(mode)),
                         selected = selectedMode == mode,
-                        onClick = { onSelected(mode) },
+                        onClick = {
+                            if (mode == AppearanceMode.StockholmNight && !hasPremiumAccess) {
+                                onPremiumRequested()
+                            } else {
+                                onSelected(mode)
+                            }
+                        },
                     )
                 }
             }
@@ -354,6 +367,7 @@ internal fun appearanceLabelRes(mode: AppearanceMode): Int = when (mode) {
     AppearanceMode.System -> R.string.settings_appearance_system
     AppearanceMode.Light -> R.string.settings_appearance_light
     AppearanceMode.Dark -> R.string.settings_appearance_dark
+    AppearanceMode.StockholmNight -> R.string.settings_appearance_stockholm_night
 }
 
 @StringRes

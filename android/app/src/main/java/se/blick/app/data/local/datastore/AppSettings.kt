@@ -9,6 +9,7 @@ package se.blick.app.data.local.datastore
  */
 data class AppSettings(
     val useDarkTheme: Boolean? = null, // null = follow system
+    val useStockholmNightTheme: Boolean = false,
     val hasSeenNotificationRationale: Boolean = false,
     val hasAcknowledgedAttribution: Boolean = false,
 )

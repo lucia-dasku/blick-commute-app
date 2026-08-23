@@ -12,6 +12,7 @@ import kotlinx.coroutines.flow.stateIn
 import kotlinx.coroutines.launch
 import se.blick.app.billing.EntitlementState
 import se.blick.app.billing.PremiumEntitlementRepository
+import se.blick.app.billing.hasPremiumAccess
 import se.blick.app.data.local.datastore.AppSettingsDataStore
 import se.blick.app.notification.NotificationAvailability
 import se.blick.app.notification.NotificationAvailabilityChecker
@@ -35,7 +36,7 @@ data class AboutUiState(
 class AboutViewModel @Inject constructor(
     private val routineWidgetUpdater: RoutineWidgetUpdater,
     private val appSettingsDataStore: AppSettingsDataStore,
-    premiumEntitlementRepository: PremiumEntitlementRepository,
+    private val premiumEntitlementRepository: PremiumEntitlementRepository,
     private val notificationAvailabilityChecker: NotificationAvailabilityChecker,
     private val promotedNotificationChecker: PromotedNotificationChecker,
 ) : ViewModel() {
@@ -50,7 +51,11 @@ class AboutViewModel @Inject constructor(
         liveUpdatesEnabled,
     ) { settings, entitlement, notifications, liveUpdates ->
         AboutUiState(
-            appearanceMode = AppearanceMode.from(settings.useDarkTheme),
+            appearanceMode = AppearanceMode.from(
+                useDarkTheme = settings.useDarkTheme,
+                useStockholmNightTheme = settings.useStockholmNightTheme,
+                hasPremiumAccess = entitlement.hasPremiumAccess,
+            ),
             entitlement = entitlement,
             notificationAvailability = notifications,
             liveUpdatesEnabled = liveUpdates,
@@ -73,7 +78,16 @@ class AboutViewModel @Inject constructor(
     }
 
     fun onAppearanceSelected(mode: AppearanceMode) {
-        viewModelScope.launch { appSettingsDataStore.setUseDarkTheme(mode.useDarkTheme) }
+        viewModelScope.launch {
+            if (mode == AppearanceMode.StockholmNight) {
+                if (premiumEntitlementRepository.entitlement.value.hasPremiumAccess) {
+                    appSettingsDataStore.setUseStockholmNightTheme(true)
+                }
+            } else {
+                appSettingsDataStore.setUseStockholmNightTheme(false)
+                appSettingsDataStore.setUseDarkTheme(mode.useDarkTheme)
+            }
+        }
     }
 
     /** Re-read on resume so returning from Android Settings immediately reflects any change. */

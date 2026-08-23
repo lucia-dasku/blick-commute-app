@@ -459,6 +459,9 @@ class RoutineDetailsViewModelTest {
         override suspend fun setUseDarkTheme(useDarkTheme: Boolean?) {
             state.value = state.value.copy(useDarkTheme = useDarkTheme)
         }
+        override suspend fun setUseStockholmNightTheme(enabled: Boolean) {
+            state.value = state.value.copy(useStockholmNightTheme = enabled)
+        }
         override suspend fun setHasSeenNotificationRationale(seen: Boolean) {
             state.value = state.value.copy(hasSeenNotificationRationale = seen)
         }

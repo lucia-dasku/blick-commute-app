@@ -11,6 +11,7 @@ import javax.inject.Inject
 private object Keys {
     val USE_DARK_THEME = booleanPreferencesKey("use_dark_theme")
     val HAS_SET_DARK_THEME = booleanPreferencesKey("has_set_dark_theme")
+    val USE_STOCKHOLM_NIGHT_THEME = booleanPreferencesKey("use_stockholm_night_theme")
     val HAS_SEEN_NOTIFICATION_RATIONALE = booleanPreferencesKey("has_seen_notification_rationale")
     val HAS_ACKNOWLEDGED_ATTRIBUTION = booleanPreferencesKey("has_acknowledged_attribution")
 }
@@ -22,6 +23,7 @@ class PreferencesAppSettingsDataStore @Inject constructor(
     override val settings: Flow<AppSettings> = dataStore.data.map { prefs ->
         AppSettings(
             useDarkTheme = if (prefs[Keys.HAS_SET_DARK_THEME] == true) prefs[Keys.USE_DARK_THEME] else null,
+            useStockholmNightTheme = prefs[Keys.USE_STOCKHOLM_NIGHT_THEME] ?: false,
             hasSeenNotificationRationale = prefs[Keys.HAS_SEEN_NOTIFICATION_RATIONALE] ?: false,
             hasAcknowledgedAttribution = prefs[Keys.HAS_ACKNOWLEDGED_ATTRIBUTION] ?: false,
         )
@@ -32,6 +34,10 @@ class PreferencesAppSettingsDataStore @Inject constructor(
             prefs[Keys.HAS_SET_DARK_THEME] = useDarkTheme != null
             if (useDarkTheme != null) prefs[Keys.USE_DARK_THEME] = useDarkTheme
         }
+    }
+
+    override suspend fun setUseStockholmNightTheme(enabled: Boolean) {
+        dataStore.edit { prefs -> prefs[Keys.USE_STOCKHOLM_NIGHT_THEME] = enabled }
     }
 
     override suspend fun setHasSeenNotificationRationale(seen: Boolean) {
