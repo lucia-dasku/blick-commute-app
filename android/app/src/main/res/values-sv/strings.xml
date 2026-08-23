@@ -8,6 +8,8 @@
     <string name="routine_list_empty">Inga rutiner än. Lägg till en för att se avgångar automatiskt.</string>
     <string name="routine_list_add">Lägg till rutin</string>
     <string name="routine_list_open">Öppna %1$s</string>
+    <string name="routine_list_move_up">Flytta rutinen uppåt</string>
+    <string name="routine_list_move_down">Flytta rutinen nedåt</string>
     <string name="routine_list_free_limit_title">Gratis innehåller en rutin</string>
     <string name="routine_list_free_limit_body">Uppgradera till Blick Premium för att spara flera rutiner och jämföra kompletta resor till en exakt destination.</string>
     <string name="routine_list_premium_locked">Pausad · Premiumrutin</string>
@@ -71,9 +73,24 @@
     <string name="journey_direct">Direkt</string>
     <string name="journey_with_changes">Med byten</string>
     <string name="journey_no_direct_available">Ingen direktresa tillgänglig. Slå på Med byten för att se andra resvägar.</string>
-    <string name="journey_changes">%1$d byten</string>
+    <plurals name="journey_changes">
+        <item quantity="one">%1$d byte</item>
+        <item quantity="other">%1$d byten</item>
+    </plurals>
     <string name="journey_arrives">Ankomst %1$s</string>
     <string name="journey_later">%1$s senare</string>
+    <string name="journey_departure_summary">%1$s %2$s</string>
+    <string name="journey_summary_format">%1$s · %2$s</string>
+    <string name="journey_summary_later_format">%1$s · %2$s · %3$s</string>
+    <string name="journey_mode_line_format">%1$s %2$s</string>
+    <string name="journey_leg_route_format">%1$s → %2$s</string>
+    <string name="journey_toward_format">Mot %1$s</string>
+    <string name="journey_change">Byte</string>
+    <string name="journey_change_at">Byt vid %1$s</string>
+    <string name="journey_approximate_duration">~%1$s</string>
+    <string name="journey_walk">Gå</string>
+    <string name="journey_walk_duration">Gå %1$s</string>
+    <string name="journey_total_duration">Totalt %1$s</string>
     <string name="journey_duration_minutes">%1$d min</string>
     <string name="journey_duration_hours">%1$d tim</string>
     <string name="journey_duration_hours_minutes">%1$d tim %2$d min</string>
@@ -280,7 +297,7 @@
     <string name="widget_notifications_unavailable">Slå på aviseringar för att se live-avgångar här.</string>
     <string name="widget_countdown_minutes_format">%1$d min</string>
     <string name="widget_next_departure_format">Nästa om %1$d min</string>
-    <string name="widget_journey_next_label">Nästa</string>
+    <string name="widget_journey_next_label">Nästa om</string>
     <string name="widget_journey_alternative_label">Alternativ</string>
     <plurals name="widget_journey_arrive_with_changes">
         <item quantity="one">Ankomst %1$s • %2$d byte</item>

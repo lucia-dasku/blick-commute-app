@@ -9,6 +9,8 @@
     <string name="routine_list_empty">No routines yet. Add one to see departures automatically.</string>
     <string name="routine_list_add">Add routine</string>
     <string name="routine_list_open">Open %1$s</string>
+    <string name="routine_list_move_up">Move routine up</string>
+    <string name="routine_list_move_down">Move routine down</string>
     <string name="routine_list_free_limit_title">Free includes one routine</string>
     <string name="routine_list_free_limit_body">Upgrade to Blick Premium to save multiple routines and compare complete journeys to an exact destination.</string>
     <string name="routine_list_premium_locked">Paused · Premium routine</string>
@@ -77,9 +79,24 @@
     <string name="journey_direct">Direct</string>
     <string name="journey_with_changes">With changes</string>
     <string name="journey_no_direct_available">No direct journey available. Turn on With changes to see other routes.</string>
-    <string name="journey_changes">%1$d changes</string>
+    <plurals name="journey_changes">
+        <item quantity="one">%1$d change</item>
+        <item quantity="other">%1$d changes</item>
+    </plurals>
     <string name="journey_arrives">Arrives %1$s</string>
     <string name="journey_later">%1$s later</string>
+    <string name="journey_departure_summary">%1$s %2$s</string>
+    <string name="journey_summary_format">%1$s · %2$s</string>
+    <string name="journey_summary_later_format">%1$s · %2$s · %3$s</string>
+    <string name="journey_mode_line_format">%1$s %2$s</string>
+    <string name="journey_leg_route_format">%1$s → %2$s</string>
+    <string name="journey_toward_format">Toward %1$s</string>
+    <string name="journey_change">Change</string>
+    <string name="journey_change_at">Change at %1$s</string>
+    <string name="journey_approximate_duration">~%1$s</string>
+    <string name="journey_walk">Walk</string>
+    <string name="journey_walk_duration">Walk %1$s</string>
+    <string name="journey_total_duration">%1$s total</string>
     <string name="journey_duration_minutes">%1$d min</string>
     <string name="journey_duration_hours">%1$d hr</string>
     <string name="journey_duration_hours_minutes">%1$d hr %2$d min</string>
@@ -389,7 +406,7 @@
          widget_countdown_minutes_format value in a two-column row — see BlickRoutineWidget.kt's
          own JourneyMainContent doc. Distinct from journey_next/journey_alternative (ALL CAPS card
          labels used elsewhere) to match this widget's own Title Case convention. -->
-    <string name="widget_journey_next_label">Next</string>
+    <string name="widget_journey_next_label">Next in</string>
     <string name="widget_journey_alternative_label">Alternative</string>
     <!-- Both/With-changes layout only: the primary journey's own arrival time plus its change
          count — shown instead of "Direct" whenever the journey actually has one or more

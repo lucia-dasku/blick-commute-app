@@ -5,6 +5,7 @@ import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.fillMaxHeight
 import androidx.compose.foundation.layout.requiredWidth
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.test.assertIsDisplayed
 import androidx.compose.ui.test.junit4.v2.createAndroidComposeRule
@@ -12,6 +13,7 @@ import androidx.compose.ui.test.onNodeWithContentDescription
 import androidx.compose.ui.test.onNodeWithTag
 import androidx.compose.ui.test.onNodeWithText
 import androidx.compose.ui.test.performClick
+import androidx.compose.ui.test.performTouchInput
 import androidx.compose.ui.unit.Dp
 import androidx.compose.ui.unit.dp
 import androidx.test.ext.junit.runners.AndroidJUnit4
@@ -440,5 +442,75 @@ class RoutineListScreenTest {
         composeRule.onNodeWithContentDescription(fabDescription).performClick()
 
         assertEquals(true, addRoutineClicked)
+    }
+
+    @Test
+    fun premiumLongPressDragRequestsRoutineReordering() {
+        var requestedMove: Pair<String, String>? = null
+        composeRule.setContent {
+            RoutineListContent(
+                uiState = RoutineListUiState(
+                    routines = listOf(
+                        sampleRoutine(id = "home", name = "Home route").copy(label = RoutineLabel.HOME),
+                        sampleRoutine(id = "work", name = "Work route").copy(label = RoutineLabel.WORK),
+                    ),
+                    isLoading = false,
+                    entitlement = EntitlementState.Premium,
+                ),
+                onAddRoutine = {},
+                onOpenRoutine = {},
+                onMoveRoutine = { draggedId, targetId -> requestedMove = draggedId to targetId },
+            )
+        }
+
+        val firstNode = composeRule.onNodeWithTag("routine_reorder_item_home")
+        val firstBounds = firstNode.fetchSemanticsNode().boundsInRoot
+        val secondBounds = composeRule.onNodeWithTag("routine_reorder_item_work")
+            .fetchSemanticsNode().boundsInRoot
+        firstNode.performTouchInput {
+            down(center)
+            advanceEventTime(700)
+            moveTo(Offset(center.x, secondBounds.center.y - firstBounds.top))
+            up()
+        }
+
+        composeRule.runOnIdle {
+            assertEquals("home" to "work", requestedMove)
+        }
+    }
+
+    @Test
+    fun freeLongPressDragDoesNotRequestRoutineReordering() {
+        var moveRequested = false
+        composeRule.setContent {
+            RoutineListContent(
+                uiState = RoutineListUiState(
+                    routines = listOf(
+                        sampleRoutine(id = "home", name = "Home route").copy(label = RoutineLabel.HOME),
+                        sampleRoutine(id = "work", name = "Work route").copy(label = RoutineLabel.WORK),
+                    ),
+                    isLoading = false,
+                    entitlement = EntitlementState.Free,
+                ),
+                onAddRoutine = {},
+                onOpenRoutine = {},
+                onMoveRoutine = { _, _ -> moveRequested = true },
+            )
+        }
+
+        val firstNode = composeRule.onNodeWithTag("routine_reorder_item_home")
+        val firstBounds = firstNode.fetchSemanticsNode().boundsInRoot
+        val secondBounds = composeRule.onNodeWithTag("routine_reorder_item_work")
+            .fetchSemanticsNode().boundsInRoot
+        firstNode.performTouchInput {
+            down(center)
+            advanceEventTime(700)
+            moveTo(Offset(center.x, secondBounds.center.y - firstBounds.top))
+            up()
+        }
+
+        composeRule.runOnIdle {
+            assertEquals(false, moveRequested)
+        }
     }
 }

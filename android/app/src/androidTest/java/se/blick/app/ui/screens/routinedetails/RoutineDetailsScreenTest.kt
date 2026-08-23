@@ -234,6 +234,7 @@ class RoutineDetailsScreenTest {
         composeRule.onNodeWithText("43").assertExists()
         composeRule.onNodeWithText(
             composeRule.activity.getString(R.string.journey_mode_commuter_rail),
+            substring = true,
         ).assertExists()
     }
 
@@ -367,16 +368,16 @@ class RoutineDetailsScreenTest {
             )
         }
 
-        composeRule.onNodeWithText("in 5 min").assertExists()
-        composeRule.onNodeWithText("in 4 min").assertDoesNotExist()
+        composeRule.onNodeWithText("in 5 min", substring = true).assertExists()
+        composeRule.onNodeWithText("in 4 min", substring = true).assertDoesNotExist()
 
         // The SAME journeys list is never re-supplied -- only the evaluation timestamp advances,
         // exactly like a real automatic refresh whose journey response was structurally identical
         // but whose journeysEvaluatedAt still moved forward.
         composeRule.runOnIdle { now.value = Instant.parse("2026-07-28T08:00:30Z") }
 
-        composeRule.onNodeWithText("in 4 min").assertExists()
-        composeRule.onNodeWithText("in 5 min").assertDoesNotExist()
+        composeRule.onNodeWithText("in 4 min", substring = true).assertExists()
+        composeRule.onNodeWithText("in 5 min", substring = true).assertDoesNotExist()
     }
 
     @Test
@@ -400,6 +401,7 @@ class RoutineDetailsScreenTest {
         val oneHour = composeRule.activity.getString(R.string.journey_duration_hours, 1)
         composeRule.onNodeWithText(
             composeRule.activity.getString(R.string.journey_departure_in, oneHour),
+            substring = true,
         ).assertExists()
         composeRule.onNodeWithText("60 min", substring = true).assertDoesNotExist()
     }
@@ -437,13 +439,18 @@ class RoutineDetailsScreenTest {
         val nextDuration = composeRule.activity.getString(R.string.journey_duration_hours_minutes, 1, 28)
         composeRule.onNodeWithText(
             composeRule.activity.getString(R.string.journey_departure_in, departure),
+            substring = true,
         ).assertExists()
         composeRule.onNodeWithText(
             composeRule.activity.getString(R.string.journey_later, later),
             substring = true,
         ).assertExists()
-        composeRule.onNodeWithText("\u23F1 $primaryDuration").assertExists()
-        composeRule.onNodeWithText("\u23F1 $nextDuration").assertExists()
+        composeRule.onNodeWithText(
+            composeRule.activity.getString(R.string.journey_total_duration, primaryDuration),
+        ).assertExists()
+        composeRule.onNodeWithText(
+            composeRule.activity.getString(R.string.journey_total_duration, nextDuration),
+        ).assertExists()
     }
 
     // ---- Journeys section: route heading, Direct/With changes filters, per-card duration ----
@@ -493,6 +500,44 @@ class RoutineDetailsScreenTest {
             legs = listOf(leg),
             disruptions = emptyList(),
             role = role,
+        )
+    }
+
+    private fun timelineJourney(now: Instant): JourneyPlan {
+        val firstDeparture = now.plusSeconds(5 * 60)
+        val first = JourneyLeg(
+            transportMode = TransportMode.METRO,
+            lineDesignation = "13",
+            direction = "Ropsten",
+            originName = "Mälarhöjden, Stockholm",
+            destinationName = "Liljeholmen, Stockholm",
+            departureTime = firstDeparture,
+            arrivalTime = firstDeparture.plusSeconds(3 * 60),
+            isRealtime = true,
+            disruptions = emptyList(),
+        )
+        val second = JourneyLeg(
+            transportMode = TransportMode.METRO,
+            lineDesignation = "14",
+            direction = "Fruängen",
+            originName = "Liljeholmen, Stockholm",
+            destinationName = "Fruängen, Stockholm",
+            departureTime = firstDeparture.plusSeconds(5 * 60),
+            arrivalTime = firstDeparture.plusSeconds(16 * 60),
+            isRealtime = true,
+            disruptions = emptyList(),
+        )
+        return JourneyPlan(
+            journeyId = "timeline",
+            originName = first.originName,
+            destinationName = second.destinationName,
+            departureTime = firstDeparture,
+            arrivalTime = second.arrivalTime!!,
+            transferCount = 1,
+            firstLeg = first,
+            legs = listOf(first, second),
+            disruptions = emptyList(),
+            role = JourneyRole.PRIMARY,
         )
     }
 
@@ -755,7 +800,80 @@ class RoutineDetailsScreenTest {
         )
 
         val durationText = composeRule.activity.getString(R.string.journey_duration_minutes, 26)
-        composeRule.onNodeWithText("⏱ $durationText").assertExists()
+        composeRule.onNodeWithText(
+            composeRule.activity.getString(R.string.journey_total_duration, durationText),
+        ).assertExists()
+    }
+
+    @Test
+    fun expandedJourneyCard_showsStructuredTimelineAndCollapsesAgain() {
+        val now = Instant.parse("2026-08-23T12:00:00Z")
+        setContent(
+            disruptionsState = DisruptionsState.NoDisruptions,
+            routine = exactDestinationRoutine(),
+            journeys = listOf(timelineJourney(now)),
+            now = now,
+        )
+
+        val changeAt = composeRule.activity.getString(R.string.journey_change_at, "Liljeholmen")
+        composeRule.onNodeWithText(changeAt).assertDoesNotExist()
+
+        val expand = composeRule.activity.getString(R.string.journey_expand)
+        composeRule.onNodeWithContentDescription(expand).performScrollTo().performClick()
+
+        composeRule.onNodeWithText(
+            composeRule.activity.getString(
+                R.string.journey_mode_line_format,
+                composeRule.activity.getString(R.string.journey_mode_metro),
+                "13",
+            ),
+        ).assertExists()
+        composeRule.onNodeWithText(
+            composeRule.activity.getString(
+                R.string.journey_leg_route_format,
+                "Mälarhöjden",
+                "Liljeholmen",
+            ),
+        ).assertExists()
+        composeRule.onNodeWithText(
+            composeRule.activity.getString(R.string.journey_toward_format, "Ropsten"),
+        ).assertExists()
+        composeRule.onNodeWithText(changeAt).assertExists()
+        composeRule.onNodeWithText(
+            composeRule.activity.getString(
+                R.string.journey_approximate_duration,
+                composeRule.activity.getString(R.string.journey_duration_minutes, 2),
+            ),
+        ).assertExists()
+        composeRule.onNodeWithText(
+            composeRule.activity.getString(
+                R.string.journey_mode_line_format,
+                composeRule.activity.getString(R.string.journey_mode_metro),
+                "14",
+            ),
+        ).assertExists()
+
+        val collapse = composeRule.activity.getString(R.string.journey_collapse)
+        composeRule.onNodeWithContentDescription(collapse).performScrollTo().performClick()
+        composeRule.onNodeWithText(changeAt).assertDoesNotExist()
+    }
+
+    @Test
+    fun journeySummary_usesSingularChangeCopyAndAuthoritativeTotal() {
+        val now = Instant.parse("2026-08-23T12:00:00Z")
+        setContent(
+            disruptionsState = DisruptionsState.NoDisruptions,
+            routine = exactDestinationRoutine(),
+            journeys = listOf(timelineJourney(now)),
+            now = now,
+        )
+
+        val oneChange = composeRule.activity.resources.getQuantityString(R.plurals.journey_changes, 1, 1)
+        composeRule.onNodeWithText(oneChange, substring = true).assertExists()
+        val duration = composeRule.activity.getString(R.string.journey_duration_minutes, 16)
+        composeRule.onNodeWithText(
+            composeRule.activity.getString(R.string.journey_total_duration, duration),
+        ).assertExists()
     }
 
     // ---- Role-based card labels (PRIMARY/NEXT/ALTERNATIVE) -- labelled from each journey's own

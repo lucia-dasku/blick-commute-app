@@ -27,6 +27,8 @@ import se.blick.app.data.repository.RemoteJourneyRepository
 import javax.inject.Singleton
 import se.blick.app.billing.GooglePlayPremiumEntitlementRepository
 import se.blick.app.billing.PremiumEntitlementRepository
+import se.blick.app.billing.PreferencesPremiumRoutineOrderStore
+import se.blick.app.billing.PremiumRoutineOrderStore
 
 @Module
 @InstallIn(SingletonComponent::class)
@@ -37,6 +39,12 @@ abstract class RepositoryModule {
     abstract fun bindPremiumEntitlementRepository(
         impl: GooglePlayPremiumEntitlementRepository,
     ): PremiumEntitlementRepository
+
+    @Binds
+    @Singleton
+    abstract fun bindPremiumRoutineOrderStore(
+        impl: PreferencesPremiumRoutineOrderStore,
+    ): PremiumRoutineOrderStore
 
     @Binds
     @Singleton
