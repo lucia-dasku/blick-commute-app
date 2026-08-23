@@ -651,7 +651,7 @@ class RoutineNotificationBuilderTest {
 
     @Test
     @Config(sdk = [26], qualifiers = "lt")
-    fun `no explicit Blick choice on an unsupported Lithuanian system locale resolves English notification text and English-formatted last-checked time`() {
+    fun `no explicit Blick choice on an unsupported Lithuanian system locale resolves English notification text and 24-hour last-checked time`() {
         // Sanity check that the simulated device/system locale really is the unsupported one.
         assertEquals("lt", context.resources.configuration.locales[0].language)
 
@@ -666,13 +666,10 @@ class RoutineNotificationBuilderTest {
             model(content = RoutineNotificationContent.Stale(listOf(sampleRow(minutesRemaining = 6)), lastCheckedAt)),
         )
         val englishTimeText = formatDepartureTime(lastCheckedAt, Locale.forLanguageTag("en"))
-        val lithuanianTimeText = formatDepartureTime(lastCheckedAt, Locale.forLanguageTag("lt"))
         val lines = bigTextLines(staleNotification)
         assertTrue("expected the English-formatted last-checked time in: $lines", lines.any { it.contains(englishTimeText) })
-        assertTrue(
-            "expected English and Lithuanian time formatting to actually differ, otherwise this test would not catch a regression",
-            englishTimeText != lithuanianTimeText,
-        )
+        assertFalse(englishTimeText.contains("AM"))
+        assertFalse(englishTimeText.contains("PM"))
     }
 
     @Test

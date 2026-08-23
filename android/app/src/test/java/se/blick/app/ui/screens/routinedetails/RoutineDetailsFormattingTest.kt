@@ -85,8 +85,7 @@ class RoutineDetailsFormattingTest {
     fun `formatTimeRange renders both the start and end time`() {
         val range = formatTimeRange(LocalTime.of(7, 0), LocalTime.of(9, 0), locale)
 
-        assertTrue(range.contains("7:00"))
-        assertTrue(range.contains("9:00"))
+        assertEquals("07:00 – 09:00", range)
     }
 
     @Test
@@ -95,7 +94,7 @@ class RoutineDetailsFormattingTest {
 
         val formatted = formatDepartureTime(instant, locale, ZoneOffset.UTC)
 
-        assertTrue(formatted.contains("8:15"))
+        assertEquals("08:15", formatted)
     }
 
     @Test
@@ -105,8 +104,8 @@ class RoutineDetailsFormattingTest {
         val utc = formatDepartureTime(instant, locale, ZoneOffset.UTC)
         val plusTwo = formatDepartureTime(instant, locale, ZoneOffset.ofHours(2))
 
-        assertTrue(utc.contains("8:15"))
-        assertTrue(plusTwo.contains("10:15"))
+        assertEquals("08:15", utc)
+        assertEquals("10:15", plusTwo)
     }
 
     // ---- Swedish (sv) -- these three functions are exactly what Blick's own app-locale
@@ -141,15 +140,12 @@ class RoutineDetailsFormattingTest {
     }
 
     @Test
-    fun `formatTimeRange renders a Swedish 24-hour time range distinct from the English 12-hour one`() {
+    fun `formatTimeRange consistently uses 24-hour time in Swedish and English`() {
         val range = formatTimeRange(LocalTime.of(19, 5), LocalTime.of(21, 0), swedish)
         val englishRange = formatTimeRange(LocalTime.of(19, 5), LocalTime.of(21, 0), locale)
 
-        // Swedish's standard short time format is 24-hour ("19:05"); Locale.US's is 12-hour
-        // ("7:05 PM") -- this is a real, meaningful difference a Swedish user would notice,
-        // not just a different label for the same value.
-        assertTrue("expected '$range' to contain the 24-hour hour value", range.contains("19"))
-        assertTrue("expected the Swedish and English renderings to differ: '$range' vs '$englishRange'", range != englishRange)
+        assertEquals("19:05 – 21:00", range)
+        assertEquals(range, englishRange)
     }
 
     @Test

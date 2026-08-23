@@ -6,7 +6,6 @@ import java.time.Instant
 import java.time.LocalTime
 import java.time.ZoneId
 import java.time.format.DateTimeFormatter
-import java.time.format.FormatStyle
 import java.time.format.TextStyle
 import java.util.Locale
 
@@ -37,19 +36,19 @@ private val WEEKDAYS: Set<DayOfWeek> = setOf(
     DayOfWeek.MONDAY, DayOfWeek.TUESDAY, DayOfWeek.WEDNESDAY, DayOfWeek.THURSDAY, DayOfWeek.FRIDAY,
 )
 
-/** Locale-aware short start–end time range, e.g. "7:00 AM – 9:00 AM". */
+/** European 24-hour start–end time range, e.g. "07:00 – 09:00". */
 fun formatTimeRange(start: LocalTime, end: LocalTime, locale: Locale): String {
-    val formatter = DateTimeFormatter.ofLocalizedTime(FormatStyle.SHORT).withLocale(locale)
+    val formatter = DateTimeFormatter.ofPattern("HH:mm", locale)
     return "${start.format(formatter)} – ${end.format(formatter)}"
 }
 
 /**
- * Locale-aware clock time for a departure's effective instant, rendered in [zone]
+ * European 24-hour clock time for a departure's effective instant, rendered in [zone]
  * (defaults to the device's current time zone) — matches how a person reads a physical
- * departure board, rather than showing a raw UTC instant.
+ * departure board, rather than showing a raw UTC instant or a device-dependent AM/PM value.
  */
 fun formatDepartureTime(instant: Instant, locale: Locale, zone: ZoneId = ZoneId.systemDefault()): String {
-    val formatter = DateTimeFormatter.ofLocalizedTime(FormatStyle.SHORT).withLocale(locale).withZone(zone)
+    val formatter = DateTimeFormatter.ofPattern("HH:mm", locale).withZone(zone)
     return formatter.format(instant)
 }
 

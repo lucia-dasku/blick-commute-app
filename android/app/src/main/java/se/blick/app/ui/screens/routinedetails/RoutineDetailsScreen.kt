@@ -72,19 +72,13 @@ import se.blick.app.domain.model.ExactDestinationChangesPreference
 import se.blick.app.domain.usecase.DisruptionsState
 import se.blick.app.domain.usecase.LiveDeparturesState
 import se.blick.app.domain.usecase.PreparedDeparture
-import se.blick.app.domain.usecase.countdownMinutes
-import se.blick.app.domain.usecase.effectiveFirstDeparture
 import se.blick.app.domain.usecase.filterCurrentJourneys
 import se.blick.app.domain.model.TransportMode
 import se.blick.app.domain.model.JourneyPlan
-import se.blick.app.domain.model.JourneyRole
 import se.blick.app.domain.model.JOURNEY_TRANSPORT_MODE_OPTIONS
 import se.blick.app.domain.model.RoutineType
 import se.blick.app.ui.theme.RoutineDestructiveRed
-import java.time.Duration
 import java.time.Instant
-import java.time.ZoneId
-import java.time.format.DateTimeFormatter
 import se.blick.app.locale.currentBlickLocale
 import se.blick.app.notification.NotificationAvailability
 import se.blick.app.notification.NotificationPostResult
@@ -253,6 +247,7 @@ private fun JourneyComparisonSection(
     journeys: List<JourneyPlan>,
     unavailable: Boolean,
     now: Instant,
+    locale: java.util.Locale,
     changesPreference: ExactDestinationChangesPreference,
     isUpdatingChangesPreference: Boolean,
     changesPreferenceUpdateFailed: Boolean,
@@ -331,104 +326,18 @@ private fun JourneyComparisonSection(
                 // surfaces that only ever want two rows, not this screen -- see their own code).
                 filteredJourneys.take(3).forEachIndexed { index, journey ->
                     var expanded by remember(journey.journeyId) { mutableStateOf(false) }
-                    Surface(
-                        tonalElevation = if (index == 0) 3.dp else 1.dp,
-                        shape = MaterialTheme.shapes.medium,
-                        modifier = Modifier.fillMaxWidth().clickable { expanded = !expanded },
-                    ) {
-                        Column(Modifier.padding(16.dp), verticalArrangement = Arrangement.spacedBy(6.dp)) {
-                            Row(
-                                modifier = Modifier.fillMaxWidth(),
-                                horizontalArrangement = Arrangement.SpaceBetween,
-                                verticalAlignment = Alignment.CenterVertically,
-                            ) {
-                                // Labelled from the journey's OWN role, never list position: the
-                                // Direct/With-changes filters above can leave any single journey as
-                                // the only (and therefore first-shown) card, and it must still say
-                                // what it actually is rather than default to "FASTEST" purely by
-                                // virtue of being shown first (see JourneyFilterRow's own doc, and
-                                // the product spec's "filtering cannot cause misleading role
-                                // labels" requirement).
-                                Text(
-                                    stringResource(
-                                        when (journey.role) {
-                                            JourneyRole.PRIMARY -> R.string.journey_fastest
-                                            JourneyRole.NEXT -> R.string.journey_next
-                                            JourneyRole.ALTERNATIVE -> R.string.journey_alternative
-                                        },
-                                    ),
-                                    style = MaterialTheme.typography.labelLarge,
-                                )
-                                Icon(
-                                    imageVector = if (expanded) Icons.Filled.KeyboardArrowUp else Icons.Filled.KeyboardArrowDown,
-                                    contentDescription = stringResource(
-                                        if (expanded) R.string.journey_collapse else R.string.journey_expand,
-                                    ),
-                                )
-                            }
-                            Row(horizontalArrangement = Arrangement.spacedBy(8.dp), verticalAlignment = Alignment.CenterVertically) {
-                                journey.firstLeg.lineDesignation?.let {
-                                    LineBadge(it, journey.firstLeg.transportMode)
-                                }
-                                Text(
-                                    stringResource(journey.firstLeg.transportMode.journeyLabelResId()),
-                                    style = MaterialTheme.typography.titleMedium,
-                                )
-                                // countdownMinutes, never a floor-based Duration.toMinutes().coerceAtLeast(0):
-                                // that would floor a genuinely-upcoming departure under a minute away down
-                                // to "0 min" (indistinguishable from one that already departed) and would
-                                // hide an already-expired departure as "0 min" rather than it having already
-                                // been removed by the filter above. effectiveFirstDeparture, not the raw
-                                // top-level departureTime, for both this eligibility check and this
-                                // countdown -- see that function's own doc.
-                                val minutes = countdownMinutes(now, journey.effectiveFirstDeparture())
-                                Text(
-                                    stringResource(R.string.journey_departure_in, formatJourneyMinutes(minutes)),
-                                    style = MaterialTheme.typography.titleMedium,
-                                )
-                            }
-                            val changes = if (journey.transferCount == 0) stringResource(R.string.journey_direct)
-                                else stringResource(R.string.journey_changes, journey.transferCount)
-                            val arrival = DateTimeFormatter.ofPattern("HH:mm").withZone(ZoneId.systemDefault()).format(journey.arrivalTime)
-                            val later = Duration.between(fastestArrival, journey.arrivalTime).toMinutes()
-                            Text(if (index == 0) "$changes · ${stringResource(R.string.journey_arrives, arrival)}"
-                                else "$changes · ${stringResource(R.string.journey_arrives, arrival)} · ${stringResource(R.string.journey_later, formatJourneyMinutes(later))}")
-                            if (expanded) {
-                                journey.legs.forEach { leg ->
-                                    Text("${leg.originName} → ${leg.destinationName}${leg.lineDesignation?.let { " · $it" }.orEmpty()}")
-                                    leg.disruptions.forEach { Text(it, color = MaterialTheme.colorScheme.error) }
-                                }
-                            }
-                            // Total journey time -- always the true bottom of the card, after the
-                            // expanded leg breakdown when shown (the chevron in the header row
-                            // above is the only collapsed-state expand affordance now). The same
-                            // effectiveFirstDeparture the countdown above is measured from, not
-                            // the raw top-level departureTime, so this duration is consistent
-                            // with the departure this card actually displays.
-                            val durationMinutes = Duration.between(journey.effectiveFirstDeparture(), journey.arrivalTime).toMinutes()
-                            Text(
-                                "⏱ ${formatJourneyMinutes(durationMinutes)}",
-                                style = MaterialTheme.typography.bodySmall,
-                                color = MaterialTheme.colorScheme.secondary,
-                            )
-                        }
-                    }
+                    JourneyTimelineCard(
+                        journey = journey,
+                        now = now,
+                        fastestArrival = fastestArrival,
+                        locale = locale,
+                        emphasized = index == 0,
+                        expanded = expanded,
+                        onExpandedChange = { expanded = it },
+                    )
                 }
             }
         }
-    }
-}
-
-@Composable
-private fun formatJourneyMinutes(minutes: Long): String {
-    if (minutes < 60) return stringResource(R.string.journey_duration_minutes, minutes)
-
-    val hours = minutes / 60
-    val remainingMinutes = minutes % 60
-    return if (remainingMinutes == 0L) {
-        stringResource(R.string.journey_duration_hours, hours)
-    } else {
-        stringResource(R.string.journey_duration_hours_minutes, hours, remainingMinutes)
     }
 }
 
@@ -616,6 +525,7 @@ internal fun RoutineDetailsContent(
                 journeys = journeys,
                 unavailable = journeysUnavailable,
                 now = now,
+                locale = locale,
                 changesPreference = routine.changesPreference,
                 isUpdatingChangesPreference = isUpdatingChangesPreference,
                 changesPreferenceUpdateFailed = changesPreferenceUpdateFailed,
@@ -1432,13 +1342,4 @@ private fun TransportMode.detailsLabelResId(): Int = when (this) {
     TransportMode.FERRY -> R.string.transport_mode_ferry
     TransportMode.TAXI -> R.string.transport_mode_taxi
     TransportMode.UNKNOWN -> R.string.transport_mode_unknown
-}
-
-private fun TransportMode.journeyLabelResId(): Int = when (this) {
-    TransportMode.METRO -> R.string.journey_mode_metro
-    TransportMode.TRAIN -> R.string.journey_mode_commuter_rail
-    TransportMode.BUS -> R.string.journey_mode_bus
-    TransportMode.TRAM -> R.string.journey_mode_tram
-    TransportMode.SHIP, TransportMode.FERRY -> R.string.journey_mode_ferry
-    TransportMode.TAXI, TransportMode.UNKNOWN -> R.string.transport_mode_unknown
 }

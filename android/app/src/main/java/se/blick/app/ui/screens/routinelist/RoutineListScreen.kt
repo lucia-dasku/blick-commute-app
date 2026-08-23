@@ -2,6 +2,7 @@ package se.blick.app.ui.screens.routinelist
 
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.background
+import androidx.compose.foundation.gestures.detectDragGesturesAfterLongPress
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Column
@@ -16,7 +17,7 @@ import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.lazy.LazyColumn
-import androidx.compose.foundation.lazy.items
+import androidx.compose.foundation.lazy.itemsIndexed
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.KeyboardArrowRight
 import androidx.compose.material.icons.filled.Add
@@ -36,16 +37,28 @@ import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
 import androidx.compose.material3.TopAppBar
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.DisposableEffect
 import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableFloatStateOf
+import androidx.compose.runtime.mutableStateMapOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.geometry.Rect
+import androidx.compose.ui.hapticfeedback.HapticFeedbackType
+import androidx.compose.ui.input.pointer.pointerInput
+import androidx.compose.ui.layout.boundsInRoot
+import androidx.compose.ui.layout.onGloballyPositioned
+import androidx.compose.ui.platform.LocalHapticFeedback
 import androidx.compose.foundation.isSystemInDarkTheme
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.platform.testTag
+import androidx.compose.ui.semantics.CustomAccessibilityAction
+import androidx.compose.ui.semantics.customActions
+import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.text.style.TextOverflow
@@ -90,6 +103,7 @@ fun RoutineListScreen(
         onOpenRoutine = onOpenRoutine,
         onOpenAbout = onOpenAbout,
         onSelectFreeRoutine = viewModel::selectFreeRoutine,
+        onMoveRoutine = viewModel::moveRoutine,
     )
 }
 
@@ -113,9 +127,14 @@ fun RoutineListContent(
     onOpenAbout: () -> Unit = {},
     onOpenPremium: () -> Unit = {},
     onSelectFreeRoutine: (String) -> Unit = {},
+    onMoveRoutine: (String, String) -> Unit = { _, _ -> },
 ) {
     // One stable notification remains sufficient because enabled routine windows cannot overlap.
     var showOneRoutineLimitDialog by remember { mutableStateOf(false) }
+    val routineBounds = remember { mutableStateMapOf<String, Rect>() }
+    var dragPointerY by remember { mutableFloatStateOf(0f) }
+    var lastDragTargetId by remember { mutableStateOf<String?>(null) }
+    val hapticFeedback = LocalHapticFeedback.current
 
     Scaffold(
         topBar = {
@@ -187,10 +206,74 @@ fun RoutineListContent(
                 // content padding must, or the last routine row can end up under the FAB.
                 contentPadding = PaddingValues(bottom = FAB_CLEARANCE),
             ) {
-                items(uiState.routines, key = CommuteRoutine::id) { routine ->
+                itemsIndexed(uiState.routines, key = { _, routine -> routine.id }) { index, routine ->
                     val allowed = RoutineTierPolicy.canRun(
                         routine, uiState.routines, uiState.entitlement, uiState.selectedFreeRoutineId,
                     )
+                    val reorderEnabled = uiState.entitlement.hasPremiumAccess
+                    val moveUpLabel = stringResource(R.string.routine_list_move_up)
+                    val moveDownLabel = stringResource(R.string.routine_list_move_down)
+                    DisposableEffect(routine.id) {
+                        onDispose { routineBounds.remove(routine.id) }
+                    }
+                    val reorderModifier = if (reorderEnabled) {
+                        Modifier
+                            .pointerInput(routine.id) {
+                                detectDragGesturesAfterLongPress(
+                                    onDragStart = { localPosition ->
+                                        dragPointerY = (routineBounds[routine.id]?.top ?: 0f) + localPosition.y
+                                        lastDragTargetId = null
+                                        hapticFeedback.performHapticFeedback(HapticFeedbackType.LongPress)
+                                    },
+                                    onDragEnd = {
+                                        lastDragTargetId = null
+                                    },
+                                    onDragCancel = {
+                                        lastDragTargetId = null
+                                    },
+                                    onDrag = { change, dragAmount ->
+                                        change.consume()
+                                        dragPointerY += dragAmount.y
+                                        val targetId = routineBounds.entries
+                                            .firstOrNull { (_, bounds) -> dragPointerY in bounds.top..bounds.bottom }
+                                            ?.key
+                                        if (targetId == null || targetId == routine.id) {
+                                            lastDragTargetId = null
+                                        } else if (targetId != lastDragTargetId) {
+                                            lastDragTargetId = targetId
+                                            onMoveRoutine(routine.id, targetId)
+                                        }
+                                    },
+                                )
+                            }
+                            .semantics {
+                                customActions = buildList {
+                                    if (index > 0) {
+                                        add(CustomAccessibilityAction(moveUpLabel) {
+                                            onMoveRoutine(routine.id, uiState.routines[index - 1].id)
+                                            true
+                                        })
+                                    }
+                                    if (index < uiState.routines.lastIndex) {
+                                        add(CustomAccessibilityAction(moveDownLabel) {
+                                            onMoveRoutine(routine.id, uiState.routines[index + 1].id)
+                                            true
+                                        })
+                                    }
+                                }
+                            }
+                    } else {
+                        Modifier
+                    }
+                    Box(
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .onGloballyPositioned { coordinates ->
+                                routineBounds[routine.id] = coordinates.boundsInRoot()
+                            }
+                            .then(reorderModifier)
+                            .testTag("routine_reorder_item_${routine.id}"),
+                    ) {
                     if (routine.label != null) {
                         LabeledRoutineCard(
                             routine = routine,
@@ -231,6 +314,7 @@ fun RoutineListContent(
                         },
                         modifier = Modifier.clickable { onOpenRoutine(routine.id) },
                         )
+                    }
                     }
                 }
             }
