@@ -233,12 +233,23 @@
     <string name="notification_channel_name">Pendlingsavgångar</string>
     <string name="notification_channel_description">Pågående avgångsuppdateringar för din aktiva pendlingsrutin</string>
     <string name="notification_title_format">%1$s · %2$s → %3$s</string>
+    <string name="notification_exact_route_title_format">%1$s → %2$s</string>
     <string name="notification_line_fallback">Alla linjer</string>
     <string name="notification_direction_fallback">Valfri riktning</string>
-    <string name="notification_departure_status_format">%1$d min · %2$s</string>
-    <string name="notification_next_departure_format">Nästa om %1$d min</string>
+    <string name="notification_departure_status_format">%1$s · %2$s</string>
+    <string name="notification_next_departure_format">Nästa om %1$s</string>
+    <string name="notification_exact_collapsed_primary_format">%1$s · %2$s</string>
+    <string name="notification_exact_expanded_countdown_format">⏰ %1$s</string>
+    <string name="notification_exact_board_toward_format">%1$s mot %2$s</string>
+    <string name="notification_exact_change_toward_format">Byt till %1$s mot %2$s</string>
+    <string name="notification_exact_change_format">Byt till %1$s</string>
+    <string name="notification_exact_arrival_format">Ankomst %1$s</string>
+    <plurals name="notification_exact_arrival_with_changes">
+        <item quantity="one">Ankomst %1$s · %2$d byte</item>
+        <item quantity="other">Ankomst %1$s · %2$d byten</item>
+    </plurals>
     <string name="notification_next_departure_cancelled">Nästa · Inställd</string>
-    <string name="notification_alternative_departure_format">Alternativ om %1$d min</string>
+    <string name="notification_alternative_departure_format">Alternativ om %1$s</string>
     <string name="notification_alternative_departure_cancelled">Alternativ · Inställd</string>
     <string name="notification_loading">Uppdaterar avgångar…</string>
     <string name="notification_last_checked_format">Senast kontrollerat: %1$s</string>

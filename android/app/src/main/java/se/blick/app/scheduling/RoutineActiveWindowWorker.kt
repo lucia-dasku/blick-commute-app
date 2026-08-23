@@ -674,7 +674,13 @@ class RoutineActiveWindowWorker @AssistedInject constructor(
                     null
                 }
                 val notificationDisruption = exactDisruption ?: disruptionAtPost?.toPresentation()
-                val model = RoutineNotificationMapper.map(notificationRoutine, departuresState, now, notificationDisruption)
+                val model = RoutineNotificationMapper.map(
+                    notificationRoutine,
+                    departuresState,
+                    now,
+                    notificationDisruption,
+                    exactJourneys = journeyPlans,
+                )
                 // The real NotificationPostResult is intentionally not surfaced anywhere from
                 // here (there is no UI attached to a background worker to report it to) --
                 // but it is also never used to claim success; showOrUpdate itself already
@@ -731,7 +737,13 @@ class RoutineActiveWindowWorker @AssistedInject constructor(
                     // that fetch even started.
                     val nowAfterDisruptionFetch = clock.instant()
                     routineNotifier.showOrUpdate(
-                        RoutineNotificationMapper.map(notificationRoutine, departuresState, nowAfterDisruptionFetch, lastKnownDisruption?.toPresentation()),
+                        RoutineNotificationMapper.map(
+                            notificationRoutine,
+                            departuresState,
+                            nowAfterDisruptionFetch,
+                            lastKnownDisruption?.toPresentation(),
+                            exactJourneys = journeyPlans,
+                        ),
                     )
                     // Mirrors the notification's own second, disruption-aware update above --
                     // same tick, same already-fetched departuresState, no separate widget fetch
@@ -784,7 +796,13 @@ class RoutineActiveWindowWorker @AssistedInject constructor(
                         if (resolvedDisruption != exactDisruption) {
                             val nowAfterDeviationsFetch = clock.instant()
                             routineNotifier.showOrUpdate(
-                                RoutineNotificationMapper.map(notificationRoutine, departuresState, nowAfterDeviationsFetch, resolvedDisruption),
+                                RoutineNotificationMapper.map(
+                                    notificationRoutine,
+                                    departuresState,
+                                    nowAfterDeviationsFetch,
+                                    resolvedDisruption,
+                                    exactJourneys = journeyPlans,
+                                ),
                             )
                             runWidgetUpdateSafely {
                                 routineWidgetUpdater.updateWithJourneys(

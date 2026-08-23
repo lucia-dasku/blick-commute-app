@@ -97,7 +97,11 @@ class BlickRoutineWidgetRenderTest {
         ),
     )
 
-    private fun countdownText(minutes: Long) = context.getString(R.string.widget_countdown_minutes_format, minutes)
+    private fun countdownText(minutes: Long) = when {
+        minutes < 60 -> context.getString(R.string.journey_duration_minutes, minutes)
+        minutes % 60 == 0L -> context.getString(R.string.journey_duration_hours, minutes / 60)
+        else -> context.getString(R.string.journey_duration_hours_minutes, minutes / 60, minutes % 60)
+    }
     private fun directText() = context.getString(R.string.journey_direct)
     private fun withChangesText() = context.getString(R.string.journey_with_changes)
     private fun nextLabelText() = context.getString(R.string.widget_journey_next_label)
@@ -108,6 +112,26 @@ class BlickRoutineWidgetRenderTest {
     private fun lineRelevantSingleText(line: String) = context.getString(R.string.notification_disruption_line_relevant_single_format, line)
     private fun lineRelevantGenericText() = context.getString(R.string.notification_disruption_line_relevant_generic)
     private fun effectText(effect: DisruptionEffect) = context.getString(disruptionEffectLabelRes(effect))
+
+    @Test
+    fun `widget countdown changes from minutes to localized hours at sixty minutes`() {
+        assertEquals("59 min", formatWidgetCountdown(context, 59))
+        assertEquals("1 hr", formatWidgetCountdown(context, 60))
+        assertEquals("2 hr 2 min", formatWidgetCountdown(context, 122))
+        assertEquals("21 hr 57 min", formatWidgetCountdown(context, 1_317))
+    }
+
+    @Test
+    fun `widget long countdown uses Swedish localized hours and minutes`() {
+        val swedishContext = context.createConfigurationContext(
+            Configuration(context.resources.configuration).apply {
+                setLocales(android.os.LocaleList(Locale.forLanguageTag("sv")))
+            },
+        )
+
+        assertEquals("21 tim 57 min", formatWidgetCountdown(swedishContext, 1_317))
+        assertEquals("2 tim 2 min", formatWidgetCountdown(swedishContext, 122))
+    }
 
     // ---- Branded inactive state: real Glance composition at each responsive shape. ----
 
@@ -556,7 +580,7 @@ class BlickRoutineWidgetRenderTest {
             )
             provideComposable { BlickWidgetContent(state, now) }
 
-            // 71-minute primary countdown -- a genuine two-digit value.
+            // 71-minute primary countdown -- displayed as localized hours and minutes.
             onNode(hasTextEqualTo(countdownText(71))).assertExists()
             // hasTextEqualTo, not the substring-matching hasText: "4" is itself a substring of
             // the "42X" badge's own text, so a substring search for "4" would ambiguously match
@@ -567,7 +591,7 @@ class BlickRoutineWidgetRenderTest {
             onNode(hasText(arriveWithChangesText(arrival, 2))).assertExists()
             onNode(hasText(withChangesText())).assertExists()
             onNode(hasTextEqualTo(nextLabelText())).assertExists()
-            // 110-minute secondary countdown.
+            // 110-minute secondary countdown -- also displayed as hours and minutes.
             onNode(hasTextEqualTo(countdownText(110))).assertExists()
         }
 

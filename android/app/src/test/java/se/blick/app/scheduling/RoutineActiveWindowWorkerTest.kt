@@ -3783,10 +3783,14 @@ class RoutineActiveWindowWorkerTest {
         )
         worker.doWork()
 
+        val liveModel = notifier.shown.first { it.content is RoutineNotificationContent.Live }
         val liveContent = notifier.shown.map { it.content }.filterIsInstance<RoutineNotificationContent.Live>()
         assertTrue("expected the notification to show the surviving journey live", liveContent.isNotEmpty())
         val notificationDeparture = liveContent.first().departures.single()
         assertEquals("14", notificationDeparture.lineDesignation)
+        val exactPresentation = checkNotNull(liveModel.exactDestination)
+        assertEquals(upcomingJourney.arrivalTime, exactPresentation.arrivalTime)
+        assertEquals(listOf("14"), exactPresentation.transitLegs.map { it.lineDesignation })
 
         assertTrue("expected at least one updateWithJourneys call", widgetUpdater.journeysUpdateCalls.isNotEmpty())
         val (journeysAtUpdate, nowAtUpdate) = widgetUpdater.journeysUpdateCalls.first()
@@ -3796,6 +3800,66 @@ class RoutineActiveWindowWorkerTest {
         // proving both surfaces shared one eligibility decision AND one timestamp, not two
         // independently-read ones that merely happened not to disagree this time.
         assertEquals(notificationDeparture.minutesRemaining, countdownMinutes(nowAtUpdate, upcomingJourney.departureTime))
+    }
+
+    @Test
+    fun `successive normal worker ticks retain the full exact PRIMARY and NEXT presentation`() = runTest {
+        val start = Instant.parse("2026-07-27T05:00:00Z") // 07:00 local, Monday
+        val clock = SchedulerClock(start, zone) { testScheduler.currentTime }
+        val routine = exactDestinationRoutine(endTime = LocalTime.of(8, 0))
+        val firstLeg = JourneyLeg(
+            TransportMode.METRO, "19", "Hässelby strand", "Slussen", "T-Centralen",
+            start.plusSeconds(240), start.plusSeconds(900), true, emptyList(),
+        )
+        val transferLeg = JourneyLeg(
+            TransportMode.METRO, "11", "Kungsträdgården", "T-Centralen", "Kungsträdgården",
+            start.plusSeconds(960), start.plusSeconds(1_200), true, emptyList(),
+        )
+        val primary = JourneyPlan(
+            "primary", "Slussen", "Kungsträdgården", start.plusSeconds(240), start.plusSeconds(1_200),
+            1, firstLeg, listOf(firstLeg, transferLeg), emptyList(), JourneyRole.PRIMARY,
+        )
+        val nextFirstLeg = firstLeg.copy(
+            departureTime = start.plusSeconds(420),
+            arrivalTime = start.plusSeconds(1_080),
+        )
+        val next = JourneyPlan(
+            "next", "Slussen", "Kungsträdgården", start.plusSeconds(420), start.plusSeconds(1_380),
+            1, nextFirstLeg, listOf(nextFirstLeg, transferLeg.copy(departureTime = start.plusSeconds(1_140))),
+            emptyList(), JourneyRole.NEXT,
+        )
+        val journeys = RecordingJourneyRepository({ testScheduler.currentTime }) { listOf(primary, next) }
+        val notifier = RecordingNotifier()
+        val worker = buildWorker(
+            routine.id,
+            FixedRoutineRepository(routine),
+            GetLiveDeparturesUseCase(FakeDepartureRepository { error("unused") }, clock),
+            notifier,
+            RecordingScheduler(),
+            clock,
+            getRankedJourneys = GetRankedJourneysUseCase(journeys, clock),
+        )
+
+        val job = launch { worker.doWork() }
+        runCurrent()
+        testScheduler.advanceTimeBy(60_000L)
+        runCurrent()
+
+        val liveModels = notifier.shown.filter { it.content is RoutineNotificationContent.Live }
+        assertTrue("expected at least the first and later live tick", liveModels.size >= 2)
+        val first = checkNotNull(liveModels.first().exactDestination)
+        val later = checkNotNull(liveModels.last().exactDestination)
+        assertTrue("no live tick may downgrade to the generic presentation", liveModels.all { it.exactDestination != null })
+        assertEquals(listOf("19", "11"), first.transitLegs.map { it.lineDesignation })
+        assertEquals(listOf("19", "11"), later.transitLegs.map { it.lineDesignation })
+        assertEquals(primary.arrivalTime, later.arrivalTime)
+        assertEquals(1, later.primaryChangeCount)
+        assertEquals(4L, first.primaryCountdownMinutes)
+        assertEquals(3L, later.primaryCountdownMinutes)
+        assertEquals(7L, first.nextCountdownMinutes)
+        assertEquals(6L, later.nextCountdownMinutes)
+
+        job.cancelAndJoin()
     }
 
     @Test

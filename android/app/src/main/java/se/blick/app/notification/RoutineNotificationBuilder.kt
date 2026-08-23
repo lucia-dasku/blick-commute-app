@@ -12,8 +12,12 @@ import se.blick.app.MainActivity
 import se.blick.app.R
 import se.blick.app.domain.model.DisruptionEffect
 import se.blick.app.domain.model.JourneyRole
+import se.blick.app.domain.model.RoutineType
+import se.blick.app.domain.model.TransportMode
 import se.blick.app.locale.withAppLocale
 import se.blick.app.ui.screens.routinedetails.formatDepartureTime
+import java.time.ZoneId
+import java.time.format.DateTimeFormatter
 import javax.inject.Inject
 import javax.inject.Singleton
 
@@ -25,15 +29,13 @@ import javax.inject.Singleton
  * `RoutineNotificationBuilderTest`) without needing a real `NotificationManager` to post to.
  *
  * Deliberately simple: only standard [NotificationCompat] fields and [NotificationCompat.BigTextStyle]
- * — no custom `RemoteViews`, colours, fonts, sizes, or spacing. The title (route/line/
- * destination, e.g. "14 · Slussen → Fruängen" — bolded automatically by the platform, not by
- * this class) is the one place that identity is shown; the body never repeats it. The
- * collapsed body is at most three short lines — the soonest departure's own countdown and
- * status, the following departure's own countdown (only when a second departure exists), and
- * a fixed disruption indicator (only when a relevant disruption exists) — joined with `\n`
- * into [NotificationCompat.Builder.setContentText]. Which of those lines Samsung (or any other
- * OEM launcher/shade) actually renders collapsed, and whether it truncates any of them, is
- * entirely up to the platform; this class does not attempt to control it.
+ * — no custom `RemoteViews`, colours, fonts, sizes, or spacing. The title is always the saved
+ * routine identity: line + selected direction for `LINE_DIRECTION`, or saved origin + final
+ * destination for `EXACT_DESTINATION`. Exact-destination transit headsigns only appear below as
+ * boarding/transfer instructions, never as destination B. Body lines are joined with `\n` into
+ * [NotificationCompat.Builder.setContentText]. Which of those lines Samsung (or any other OEM
+ * launcher/shade) actually renders collapsed, and whether it truncates any of them, is entirely
+ * up to the platform; this class does not attempt to control it.
  *
  * All user-facing text is a string resource — never a raw exception message, hostname, or
  * other technical detail (matching the rest of the app's error-string convention, e.g.
@@ -106,15 +108,23 @@ class RoutineNotificationBuilder @Inject constructor(
         return builder.build()
     }
 
-    /** The one place route/line/destination is shown — see this class's own doc on why the
-     * body never repeats it. Rendered bold by the platform's own standard title styling; no
-     * markup is applied here. */
-    private fun title(model: RoutineNotificationModel): String = localizedContext.getString(
-        R.string.notification_title_format,
-        model.lineLabel ?: localizedContext.getString(R.string.notification_line_fallback),
-        model.stationName,
-        model.directionLabel ?: localizedContext.getString(R.string.notification_direction_fallback),
-    )
+    /** The saved route identity. Rendered bold by the platform's own standard title styling;
+     * no markup is applied here. */
+    private fun title(model: RoutineNotificationModel): String =
+        if (model.routineType == RoutineType.EXACT_DESTINATION) {
+            localizedContext.getString(
+                R.string.notification_exact_route_title_format,
+                model.stationName,
+                model.directionLabel ?: localizedContext.getString(R.string.notification_direction_fallback),
+            )
+        } else {
+            localizedContext.getString(
+                R.string.notification_title_format,
+                model.lineLabel ?: localizedContext.getString(R.string.notification_line_fallback),
+                model.stationName,
+                model.directionLabel ?: localizedContext.getString(R.string.notification_direction_fallback),
+            )
+        }
 
     private fun applyContent(builder: NotificationCompat.Builder, model: RoutineNotificationModel) {
         val hasDisruption = model.disruptionHeadline != null
@@ -137,10 +147,27 @@ class RoutineNotificationBuilder @Inject constructor(
 
         when (val content = model.content) {
             is RoutineNotificationContent.Live -> {
-                val bodyLines = departureLines(content.departures)
-                builder.setContentText((bodyLines + disruptionIndicator).joinToString("\n"))
-                builder.setStyle(bigTextStyle(bodyLines + disruptionIndicator))
-                shortCriticalText(content.departures)?.let { builder.setShortCriticalText(it) }
+                val exact = model.exactDestination
+                if (model.routineType == RoutineType.EXACT_DESTINATION) {
+                    if (exact != null) {
+                        val collapsedLines = exactCollapsedLines(exact)
+                        builder.setContentText((collapsedLines + disruptionIndicator).joinToString("\n"))
+                        builder.setStyle(bigTextStyle(exactExpandedLines(exact) + disruptionIndicator))
+                        builder.setShortCriticalText(countdownText(exact.primaryCountdownMinutes))
+                    } else {
+                        // Defensive counterpart to RoutineNotificationMapper's own invariant:
+                        // never render exact-destination live rows with LINE_DIRECTION's generic
+                        // body if a manually-constructed/incompatible model reaches this layer.
+                        val text = localizedContext.getString(R.string.notification_unavailable)
+                        builder.setContentText((listOf(text) + disruptionIndicator).joinToString("\n"))
+                        if (hasDisruption) builder.setStyle(bigTextStyle(listOf(text) + disruptionIndicator))
+                    }
+                } else {
+                    val bodyLines = departureLines(content.departures)
+                    builder.setContentText((bodyLines + disruptionIndicator).joinToString("\n"))
+                    builder.setStyle(bigTextStyle(bodyLines + disruptionIndicator))
+                    shortCriticalText(content.departures)?.let { builder.setShortCriticalText(it) }
+                }
             }
             is RoutineNotificationContent.Stale -> {
                 // The last-known departure lines are informative enough to keep in the
@@ -207,6 +234,70 @@ class RoutineNotificationBuilder @Inject constructor(
             departures.getOrNull(1)?.let(::nextDepartureLine),
         )
 
+    private fun exactCollapsedLines(exact: ExactDestinationNotificationPresentation): List<String> {
+        val countdown = countdownText(exact.primaryCountdownMinutes)
+        val firstLeg = exact.transitLegs.firstOrNull()?.let(::transitModeAndLine)
+        val primary = firstLeg?.let {
+            localizedContext.getString(R.string.notification_exact_collapsed_primary_format, countdown, it)
+        } ?: countdown
+        return listOfNotNull(
+            primary,
+            exact.nextCountdownMinutes?.let {
+                localizedContext.getString(R.string.notification_next_departure_format, countdownText(it))
+            },
+        )
+    }
+
+    private fun exactExpandedLines(exact: ExactDestinationNotificationPresentation): List<String> = buildList {
+        val countdown = countdownText(exact.primaryCountdownMinutes)
+        add(
+            localizedContext.getString(R.string.notification_exact_expanded_countdown_format, countdown),
+        )
+        exact.transitLegs.forEachIndexed { index, leg ->
+            add(transitInstruction(leg, isTransfer = index > 0))
+        }
+        val arrival = EXACT_ARRIVAL_TIME_FORMATTER.format(exact.arrivalTime)
+        add(
+            if (exact.primaryChangeCount > 0) {
+                localizedContext.resources.getQuantityString(
+                    R.plurals.notification_exact_arrival_with_changes,
+                    exact.primaryChangeCount,
+                    arrival,
+                    exact.primaryChangeCount,
+                )
+            } else {
+                localizedContext.getString(R.string.notification_exact_arrival_format, arrival)
+            },
+        )
+        exact.nextCountdownMinutes?.let {
+            add(localizedContext.getString(R.string.notification_next_departure_format, countdownText(it)))
+        }
+    }
+
+    private fun transitInstruction(leg: NotificationTransitLeg, isTransfer: Boolean): String {
+        val modeAndLine = transitModeAndLine(leg)
+        return when {
+            isTransfer && !leg.direction.isNullOrBlank() -> localizedContext.getString(
+                R.string.notification_exact_change_toward_format,
+                modeAndLine,
+                leg.direction,
+            )
+            isTransfer -> localizedContext.getString(R.string.notification_exact_change_format, modeAndLine)
+            !leg.direction.isNullOrBlank() -> localizedContext.getString(
+                R.string.notification_exact_board_toward_format,
+                modeAndLine,
+                leg.direction,
+            )
+            else -> modeAndLine
+        }
+    }
+
+    private fun transitModeAndLine(leg: NotificationTransitLeg): String =
+        listOfNotNull(
+            localizedContext.getString(journeyModeLabelRes(leg.transportMode)),
+            leg.lineDesignation?.takeIf { it.isNotBlank() },
+        ).joinToString(" ")
+
     private fun primaryDepartureLine(row: NotificationDepartureRow): String =
         if (row.isCancelled) {
             // Cancellation takes priority over real-time/scheduled status and drops the
@@ -217,7 +308,7 @@ class RoutineNotificationBuilder @Inject constructor(
             val statusText = localizedContext.getString(
                 if (row.isRealTime) R.string.routine_details_departure_live else R.string.routine_details_departure_scheduled,
             )
-            localizedContext.getString(R.string.notification_departure_status_format, row.minutesRemaining, statusText)
+            localizedContext.getString(R.string.notification_departure_status_format, countdownText(row.minutesRemaining), statusText)
         }
 
     /** ALTERNATIVE (see [JourneyRole]) visibly says so — a genuinely different way to travel,
@@ -231,12 +322,12 @@ class RoutineNotificationBuilder @Inject constructor(
             if (row.isCancelled) {
                 localizedContext.getString(R.string.notification_alternative_departure_cancelled)
             } else {
-                localizedContext.getString(R.string.notification_alternative_departure_format, row.minutesRemaining)
+                localizedContext.getString(R.string.notification_alternative_departure_format, countdownText(row.minutesRemaining))
             }
         } else if (row.isCancelled) {
             localizedContext.getString(R.string.notification_next_departure_cancelled)
         } else {
-            localizedContext.getString(R.string.notification_next_departure_format, row.minutesRemaining)
+            localizedContext.getString(R.string.notification_next_departure_format, countdownText(row.minutesRemaining))
         }
 
     /** [formatDepartureTime]'s own [java.util.Locale] comes from THIS SAME [localizedContext] --
@@ -268,7 +359,21 @@ class RoutineNotificationBuilder @Inject constructor(
         return if (soonest.isCancelled) {
             localizedContext.getString(R.string.routine_details_departure_cancelled)
         } else {
-            localizedContext.getString(R.string.routine_details_minutes_remaining, soonest.minutesRemaining)
+            countdownText(soonest.minutesRemaining)
+        }
+    }
+
+    /** Converts the already current-time-aware, ceiling-rounded countdown into Blick's shared
+     * localized minute/hour wording. The unit switches at 60 minutes; expiry and rounding stay
+     * entirely owned by RoutineNotificationMapper/countdownMinutes. */
+    private fun countdownText(minutes: Long): String {
+        if (minutes < 60) return localizedContext.getString(R.string.journey_duration_minutes, minutes)
+        val hours = minutes / 60
+        val remainingMinutes = minutes % 60
+        return if (remainingMinutes == 0L) {
+            localizedContext.getString(R.string.journey_duration_hours, hours)
+        } else {
+            localizedContext.getString(R.string.journey_duration_hours_minutes, hours, remainingMinutes)
         }
     }
 
@@ -324,6 +429,13 @@ class RoutineNotificationBuilder @Inject constructor(
         }
         manager.createNotificationChannel(channel)
     }
+
+    private companion object {
+        /** Matches Blick's existing exact-journey/widget clock convention: always 24-hour
+         * local time, independent of whether an English locale would normally add AM/PM. */
+        val EXACT_ARRIVAL_TIME_FORMATTER: DateTimeFormatter =
+            DateTimeFormatter.ofPattern("HH:mm").withZone(ZoneId.systemDefault())
+    }
 }
 
 /** The single source of truth for which localized string resource represents a classified
@@ -342,4 +454,13 @@ fun disruptionEffectLabelRes(effect: DisruptionEffect): Int = when (effect) {
     DisruptionEffect.STATION_ACCESS -> R.string.notification_disruption_effect_station_access
     DisruptionEffect.ACCESSIBILITY_ISSUE -> R.string.notification_disruption_effect_accessibility_issue
     DisruptionEffect.DISRUPTION -> R.string.notification_disruption_effect_disruption
+}
+
+private fun journeyModeLabelRes(mode: TransportMode): Int = when (mode) {
+    TransportMode.METRO -> R.string.journey_mode_metro
+    TransportMode.TRAIN -> R.string.journey_mode_commuter_rail
+    TransportMode.BUS -> R.string.journey_mode_bus
+    TransportMode.TRAM -> R.string.journey_mode_tram
+    TransportMode.SHIP, TransportMode.FERRY -> R.string.journey_mode_ferry
+    TransportMode.TAXI, TransportMode.UNKNOWN -> R.string.transport_mode_unknown
 }

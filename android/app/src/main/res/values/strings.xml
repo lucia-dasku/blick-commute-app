@@ -287,21 +287,32 @@
          title bold by default — no custom styling is applied). Line/destination each fall
          back to the wording below when the routine did not pin a specific value. -->
     <string name="notification_title_format">%1$s · %2$s → %3$s</string>
+    <string name="notification_exact_route_title_format">%1$s → %2$s</string>
     <string name="notification_line_fallback">All lines</string>
     <string name="notification_direction_fallback">Any direction</string>
     <!-- Collapsed/expanded body: the next departure's own countdown + status, e.g. "3 min ·
          Live". A cancelled next departure shows routine_details_departure_cancelled alone
          instead, with no countdown. -->
-    <string name="notification_departure_status_format">%1$d min · %2$s</string>
-    <!-- The following departure's own countdown, shown only when a second departure exists —
-         e.g. "Next 18 min". A cancelled following departure shows
+    <string name="notification_departure_status_format">%1$s · %2$s</string>
+    <!-- The following departure's own localized countdown, shown only when a second departure
+         exists — e.g. "Next in 18 min" or "Next in 2 hr". A cancelled following departure shows
          notification_next_departure_cancelled instead. -->
-    <string name="notification_next_departure_format">Next in %1$d min</string>
+    <string name="notification_next_departure_format">Next in %1$s</string>
+    <string name="notification_exact_collapsed_primary_format">%1$s · %2$s</string>
+    <string name="notification_exact_expanded_countdown_format">⏰ %1$s</string>
+    <string name="notification_exact_board_toward_format">%1$s toward %2$s</string>
+    <string name="notification_exact_change_toward_format">Change to %1$s toward %2$s</string>
+    <string name="notification_exact_change_format">Change to %1$s</string>
+    <string name="notification_exact_arrival_format">Arrive %1$s</string>
+    <plurals name="notification_exact_arrival_with_changes">
+        <item quantity="one">Arrive %1$s · %2$d change</item>
+        <item quantity="other">Arrive %1$s · %2$d changes</item>
+    </plurals>
     <string name="notification_next_departure_cancelled">Next · Cancelled</string>
     <!-- Second row when it is a genuinely different route (JourneyRole.ALTERNATIVE), not the
          same route family's own next departure — visibly says "Alternative" so it is never
          mistaken for a plain follow-up. -->
-    <string name="notification_alternative_departure_format">Alternative in %1$d min</string>
+    <string name="notification_alternative_departure_format">Alternative in %1$s</string>
     <string name="notification_alternative_departure_cancelled">Alternative · Cancelled</string>
     <string name="notification_loading">Updating departures…</string>
     <string name="notification_last_checked_format">Last checked %1$s</string>

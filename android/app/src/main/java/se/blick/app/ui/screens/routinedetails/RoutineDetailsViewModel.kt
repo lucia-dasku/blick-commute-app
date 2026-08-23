@@ -1003,7 +1003,13 @@ class RoutineDetailsViewModel @Inject constructor(
         val topDisruption = debugEffectOverride
             ?.let { effect -> debugDisruptionSampleSource.map { it.sampleFor(effect) }.orElse(null) }
             ?: realDisruption
-        val model = RoutineNotificationMapper.map(routine, state.departures, clock.instant(), topDisruption)
+        val model = RoutineNotificationMapper.map(
+            routine,
+            state.departures,
+            clock.instant(),
+            topDisruption,
+            exactJourneys = state.journeys,
+        )
         return routineNotifier.showOrUpdate(model)
     }
 

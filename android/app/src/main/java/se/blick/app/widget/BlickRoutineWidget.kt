@@ -902,7 +902,7 @@ private fun JourneyMainContent(
     val arrivalFormatter = DateTimeFormatter.ofPattern("HH:mm").withZone(java.time.ZoneId.systemDefault())
     Column(modifier = GlanceModifier.fillMaxWidth()) {
         Text(
-            context.getString(R.string.widget_countdown_minutes_format, primaryMinutes),
+            formatWidgetCountdown(context, primaryMinutes),
             maxLines = 1,
             style = TextStyle(fontWeight = FontWeight.Bold, fontSize = tier.countdownSize, color = onBackgroundColor()),
         )
@@ -1044,9 +1044,9 @@ private fun JourneyTimesRow(
     }
 }
 
-/** The second journey row: a two-column "Next"/"Alternative" label and a plain countdown value
- * (reusing [R.string.widget_countdown_minutes_format], the exact same format the primary countdown
- * above uses). Backend-authoritative role decides the label -- NEXT (the same route family's own
+/** The second journey row: a two-column "Next"/"Alternative" label and a localized countdown value
+ * using the exact same minute/hour rule as the primary countdown above. Backend-authoritative role
+ * decides the label -- NEXT (the same route family's own
  * next departure) reads as a plain continuation of the primary row, while ALTERNATIVE visibly says
  * so, since it's a genuinely different way to travel, not just "another one of these" -- never
  * assumed from list position. */
@@ -1066,7 +1066,7 @@ private fun NextJourneyRow(context: Context, secondary: WidgetJourneyRow, now: j
             style = TextStyle(fontSize = tier.secondarySize, color = onSurfaceVariantColor()),
         )
         Text(
-            context.getString(R.string.widget_countdown_minutes_format, secondaryMinutes),
+            formatWidgetCountdown(context, secondaryMinutes),
             maxLines = 1,
             style = TextStyle(fontSize = tier.secondarySize, color = onSurfaceVariantColor()),
         )
@@ -1138,7 +1138,7 @@ private fun NextDepartureRow(context: Context, row: WidgetDepartureRow, tier: Wi
     val value = if (row.isCancelled) {
         context.getString(R.string.routine_details_departure_cancelled)
     } else {
-        context.getString(R.string.widget_countdown_minutes_format, row.minutesRemaining)
+        formatWidgetCountdown(context, row.minutesRemaining)
     }
     Row(modifier = GlanceModifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
         Text(
@@ -1160,9 +1160,23 @@ private fun CountdownText(context: Context, row: WidgetDepartureRow, tier: Widge
     val text = if (row.isCancelled) {
         context.getString(R.string.routine_details_departure_cancelled)
     } else {
-        context.getString(R.string.widget_countdown_minutes_format, row.minutesRemaining)
+        formatWidgetCountdown(context, row.minutesRemaining)
     }
     Text(text = text, maxLines = 1, style = TextStyle(fontWeight = FontWeight.Bold, fontSize = tier.countdownSize, color = onBackgroundColor()))
+}
+
+/** Formats an already current-time-aware widget countdown using Blick's localized duration
+ * wording. The mapper continues to own expiry and ceiling-rounding, so 59m59s reaches this helper
+ * as 60 minutes and displays as one hour without changing widget timing or refresh behavior. */
+internal fun formatWidgetCountdown(context: Context, minutes: Long): String {
+    if (minutes < 60) return context.getString(R.string.journey_duration_minutes, minutes)
+    val hours = minutes / 60
+    val remainingMinutes = minutes % 60
+    return if (remainingMinutes == 0L) {
+        context.getString(R.string.journey_duration_hours, hours)
+    } else {
+        context.getString(R.string.journey_duration_hours_minutes, hours, remainingMinutes)
+    }
 }
 
 /** A small colored dot plus a "Live"/"Scheduled"/"Cancelled" label — green+"Live" for a
