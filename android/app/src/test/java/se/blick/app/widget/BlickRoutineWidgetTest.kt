@@ -100,7 +100,6 @@ class BlickRoutineWidgetTest {
         assertNull(compact.skylineResourceId)
         assertEquals(R.drawable.widget_inactive_skyline_approved, canonicalSmall.skylineResourceId)
         assertTrue(inactiveSkylineHeightFor(180.dp, canonicalSmall)!! in 65.dp..66.dp)
-        assertEquals(22.dp, canonicalSmall.brandingTopPadding)
         assertTrue(compact.logoViewportHeight < canonicalSmall.logoViewportHeight)
     }
 

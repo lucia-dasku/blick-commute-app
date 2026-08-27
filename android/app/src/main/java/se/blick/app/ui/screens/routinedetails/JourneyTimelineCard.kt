@@ -97,7 +97,7 @@ internal fun JourneyTimelineCard(
 
     Surface(
         color = if (useStockholmNightSurface) StockholmNightSurfaces.Card else MaterialTheme.colorScheme.surface,
-        border = if (useStockholmNightSurface) BorderStroke(1.dp, StockholmNightSurfaces.Border) else null,
+        border = if (useStockholmNightSurface) BorderStroke(1.dp, StockholmNightSurfaces.CardBorder) else null,
         tonalElevation = if (useStockholmNightSurface) 0.dp else if (emphasized) 3.dp else 1.dp,
         shape = MaterialTheme.shapes.medium,
         modifier = Modifier.fillMaxWidth().clickable { onExpandedChange(!expanded) },

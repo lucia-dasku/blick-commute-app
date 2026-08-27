@@ -136,35 +136,35 @@ class BlickRoutineWidgetRenderTest {
     // ---- Branded inactive state: real Glance composition at each responsive shape. ----
 
     @Test
-    fun `compact inactive widget renders its resource-backed brand and status without requiring skyline space`() =
+    fun `compact inactive widget renders its logo and status without a brand title`() =
         runGlanceAppWidgetUnitTest {
             setContext(context)
             setAppWidgetSize(DpSize(110.dp, 80.dp))
             provideComposable { BlickWidgetContent(RoutineWidgetUiState.NoActiveCommute, now) }
 
-            onNode(hasTextEqualTo(context.getString(R.string.app_name))).assertExists()
+            onNode(hasTextEqualTo(context.getString(R.string.app_name))).assertDoesNotExist()
             onNode(hasTextEqualTo(context.getString(R.string.widget_no_active_commute))).assertExists()
         }
 
     @Test
-    fun `standard inactive widget renders its resource-backed brand and status`() =
+    fun `standard inactive widget renders its logo and status without a brand title`() =
         runGlanceAppWidgetUnitTest {
             setContext(context)
             setAppWidgetSize(DpSize(260.dp, 150.dp))
             provideComposable { BlickWidgetContent(RoutineWidgetUiState.NoActiveCommute, now) }
 
-            onNode(hasTextEqualTo(context.getString(R.string.app_name))).assertExists()
+            onNode(hasTextEqualTo(context.getString(R.string.app_name))).assertDoesNotExist()
             onNode(hasTextEqualTo(context.getString(R.string.widget_no_active_commute))).assertExists()
         }
 
     @Test
-    fun `large inactive widget renders its resource-backed brand and status`() =
+    fun `large inactive widget renders its logo and status without a brand title`() =
         runGlanceAppWidgetUnitTest {
             setContext(context)
             setAppWidgetSize(DpSize(340.dp, 260.dp))
             provideComposable { BlickWidgetContent(RoutineWidgetUiState.NoActiveCommute, now) }
 
-            onNode(hasTextEqualTo(context.getString(R.string.app_name))).assertExists()
+            onNode(hasTextEqualTo(context.getString(R.string.app_name))).assertDoesNotExist()
             onNode(hasTextEqualTo(context.getString(R.string.widget_no_active_commute))).assertExists()
         }
 

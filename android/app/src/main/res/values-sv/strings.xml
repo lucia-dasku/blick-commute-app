@@ -12,6 +12,7 @@
     <string name="routine_list_free_limit_title">Gratis innehåller en rutin</string>
     <string name="routine_list_free_limit_body">Uppgradera till Blick Premium för att spara flera rutiner och jämföra kompletta resor till en exakt destination.</string>
     <string name="routine_list_premium_locked">Pausad · Premiumrutin</string>
+    <string name="routine_list_status_paused">Pausad</string>
     <string name="routine_list_use_free">Använd som gratisrutin</string>
     <string name="routine_create_origin_label">Start</string>
     <string name="routine_create_destination_label">Destination</string>

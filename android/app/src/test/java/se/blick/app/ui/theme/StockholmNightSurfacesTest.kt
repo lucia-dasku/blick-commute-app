@@ -1,8 +1,10 @@
 package se.blick.app.ui.theme
 
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.graphics.luminance
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertNotEquals
+import org.junit.Assert.assertTrue
 import org.junit.Test
 
 class StockholmNightSurfacesTest {
@@ -26,7 +28,18 @@ class StockholmNightSurfacesTest {
 
     @Test
     fun `surface borders and dividers are also fully opaque`() {
+        assertEquals(1f, StockholmNightSurfaces.CardBorder.alpha)
         assertEquals(1f, StockholmNightSurfaces.Border.alpha)
         assertEquals(1f, StockholmNightSurfaces.Divider.alpha)
+    }
+
+    @Test
+    fun `card perimeter is substantially softer than the interactive control border`() {
+        val cardLuminance = StockholmNightSurfaces.Card.luminance()
+        val cardEdgeDelta = kotlin.math.abs(StockholmNightSurfaces.CardBorder.luminance() - cardLuminance)
+        val controlEdgeDelta = kotlin.math.abs(StockholmNightSurfaces.Border.luminance() - cardLuminance)
+
+        assertNotEquals(StockholmNightSurfaces.Card, StockholmNightSurfaces.CardBorder)
+        assertTrue(cardEdgeDelta < controlEdgeDelta / 2f)
     }
 }

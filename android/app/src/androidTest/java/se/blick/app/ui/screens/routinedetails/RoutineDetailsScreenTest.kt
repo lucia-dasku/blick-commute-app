@@ -459,10 +459,11 @@ class RoutineDetailsScreenTest {
         ).assertExists()
     }
 
-    // ---- Journeys section: route heading, Direct/With changes filters, per-card duration ----
+    // ---- Journeys section: Direct/With changes filters and per-card duration ----
 
     private fun exactDestinationRoutine(origin: String = "Fruängen", destination: String = "Mariatorget") =
         sampleRoutine().copy(
+            name = "$origin → $destination",
             type = RoutineType.EXACT_DESTINATION,
             transportMode = TransportMode.UNKNOWN,
             lineId = null,
@@ -548,7 +549,7 @@ class RoutineDetailsScreenTest {
     }
 
     @Test
-    fun exactDestinationRoutine_journeysHeadingShowsTheRouteInsteadOfAGenericLabel() {
+    fun exactDestinationRoutine_doesNotRepeatItsTopBarNameAsAContentHeading() {
         val now = Instant.parse("2026-08-13T08:00:00Z")
         val journey = journeyWithTransfers("j1", "14", transferCount = 0, departure = now.plusSeconds(300), durationMinutes = 20)
 
@@ -559,9 +560,9 @@ class RoutineDetailsScreenTest {
             now = now,
         )
 
-        // The collapsed Routine details section hides its duplicate Route row, leaving only
-        // the journeys section heading this test targets.
-        composeRule.onAllNodesWithText("Slussen → Fruängen").assertCountEquals(1)
+        // RoutineDetailsContent excludes the Scaffold/top bar. The route name belongs there,
+        // while the collapsed Routine details section keeps its duplicate Route row hidden.
+        composeRule.onNodeWithText("Slussen → Fruängen").assertDoesNotExist()
     }
 
     @Test
@@ -1057,6 +1058,24 @@ class RoutineDetailsScreenTest {
 
         val pauseLabel = composeRule.activity.getString(R.string.routine_details_pause_today_action)
         composeRule.onNodeWithText(pauseLabel).assertExists()
+    }
+
+    @Test
+    fun refreshAndPauseTodayButtons_shareAnEqualWidthRow() {
+        setContent(DisruptionsState.NoDisruptions, isPausedToday = false)
+
+        val refresh = composeRule.onNodeWithText(
+            composeRule.activity.getString(R.string.routine_details_refresh_action),
+        )
+        val pause = composeRule.onNodeWithText(
+            composeRule.activity.getString(R.string.routine_details_pause_today_action),
+        )
+        pause.performScrollTo()
+
+        val refreshBounds = refresh.fetchSemanticsNode().boundsInRoot
+        val pauseBounds = pause.fetchSemanticsNode().boundsInRoot
+        assertEquals(refreshBounds.top, pauseBounds.top, 1f)
+        assertEquals(refreshBounds.width, pauseBounds.width, 1f)
     }
 
     @Test

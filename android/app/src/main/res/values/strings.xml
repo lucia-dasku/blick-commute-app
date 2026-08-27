@@ -13,6 +13,7 @@
     <string name="routine_list_free_limit_title">Free includes one routine</string>
     <string name="routine_list_free_limit_body">Upgrade to Blick Premium to save multiple routines and compare complete journeys to an exact destination.</string>
     <string name="routine_list_premium_locked">Paused · Premium routine</string>
+    <string name="routine_list_status_paused">Paused</string>
     <string name="routine_list_use_free">Use as Free routine</string>
     <string name="routine_create_origin_label">Origin</string>
     <string name="routine_create_destination_label">Destination</string>
