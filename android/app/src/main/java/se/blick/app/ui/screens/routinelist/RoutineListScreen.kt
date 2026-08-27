@@ -32,6 +32,7 @@ import androidx.compose.material3.Icon
 import androidx.compose.material3.ListItem
 import androidx.compose.material3.ListItemDefaults
 import androidx.compose.material3.MaterialTheme
+import androidx.compose.material3.ModalBottomSheet
 import androidx.compose.material3.Scaffold
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
@@ -81,6 +82,7 @@ import se.blick.app.ui.components.visuals
 import se.blick.app.ui.theme.LocalStockholmNightTheme
 import se.blick.app.ui.theme.RoutineDestructiveRed
 import se.blick.app.ui.theme.StockholmNightSurfaces
+import se.blick.app.ui.screens.onetimeevent.OneTimeEventCard
 import se.blick.app.billing.RoutineTierPolicy
 import se.blick.app.domain.model.RoutineType
 import se.blick.app.locale.currentBlickLocale
@@ -100,6 +102,9 @@ private val FAB_CLEARANCE = 96.dp
 @Composable
 fun RoutineListScreen(
     onAddRoutine: () -> Unit,
+    onAddEvent: () -> Unit = {},
+    onOpenEvents: () -> Unit = {},
+    onOpenEvent: (String) -> Unit = {},
     onOpenPremium: () -> Unit = {},
     onOpenRoutine: (String) -> Unit,
     onOpenAbout: () -> Unit,
@@ -112,6 +117,9 @@ fun RoutineListScreen(
         uiState = uiState,
         today = today,
         onAddRoutine = onAddRoutine,
+        onAddEvent = onAddEvent,
+        onOpenEvents = onOpenEvents,
+        onOpenEvent = onOpenEvent,
         onOpenPremium = onOpenPremium,
         onOpenRoutine = onOpenRoutine,
         onOpenAbout = onOpenAbout,
@@ -134,6 +142,9 @@ fun RoutineListContent(
     uiState: RoutineListUiState,
     today: LocalDate = LocalDate.now(),
     onAddRoutine: () -> Unit,
+    onAddEvent: () -> Unit = {},
+    onOpenEvents: () -> Unit = {},
+    onOpenEvent: (String) -> Unit = {},
     onOpenRoutine: (String) -> Unit,
     // Defaulted (unlike onAddRoutine/onOpenRoutine) so existing RoutineListScreenTest call
     // sites, which predate the About screen, don't need to be touched just to compile --
@@ -145,6 +156,7 @@ fun RoutineListContent(
 ) {
     // One stable notification remains sufficient because enabled routine windows cannot overlap.
     var showOneRoutineLimitDialog by remember { mutableStateOf(false) }
+    var showAddPlanSheet by remember { mutableStateOf(false) }
     val routineBounds = remember { mutableStateMapOf<String, Rect>() }
     var dragPointerY by remember { mutableFloatStateOf(0f) }
     var lastDragTargetId by remember { mutableStateOf<String?>(null) }
@@ -182,16 +194,7 @@ fun RoutineListContent(
             // Always visible. Both tiers open the same form; entitlement controls whether
             // its destination field is enabled.
             FloatingActionButton(
-                onClick = {
-                    when {
-                        uiState.entitlement.hasPremiumAccess -> onAddRoutine()
-                        // Locked exact-destination routines are intentionally retained after a
-                        // refund. If there is no line routine among them, Free must still be
-                        // able to create its one eligible line-and-direction routine.
-                        uiState.routines.none { it.type == RoutineType.LINE_DIRECTION } -> onAddRoutine()
-                        else -> showOneRoutineLimitDialog = true
-                    }
-                },
+                onClick = { showAddPlanSheet = true },
                 containerColor = MaterialTheme.colorScheme.primary,
                 contentColor = MaterialTheme.colorScheme.onPrimary,
             ) {
@@ -199,7 +202,7 @@ fun RoutineListContent(
             }
         },
     ) { paddingValues ->
-        if (!uiState.isLoading && uiState.routines.isEmpty()) {
+        if (!uiState.isLoading && uiState.routines.isEmpty() && uiState.upcomingEvents.isEmpty()) {
             // contentAlignment centers the whole text block both axes; textAlign additionally
             // centers each wrapped line *within* that block on narrow phones, where this
             // message wraps to two or three lines -- without it, wrapped lines default to
@@ -323,6 +326,86 @@ fun RoutineListContent(
                         }
                     }
                 }
+                if (uiState.upcomingEvents.isNotEmpty()) {
+                    item(key = "upcoming-events-heading") {
+                        Row(
+                            Modifier.fillMaxWidth().padding(start = 16.dp, top = 22.dp, end = 8.dp, bottom = 8.dp),
+                            verticalAlignment = Alignment.CenterVertically,
+                            horizontalArrangement = Arrangement.SpaceBetween,
+                        ) {
+                            Text(
+                                stringResource(R.string.one_time_event_upcoming_title),
+                                style = MaterialTheme.typography.titleMedium,
+                                fontWeight = FontWeight.SemiBold,
+                            )
+                            TextButton(
+                                onClick = {
+                                    if (uiState.entitlement.hasPremiumAccess) onOpenEvents() else onOpenPremium()
+                                },
+                            ) { Text(stringResource(R.string.one_time_event_view_all)) }
+                        }
+                    }
+                    itemsIndexed(
+                        uiState.upcomingEvents.take(3),
+                        key = { _, event -> "event-${event.id}" },
+                    ) { _, event ->
+                        OneTimeEventCard(
+                            event = event,
+                            onClick = {
+                                if (uiState.entitlement.hasPremiumAccess) onOpenEvent(event.id) else onOpenPremium()
+                            },
+                            modifier = Modifier.padding(horizontal = 16.dp, vertical = 6.dp),
+                            locked = !uiState.entitlement.hasPremiumAccess,
+                            matchHomeRoutineCardEdges = true,
+                        )
+                    }
+                }
+            }
+        }
+    }
+
+    if (showAddPlanSheet) {
+        ModalBottomSheet(onDismissRequest = { showAddPlanSheet = false }) {
+            Column(Modifier.fillMaxWidth().padding(horizontal = 16.dp).padding(bottom = 24.dp)) {
+                Text(
+                    stringResource(R.string.add_plan_title),
+                    style = MaterialTheme.typography.titleLarge,
+                    modifier = Modifier.padding(horizontal = 16.dp, vertical = 12.dp),
+                )
+                ListItem(
+                    headlineContent = { Text(stringResource(R.string.add_plan_routine_title), fontWeight = FontWeight.SemiBold) },
+                    supportingContent = { Text(stringResource(R.string.add_plan_routine_subtitle)) },
+                    leadingContent = { Icon(Icons.Filled.DateRange, contentDescription = null) },
+                    modifier = Modifier.clickable {
+                        showAddPlanSheet = false
+                        when {
+                            uiState.entitlement.hasPremiumAccess -> onAddRoutine()
+                            uiState.routines.none { it.type == RoutineType.LINE_DIRECTION } -> onAddRoutine()
+                            else -> showOneRoutineLimitDialog = true
+                        }
+                    },
+                )
+                ListItem(
+                    headlineContent = {
+                        Row(verticalAlignment = Alignment.CenterVertically) {
+                            Text(stringResource(R.string.add_plan_event_title), fontWeight = FontWeight.SemiBold)
+                            if (!uiState.entitlement.hasPremiumAccess) {
+                                Spacer(Modifier.width(8.dp))
+                                Text(
+                                    stringResource(R.string.premium_feature_badge),
+                                    style = MaterialTheme.typography.labelSmall,
+                                    color = MaterialTheme.colorScheme.primary,
+                                )
+                            }
+                        }
+                    },
+                    supportingContent = { Text(stringResource(R.string.add_plan_event_subtitle)) },
+                    leadingContent = { Icon(Icons.Filled.DateRange, contentDescription = null) },
+                    modifier = Modifier.clickable {
+                        showAddPlanSheet = false
+                        if (uiState.entitlement.hasPremiumAccess) onAddEvent() else onOpenPremium()
+                    },
+                )
             }
         }
     }

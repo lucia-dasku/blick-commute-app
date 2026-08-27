@@ -11,8 +11,9 @@ import androidx.sqlite.db.SupportSQLiteDatabase
         StaleSnapshotEntity::class,
         RoutineWorkOwnershipEntity::class,
         RoutineOccurrenceRuntimeEntity::class,
+        OneTimeEventEntity::class,
     ],
-    version = 8,
+    version = 9,
     exportSchema = true,
 )
 abstract class BlickDatabase : RoomDatabase() {
@@ -20,6 +21,32 @@ abstract class BlickDatabase : RoomDatabase() {
     abstract fun staleSnapshotDao(): StaleSnapshotDao
     abstract fun routineWorkOwnershipDao(): RoutineWorkOwnershipDao
     abstract fun routineOccurrenceRuntimeDao(): RoutineOccurrenceRuntimeDao
+    abstract fun oneTimeEventDao(): OneTimeEventDao
+}
+
+/** Adds dedicated one-time transport intentions without changing any existing routine row. */
+val MIGRATION_8_9: Migration = object : Migration(8, 9) {
+    override fun migrate(db: SupportSQLiteDatabase) {
+        db.execSQL(
+            """
+            CREATE TABLE IF NOT EXISTS `one_time_events` (
+                `id` TEXT NOT NULL,
+                `label` TEXT NOT NULL,
+                `name` TEXT NOT NULL,
+                `originId` TEXT NOT NULL,
+                `originName` TEXT NOT NULL,
+                `destinationId` TEXT NOT NULL,
+                `destinationName` TEXT NOT NULL,
+                `eventDateEpochDay` INTEGER NOT NULL,
+                `eventTimeMinutes` INTEGER NOT NULL,
+                `timeType` TEXT NOT NULL,
+                `createdAtEpochMilli` INTEGER NOT NULL,
+                `updatedAtEpochMilli` INTEGER NOT NULL,
+                PRIMARY KEY(`id`)
+            )
+            """.trimIndent(),
+        )
+    }
 }
 
 /** Adds [StaleSnapshotEntity]'s table — see that class's own doc for the durable stale-fallback

@@ -91,6 +91,7 @@ class RoutineListScreenTest {
             assertExists()
             performClick()
         }
+        composeRule.onNodeWithText(composeRule.activity.getString(R.string.add_plan_routine_title)).performClick()
 
         assertEquals(true, addRoutineClicked)
     }
@@ -182,6 +183,7 @@ class RoutineListScreenTest {
 
         val fabDescription = composeRule.activity.getString(R.string.routine_list_add)
         composeRule.onNodeWithContentDescription(fabDescription).performClick()
+        composeRule.onNodeWithText(composeRule.activity.getString(R.string.add_plan_routine_title)).performClick()
 
         // The explanation dialog appears...
         val dialogTitle = composeRule.activity.getString(R.string.routine_list_free_limit_title)
@@ -205,6 +207,7 @@ class RoutineListScreenTest {
 
         val fabDescription = composeRule.activity.getString(R.string.routine_list_add)
         composeRule.onNodeWithContentDescription(fabDescription).performClick()
+        composeRule.onNodeWithText(composeRule.activity.getString(R.string.add_plan_routine_title)).performClick()
 
         val dismissText = composeRule.activity.getString(R.string.action_back)
         composeRule.onNodeWithText(dismissText).performClick()
@@ -552,7 +555,7 @@ class RoutineListScreenTest {
     }
 
     @Test
-    fun premiumAddButtonOpensUnifiedFormDirectlyWithoutRoutineTypeChooser() {
+    fun premiumAddButtonShowsPlanChooserAndRoutineOpensExistingFlow() {
         var addRoutineClicked = false
         composeRule.setContent {
             RoutineListContent(
@@ -568,8 +571,50 @@ class RoutineListScreenTest {
 
         val fabDescription = composeRule.activity.getString(R.string.routine_list_add)
         composeRule.onNodeWithContentDescription(fabDescription).performClick()
+        composeRule.onNodeWithText(composeRule.activity.getString(R.string.add_plan_title)).assertIsDisplayed()
+        composeRule.onNodeWithText(composeRule.activity.getString(R.string.add_plan_routine_title)).performClick()
 
         assertEquals(true, addRoutineClicked)
+    }
+
+    @Test
+    fun premiumOneTimeEventChoiceOpensEventCreation() {
+        var eventClicked = false
+        composeRule.setContent {
+            RoutineListContent(
+                uiState = RoutineListUiState(isLoading = false, entitlement = EntitlementState.Premium),
+                onAddRoutine = {},
+                onAddEvent = { eventClicked = true },
+                onOpenRoutine = {},
+            )
+        }
+
+        composeRule.onNodeWithContentDescription(
+            composeRule.activity.getString(R.string.routine_list_add),
+        ).performClick()
+        composeRule.onNodeWithText(composeRule.activity.getString(R.string.add_plan_event_title)).performClick()
+
+        assertTrue(eventClicked)
+    }
+
+    @Test
+    fun freeOneTimeEventChoiceUsesExistingPremiumPath() {
+        var premiumOpened = false
+        composeRule.setContent {
+            RoutineListContent(
+                uiState = RoutineListUiState(isLoading = false, entitlement = EntitlementState.Free),
+                onAddRoutine = {},
+                onOpenPremium = { premiumOpened = true },
+                onOpenRoutine = {},
+            )
+        }
+
+        composeRule.onNodeWithContentDescription(
+            composeRule.activity.getString(R.string.routine_list_add),
+        ).performClick()
+        composeRule.onNodeWithText(composeRule.activity.getString(R.string.add_plan_event_title)).performClick()
+
+        assertTrue(premiumOpened)
     }
 
     @Test
