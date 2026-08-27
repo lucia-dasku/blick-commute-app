@@ -1,6 +1,11 @@
 import { normalizeJourney } from "../normalize/normalizeJourney.js";
 import { floorToStockholmRequestMinute, nextStockholmRequestMinute } from "../lib/stockholmTime.js";
-import type { JourneyRouteType, JourneyTransportMode, SlJourneyPlannerClient } from "./slJourneyPlannerClient.js";
+import type {
+  JourneyDateTimeMode,
+  JourneyRouteType,
+  JourneyTransportMode,
+  SlJourneyPlannerClient,
+} from "./slJourneyPlannerClient.js";
 
 export type NormalizedJourney = NonNullable<ReturnType<typeof normalizeJourney>>;
 
@@ -91,6 +96,7 @@ export interface CandidateBatchOptions {
   transportModes: readonly JourneyTransportMode[];
   maxChanges: number;
   departureAt: Date;
+  dateTimeMode?: JourneyDateTimeMode;
   routeType?: JourneyRouteType;
   viaStopId?: string;
 }
@@ -156,9 +162,10 @@ export class CandidateCollector {
   private readonly candidatesById = new Map<string, NormalizedJourney>();
   /** Every DISTINCT SL query this instance has ever actually sent, identified by
    * `probeKey` — the Stockholm request-minute bucket it targeted COMBINED WITH every SL
-   * parameter that can materially change which journeys come back (transport modes,
-   * `maxChanges`, `routeType`, `viaStopId`). Deliberately NOT keyed by minute alone: the
-   * same minute queried once narrowed to PRIMARY's own transport modes (a targeted NEXT
+   * parameter that can materially change which journeys come back (departure/arrival mode,
+   * transport modes, `maxChanges`, `routeType`, `viaStopId`). Deliberately NOT keyed by minute alone: the
+   * same minute queried once as a departure search and once as an arrival search, or once
+   * narrowed to PRIMARY's own transport modes (a targeted NEXT
    * search) and once with the full allowed mode set (an ALTERNATIVE search) are two
    * genuinely different requests that can return different journeys — a bus a narrow
    * METRO-only NEXT search could never have returned is a real, valid discovery for a
@@ -252,6 +259,7 @@ export class CandidateCollector {
       transportModes: options.transportModes,
       maxChanges: options.maxChanges,
       departureAt: options.departureAt,
+      dateTimeMode: options.dateTimeMode,
       routeType: options.routeType,
       viaStopId: options.viaStopId,
     });
@@ -314,6 +322,8 @@ export class CandidateCollector {
    * safe since a real SL stop id is never itself an empty string (see this route's own
    * `required` validation at the API boundary).
    *
+   * `dateTimeMode` is normalized to the upstream default (`"DEPARTURE"`) so omission and an
+   * explicit default are identical, while an `"ARRIVAL"` search remains distinct.
    * `departureAt`'s exact second is intentionally NOT part of the key — only its own
    * floored request-minute bucket is, matching SL's own whole-minute request precision
    * (`itd_time` is HHMM) and this collector's own bucket-probing model throughout.
@@ -323,7 +333,8 @@ export class CandidateCollector {
     const modes = [...new Set(options.transportModes)].sort().join(",");
     const routeType = options.routeType ?? "leasttime";
     const viaStopId = options.viaStopId ?? "";
-    return `${bucketStartMillis}|${modes}|${options.maxChanges}|${routeType}|${viaStopId}`;
+    const dateTimeMode = options.dateTimeMode ?? "DEPARTURE";
+    return `${bucketStartMillis}|${dateTimeMode}|${modes}|${options.maxChanges}|${routeType}|${viaStopId}`;
   }
 
   /**

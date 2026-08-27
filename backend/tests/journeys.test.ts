@@ -16,9 +16,14 @@ function metricsSpy(): { emit: (metrics: JourneyAcquisitionMetrics) => void; eve
 }
 
 interface JourneyResponse {
+  fetchedAt: string;
+  journeyContext: "LIVE" | "PLANNED";
+  searchMode: "NOW" | "LEAVE_AT" | "ARRIVE_BY";
+  requestedDateTime: string | null;
   journeys: Array<{
     journeyId: string;
     role: string;
+    departureTime: string;
     arrivalTime: string;
     transferCount: number;
     firstLeg: { lineDesignation: string | null };
@@ -114,10 +119,18 @@ function worldClient(journeys: WorldJourney[]): { client: SlJourneyPlannerClient
       requests.push(request);
       const allowedModes = request.transportModes != null ? new Set<string>(request.transportModes) : null;
       const matches = journeys
-        .filter((j) => Date.parse(j.departure) >= request.departureAt.getTime())
+        .filter((j) =>
+          request.dateTimeMode === "ARRIVAL"
+            ? Date.parse(j.arrival) <= request.departureAt.getTime()
+            : Date.parse(j.departure) >= request.departureAt.getTime(),
+        )
         .filter((j) => (j.interchanges ?? 0) <= request.maxChanges)
         .filter((j) => allowedModes == null || allowedModes.has((j.mode ?? "metro") === "metro" ? "METRO" : "BUS"))
-        .sort((a, b) => Date.parse(a.departure) - Date.parse(b.departure))
+        .sort((a, b) =>
+          request.dateTimeMode === "ARRIVAL"
+            ? Date.parse(b.arrival) - Date.parse(a.arrival)
+            : Date.parse(a.departure) - Date.parse(b.departure),
+        )
         .slice(0, 3);
       return matches.map((j) => rawJourney(j.id, j.departure, j.arrival, j.interchanges ?? 0, j.mode ?? "metro"));
     },
@@ -126,6 +139,122 @@ function worldClient(journeys: WorldJourney[]): { client: SlJourneyPlannerClient
 }
 
 describe("journey routes", () => {
+  describe("planned-time contract", () => {
+    it("keeps an omitted search mode backward-compatible as a LIVE NOW request", async () => {
+      const { client, requests } = worldClient([
+        { id: "now", departure: "2026-08-10T07:05:00Z", arrival: "2026-08-10T07:20:00Z", mode: "metro" },
+      ]);
+
+      const response = await createJourneyRoutes(client, FIXED_NOW).request(
+        "/?originId=origin&destinationId=destination",
+      );
+      const body = (await response.json()) as SuccessEnvelope<JourneyResponse>;
+
+      expect(body.data.journeyContext).toBe("LIVE");
+      expect(body.data.searchMode).toBe("NOW");
+      expect(body.data.requestedDateTime).toBeNull();
+      expect(requests[0]!.dateTimeMode).toBe("DEPARTURE");
+      expect(requests[0]!.departureAt.toISOString()).toBe(FIXED_NOW().toISOString());
+    });
+
+    it("issues one future departure search for LEAVE_AT and preserves planned role selection", async () => {
+      const { client, requests } = worldClient([
+        { id: "too-early", departure: "2026-08-10T09:59:00Z", arrival: "2026-08-10T10:15:00Z", mode: "metro" },
+        { id: "primary", departure: "2026-08-10T10:00:00Z", arrival: "2026-08-10T10:20:00Z", mode: "metro" },
+        { id: "alternative", departure: "2026-08-10T10:05:00Z", arrival: "2026-08-10T10:25:00Z", mode: "bus" },
+        { id: "next", departure: "2026-08-10T10:10:00Z", arrival: "2026-08-10T10:30:00Z", mode: "metro" },
+      ]);
+
+      const response = await createJourneyRoutes(client, FIXED_NOW).request(
+        "/?originId=origin&destinationId=destination&searchMode=LEAVE_AT&requestedDateTime=2026-08-10T12:00:00%2B02:00",
+      );
+      const body = (await response.json()) as SuccessEnvelope<JourneyResponse>;
+
+      expect(response.status).toBe(200);
+      expect(body.data.journeyContext).toBe("PLANNED");
+      expect(body.data.searchMode).toBe("LEAVE_AT");
+      expect(body.data.requestedDateTime).toBe("2026-08-10T10:00:00.000Z");
+      expect(requests).toHaveLength(1);
+      expect(requests[0]!.dateTimeMode).toBe("DEPARTURE");
+      expect(requests[0]!.departureAt.toISOString()).toBe("2026-08-10T10:00:00.000Z");
+      expect(body.data.journeys.map((journey) => journey.journeyId)).toEqual(["primary", "alternative", "next"]);
+      expect(body.data.journeys.map((journey) => journey.role)).toEqual(["PRIMARY", "ALTERNATIVE", "NEXT"]);
+    });
+
+    it("uses one structural arrival search and makes the latest equal-quality deadline-safe proposal PRIMARY", async () => {
+      const { client, requests } = scriptedClient([
+        [
+          rawJourney("arrive-1808", "2026-08-10T15:57:42Z", "2026-08-10T16:08:06Z", 0, "metro"),
+          rawJourney("arrive-1816", "2026-08-10T16:05:42Z", "2026-08-10T16:16:06Z", 0, "metro"),
+          rawJourney("arrive-1823", "2026-08-10T16:13:12Z", "2026-08-10T16:23:36Z", 0, "metro"),
+          rawJourney("after-deadline", "2026-08-10T16:20:00Z", "2026-08-10T16:31:00Z", 0, "metro"),
+        ],
+      ]);
+
+      const response = await createJourneyRoutes(client, FIXED_NOW).request(
+        "/?originId=origin&destinationId=destination&searchMode=ARRIVE_BY&requestedDateTime=2026-08-10T18:30:00%2B02:00",
+      );
+      const body = (await response.json()) as SuccessEnvelope<JourneyResponse>;
+
+      expect(response.status).toBe(200);
+      expect(body.data.journeyContext).toBe("PLANNED");
+      expect(body.data.searchMode).toBe("ARRIVE_BY");
+      expect(requests).toHaveLength(1);
+      expect(requests[0]!.dateTimeMode).toBe("ARRIVAL");
+      expect(requests[0]!.departureAt.toISOString()).toBe("2026-08-10T16:30:00.000Z");
+      expect(body.data.journeys.map((journey) => journey.journeyId)).toEqual(["arrive-1823"]);
+      expect(body.data.journeys[0]).toMatchObject({
+        role: "PRIMARY",
+        departureTime: "2026-08-10T16:13:12Z",
+        arrivalTime: "2026-08-10T16:23:36Z",
+      });
+      expect(body.data.journeys.some((journey) => journey.journeyId === "after-deadline")).toBe(false);
+    });
+
+    it("validates mode and timestamp combinations without calling SL", async () => {
+      const { client, requests } = scriptedClient([]);
+      const app = new Hono();
+      app.onError(onError);
+      app.route("/", createJourneyRoutes(client, FIXED_NOW));
+      const base = "/?originId=origin&destinationId=destination";
+
+      const invalidUrls = [
+        `${base}&searchMode=LATER`,
+        `${base}&searchMode=LEAVE_AT`,
+        `${base}&searchMode=ARRIVE_BY&requestedDateTime=2026-08-10T12:30:00`,
+        `${base}&searchMode=LEAVE_AT&requestedDateTime=not-a-date`,
+        `${base}&searchMode=ARRIVE_BY&requestedDateTime=2026-02-30T12:30:00Z`,
+        `${base}&searchMode=LEAVE_AT&requestedDateTime=2026-08-10T06:59:00Z`,
+        `${base}&searchMode=LEAVE_AT&requestedDateTime=2026-08-10T10:00:30Z`,
+        `${base}&searchMode=NOW&requestedDateTime=2026-08-10T10:00:00Z`,
+        `${base}&searchMode=ARRIVE_BY&requestedDateTime=2026-08-10T10:30:00Z&searchUntil=2026-08-10T11:00:00Z`,
+      ];
+
+      for (const url of invalidUrls) expect((await app.request(url)).status).toBe(400);
+      expect(requests).toHaveLength(0);
+    });
+
+    it("keeps planned mode and minute in distinct request identities", async () => {
+      const { client, requests } = scriptedClient([[], [], []]);
+      const routes = createJourneyRoutes(client, FIXED_NOW);
+      await routes.request(
+        "/?originId=origin&destinationId=destination&searchMode=LEAVE_AT&requestedDateTime=2026-08-10T10:00:00Z",
+      );
+      await routes.request(
+        "/?originId=origin&destinationId=destination&searchMode=ARRIVE_BY&requestedDateTime=2026-08-10T10:00:00Z",
+      );
+      await routes.request(
+        "/?originId=origin&destinationId=destination&searchMode=ARRIVE_BY&requestedDateTime=2026-08-10T11:00:00Z",
+      );
+
+      expect(requests.map((request) => [request.dateTimeMode, request.departureAt.toISOString()])).toEqual([
+        ["DEPARTURE", "2026-08-10T10:00:00.000Z"],
+        ["ARRIVAL", "2026-08-10T10:00:00.000Z"],
+        ["ARRIVAL", "2026-08-10T11:00:00.000Z"],
+      ]);
+    });
+  });
+
   it("passes selected modes upstream and removes journeys using an unselected public mode", async () => {
     const { client, requests } = worldClient([
       { id: "slow", departure: "2026-08-10T08:02:00Z", arrival: "2026-08-10T08:31:00Z", mode: "metro" },
@@ -1366,7 +1495,13 @@ describe("journey routes", () => {
       const response = await createJourneyRoutes(client, FIXED_NOW, spy.emit).request("/?originId=origin&destinationId=destination");
       const body = (await response.json()) as SuccessEnvelope<JourneyResponse>;
 
-      expect(Object.keys(body.data).sort()).toEqual(["fetchedAt", "journeys"]);
+      expect(Object.keys(body.data).sort()).toEqual([
+        "fetchedAt",
+        "journeyContext",
+        "journeys",
+        "requestedDateTime",
+        "searchMode",
+      ]);
       const serializedResponse = JSON.stringify(body);
       expect(serializedResponse).not.toContain("slCalls");
       expect(serializedResponse).not.toContain("journey_acquisition_metrics");

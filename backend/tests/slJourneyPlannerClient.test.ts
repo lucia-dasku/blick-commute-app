@@ -71,6 +71,24 @@ describe("SL Journey Planner client: request construction", () => {
     expect(requestedUrl.searchParams.get("itd_time")).toBe("1100");
   });
 
+  it("uses SL arrival-time semantics for an explicit ARRIVAL request", async () => {
+    const fetchMock = stubJourneyPlannerResponse(directFixture);
+    const client = createSlJourneyPlannerClient("https://journey-planner.fixture/v2");
+
+    await client.trips({
+      originId: "o",
+      destinationId: "d",
+      maxChanges: 2,
+      departureAt: ANCHOR,
+      dateTimeMode: "ARRIVAL",
+    });
+
+    const requestedUrl = new URL(fetchMock.mock.calls[0]?.[0] as string);
+    expect(requestedUrl.searchParams.get("itd_date")).toBe("20260810");
+    expect(requestedUrl.searchParams.get("itd_time")).toBe("1800");
+    expect(requestedUrl.searchParams.get("itd_trip_date_time_dep_arr")).toBe("arr");
+  });
+
   it("maps the selected app modes to SL inclusion parameters", async () => {
     const fetchMock = stubJourneyPlannerResponse(directFixture);
     const client = createSlJourneyPlannerClient("https://journey-planner.fixture/v2");

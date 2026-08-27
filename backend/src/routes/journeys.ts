@@ -2,7 +2,7 @@ import { Hono } from "hono";
 import { AppError } from "../lib/errors.js";
 import { successEnvelope } from "../models/common.js";
 import { buildRoutePattern, type RoutePattern } from "../domain/routePattern.js";
-import { selectAlternative, selectNext, selectPrimary } from "../domain/journeyRoles.js";
+import { selectAlternative, selectArriveByPrimary, selectNext, selectPrimary } from "../domain/journeyRoles.js";
 import {
   CandidateCollector,
   MAX_CHANGES,
@@ -61,6 +61,84 @@ function parseChangesPreference(value: string | undefined): JourneyChangesPrefer
   return normalized;
 }
 
+export type JourneySearchMode = "NOW" | "LEAVE_AT" | "ARRIVE_BY";
+export type JourneyContext = "LIVE" | "PLANNED";
+
+interface JourneySearchRequest {
+  searchMode: JourneySearchMode;
+  journeyContext: JourneyContext;
+  fetchedAt: Date;
+  requestedDateTime: Date | null;
+}
+
+const EXPLICIT_OFFSET_TIMESTAMP = /^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}(?::\d{2}(?:\.\d{1,3})?)?(?:Z|[+-]\d{2}:\d{2})$/;
+
+function hasValidCalendarFields(value: string): boolean {
+  const match = /^(\d{4})-(\d{2})-(\d{2})T(\d{2}):(\d{2})(?::(\d{2}))?/.exec(value);
+  if (match == null) return false;
+  const [, yearText, monthText, dayText, hourText, minuteText, secondText] = match;
+  const year = Number(yearText);
+  const month = Number(monthText);
+  const day = Number(dayText);
+  const hour = Number(hourText);
+  const minute = Number(minuteText);
+  const second = Number(secondText ?? "0");
+  const calendarCheck = new Date(Date.UTC(year, month - 1, day, hour, minute, second));
+  return (
+    calendarCheck.getUTCFullYear() === year &&
+    calendarCheck.getUTCMonth() === month - 1 &&
+    calendarCheck.getUTCDate() === day &&
+    calendarCheck.getUTCHours() === hour &&
+    calendarCheck.getUTCMinutes() === minute &&
+    calendarCheck.getUTCSeconds() === second
+  );
+}
+
+/** Parses the explicit live/planned contract. Planned values must name a real instant and
+ * include an offset; the server never guesses a timezone. SL accepts whole-minute anchors,
+ * so sub-minute precision is rejected rather than silently changing the requested intent or
+ * creating needless cache identities that map to the same upstream query. */
+function parseJourneySearch(
+  searchModeValue: string | undefined,
+  requestedDateTimeValue: string | undefined,
+  searchUntil: Date | null,
+  fetchedAt: Date,
+): JourneySearchRequest {
+  const searchMode = (searchModeValue ?? "NOW").trim().toUpperCase();
+  if (searchMode !== "NOW" && searchMode !== "LEAVE_AT" && searchMode !== "ARRIVE_BY") {
+    throw new AppError("VALIDATION_ERROR", "Query parameter 'searchMode' is invalid");
+  }
+
+  if (searchMode === "NOW") {
+    if (requestedDateTimeValue != null) {
+      throw new AppError("VALIDATION_ERROR", "Query parameter 'requestedDateTime' is not valid for NOW searches");
+    }
+    return { searchMode, journeyContext: "LIVE", fetchedAt, requestedDateTime: null };
+  }
+
+  if (searchUntil != null) {
+    throw new AppError("VALIDATION_ERROR", "Query parameter 'searchUntil' is only valid for NOW searches");
+  }
+  const raw = requestedDateTimeValue?.trim();
+  if (raw == null || !EXPLICIT_OFFSET_TIMESTAMP.test(raw) || !hasValidCalendarFields(raw)) {
+    throw new AppError(
+      "VALIDATION_ERROR",
+      "Query parameter 'requestedDateTime' must be an ISO-8601 timestamp with an explicit offset",
+    );
+  }
+  const requestedDateTime = new Date(raw);
+  if (Number.isNaN(requestedDateTime.getTime())) {
+    throw new AppError("VALIDATION_ERROR", "Query parameter 'requestedDateTime' is invalid");
+  }
+  if (requestedDateTime.getUTCSeconds() !== 0 || requestedDateTime.getUTCMilliseconds() !== 0) {
+    throw new AppError("VALIDATION_ERROR", "Query parameter 'requestedDateTime' must use whole-minute precision");
+  }
+  if (requestedDateTime.getTime() <= fetchedAt.getTime()) {
+    throw new AppError("VALIDATION_ERROR", "Query parameter 'requestedDateTime' must be in the future");
+  }
+  return { searchMode, journeyContext: "PLANNED", fetchedAt, requestedDateTime };
+}
+
 export type JourneyRole = "PRIMARY" | "NEXT" | "ALTERNATIVE";
 
 /** A full normalized journey plus its RoutePattern — structurally satisfies
@@ -81,8 +159,9 @@ interface Selection {
 
 /**
  * Re-derives the full PRIMARY/NEXT selection from the collector's own current candidate
- * pool: selects PRIMARY, then (if PRIMARY exists) NEXT (see
- * backend/src/domain/journeyRoles.ts), directly from the full eligible pool — deliberately
+ * pool: selects PRIMARY (using the live/LEAVE_AT preference or the explicit ARRIVE_BY
+ * preference), then (if PRIMARY exists) NEXT (see backend/src/domain/journeyRoles.ts),
+ * directly from the full eligible pool — deliberately
  * WITHOUT a global Pareto-dominance pass first. Called after every acquisition batch, never
  * only once, so a newly-discovered OR newly-UPDATED candidate can always reclassify an
  * earlier choice — PRIMARY/NEXT are never frozen merely because they were selected from an
@@ -101,9 +180,9 @@ interface Selection {
  * inside `selectAlternative` itself, once PRIMARY and NEXT are already fixed — see that
  * function's own doc.
  */
-function deriveSelection(pool: NormalizedJourney[]): Selection {
+function deriveSelection(pool: NormalizedJourney[], primaryMode: "LIVE_OR_LEAVE_AT" | "ARRIVE_BY" = "LIVE_OR_LEAVE_AT"): Selection {
   const rankablePool = toRankable(pool);
-  const primary = selectPrimary(rankablePool);
+  const primary = primaryMode === "ARRIVE_BY" ? selectArriveByPrimary(rankablePool) : selectPrimary(rankablePool);
   const next = primary == null ? undefined : selectNext(rankablePool, primary);
   return { rankablePool, primary, next };
 }
@@ -562,22 +641,62 @@ export function createJourneyRoutes(
 
     // One timestamp for the whole request: every eligibility check and acquisition anchor
     // below is measured against this same instant, never a freshly re-read wall clock.
-    const requestedAt = now();
-    const collector = new CandidateCollector(client, originId, destinationId, requestedAt.getTime(), changesPreference);
+    const fetchedAt = now();
+    const search = parseJourneySearch(
+      c.req.query("searchMode"),
+      c.req.query("requestedDateTime"),
+      searchUntil,
+      fetchedAt,
+    );
+    const eligibilityStart = search.searchMode === "LEAVE_AT" ? search.requestedDateTime! : fetchedAt;
+    const collector = new CandidateCollector(client, originId, destinationId, eligibilityStart.getTime(), changesPreference);
 
     // requestMaxChanges(changesPreference), not the bare MAX_CHANGES ceiling -- see that
     // function's own doc for why DIRECT_ONLY must narrow this very first request to
     // maxChanges: 0 rather than asking broadly and filtering the response afterward.
-    await collector.fetchBatch({ transportModes, maxChanges: requestMaxChanges(changesPreference), departureAt: requestedAt });
+    const requestAnchor = search.requestedDateTime ?? fetchedAt;
+    await collector.fetchBatch({
+      transportModes,
+      maxChanges: requestMaxChanges(changesPreference),
+      departureAt: requestAnchor,
+      dateTimeMode: search.searchMode === "ARRIVE_BY" ? "ARRIVAL" : "DEPARTURE",
+    });
     const initialCalls = collector.batchesUsedSoFar;
 
-    const { selection, nextCalls, alternativeCalls, primaryDiscoveryCalls, primaryRetargets } = await resolveSelection(
-      collector,
-      transportModes,
-      searchUntil,
-      changesPreference,
-      requestedAt,
-    );
+    let selection: Selection;
+    let nextCalls = 0;
+    let alternativeCalls = 0;
+    let primaryDiscoveryCalls = 0;
+    let primaryRetargets = 0;
+
+    if (search.journeyContext === "LIVE") {
+      const liveResolution = await resolveSelection(
+        collector,
+        transportModes,
+        searchUntil,
+        changesPreference,
+        fetchedAt,
+      );
+      selection = liveResolution.selection;
+      nextCalls = liveResolution.nextCalls;
+      alternativeCalls = liveResolution.alternativeCalls;
+      primaryDiscoveryCalls = liveResolution.primaryDiscoveryCalls;
+      primaryRetargets = liveResolution.primaryRetargets;
+    } else {
+      // A planned lookup is a single user-initiated timetable query, never live forward
+      // acquisition. ARRIVE_BY is also checked defensively against the exact requested
+      // instant even though SL was asked structurally in arrival mode.
+      const plannedPool =
+        search.searchMode === "ARRIVE_BY"
+          ? collector.pool.filter(
+              (journey) => Date.parse(journey.arrivalTime) <= search.requestedDateTime!.getTime(),
+            )
+          : collector.pool;
+      selection = deriveSelection(
+        plannedPool,
+        search.searchMode === "ARRIVE_BY" ? "ARRIVE_BY" : "LIVE_OR_LEAVE_AT",
+      );
+    }
 
     const alternative =
       selection.primary != null && selection.next != null
@@ -604,7 +723,15 @@ export function createJourneyRoutes(
     });
 
     c.header("Cache-Control", "public, s-maxage=30, stale-while-revalidate=30");
-    return c.json(successEnvelope({ fetchedAt: requestedAt.toISOString(), journeys }));
+    return c.json(
+      successEnvelope({
+        fetchedAt: search.fetchedAt.toISOString(),
+        journeyContext: search.journeyContext,
+        searchMode: search.searchMode,
+        requestedDateTime: search.requestedDateTime?.toISOString() ?? null,
+        journeys,
+      }),
+    );
   });
   return route;
 }

@@ -1,5 +1,11 @@
 import { describe, expect, it } from "vitest";
-import { selectAlternative, selectNext, selectPrimary, type RankableJourney } from "../src/domain/journeyRoles.js";
+import {
+  selectAlternative,
+  selectArriveByPrimary,
+  selectNext,
+  selectPrimary,
+  type RankableJourney,
+} from "../src/domain/journeyRoles.js";
 import type { RoutePattern } from "../src/domain/routePattern.js";
 
 const METRO_PATTERN: RoutePattern = { legs: [{ transportMode: "METRO", stopIds: ["A", "B"] }] };
@@ -50,6 +56,60 @@ describe("selectPrimary", () => {
 
   it("an empty pool selects nothing", () => {
     expect(selectPrimary([])).toBeUndefined();
+  });
+});
+
+describe("selectArriveByPrimary", () => {
+  it("chooses the latest equal-quality departure that still belongs to the deadline-safe pool", () => {
+    const arrive1808 = journey({
+      journeyId: "arrive-1808",
+      departureTime: "2026-08-10T17:57:42Z",
+      arrivalTime: "2026-08-10T18:08:06Z",
+    });
+    const arrive1816 = journey({
+      journeyId: "arrive-1816",
+      departureTime: "2026-08-10T18:05:42Z",
+      arrivalTime: "2026-08-10T18:16:06Z",
+    });
+    const arrive1823 = journey({
+      journeyId: "arrive-1823",
+      departureTime: "2026-08-10T18:13:12Z",
+      arrivalTime: "2026-08-10T18:23:36Z",
+    });
+
+    expect(selectArriveByPrimary([arrive1808, arrive1816, arrive1823])?.journeyId).toBe("arrive-1823");
+  });
+
+  it("does not prefer a later bizarre detour over a simpler sensible journey", () => {
+    const direct = journey({
+      journeyId: "direct",
+      departureTime: "2026-08-10T18:13:00Z",
+      arrivalTime: "2026-08-10T18:23:00Z",
+      transferCount: 0,
+    });
+    const detour = journey({
+      journeyId: "detour",
+      departureTime: "2026-08-10T18:15:00Z",
+      arrivalTime: "2026-08-10T18:29:00Z",
+      transferCount: 2,
+    });
+
+    expect(selectArriveByPrimary([detour, direct])?.journeyId).toBe("direct");
+  });
+
+  it("keeps known walking quality ahead of a marginally later departure", () => {
+    const lowWalking = journey({
+      journeyId: "low-walking",
+      departureTime: "2026-08-10T18:13:00Z",
+      walkingDurationSeconds: 30,
+    });
+    const highWalking = journey({
+      journeyId: "high-walking",
+      departureTime: "2026-08-10T18:14:00Z",
+      walkingDurationSeconds: 600,
+    });
+
+    expect(selectArriveByPrimary([highWalking, lowWalking])?.journeyId).toBe("low-walking");
   });
 });
 

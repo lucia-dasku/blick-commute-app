@@ -15,6 +15,7 @@ import org.junit.runner.RunWith
 import se.blick.app.domain.model.OneTimeEvent
 import se.blick.app.domain.model.OneTimeEventLabel
 import se.blick.app.domain.model.OneTimeEventTimeType
+import java.time.Instant
 import java.time.LocalDate
 import java.time.LocalTime
 
@@ -64,5 +65,7 @@ class OneTimeEventDaoTest {
         date = LocalDate.of(2026, 10, 8),
         time = LocalTime.of(14, 15),
         timeType = OneTimeEventTimeType.LEAVE_AT,
+        createdAt = Instant.ofEpochMilli(1_800_000_000_123L),
+        updatedAt = Instant.ofEpochMilli(1_800_000_060_456L),
     )
 }

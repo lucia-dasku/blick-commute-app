@@ -50,7 +50,7 @@ Resolves a user-entered stop/location through Journey Planner Stop Finder and re
 global identifiers plus display names. Android must persist these identifiers; SL Transport's
 numeric site IDs are not assumed to be compatible.
 
-### `GET /api/v1/journeys?originId=&destinationId=&transportModes=METRO,TRAIN,BUS&searchUntil=&changesPreference=`
+### `GET /api/v1/journeys?originId=&destinationId=&transportModes=METRO,TRAIN,BUS&searchUntil=&changesPreference=&searchMode=&requestedDateTime=`
 
 Calls Journey Planner Trips, normalizes complete legs (first public transport mode/line,
 departure and final arrival, transfer count, realtime flags, stop names, disruptions, and each
@@ -69,6 +69,30 @@ disallowed rows merely hidden afterward; an unrecognized value is a validation e
 timeout/network/schema failures retain the existing error-envelope behavior. Responses are
 public-cacheable for 30 seconds so app/detail/widget consumers do not independently amplify
 upstream traffic.
+
+`searchMode` is explicit and defaults to `NOW` when omitted. A `NOW` request rejects
+`requestedDateTime` and keeps the existing departure-at-current-time acquisition behavior.
+`LEAVE_AT` and `ARRIVE_BY` require `requestedDateTime` as a future, whole-minute ISO-8601
+timestamp with an explicit offset (for example `2026-09-17T18:30:00+02:00`); timezone-less,
+malformed, past, and sub-minute values are rejected. Planned requests also reject `searchUntil`,
+which remains a live routine-window boundary. `LEAVE_AT` maps the requested instant to SL's
+departure search; `ARRIVE_BY` maps it to SL's native arrival search. A planned lookup makes one
+bounded timetable request and does not enter the live forward-acquisition loop.
+
+Every response identifies its meaning directly with `journeyContext` (`LIVE` or `PLANNED`),
+`searchMode`, and canonical `requestedDateTime` (`null` for `NOW`, otherwise an explicit UTC ISO
+instant). `fetchedAt` remains the time the backend performed the lookup, never the future planning
+anchor. The existing journey shape and `PRIMARY`/`NEXT`/`ALTERNATIVE` roles are reused within that
+context. For `ARRIVE_BY`, candidates whose normalized final arrival is after the requested
+deadline are rejected defensively even though the upstream request already uses arrival mode.
+Its PRIMARY preference is also deadline-specific: fewer changes, then less known walking, then
+the latest useful departure, then the arrival closest to the deadline. Thus equal-quality regular
+proposals choose the latest one that still arrives on time, while a later multi-change detour does
+not displace a simpler sensible route merely for leaving slightly later. NEXT, when present, is
+still route-compatible and is selected only from that same deadline-safe pool; a journey arriving
+after the deadline can never receive any role.
+Because planning mode and requested time are query parameters at whole-minute precision, CDN
+cache identity separates live, departure-planned, arrival-planned, and different planned minutes.
 
 Each journey additionally carries `disruptionContext` (`{ version, journeyStart, journeyEnd,
 legs: [{ transportMode, lineDesignation, boardingPatternPointGid?, alightingPatternPointGid?,

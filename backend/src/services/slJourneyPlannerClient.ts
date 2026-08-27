@@ -130,6 +130,7 @@ export const journeyTransportModes = ["METRO", "TRAIN", "BUS", "TRAM", "FERRY"] 
 export type JourneyTransportMode = (typeof journeyTransportModes)[number];
 
 export type JourneyRouteType = "leasttime" | "leastinterchange" | "leastwalking";
+export type JourneyDateTimeMode = "DEPARTURE" | "ARRIVAL";
 
 export interface TripsRequest {
   originId: string;
@@ -148,6 +149,11 @@ export interface TripsRequest {
    * timezone). Always supplied, even for a request's very first search — SL is never left
    * to independently choose its own notion of "now" (see journeys.ts's own doc). */
   departureAt: Date;
+  /** Whether [departureAt] is interpreted by SL as a departure or arrival search anchor.
+   * The property keeps its existing name for source compatibility with the live candidate
+   * acquisition pipeline; planned ARRIVE_BY requests explicitly opt into `"ARRIVAL"`.
+   * Omission preserves the existing departure-search behavior. */
+  dateTimeMode?: JourneyDateTimeMode;
   /** Defaults to `"leasttime"` (the existing behavior) when omitted. */
   routeType?: JourneyRouteType;
   /** A single stop the trip should route through — SL's own `name_via` (`type_via` is
@@ -190,7 +196,7 @@ export function createSlJourneyPlannerClient(baseUrl = config.slJourneyPlannerBa
         // The explicit anchor for this search — see TripsRequest.departureAt's own doc.
         itd_date: itdDate,
         itd_time: itdTime,
-        itd_trip_date_time_dep_arr: "dep",
+        itd_trip_date_time_dep_arr: request.dateTimeMode === "ARRIVAL" ? "arr" : "dep",
         // SL's own default (nine) is far looser than a commute journey should ever need; this
         // app never wants to present a nine-change trip as a viable regular/alternative option.
         // journeys.ts independently filters journey.transferCount defensively — this upstream

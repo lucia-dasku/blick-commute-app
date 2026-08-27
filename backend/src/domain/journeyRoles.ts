@@ -73,6 +73,28 @@ export function selectPrimary<T extends RankableJourney>(journeys: T[]): T | und
   return [...journeys].sort(compareByPreference)[0];
 }
 
+/** Selects the recommendation for an ARRIVE_BY timetable result. All candidates must already
+ * arrive no later than the requested deadline. Unlike live PRIMARY, arriving earlier is not the
+ * objective: among SL's bounded, already-sensible proposals this prefers fewer changes, then less
+ * known walking, then the latest useful departure, then the arrival closest to the deadline.
+ * This keeps a later multi-change detour from displacing a simpler route merely because it leaves
+ * slightly later, while equal-quality regular journeys naturally choose the latest one that still
+ * satisfies the deadline. The final journey-id tie-break keeps the result deterministic.
+ *
+ * These dimensions also preserve the relevant Pareto property for this context: a candidate that
+ * is no worse on changes/walking and leaves later cannot lose to the candidate it improves upon;
+ * unknown walking remains neutral rather than being invented as zero, matching live ranking. */
+export function selectArriveByPrimary<T extends RankableJourney>(journeys: T[]): T | undefined {
+  return [...journeys].sort(
+    (a, b) =>
+      a.transferCount - b.transferCount ||
+      compareKnownWalking(a.walkingDurationSeconds, b.walkingDurationSeconds) ||
+      Date.parse(b.departureTime) - Date.parse(a.departureTime) ||
+      Date.parse(b.arrivalTime) - Date.parse(a.arrivalTime) ||
+      a.journeyId.localeCompare(b.journeyId),
+  )[0];
+}
+
 /**
  * NEXT means the next departure the user can take if they miss PRIMARY while continuing
  * to travel in essentially the same normal way. A candidate qualifies only when it is:

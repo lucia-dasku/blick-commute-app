@@ -383,6 +383,24 @@ describe("CandidateCollector query-scoped probe tracking", () => {
     expect(broad.skipped).toBe(false);
   });
 
+  it("keeps departure and arrival searches in distinct probe identities at the same minute", async () => {
+    const { client, requests } = scriptedClient([[], []]);
+    const collector = new CandidateCollector(client, ORIGIN, DESTINATION, REQUESTED_AT_MILLIS);
+    const anchor = new Date("2026-08-10T18:35:00Z");
+
+    const departure = await collector.fetchBatch({ ...BASE_OPTIONS, departureAt: anchor });
+    const arrival = await collector.fetchBatch({
+      ...BASE_OPTIONS,
+      departureAt: anchor,
+      dateTimeMode: "ARRIVAL",
+    });
+
+    expect(requests).toHaveLength(2);
+    expect(requests.map((request) => request.dateTimeMode ?? "DEPARTURE")).toEqual(["DEPARTURE", "ARRIVAL"]);
+    expect(departure.skipped).toBe(false);
+    expect(arrival.skipped).toBe(false);
+  });
+
   it("treats the same transport modes supplied in a different order as the identical probe", async () => {
     let callCount = 0;
     const client: SlJourneyPlannerClient = {
