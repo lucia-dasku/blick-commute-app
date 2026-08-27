@@ -8,7 +8,9 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.test.assertIsDisplayed
+import androidx.compose.ui.test.assertCountEquals
 import androidx.compose.ui.test.junit4.v2.createAndroidComposeRule
+import androidx.compose.ui.test.onAllNodesWithText
 import androidx.compose.ui.test.onNodeWithContentDescription
 import androidx.compose.ui.test.onNodeWithTag
 import androidx.compose.ui.test.onNodeWithText
@@ -18,6 +20,7 @@ import androidx.compose.ui.unit.Dp
 import androidx.compose.ui.unit.dp
 import androidx.test.ext.junit.runners.AndroidJUnit4
 import java.time.DayOfWeek
+import java.time.LocalDate
 import java.time.LocalTime
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertTrue
@@ -358,6 +361,72 @@ class RoutineListScreenTest {
     }
 
     @Test
+    fun routinesPausedForTheCurrentDateShowPausedOnLabeledAndUnlabeledCards() {
+        val today = LocalDate.of(2026, 8, 27)
+        composeRule.setContent {
+            RoutineListContent(
+                uiState = RoutineListUiState(
+                    routines = listOf(
+                        sampleRoutine(id = "unlabeled").copy(pausedDate = today),
+                        sampleRoutine(id = "labeled").copy(label = RoutineLabel.WORK, pausedDate = today),
+                    ),
+                    isLoading = false,
+                    entitlement = EntitlementState.Premium,
+                ),
+                today = today,
+                onAddRoutine = {},
+                onOpenRoutine = {},
+            )
+        }
+
+        val paused = composeRule.activity.getString(R.string.routine_list_status_paused)
+        composeRule.onAllNodesWithText(paused).assertCountEquals(2)
+    }
+
+    @Test
+    fun aPauseFromAnotherDateIsNotShownAsCurrent() {
+        val today = LocalDate.of(2026, 8, 27)
+        composeRule.setContent {
+            RoutineListContent(
+                uiState = RoutineListUiState(
+                    routines = listOf(sampleRoutine().copy(pausedDate = today.minusDays(1))),
+                    isLoading = false,
+                ),
+                today = today,
+                onAddRoutine = {},
+                onOpenRoutine = {},
+            )
+        }
+
+        composeRule.onNodeWithText(
+            composeRule.activity.getString(R.string.routine_list_status_paused),
+        ).assertDoesNotExist()
+    }
+
+    @Test
+    fun disabledStatusTakesPriorityOverAPauseForToday() {
+        val today = LocalDate.of(2026, 8, 27)
+        composeRule.setContent {
+            RoutineListContent(
+                uiState = RoutineListUiState(
+                    routines = listOf(sampleRoutine().copy(enabled = false, pausedDate = today)),
+                    isLoading = false,
+                ),
+                today = today,
+                onAddRoutine = {},
+                onOpenRoutine = {},
+            )
+        }
+
+        composeRule.onNodeWithText(
+            composeRule.activity.getString(R.string.routine_details_status_disabled),
+        ).assertIsDisplayed()
+        composeRule.onNodeWithText(
+            composeRule.activity.getString(R.string.routine_list_status_paused),
+        ).assertDoesNotExist()
+    }
+
+    @Test
     fun StockholmNightUnlabeledRoutineMatchesLabeledCardHorizontalBounds() {
         composeRule.setContent {
             BlickTheme(useStockholmNightTheme = true) {
@@ -536,6 +605,37 @@ class RoutineListScreenTest {
         composeRule.runOnIdle {
             assertEquals("home" to "work", requestedMove)
         }
+    }
+
+    @Test
+    fun premiumLongPressHighlightsTheHeldRoutineOnlyUntilRelease() {
+        composeRule.setContent {
+            RoutineListContent(
+                uiState = RoutineListUiState(
+                    routines = listOf(
+                        sampleRoutine(id = "home", name = "Home route").copy(label = RoutineLabel.HOME),
+                        sampleRoutine(id = "work", name = "Work route").copy(label = RoutineLabel.WORK),
+                    ),
+                    isLoading = false,
+                    entitlement = EntitlementState.Premium,
+                ),
+                onAddRoutine = {},
+                onOpenRoutine = {},
+            )
+        }
+
+        val heldRoutine = composeRule.onNodeWithTag("routine_reorder_item_home")
+        heldRoutine.performTouchInput {
+            down(center)
+            advanceEventTime(700)
+            moveBy(Offset(0f, 1f))
+        }
+
+        composeRule.onNodeWithTag("routine_drag_highlight_home").assertExists()
+
+        heldRoutine.performTouchInput { up() }
+
+        composeRule.onNodeWithTag("routine_drag_highlight_home").assertDoesNotExist()
     }
 
     @Test

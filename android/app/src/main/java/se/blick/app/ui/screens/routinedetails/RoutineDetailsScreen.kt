@@ -101,8 +101,9 @@ import se.blick.app.widget.LINE_BADGE_GREEN
  * [NotificationStatusRow]) also re-checks availability every time the screen resumes, e.g.
  * after returning from system notification settings.
  *
- * Also hosts routine management. Pause/resume today ([PauseTodayButton]) sits right under the
- * departures list, since it directly affects what that list is showing; edit (delegates
+ * Also hosts routine management. Manual refresh and pause/resume today ([PauseTodayButton])
+ * share an action row right under the departures list, since both directly affect what that
+ * list is showing; edit (delegates
  * navigation to [onEdit], the actual editing UI is
  * [se.blick.app.ui.screens.routinecreate.RoutineCreateScreen] reused in edit mode — see
  * [se.blick.app.ui.navigation.BlickNavHost]), enable/disable, and delete (with an in-screen
@@ -138,15 +139,14 @@ fun RoutineDetailsScreen(
         }
     }
 
+    val routine = uiState.routine
     Scaffold(
         topBar = {
-            // No title -- the journeys/departures heading right below already identifies this
-            // screen by its own route/routine name (see JourneyComparisonSection's own call
-            // site), so a second, generic "Routine" label up here was redundant.
-            BlickTopBar(title = null, onBack = onBack)
+            // The saved routine name sits beside Back instead of consuming a separate heading
+            // row in the scrollable content. Loading/not-found states have no routine to name.
+            BlickTopBar(title = routine?.name, onBack = onBack)
         },
     ) { padding ->
-        val routine = uiState.routine
         when {
             uiState.isRoutineLoading -> CenteredBox(Modifier.fillMaxSize().padding(padding)) {
                 CircularProgressIndicator()
@@ -239,12 +239,6 @@ fun RoutineDetailsScreen(
         )
     }
 }
-
-/** "{origin} → {destination}" -- the same pattern the Route detail row further down this screen
- * already builds (see that row's own comment) -- reused here as the journeys section's own
- * heading, and shown nowhere near a composable so it doesn't need to be one itself. */
-private fun exactDestinationRouteLabel(routine: CommuteRoutine) =
-    "${routine.journeyOriginName ?: routine.siteName} → ${routine.journeyDestinationName.orEmpty()}"
 
 @Composable
 private fun JourneyComparisonSection(
@@ -530,25 +524,14 @@ internal fun RoutineDetailsContent(
         // other reason someone opens this screen from the notification/widget, ahead of the
         // routine's own (static, rarely-checked) name/schedule details and management actions
         // below.
-        Row(
-            modifier = Modifier.fillMaxWidth(),
-            horizontalArrangement = Arrangement.SpaceBetween,
-            verticalAlignment = Alignment.CenterVertically,
-        ) {
-            // Exact-destination: the route itself ("{origin} → {destination}") rather than a
-            // generic "Fastest journeys" label -- this is now the first thing identifying which
-            // routine's journeys these are at all, since the top app bar above no longer carries
-            // a title (see BlickTopBar's own call site). LINE_DIRECTION keeps its existing
-            // generic "Next departures" heading -- that type's own route is already named by
-            // routine.name itself, shown nowhere near this heading either way.
+        // Exact-destination is already identified by its saved routine name beside Back in the
+        // top app bar, so it does not repeat the same route as a second content heading.
+        // LINE_DIRECTION keeps its useful generic section heading.
+        if (routine.type == RoutineType.LINE_DIRECTION) {
             Text(
-                if (routine.type == RoutineType.EXACT_DESTINATION) exactDestinationRouteLabel(routine)
-                else stringResource(R.string.routine_details_departures_heading),
+                stringResource(R.string.routine_details_departures_heading),
                 style = MaterialTheme.typography.titleMedium,
             )
-            Button(onClick = onRefresh, enabled = !isRefreshing) {
-                Text(stringResource(R.string.routine_details_refresh_action))
-            }
         }
         if (isRefreshing) {
             Spacer(Modifier.height(8.dp))
@@ -571,18 +554,37 @@ internal fun RoutineDetailsContent(
             DeparturesSection(departuresState, routine.transportMode, locale, onRefresh)
         }
 
-        // Pause/resume today lives here, directly under the departures it affects, rather than
-        // inside the (now collapsible) Manage routine section below -- see PauseTodayButton's
-        // own doc for why this is a top-level composable of its own rather than folded back
-        // into RoutineActionsSection.
+        // Manual refresh and pause/resume today share one compact action row directly under the
+        // departures they affect. Pause remains outside the (now collapsible) Manage routine
+        // section below -- see PauseTodayButton's own doc for why it is a top-level composable.
         Spacer(Modifier.height(12.dp))
-        PauseTodayButton(
-            isPausedToday = isPausedToday,
-            isTogglingPause = isTogglingPause,
-            pauseActionFailed = pauseActionFailed,
-            onPauseToday = onPauseToday,
-            onResumeToday = onResumeToday,
-        )
+        Row(
+            modifier = Modifier.fillMaxWidth(),
+            horizontalArrangement = Arrangement.spacedBy(12.dp),
+        ) {
+            Button(
+                onClick = onRefresh,
+                enabled = !isRefreshing,
+                modifier = Modifier.weight(1f),
+            ) {
+                Text(stringResource(R.string.routine_details_refresh_action))
+            }
+            PauseTodayButton(
+                isPausedToday = isPausedToday,
+                isTogglingPause = isTogglingPause,
+                onPauseToday = onPauseToday,
+                onResumeToday = onResumeToday,
+                modifier = Modifier.weight(1f),
+            )
+        }
+        if (pauseActionFailed) {
+            Spacer(Modifier.height(4.dp))
+            Text(
+                stringResource(R.string.routine_details_pause_action_failed),
+                color = MaterialTheme.colorScheme.error,
+                style = MaterialTheme.typography.bodySmall,
+            )
+        }
 
         Spacer(Modifier.height(20.dp))
         HorizontalDivider()
@@ -736,40 +738,29 @@ private fun DebugNotificationSection(
 }
 
 /**
- * "Pause today"/"Resume today" -- its own top-level composable (used directly by
- * [RoutineDetailsContent], right under the departures it affects) rather than folded back into
- * [RoutineActionsSection] below, which now only holds the collapsible edit/disable/delete
- * group. Text/enabled/error-message behaviour is exactly what lived inside
- * [RoutineActionsSection] before this split -- only its position on screen changed.
+ * "Pause today"/"Resume today" -- its own top-level button (used directly by
+ * [RoutineDetailsContent], beside manual refresh under the departures they affect) rather than
+ * folded back into [RoutineActionsSection] below, which only holds the collapsible
+ * edit/disable/delete group.
  */
 @Composable
 private fun PauseTodayButton(
     isPausedToday: Boolean,
     isTogglingPause: Boolean,
-    pauseActionFailed: Boolean,
     onPauseToday: () -> Unit,
     onResumeToday: () -> Unit,
+    modifier: Modifier = Modifier,
 ) {
-    Column {
-        Button(
-            onClick = if (isPausedToday) onResumeToday else onPauseToday,
-            enabled = !isTogglingPause,
-            modifier = Modifier.fillMaxWidth(),
-        ) {
-            Text(
-                stringResource(
-                    if (isPausedToday) R.string.routine_details_resume_today_action else R.string.routine_details_pause_today_action,
-                ),
-            )
-        }
-        if (pauseActionFailed) {
-            Spacer(Modifier.height(4.dp))
-            Text(
-                stringResource(R.string.routine_details_pause_action_failed),
-                color = MaterialTheme.colorScheme.error,
-                style = MaterialTheme.typography.bodySmall,
-            )
-        }
+    Button(
+        onClick = if (isPausedToday) onResumeToday else onPauseToday,
+        enabled = !isTogglingPause,
+        modifier = modifier,
+    ) {
+        Text(
+            stringResource(
+                if (isPausedToday) R.string.routine_details_resume_today_action else R.string.routine_details_pause_today_action,
+            ),
+        )
     }
 }
 
@@ -782,7 +773,7 @@ private fun StockholmNightExpandablePanel(
             modifier = Modifier.fillMaxWidth(),
             shape = MaterialTheme.shapes.medium,
             color = StockholmNightSurfaces.Card,
-            border = BorderStroke(1.dp, StockholmNightSurfaces.Border),
+            border = BorderStroke(1.dp, StockholmNightSurfaces.CardBorder),
             tonalElevation = 0.dp,
         ) {
             Column(

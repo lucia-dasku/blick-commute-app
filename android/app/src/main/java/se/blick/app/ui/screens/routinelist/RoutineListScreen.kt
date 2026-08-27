@@ -37,6 +37,7 @@ import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.DisposableEffect
+import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableFloatStateOf
 import androidx.compose.runtime.mutableStateMapOf
@@ -68,6 +69,7 @@ import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import androidx.hilt.navigation.compose.hiltViewModel
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
+import kotlinx.coroutines.delay
 import se.blick.app.R
 import se.blick.app.billing.hasPremiumAccess
 import se.blick.app.domain.model.CommuteRoutine
@@ -82,6 +84,9 @@ import se.blick.app.ui.theme.StockholmNightSurfaces
 import se.blick.app.billing.RoutineTierPolicy
 import se.blick.app.domain.model.RoutineType
 import se.blick.app.locale.currentBlickLocale
+import java.time.Duration
+import java.time.LocalDate
+import java.time.ZonedDateTime
 
 /** Extra bottom padding reserved for the last list row so the always-visible FAB (see
  * [RoutineListScreen]'s `floatingActionButton` slot) never obscures it — Material3's
@@ -101,9 +106,11 @@ fun RoutineListScreen(
     viewModel: RoutineListViewModel = hiltViewModel(),
 ) {
     val uiState by viewModel.uiState.collectAsStateWithLifecycle()
+    val today = rememberCurrentLocalDate()
 
     RoutineListContent(
         uiState = uiState,
+        today = today,
         onAddRoutine = onAddRoutine,
         onOpenPremium = onOpenPremium,
         onOpenRoutine = onOpenRoutine,
@@ -125,6 +132,7 @@ fun RoutineListScreen(
 @Composable
 fun RoutineListContent(
     uiState: RoutineListUiState,
+    today: LocalDate = LocalDate.now(),
     onAddRoutine: () -> Unit,
     onOpenRoutine: (String) -> Unit,
     // Defaulted (unlike onAddRoutine/onOpenRoutine) so existing RoutineListScreenTest call
@@ -140,6 +148,7 @@ fun RoutineListContent(
     val routineBounds = remember { mutableStateMapOf<String, Rect>() }
     var dragPointerY by remember { mutableFloatStateOf(0f) }
     var lastDragTargetId by remember { mutableStateOf<String?>(null) }
+    var draggedRoutineId by remember { mutableStateOf<String?>(null) }
     val hapticFeedback = LocalHapticFeedback.current
     val useStockholmNightHeader = LocalStockholmNightTheme.current
     val sectionLabelColor = when {
@@ -155,7 +164,7 @@ fun RoutineListContent(
                     useStockholmNightBranding = useStockholmNightHeader,
                     onOpenAbout = onOpenAbout,
                 )
-                Column(Modifier.padding(start = 16.dp, end = 16.dp, bottom = 12.dp)) {
+                Column(Modifier.padding(start = 16.dp, top = 8.dp, end = 16.dp, bottom = 12.dp)) {
                     Text(
                         text = stringResource(R.string.routine_list_title),
                         color = sectionLabelColor,
@@ -228,14 +237,17 @@ fun RoutineListContent(
                             .pointerInput(routine.id) {
                                 detectDragGesturesAfterLongPress(
                                     onDragStart = { localPosition ->
+                                        draggedRoutineId = routine.id
                                         dragPointerY = (routineBounds[routine.id]?.top ?: 0f) + localPosition.y
                                         lastDragTargetId = null
                                         hapticFeedback.performHapticFeedback(HapticFeedbackType.LongPress)
                                     },
                                     onDragEnd = {
+                                        draggedRoutineId = null
                                         lastDragTargetId = null
                                     },
                                     onDragCancel = {
+                                        draggedRoutineId = null
                                         lastDragTargetId = null
                                     },
                                     onDrag = { change, dragAmount ->
@@ -281,21 +293,34 @@ fun RoutineListContent(
                             .then(reorderModifier)
                             .testTag("routine_reorder_item_${routine.id}"),
                     ) {
-                    if (routine.label != null) {
-                        LabeledRoutineCard(
-                            routine = routine,
-                            allowed = allowed,
-                            onOpenRoutine = onOpenRoutine,
-                            onSelectFreeRoutine = onSelectFreeRoutine,
-                        )
-                    } else {
-                        UnlabeledRoutineCard(
-                            routine = routine,
-                            allowed = allowed,
-                            onOpenRoutine = onOpenRoutine,
-                            onSelectFreeRoutine = onSelectFreeRoutine,
-                        )
-                    }
+                        val isDragging = draggedRoutineId == routine.id
+                        Box(
+                            modifier = Modifier
+                                .fillMaxWidth()
+                                .then(
+                                    if (isDragging) Modifier.testTag("routine_drag_highlight_${routine.id}") else Modifier,
+                                ),
+                        ) {
+                            if (routine.label != null) {
+                                LabeledRoutineCard(
+                                    routine = routine,
+                                    allowed = allowed,
+                                    isPausedToday = routine.pausedDate == today,
+                                    isDragging = isDragging,
+                                    onOpenRoutine = onOpenRoutine,
+                                    onSelectFreeRoutine = onSelectFreeRoutine,
+                                )
+                            } else {
+                                UnlabeledRoutineCard(
+                                    routine = routine,
+                                    allowed = allowed,
+                                    isPausedToday = routine.pausedDate == today,
+                                    isDragging = isDragging,
+                                    onOpenRoutine = onOpenRoutine,
+                                    onSelectFreeRoutine = onSelectFreeRoutine,
+                                )
+                            }
+                        }
                     }
                 }
             }
@@ -320,10 +345,29 @@ fun RoutineListContent(
 
 }
 
+/** Keeps the home-only pause label current across local midnight without adding polling,
+ * scheduling work, or another commute refresh loop. The coroutine sleeps until the next local
+ * date boundary and exists only while this composable is on screen. */
+@Composable
+private fun rememberCurrentLocalDate(): LocalDate {
+    var today by remember { mutableStateOf(LocalDate.now()) }
+    LaunchedEffect(Unit) {
+        while (true) {
+            val now = ZonedDateTime.now()
+            today = now.toLocalDate()
+            val nextMidnight = now.toLocalDate().plusDays(1).atStartOfDay(now.zone)
+            delay(Duration.between(now, nextMidnight).toMillis().coerceAtLeast(1_000L))
+        }
+    }
+    return today
+}
+
 @Composable
 private fun UnlabeledRoutineCard(
     routine: CommuteRoutine,
     allowed: Boolean,
+    isPausedToday: Boolean,
+    isDragging: Boolean,
     onOpenRoutine: (String) -> Unit,
     onSelectFreeRoutine: (String) -> Unit,
 ) {
@@ -336,9 +380,11 @@ private fun UnlabeledRoutineCard(
             Card(
                 onClick = { onOpenRoutine(routine.id) },
                 shape = RoundedCornerShape(16.dp),
-                colors = CardDefaults.cardColors(containerColor = StockholmNightSurfaces.Card),
-                border = BorderStroke(1.dp, StockholmNightSurfaces.Border),
-                elevation = CardDefaults.cardElevation(defaultElevation = 2.dp),
+                colors = CardDefaults.cardColors(
+                    containerColor = if (isDragging) MaterialTheme.colorScheme.surfaceContainerHigh else StockholmNightSurfaces.Card,
+                ),
+                border = BorderStroke(1.dp, StockholmNightSurfaces.CardBorder),
+                elevation = CardDefaults.cardElevation(defaultElevation = if (isDragging) 5.dp else 2.dp),
                 modifier = Modifier
                     .fillMaxWidth()
                     .testTag("unlabeled_routine_card_${routine.id}"),
@@ -346,6 +392,7 @@ private fun UnlabeledRoutineCard(
                 UnlabeledRoutineContent(
                     routine = routine,
                     allowed = allowed,
+                    isPausedToday = isPausedToday,
                     onSelectFreeRoutine = onSelectFreeRoutine,
                     containerColor = Color.Transparent,
                     modifier = Modifier.fillMaxWidth(),
@@ -356,8 +403,9 @@ private fun UnlabeledRoutineCard(
         UnlabeledRoutineContent(
             routine = routine,
             allowed = allowed,
+            isPausedToday = isPausedToday,
             onSelectFreeRoutine = onSelectFreeRoutine,
-            containerColor = MaterialTheme.colorScheme.surface,
+            containerColor = if (isDragging) MaterialTheme.colorScheme.surfaceContainerHigh else MaterialTheme.colorScheme.surface,
             modifier = Modifier.clickable { onOpenRoutine(routine.id) },
         )
     }
@@ -367,6 +415,7 @@ private fun UnlabeledRoutineCard(
 private fun UnlabeledRoutineContent(
     routine: CommuteRoutine,
     allowed: Boolean,
+    isPausedToday: Boolean,
     onSelectFreeRoutine: (String) -> Unit,
     containerColor: Color,
     modifier: Modifier,
@@ -384,11 +433,8 @@ private fun UnlabeledRoutineContent(
         // separate supportingContent line for the site name, which would just
         // repeat it a second time since the name already includes it.
         headlineContent = { Text(routine.name) },
-        // Consistent with the details screen: enabled/disabled is always
-        // stated in words here too, never colour-only (see
-        // RoutineDetailsScreen's statusLabel for the same rule; "paused
-        // today" isn't surfaced here since it requires the injected Clock,
-        // which this list-only screen has no other reason to depend on).
+        // Consistent with the details screen: enabled/disabled and a current-day pause are
+        // stated in words here too, never colour-only.
         supportingContent = if (!allowed) {
             { Text(stringResource(R.string.routine_list_premium_locked)) }
         } else null,
@@ -404,6 +450,12 @@ private fun UnlabeledRoutineContent(
                     color = RoutineDestructiveRed,
                 )
             })
+            isPausedToday -> ({
+                Text(
+                    text = stringResource(R.string.routine_list_status_paused),
+                    color = pausedRoutineStatusColor(),
+                )
+            })
             else -> null
         },
         colors = ListItemDefaults.colors(containerColor = containerColor),
@@ -415,6 +467,8 @@ private fun UnlabeledRoutineContent(
 private fun LabeledRoutineCard(
     routine: CommuteRoutine,
     allowed: Boolean,
+    isPausedToday: Boolean,
+    isDragging: Boolean,
     onOpenRoutine: (String) -> Unit,
     onSelectFreeRoutine: (String) -> Unit,
 ) {
@@ -431,9 +485,14 @@ private fun LabeledRoutineCard(
     val status = when {
         !allowed -> stringResource(R.string.routine_list_premium_locked)
         !routine.enabled -> stringResource(R.string.routine_details_status_disabled)
+        isPausedToday -> stringResource(R.string.routine_list_status_paused)
         else -> null
     }
-    val statusColor = if (!allowed) MaterialTheme.colorScheme.onSurfaceVariant else RoutineDestructiveRed
+    val statusColor = when {
+        !allowed -> MaterialTheme.colorScheme.onSurfaceVariant
+        !routine.enabled -> RoutineDestructiveRed
+        else -> pausedRoutineStatusColor()
+    }
 
     Box(
         modifier = Modifier
@@ -444,18 +503,20 @@ private fun LabeledRoutineCard(
             onClick = { onOpenRoutine(routine.id) },
             shape = RoundedCornerShape(16.dp),
             colors = CardDefaults.cardColors(
-                containerColor = if (useStockholmNightSurface) {
+                containerColor = if (isDragging) {
+                    MaterialTheme.colorScheme.surfaceContainerHigh
+                } else if (useStockholmNightSurface) {
                     StockholmNightSurfaces.Card
                 } else {
                     MaterialTheme.colorScheme.surface
                 },
             ),
             border = if (useStockholmNightSurface) {
-                BorderStroke(1.dp, StockholmNightSurfaces.Border)
+                BorderStroke(1.dp, StockholmNightSurfaces.CardBorder)
             } else {
                 null
             },
-            elevation = CardDefaults.cardElevation(defaultElevation = 2.dp),
+            elevation = CardDefaults.cardElevation(defaultElevation = if (isDragging) 5.dp else 2.dp),
             modifier = Modifier
                 .fillMaxWidth()
                 .height(112.dp)
@@ -541,3 +602,9 @@ private fun LabeledRoutineCard(
         }
     }
 }
+
+/** White on Stockholm Night and regular dark surfaces as requested; the light theme uses its
+ * accessible on-surface color rather than rendering white text on a white card. */
+@Composable
+private fun pausedRoutineStatusColor(): Color =
+    if (MaterialTheme.colorScheme.background.luminance() < 0.5f) Color.White else MaterialTheme.colorScheme.onSurface

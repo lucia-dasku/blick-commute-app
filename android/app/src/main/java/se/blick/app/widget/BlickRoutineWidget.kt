@@ -264,10 +264,13 @@ private fun sizeTierFor(layoutTier: WidgetLayoutTier): WidgetSizeTier = when (la
 // ColorProvider stays here, since androidx.glance.unit.ColorProvider has no standard-Compose use.
 private val BADGE_TEXT_WHITE = ColorProvider(Color.White)
 private val INACTIVE_WIDGET_BACKGROUND = ColorProvider(Color(0xFF010C2F))
-private val INACTIVE_WIDGET_PRIMARY = ColorProvider(Color.White)
 private val INACTIVE_WIDGET_SECONDARY = ColorProvider(Color(0xFFC5C8CF))
 private val INACTIVE_WIDGET_MINT = ColorProvider(Color(0xFF33E4A1))
 private val INACTIVE_WIDGET_WATER_HEIGHT = 12.dp
+// The skyline makes geometric centering read slightly low. This extra space below the centered
+// branding content shifts its visual center upward by 14dp -- approximately one status-text
+// line -- without introducing a fixed top position, so it still adapts to launcher bounds.
+private val INACTIVE_WIDGET_BRANDING_OPTICAL_PADDING = 28.dp
 private const val INACTIVE_WIDGET_SKYLINE_DISPLAY_ASPECT_RATIO = 2.75f
 
 /** Responsive presentation values for the branded inactive state. All canonical sizes use the
@@ -277,12 +280,9 @@ internal data class InactiveWidgetLayout(
     val logoViewportWidth: Dp,
     val logoViewportHeight: Dp,
     val logoAssetSize: Dp,
-    val brandSize: TextUnit,
     val statusSize: TextUnit,
-    val logoBrandGap: Dp,
-    val brandStatusGap: Dp,
+    val logoStatusGap: Dp,
     val horizontalPadding: Dp,
-    val brandingTopPadding: Dp,
     val skylineResourceId: Int?,
     val skylineAspectRatio: Float?,
 )
@@ -301,12 +301,9 @@ internal fun inactiveWidgetLayoutFor(width: Dp, height: Dp): InactiveWidgetLayou
             logoViewportWidth = 66.dp,
             logoViewportHeight = 80.dp,
             logoAssetSize = 156.dp,
-            brandSize = 30.sp,
             statusSize = 14.sp,
-            logoBrandGap = 6.dp,
-            brandStatusGap = 3.dp,
+            logoStatusGap = 8.dp,
             horizontalPadding = 12.dp,
-            brandingTopPadding = 24.dp,
             skylineResourceId = R.drawable.widget_inactive_skyline_approved,
             skylineAspectRatio = INACTIVE_WIDGET_SKYLINE_DISPLAY_ASPECT_RATIO,
         )
@@ -314,12 +311,9 @@ internal fun inactiveWidgetLayoutFor(width: Dp, height: Dp): InactiveWidgetLayou
             logoViewportWidth = 52.dp,
             logoViewportHeight = 62.dp,
             logoAssetSize = 122.dp,
-            brandSize = 26.sp,
             statusSize = 13.sp,
-            logoBrandGap = 4.dp,
-            brandStatusGap = 2.dp,
+            logoStatusGap = 6.dp,
             horizontalPadding = 8.dp,
-            brandingTopPadding = 16.dp,
             skylineResourceId = R.drawable.widget_inactive_skyline_approved,
             skylineAspectRatio = INACTIVE_WIDGET_SKYLINE_DISPLAY_ASPECT_RATIO,
         )
@@ -327,12 +321,9 @@ internal fun inactiveWidgetLayoutFor(width: Dp, height: Dp): InactiveWidgetLayou
             logoViewportWidth = 40.dp,
             logoViewportHeight = 46.dp,
             logoAssetSize = 90.dp,
-            brandSize = 20.sp,
             statusSize = 11.sp,
-            logoBrandGap = 2.dp,
-            brandStatusGap = 1.dp,
+            logoStatusGap = 4.dp,
             horizontalPadding = 8.dp,
-            brandingTopPadding = 4.dp,
             skylineResourceId = null,
             skylineAspectRatio = null,
         )
@@ -340,12 +331,9 @@ internal fun inactiveWidgetLayoutFor(width: Dp, height: Dp): InactiveWidgetLayou
             logoViewportWidth = 26.dp,
             logoViewportHeight = 32.dp,
             logoAssetSize = 62.dp,
-            brandSize = 16.sp,
             statusSize = 9.sp,
-            logoBrandGap = 1.dp,
-            brandStatusGap = 1.dp,
+            logoStatusGap = 2.dp,
             horizontalPadding = 6.dp,
-            brandingTopPadding = 2.dp,
             skylineResourceId = null,
             skylineAspectRatio = null,
         )
@@ -353,12 +341,9 @@ internal fun inactiveWidgetLayoutFor(width: Dp, height: Dp): InactiveWidgetLayou
             logoViewportWidth = 40.dp,
             logoViewportHeight = 48.dp,
             logoAssetSize = 94.dp,
-            brandSize = 20.sp,
             statusSize = 11.sp,
-            logoBrandGap = 2.dp,
-            brandStatusGap = 2.dp,
+            logoStatusGap = 4.dp,
             horizontalPadding = 8.dp,
-            brandingTopPadding = 22.dp,
             skylineResourceId = R.drawable.widget_inactive_skyline_approved,
             skylineAspectRatio = INACTIVE_WIDGET_SKYLINE_DISPLAY_ASPECT_RATIO,
         )
@@ -435,15 +420,11 @@ private fun NoActiveCommuteContent() {
                 .padding(
                     start = layout.horizontalPadding,
                     end = layout.horizontalPadding,
+                    bottom = if (skylineHeight != null) INACTIVE_WIDGET_BRANDING_OPTICAL_PADDING else 0.dp,
                 ),
-            contentAlignment = if (skylineHeight == null) Alignment.Center else Alignment.TopCenter,
+            contentAlignment = Alignment.Center,
         ) {
             Column(
-                modifier = if (skylineHeight == null) {
-                    GlanceModifier
-                } else {
-                    GlanceModifier.padding(top = layout.brandingTopPadding)
-                },
                 horizontalAlignment = Alignment.CenterHorizontally,
             ) {
                 InactiveBrandingContent(context, layout)
@@ -471,18 +452,7 @@ private fun InactiveBrandingContent(context: Context, layout: InactiveWidgetLayo
             colorFilter = ColorFilter.tint(INACTIVE_WIDGET_MINT),
         )
     }
-    Spacer(modifier = GlanceModifier.height(layout.logoBrandGap))
-    Text(
-        text = context.getString(R.string.app_name),
-        maxLines = 1,
-        style = TextStyle(
-            color = INACTIVE_WIDGET_PRIMARY,
-            fontSize = layout.brandSize,
-            fontWeight = FontWeight.Bold,
-            textAlign = TextAlign.Center,
-        ),
-    )
-    Spacer(modifier = GlanceModifier.height(layout.brandStatusGap))
+    Spacer(modifier = GlanceModifier.height(layout.logoStatusGap))
     Text(
         text = context.getString(R.string.widget_no_active_commute),
         maxLines = 2,

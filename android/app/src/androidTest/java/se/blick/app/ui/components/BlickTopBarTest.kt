@@ -7,6 +7,7 @@ import androidx.compose.ui.test.onNodeWithContentDescription
 import androidx.compose.ui.test.onNodeWithText
 import androidx.compose.ui.test.performClick
 import androidx.test.ext.junit.runners.AndroidJUnit4
+import org.junit.Assert.assertEquals
 import org.junit.Assert.assertTrue
 import org.junit.Rule
 import org.junit.Test
@@ -16,9 +17,8 @@ import se.blick.app.R
 /**
  * Instrumented Compose test for [BlickTopBar] — exercised directly since it's the shared header
  * used identically by four different screens (see its own class doc); a regression here would
- * affect all of them at once. Covers [title]'s nullability specifically —
- * [se.blick.app.ui.screens.routinedetails.RoutineDetailsScreen] is the one call site that now
- * passes `null`, since that screen's own journeys/departures heading already identifies it.
+ * affect all of them at once. Covers [title]'s nullability specifically, including the brief
+ * loading state before Routine Details has a saved routine name to show beside Back.
  */
 @RunWith(AndroidJUnit4::class)
 class BlickTopBarTest {
@@ -33,6 +33,17 @@ class BlickTopBarTest {
         composeRule.setContent { BlickTopBar(title = sampleTitle) }
 
         composeRule.onNodeWithText(sampleTitle).assertIsDisplayed()
+    }
+
+    @Test
+    fun aNonNullTitleSharesTheBackButtonRow() {
+        composeRule.setContent { BlickTopBar(title = sampleTitle, onBack = {}) }
+
+        val backDescription = composeRule.activity.getString(R.string.action_back)
+        val titleBounds = composeRule.onNodeWithText(sampleTitle).fetchSemanticsNode().boundsInRoot
+        val backBounds = composeRule.onNodeWithContentDescription(backDescription).fetchSemanticsNode().boundsInRoot
+
+        assertEquals(backBounds.center.y, titleBounds.center.y, 2f)
     }
 
     @Test

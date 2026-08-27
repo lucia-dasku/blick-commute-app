@@ -40,6 +40,7 @@ internal object StockholmNightSurfaces {
     val Card = Color(0xFF09172F)
     val Control = Color(0xFF07142B)
     val SelectedControl = Color(0xFF253852)
+    val CardBorder = Color(0xFF14243B)
     val Border = Color(0xFF2A4260)
     val Divider = Color(0xFF263B58)
 }

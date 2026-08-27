@@ -27,10 +27,9 @@ import se.blick.app.ui.theme.LocalStockholmNightTheme
  * progress bar -- see [BlickWizardHeader] for the routine-creation wizard's own variant of this
  * same visual language (shared [MaterialTheme.typography.titleLarge] title style).
  *
- * [title] is nullable -- null renders just `[←]` with no title text at all, for a screen whose
- * content already identifies itself right below the bar (see
- * [se.blick.app.ui.screens.routinedetails.RoutineDetailsScreen]'s own call site) and has no
- * need for a second, generic label above it.
+ * [title] is nullable -- null renders just `[←]` with no title text at all, such as while
+ * [se.blick.app.ui.screens.routinedetails.RoutineDetailsScreen] is still loading the saved
+ * routine name shown beside Back.
  */
 @Composable
 fun BlickTopBar(

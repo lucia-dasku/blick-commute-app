@@ -46,6 +46,7 @@ import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
 import androidx.compose.material3.TimePicker
+import androidx.compose.material3.TimePickerDefaults
 import androidx.compose.material3.rememberTimePickerState
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.getValue
@@ -845,7 +846,17 @@ private fun TimePickerDialogHost(
         dismissButton = {
             TextButton(onClick = onDismiss) { Text(stringResource(android.R.string.cancel)) }
         },
-        text = { TimePicker(state = state) },
+        text = {
+            TimePicker(
+                state = state,
+                colors = TimePickerDefaults.colors(
+                    selectorColor = MaterialTheme.colorScheme.primary,
+                    clockDialSelectedContentColor = MaterialTheme.colorScheme.onPrimary,
+                    timeSelectorSelectedContainerColor = MaterialTheme.colorScheme.primary,
+                    timeSelectorSelectedContentColor = MaterialTheme.colorScheme.onPrimary,
+                ),
+            )
+        },
     )
 }
 
