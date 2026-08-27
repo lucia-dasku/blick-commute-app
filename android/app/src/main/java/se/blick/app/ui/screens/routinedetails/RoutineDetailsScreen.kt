@@ -6,10 +6,12 @@ import android.content.Context
 import android.content.Intent
 import android.os.Build
 import androidx.compose.foundation.background
+import androidx.compose.foundation.BorderStroke
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
+import androidx.compose.foundation.layout.ColumnScope
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxSize
@@ -78,6 +80,8 @@ import se.blick.app.domain.model.JourneyPlan
 import se.blick.app.domain.model.JOURNEY_TRANSPORT_MODE_OPTIONS
 import se.blick.app.domain.model.RoutineType
 import se.blick.app.ui.theme.RoutineDestructiveRed
+import se.blick.app.ui.theme.LocalStockholmNightTheme
+import se.blick.app.ui.theme.StockholmNightSurfaces
 import java.time.Instant
 import se.blick.app.locale.currentBlickLocale
 import se.blick.app.notification.NotificationAvailability
@@ -353,6 +357,15 @@ private fun JourneyFilterRow(
     onToggleDirect: () -> Unit,
     onToggleWithChanges: () -> Unit,
 ) {
+    val useStockholmNightSurface = LocalStockholmNightTheme.current
+    val chipColors = if (useStockholmNightSurface) {
+        FilterChipDefaults.filterChipColors(
+            containerColor = StockholmNightSurfaces.Control,
+            selectedContainerColor = StockholmNightSurfaces.SelectedControl,
+        )
+    } else {
+        FilterChipDefaults.filterChipColors()
+    }
     Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
         FilterChip(
             selected = showDirect,
@@ -362,6 +375,17 @@ private fun JourneyFilterRow(
             leadingIcon = if (showDirect) {
                 { Icon(Icons.Filled.Check, contentDescription = null, modifier = Modifier.size(FilterChipDefaults.IconSize)) }
             } else null,
+            colors = chipColors,
+            border = if (useStockholmNightSurface) {
+                FilterChipDefaults.filterChipBorder(
+                    enabled = enabled,
+                    selected = showDirect,
+                    borderColor = StockholmNightSurfaces.Border,
+                    selectedBorderColor = MaterialTheme.colorScheme.outline,
+                )
+            } else {
+                FilterChipDefaults.filterChipBorder(enabled = enabled, selected = showDirect)
+            },
         )
         FilterChip(
             selected = showWithChanges,
@@ -371,6 +395,17 @@ private fun JourneyFilterRow(
             leadingIcon = if (showWithChanges) {
                 { Icon(Icons.Filled.Check, contentDescription = null, modifier = Modifier.size(FilterChipDefaults.IconSize)) }
             } else null,
+            colors = chipColors,
+            border = if (useStockholmNightSurface) {
+                FilterChipDefaults.filterChipBorder(
+                    enabled = enabled,
+                    selected = showWithChanges,
+                    borderColor = StockholmNightSurfaces.Border,
+                    selectedBorderColor = MaterialTheme.colorScheme.outline,
+                )
+            } else {
+                FilterChipDefaults.filterChipBorder(enabled = enabled, selected = showWithChanges)
+            },
         )
     }
 }
@@ -555,39 +590,40 @@ internal fun RoutineDetailsContent(
 
         // Collapsed by default like Manage routine below. The entire row is tappable; expanding
         // restores the existing transport, route, schedule, time and status rows unchanged.
-        Row(
-            modifier = Modifier.fillMaxWidth().clickable { routineInfoExpanded = !routineInfoExpanded },
-            verticalAlignment = Alignment.CenterVertically,
-        ) {
-            Text(
-                stringResource(R.string.routine_details_info_heading),
-                style = MaterialTheme.typography.titleMedium,
-                modifier = Modifier.weight(1f),
-            )
-            Icon(
-                imageVector = if (routineInfoExpanded) Icons.Filled.KeyboardArrowUp else Icons.Filled.KeyboardArrowDown,
-                contentDescription = stringResource(
-                    if (routineInfoExpanded) R.string.routine_details_info_collapse else R.string.routine_details_info_expand,
-                ),
-            )
-        }
+        StockholmNightExpandablePanel {
+            Row(
+                modifier = Modifier.fillMaxWidth().clickable { routineInfoExpanded = !routineInfoExpanded },
+                verticalAlignment = Alignment.CenterVertically,
+            ) {
+                Text(
+                    stringResource(R.string.routine_details_info_heading),
+                    style = MaterialTheme.typography.titleMedium,
+                    modifier = Modifier.weight(1f),
+                )
+                Icon(
+                    imageVector = if (routineInfoExpanded) Icons.Filled.KeyboardArrowUp else Icons.Filled.KeyboardArrowDown,
+                    contentDescription = stringResource(
+                        if (routineInfoExpanded) R.string.routine_details_info_collapse else R.string.routine_details_info_expand,
+                    ),
+                )
+            }
 
-        if (routineInfoExpanded) {
-        Spacer(Modifier.height(12.dp))
-        if (routine.type == RoutineType.EXACT_DESTINATION) {
-            JourneyTransportModesRow(
-                selectedModes = routine.allowedJourneyTransportModes,
-                isSaving = isUpdatingJourneyTransportModes,
-                updateFailed = journeyTransportModesUpdateFailed,
-                onSave = onUpdateJourneyTransportModes,
-            )
-        } else {
-            DetailRow(stringResource(R.string.routine_details_mode_label), stringResource(routine.transportMode.detailsLabelResId()))
-        }
-        routine.lineDesignation?.let { designation ->
-            LineDetailRow(stringResource(R.string.routine_details_line_label), designation, routine.transportMode)
-        }
-        if (routine.type == RoutineType.EXACT_DESTINATION) {
+            if (routineInfoExpanded) {
+                Spacer(Modifier.height(12.dp))
+                if (routine.type == RoutineType.EXACT_DESTINATION) {
+                    JourneyTransportModesRow(
+                        selectedModes = routine.allowedJourneyTransportModes,
+                        isSaving = isUpdatingJourneyTransportModes,
+                        updateFailed = journeyTransportModesUpdateFailed,
+                        onSave = onUpdateJourneyTransportModes,
+                    )
+                } else {
+                    DetailRow(stringResource(R.string.routine_details_mode_label), stringResource(routine.transportMode.detailsLabelResId()))
+                }
+                routine.lineDesignation?.let { designation ->
+                    LineDetailRow(stringResource(R.string.routine_details_line_label), designation, routine.transportMode)
+                }
+                if (routine.type == RoutineType.EXACT_DESTINATION) {
             // Exact-destination routines never populate destinationLabel (that field is a
             // LINE_DIRECTION-only concept -- the destination printed on a physical vehicle's
             // signage) -- their own origin/destination instead live in journeyOriginName/
@@ -598,35 +634,36 @@ internal fun RoutineDetailsContent(
                 stringResource(R.string.routine_details_route_label),
                 "${routine.journeyOriginName ?: routine.siteName} → ${routine.journeyDestinationName.orEmpty()}",
             )
-        } else {
+                } else {
             // "{siteName} → {destination}", the same default pattern routine.name itself is built
             // from (see RoutineCreateViewModel.selectDirection) -- now the one place on this screen
             // that spells out the full route, since the heading above no longer does.
             routine.destinationLabel?.let { destination ->
                 DetailRow(stringResource(R.string.routine_details_direction_label), "${routine.siteName} → $destination")
             }
-        }
-        DetailRow(
-            stringResource(R.string.routine_details_schedule_label),
-            formatActiveDays(
-                routine.activeDays,
-                locale,
-                everyDayLabel = stringResource(R.string.routine_details_schedule_every_day),
-                weekdaysLabel = stringResource(R.string.routine_details_schedule_weekdays),
-            ),
-        )
-        DetailRow(stringResource(R.string.routine_details_time_label), formatTimeRange(routine.startTime, routine.endTime, locale))
-        DetailRow(
-            stringResource(R.string.routine_details_status_label),
-            statusLabel(routine, isPausedToday),
-            // Only Enabled/Disabled get a dot -- Paused today (a third, distinct status) keeps
-            // its existing plain-text-only rendering, unchanged.
-            dotColor = when {
-                isPausedToday -> null
-                routine.enabled -> LINE_BADGE_GREEN
-                else -> RoutineDestructiveRed
-            },
-        )
+                }
+                DetailRow(
+                    stringResource(R.string.routine_details_schedule_label),
+                    formatActiveDays(
+                        routine.activeDays,
+                        locale,
+                        everyDayLabel = stringResource(R.string.routine_details_schedule_every_day),
+                        weekdaysLabel = stringResource(R.string.routine_details_schedule_weekdays),
+                    ),
+                )
+                DetailRow(stringResource(R.string.routine_details_time_label), formatTimeRange(routine.startTime, routine.endTime, locale))
+                DetailRow(
+                    stringResource(R.string.routine_details_status_label),
+                    statusLabel(routine, isPausedToday),
+                    // Only Enabled/Disabled get a dot -- Paused today (a third, distinct status) keeps
+                    // its existing plain-text-only rendering, unchanged.
+                    dotColor = when {
+                        isPausedToday -> null
+                        routine.enabled -> LINE_BADGE_GREEN
+                        else -> RoutineDestructiveRed
+                    },
+                )
+            }
         }
 
         Spacer(Modifier.height(20.dp))
@@ -736,6 +773,28 @@ private fun PauseTodayButton(
     }
 }
 
+@Composable
+private fun StockholmNightExpandablePanel(
+    content: @Composable ColumnScope.() -> Unit,
+) {
+    if (LocalStockholmNightTheme.current) {
+        Surface(
+            modifier = Modifier.fillMaxWidth(),
+            shape = MaterialTheme.shapes.medium,
+            color = StockholmNightSurfaces.Card,
+            border = BorderStroke(1.dp, StockholmNightSurfaces.Border),
+            tonalElevation = 0.dp,
+        ) {
+            Column(
+                modifier = Modifier.padding(horizontal = 12.dp, vertical = 10.dp),
+                content = content,
+            )
+        }
+    } else {
+        Column(content = content)
+    }
+}
+
 /**
  * Collapsible edit/disable/delete group -- collapsed by default, showing only the heading, a
  * fixed one-line description, and a chevron (see [routine_details_actions_description][R.string.routine_details_actions_description]);
@@ -774,7 +833,7 @@ private fun RoutineActionsSection(
     val notifyGate = rememberNotificationPermissionGate(hasSeenNotificationRationale, onNotificationRationaleSeen)
     var expanded by remember { mutableStateOf(false) }
 
-    Column {
+    StockholmNightExpandablePanel {
         Row(
             modifier = Modifier.fillMaxWidth().clickable { expanded = !expanded },
             verticalAlignment = Alignment.CenterVertically,

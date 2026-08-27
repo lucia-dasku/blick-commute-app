@@ -358,6 +358,38 @@ class RoutineListScreenTest {
     }
 
     @Test
+    fun StockholmNightUnlabeledRoutineMatchesLabeledCardHorizontalBounds() {
+        composeRule.setContent {
+            BlickTheme(useStockholmNightTheme = true) {
+                RoutineListContent(
+                    uiState = RoutineListUiState(
+                        routines = listOf(
+                            sampleRoutine(id = "labeled").copy(label = RoutineLabel.WORK),
+                            sampleRoutine(id = "unlabeled", name = "Evening commute"),
+                        ),
+                        isLoading = false,
+                    ),
+                    onAddRoutine = {},
+                    onOpenRoutine = {},
+                )
+            }
+        }
+
+        val labeledCard = composeRule.onNodeWithTag(
+            "labeled_routine_card_work",
+            useUnmergedTree = true,
+        ).fetchSemanticsNode().boundsInRoot
+        val unlabeledCard = composeRule.onNodeWithTag(
+            "unlabeled_routine_card_unlabeled",
+            useUnmergedTree = true,
+        ).fetchSemanticsNode().boundsInRoot
+
+        assertEquals(labeledCard.left, unlabeledCard.left, 1f)
+        assertEquals(labeledCard.right, unlabeledCard.right, 1f)
+        composeRule.onNodeWithText("Evening commute").assertIsDisplayed()
+    }
+
+    @Test
     fun labeledRoutineCardStillOpensTheExistingRoutineDestination() {
         var openedRoutineId: String? = null
         composeRule.setContent {

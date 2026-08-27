@@ -1,6 +1,7 @@
 package se.blick.app.ui.screens.routinedetails
 
 import androidx.compose.foundation.Canvas
+import androidx.compose.foundation.BorderStroke
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
@@ -46,6 +47,8 @@ import se.blick.app.domain.model.TransportMode
 import se.blick.app.domain.usecase.countdownMinutes
 import se.blick.app.domain.usecase.effectiveFirstDeparture
 import se.blick.app.ui.components.LineBadge
+import se.blick.app.ui.theme.LocalStockholmNightTheme
+import se.blick.app.ui.theme.StockholmNightSurfaces
 import se.blick.app.widget.LineBadgeColorMapping
 import se.blick.app.widget.toBadgeColor
 import java.time.Duration
@@ -68,6 +71,7 @@ internal fun JourneyTimelineCard(
     expanded: Boolean,
     onExpandedChange: (Boolean) -> Unit,
 ) {
+    val useStockholmNightSurface = LocalStockholmNightTheme.current
     val timeline = journey.toTimelinePresentation()
     val firstLeg = journey.firstLeg
     val modeLabel = stringResource(firstLeg.transportMode.journeyLabelResId())
@@ -92,7 +96,9 @@ internal fun JourneyTimelineCard(
     }
 
     Surface(
-        tonalElevation = if (emphasized) 3.dp else 1.dp,
+        color = if (useStockholmNightSurface) StockholmNightSurfaces.Card else MaterialTheme.colorScheme.surface,
+        border = if (useStockholmNightSurface) BorderStroke(1.dp, StockholmNightSurfaces.Border) else null,
+        tonalElevation = if (useStockholmNightSurface) 0.dp else if (emphasized) 3.dp else 1.dp,
         shape = MaterialTheme.shapes.medium,
         modifier = Modifier.fillMaxWidth().clickable { onExpandedChange(!expanded) },
     ) {

@@ -35,7 +35,28 @@ private val DarkColors = darkColorScheme(
     tertiary = AttentionAmber40,
 )
 
-private val StockholmNightColors = DarkColors.copy(background = Color.Transparent)
+/** Opaque foreground layers used over the decorative Stockholm Night artwork. */
+internal object StockholmNightSurfaces {
+    val Card = Color(0xFF09172F)
+    val Control = Color(0xFF07142B)
+    val SelectedControl = Color(0xFF253852)
+    val Border = Color(0xFF2A4260)
+    val Divider = Color(0xFF263B58)
+}
+
+private val StockholmNightColors = DarkColors.copy(
+    background = Color.Transparent,
+    surface = StockholmNightSurfaces.Card,
+    surfaceVariant = StockholmNightSurfaces.Control,
+    surfaceContainerLowest = StockholmNightSurfaces.Control,
+    surfaceContainerLow = StockholmNightSurfaces.Control,
+    surfaceContainer = StockholmNightSurfaces.Card,
+    surfaceContainerHigh = Color(0xFF10213B),
+    surfaceContainerHighest = StockholmNightSurfaces.SelectedControl,
+    outline = Color(0xFF3B5574),
+    outlineVariant = StockholmNightSurfaces.Divider,
+    surfaceTint = Color.Transparent,
+)
 
 internal const val STOCKHOLM_NIGHT_BACKGROUND_TAG = "stockholm_night_background"
 internal val LocalStockholmNightTheme = staticCompositionLocalOf { false }
