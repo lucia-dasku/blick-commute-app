@@ -8,6 +8,8 @@ import se.blick.app.scheduling.NotificationRecoveryCoordinator
 import se.blick.app.scheduling.NotificationRecoveryReporter
 import se.blick.app.scheduling.RoutineScheduler
 import se.blick.app.scheduling.WorkManagerRoutineScheduler
+import se.blick.app.scheduling.OneTimeEventScheduler
+import se.blick.app.scheduling.WorkManagerOneTimeEventScheduler
 import javax.inject.Singleton
 
 /** Same `@Binds @Singleton` convention as [NotificationModule]/[RepositoryModule]. */
@@ -18,6 +20,10 @@ abstract class SchedulingModule {
     @Binds
     @Singleton
     abstract fun bindRoutineScheduler(impl: WorkManagerRoutineScheduler): RoutineScheduler
+
+    @Binds
+    @Singleton
+    abstract fun bindOneTimeEventScheduler(impl: WorkManagerOneTimeEventScheduler): OneTimeEventScheduler
 
     /** Exposes the same `@Singleton` [NotificationRecoveryCoordinator] instance (already
      * directly injectable via its own `@Inject constructor`, e.g. into `BlickApplication`)

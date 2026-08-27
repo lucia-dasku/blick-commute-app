@@ -24,6 +24,7 @@ import se.blick.app.ui.navigation.BlickNavHost
 import se.blick.app.ui.navigation.Routes
 import se.blick.app.ui.theme.BlickTheme
 import se.blick.app.ui.theme.shouldUseStockholmNightTheme
+import se.blick.app.scheduling.OneTimeEventReminderWorker
 import javax.inject.Inject
 
 /**
@@ -97,6 +98,7 @@ class MainActivity : AppCompatActivity() {
     @Inject lateinit var premiumEntitlementRepository: PremiumEntitlementRepository
 
     private var pendingRoutineId by mutableStateOf<String?>(null)
+    private var pendingOneTimeEventId by mutableStateOf<String?>(null)
 
     override fun attachBaseContext(newBase: Context) {
         super.attachBaseContext(newBase.withAppLocale())
@@ -106,6 +108,7 @@ class MainActivity : AppCompatActivity() {
         super.onCreate(savedInstanceState)
         enableEdgeToEdge()
         pendingRoutineId = NotificationIntentCoordinator.consumeRoutineId(intent)
+        pendingOneTimeEventId = consumeOneTimeEventId(intent)
         setContent {
             val appSettings by appSettingsDataStore.settings.collectAsStateWithLifecycle(
                 initialValue = AppSettings(),
@@ -127,6 +130,14 @@ class MainActivity : AppCompatActivity() {
                     }
                     pendingRoutineId = null
                 }
+                LaunchedEffect(pendingOneTimeEventId) {
+                    val eventId = pendingOneTimeEventId ?: return@LaunchedEffect
+                    navController.navigate(Routes.OneTimeEventDetails.routeFor(eventId)) {
+                        popUpTo(Routes.RoutineList.route)
+                        launchSingleTop = true
+                    }
+                    pendingOneTimeEventId = null
+                }
                 BlickNavHost(navController = navController)
             }
         }
@@ -136,5 +147,10 @@ class MainActivity : AppCompatActivity() {
         super.onNewIntent(intent)
         setIntent(intent)
         pendingRoutineId = NotificationIntentCoordinator.consumeRoutineId(intent)
+        pendingOneTimeEventId = consumeOneTimeEventId(intent)
     }
+
+    private fun consumeOneTimeEventId(intent: Intent): String? =
+        intent.getStringExtra(OneTimeEventReminderWorker.EXTRA_ONE_TIME_EVENT_ID)
+            ?.also { intent.removeExtra(OneTimeEventReminderWorker.EXTRA_ONE_TIME_EVENT_ID) }
 }

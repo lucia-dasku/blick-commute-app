@@ -19,12 +19,18 @@ import se.blick.app.billing.hasPremiumAccess
 import se.blick.app.billing.FreePremiumEntitlementRepository
 import se.blick.app.billing.EmptyPremiumRoutineOrderStore
 import se.blick.app.billing.PremiumRoutineOrderStore
+import se.blick.app.data.repository.OneTimeEventRepository
+import se.blick.app.data.repository.EmptyOneTimeEventRepository
+import se.blick.app.domain.model.OneTimeEvent
+import se.blick.app.domain.model.upcomingAt
+import java.time.Clock
 
 data class RoutineListUiState(
     val routines: List<CommuteRoutine> = emptyList(),
     val isLoading: Boolean = true,
     val entitlement: EntitlementState = EntitlementState.Free,
     val selectedFreeRoutineId: String? = null,
+    val upcomingEvents: List<OneTimeEvent> = emptyList(),
 )
 
 private val ROUTINE_LABEL_PRIORITY = mapOf(
@@ -54,6 +60,8 @@ class RoutineListViewModel @Inject constructor(
     entitlementRepository: PremiumEntitlementRepository = FreePremiumEntitlementRepository,
     private val freeRoutineSelectionStore: FreeRoutineSelectionStore? = null,
     private val premiumRoutineOrderStore: PremiumRoutineOrderStore = EmptyPremiumRoutineOrderStore,
+    private val oneTimeEventRepository: OneTimeEventRepository = EmptyOneTimeEventRepository,
+    private val clock: Clock = Clock.systemUTC(),
 ) : ViewModel() {
 
     private val _uiState = MutableStateFlow(RoutineListUiState())
@@ -66,7 +74,8 @@ class RoutineListViewModel @Inject constructor(
                 entitlementRepository.entitlement,
                 freeRoutineSelectionStore?.selectedRoutineId ?: MutableStateFlow(null),
                 premiumRoutineOrderStore.orderedRoutineIds,
-            ) { routines, entitlement, selectedId, orderedRoutineIds ->
+                oneTimeEventRepository.observeAll(),
+            ) { routines, entitlement, selectedId, orderedRoutineIds, events ->
                 val defaultOrder = routines.sortedForRoutineList()
                 val visibleOrder = if (entitlement.hasPremiumAccess) {
                     defaultOrder.applySavedRoutineOrder(orderedRoutineIds)
@@ -78,6 +87,7 @@ class RoutineListViewModel @Inject constructor(
                     isLoading = false,
                     entitlement = entitlement,
                     selectedFreeRoutineId = selectedId,
+                    upcomingEvents = events.upcomingAt(clock.instant()),
                 )
             }.collect { state -> _uiState.value = state }
         }

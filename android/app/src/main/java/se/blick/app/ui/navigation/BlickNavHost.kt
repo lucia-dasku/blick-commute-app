@@ -18,6 +18,10 @@ import se.blick.app.ui.screens.routinecreate.RoutineCreateScreen
 import se.blick.app.ui.screens.routinedetails.RoutineDetailsScreen
 import se.blick.app.ui.screens.routinedetails.RoutineDetailsViewModel
 import se.blick.app.ui.screens.routinelist.RoutineListScreen
+import se.blick.app.ui.screens.onetimeevent.OneTimeEventEditorScreen
+import se.blick.app.ui.screens.onetimeevent.OneTimeEventDetailsScreen
+import se.blick.app.ui.screens.onetimeevent.OneTimeEventDetailsViewModel
+import se.blick.app.ui.screens.onetimeevent.OneTimeEventsScreen
 
 /** Key for the previous back stack entry's `SavedStateHandle` result signal, set when
  * [Routes.RoutineEdit] finishes successfully and consumed by [Routes.RoutineDetails] — see
@@ -25,6 +29,7 @@ import se.blick.app.ui.screens.routinelist.RoutineListScreen
  * periodic refresh) is the right way to tell an already-alive Details screen to re-check its
  * routine after an edit. */
 private const val ROUTE_RESULT_ROUTINE_EDITED = "routineEdited"
+private const val ROUTE_RESULT_EVENT_EDITED = "oneTimeEventEdited"
 
 @Composable
 fun BlickNavHost(navController: NavHostController = rememberNavController()) {
@@ -32,6 +37,9 @@ fun BlickNavHost(navController: NavHostController = rememberNavController()) {
         composable(Routes.RoutineList.route) {
             RoutineListScreen(
                 onAddRoutine = { navController.navigate(Routes.RoutineCreate.route) },
+                onAddEvent = { navController.navigate(Routes.OneTimeEventCreate.route) },
+                onOpenEvents = { navController.navigate(Routes.OneTimeEvents.route) },
+                onOpenEvent = { eventId -> navController.navigate(Routes.OneTimeEventDetails.routeFor(eventId)) },
                 onOpenPremium = { navController.navigate(Routes.Premium.route) },
                 onOpenRoutine = { routineId -> navController.navigate(Routes.RoutineDetails.routeFor(routineId)) },
                 onOpenAbout = { navController.navigate(Routes.About.route) },
@@ -57,6 +65,47 @@ fun BlickNavHost(navController: NavHostController = rememberNavController()) {
         }
         composable(Routes.Premium.route) {
             PremiumScreen(onBack = { navController.popBackStack() })
+        }
+        composable(Routes.OneTimeEventCreate.route) {
+            OneTimeEventEditorScreen(
+                onBack = { navController.popBackStack() },
+                onDone = { navController.popBackStack() },
+                onOpenPremium = { navController.navigate(Routes.Premium.route) },
+            )
+        }
+        composable(Routes.OneTimeEvents.route) {
+            OneTimeEventsScreen(
+                onBack = { navController.popBackStack() },
+                onOpenEvent = { eventId -> navController.navigate(Routes.OneTimeEventDetails.routeFor(eventId)) },
+            )
+        }
+        composable(Routes.OneTimeEventEdit.route) {
+            OneTimeEventEditorScreen(
+                onBack = { navController.popBackStack() },
+                onDone = {
+                    navController.previousBackStackEntry?.savedStateHandle?.set(ROUTE_RESULT_EVENT_EDITED, true)
+                    navController.popBackStack()
+                },
+                onOpenPremium = { navController.navigate(Routes.Premium.route) },
+            )
+        }
+        composable(Routes.OneTimeEventDetails.route) { backStackEntry ->
+            val viewModel: OneTimeEventDetailsViewModel = hiltViewModel()
+            val edited by backStackEntry.savedStateHandle
+                .getStateFlow(ROUTE_RESULT_EVENT_EDITED, false)
+                .collectAsStateWithLifecycle()
+            LaunchedEffect(edited) {
+                if (edited) {
+                    viewModel.reload()
+                    backStackEntry.savedStateHandle[ROUTE_RESULT_EVENT_EDITED] = false
+                }
+            }
+            OneTimeEventDetailsScreen(
+                onBack = { navController.popBackStack() },
+                onEdit = { eventId -> navController.navigate(Routes.OneTimeEventEdit.routeFor(eventId)) },
+                onDeleted = { navController.popBackStack(Routes.RoutineList.route, false) },
+                viewModel = viewModel,
+            )
         }
         composable(Routes.RoutineCreate.route) {
             RoutineCreateScreen(

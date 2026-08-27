@@ -15,6 +15,8 @@ import se.blick.app.data.repository.RemoteDisruptionRepository
 import se.blick.app.data.repository.RemoteStopRepository
 import se.blick.app.data.repository.RoomRoutineOccurrenceRuntimeRepository
 import se.blick.app.data.repository.RoomRoutineRepository
+import se.blick.app.data.repository.OneTimeEventRepository
+import se.blick.app.data.repository.RoomOneTimeEventRepository
 import se.blick.app.data.repository.RoomRoutineWorkOwnershipRepository
 import se.blick.app.data.repository.RoomStaleSnapshotRepository
 import se.blick.app.data.repository.RoutineOccurrenceRuntimeRepository
@@ -49,6 +51,10 @@ abstract class RepositoryModule {
     @Binds
     @Singleton
     abstract fun bindRoutineRepository(impl: RoomRoutineRepository): RoutineRepository
+
+    @Binds
+    @Singleton
+    abstract fun bindOneTimeEventRepository(impl: RoomOneTimeEventRepository): OneTimeEventRepository
 
     @Binds
     @Singleton

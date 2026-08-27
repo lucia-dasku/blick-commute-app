@@ -14,6 +14,8 @@ import se.blick.app.data.local.room.MIGRATION_4_5
 import se.blick.app.data.local.room.MIGRATION_5_6
 import se.blick.app.data.local.room.MIGRATION_6_7
 import se.blick.app.data.local.room.MIGRATION_7_8
+import se.blick.app.data.local.room.MIGRATION_8_9
+import se.blick.app.data.local.room.OneTimeEventDao
 import se.blick.app.data.local.room.RoutineDao
 import se.blick.app.data.local.room.BlickDatabase
 import se.blick.app.data.local.room.RoutineOccurrenceRuntimeDao
@@ -37,6 +39,7 @@ object DatabaseModule {
                 MIGRATION_5_6,
                 MIGRATION_6_7,
                 MIGRATION_7_8,
+                MIGRATION_8_9,
             )
             .build()
 
@@ -53,4 +56,7 @@ object DatabaseModule {
     @Provides
     fun provideRoutineOccurrenceRuntimeDao(database: BlickDatabase): RoutineOccurrenceRuntimeDao =
         database.routineOccurrenceRuntimeDao()
+
+    @Provides
+    fun provideOneTimeEventDao(database: BlickDatabase): OneTimeEventDao = database.oneTimeEventDao()
 }
