@@ -21,6 +21,7 @@ import androidx.compose.runtime.Composable
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.graphics.compositeOver
 import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.res.painterResource
 import androidx.compose.ui.res.stringResource
@@ -28,6 +29,8 @@ import androidx.compose.ui.unit.Dp
 import androidx.compose.ui.unit.dp
 import se.blick.app.R
 import se.blick.app.domain.model.RoutineLabel
+import se.blick.app.ui.theme.LocalStockholmNightTheme
+import se.blick.app.ui.theme.StockholmNightSurfaces
 
 @StringRes
 fun RoutineLabel.stringResourceId(): Int = when (this) {
@@ -134,6 +137,7 @@ fun RoutineLabelSelector(
     onLabelSelected: (RoutineLabel?) -> Unit,
     modifier: Modifier = Modifier,
 ) {
+    val useStockholmNightSurface = LocalStockholmNightTheme.current
     FlowRow(
         modifier = modifier,
         horizontalArrangement = Arrangement.spacedBy(8.dp),
@@ -143,16 +147,44 @@ fun RoutineLabelSelector(
             selected = selectedLabel == null,
             onClick = { onLabelSelected(null) },
             label = { Text(stringResource(R.string.routine_label_none)) },
-            border = FilterChipDefaults.filterChipBorder(
-                enabled = true,
-                selected = selectedLabel == null,
-                selectedBorderColor = MaterialTheme.colorScheme.primary,
-                selectedBorderWidth = 2.dp,
-            ),
+            colors = if (useStockholmNightSurface) {
+                FilterChipDefaults.filterChipColors(
+                    containerColor = StockholmNightSurfaces.Control,
+                    selectedContainerColor = StockholmNightSurfaces.SelectedControl,
+                )
+            } else {
+                FilterChipDefaults.filterChipColors()
+            },
+            border = if (useStockholmNightSurface) {
+                FilterChipDefaults.filterChipBorder(
+                    enabled = true,
+                    selected = selectedLabel == null,
+                    borderColor = StockholmNightSurfaces.Border,
+                    selectedBorderColor = MaterialTheme.colorScheme.primary,
+                    selectedBorderWidth = 2.dp,
+                )
+            } else {
+                FilterChipDefaults.filterChipBorder(
+                    enabled = true,
+                    selected = selectedLabel == null,
+                    selectedBorderColor = MaterialTheme.colorScheme.primary,
+                    selectedBorderWidth = 2.dp,
+                )
+            },
             modifier = Modifier.testTag("routine_label_option_none"),
         )
         RoutineLabel.entries.forEach { label ->
             val visuals = label.visuals(isSystemInDarkTheme())
+            val containerColor = if (useStockholmNightSurface) {
+                visuals.accent.copy(alpha = 0.08f).compositeOver(StockholmNightSurfaces.Control)
+            } else {
+                visuals.container
+            }
+            val selectedContainerColor = if (useStockholmNightSurface) {
+                visuals.accent.copy(alpha = 0.18f).compositeOver(StockholmNightSurfaces.SelectedControl)
+            } else {
+                visuals.accent.copy(alpha = 0.18f)
+            }
             FilterChip(
                 selected = selectedLabel == label,
                 onClick = { onLabelSelected(label) },
@@ -166,19 +198,29 @@ fun RoutineLabelSelector(
                     )
                 },
                 colors = FilterChipDefaults.filterChipColors(
-                    containerColor = visuals.container,
+                    containerColor = containerColor,
                     labelColor = visuals.accent,
                     iconColor = visuals.accent,
-                    selectedContainerColor = visuals.accent.copy(alpha = 0.18f),
+                    selectedContainerColor = selectedContainerColor,
                     selectedLabelColor = visuals.accent,
                     selectedLeadingIconColor = visuals.accent,
                 ),
-                border = FilterChipDefaults.filterChipBorder(
-                    enabled = true,
-                    selected = selectedLabel == label,
-                    selectedBorderColor = visuals.accent,
-                    selectedBorderWidth = 2.dp,
-                ),
+                border = if (useStockholmNightSurface) {
+                    FilterChipDefaults.filterChipBorder(
+                        enabled = true,
+                        selected = selectedLabel == label,
+                        borderColor = StockholmNightSurfaces.Border,
+                        selectedBorderColor = visuals.accent,
+                        selectedBorderWidth = 2.dp,
+                    )
+                } else {
+                    FilterChipDefaults.filterChipBorder(
+                        enabled = true,
+                        selected = selectedLabel == label,
+                        selectedBorderColor = visuals.accent,
+                        selectedBorderWidth = 2.dp,
+                    )
+                },
                 modifier = Modifier.testTag("routine_label_option_${label.name.lowercase()}"),
             )
         }

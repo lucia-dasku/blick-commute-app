@@ -2,6 +2,7 @@ package se.blick.app.ui.screens.routinelist
 
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.background
+import androidx.compose.foundation.BorderStroke
 import androidx.compose.foundation.gestures.detectDragGesturesAfterLongPress
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Arrangement
@@ -76,6 +77,8 @@ import se.blick.app.ui.components.RoutineLabelIconContainer
 import se.blick.app.ui.components.RoutineLabelPill
 import se.blick.app.ui.components.visuals
 import se.blick.app.ui.theme.LocalStockholmNightTheme
+import se.blick.app.ui.theme.RoutineDestructiveRed
+import se.blick.app.ui.theme.StockholmNightSurfaces
 import se.blick.app.billing.RoutineTierPolicy
 import se.blick.app.domain.model.RoutineType
 import se.blick.app.locale.currentBlickLocale
@@ -87,7 +90,6 @@ import se.blick.app.locale.currentBlickLocale
  * FAB visually floats above the content layer). A plain FAB is ~56dp tall plus its default
  * ~16dp margin; 96dp leaves comfortable clearance without needing to measure the real FAB. */
 private val FAB_CLEARANCE = 96.dp
-private val StockholmNightRoutineSurface = Color(0xD90A1733)
 
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
@@ -287,44 +289,11 @@ fun RoutineListContent(
                             onSelectFreeRoutine = onSelectFreeRoutine,
                         )
                     } else {
-                        ListItem(
-                        // The same colored line-number badge used throughout the app (route
-                        // selection, Routine Details, departure rows, and the home-screen
-                        // widget) — null only for a routine with no specific line configured,
-                        // matching every other display site's identical null-check.
-                        leadingContent = routine.lineDesignation?.let { designation ->
-                            { LineBadge(lineDesignation = designation, transportMode = routine.transportMode) }
-                        },
-                        // One line only: badge + "{stop} → {direction}" (routine.name's own
-                        // default pattern, see RoutineCreateViewModel.selectDirection) — no
-                        // separate supportingContent line for the site name, which would just
-                        // repeat it a second time since the name already includes it.
-                        headlineContent = { Text(routine.name) },
-                        // Consistent with the details screen: enabled/disabled is always
-                        // stated in words here too, never colour-only (see
-                        // RoutineDetailsScreen's statusLabel for the same rule; "paused
-                        // today" isn't surfaced here since it requires the injected Clock,
-                        // which this list-only screen has no other reason to depend on).
-                        supportingContent = if (!allowed) {
-                            { Text(stringResource(R.string.routine_list_premium_locked)) }
-                        } else null,
-                        trailingContent = when {
-                            !allowed && routine.type == RoutineType.LINE_DIRECTION -> ({
-                                TextButton(onClick = { onSelectFreeRoutine(routine.id) }) {
-                                    Text(stringResource(R.string.routine_list_use_free))
-                                }
-                            })
-                            !routine.enabled -> ({ Text(stringResource(R.string.routine_details_status_disabled)) })
-                            else -> null
-                        },
-                        colors = ListItemDefaults.colors(
-                            containerColor = if (useStockholmNightHeader) {
-                                StockholmNightRoutineSurface
-                            } else {
-                                MaterialTheme.colorScheme.surface
-                            },
-                        ),
-                        modifier = Modifier.clickable { onOpenRoutine(routine.id) },
+                        UnlabeledRoutineCard(
+                            routine = routine,
+                            allowed = allowed,
+                            onOpenRoutine = onOpenRoutine,
+                            onSelectFreeRoutine = onSelectFreeRoutine,
                         )
                     }
                     }
@@ -352,6 +321,97 @@ fun RoutineListContent(
 }
 
 @Composable
+private fun UnlabeledRoutineCard(
+    routine: CommuteRoutine,
+    allowed: Boolean,
+    onOpenRoutine: (String) -> Unit,
+    onSelectFreeRoutine: (String) -> Unit,
+) {
+    if (LocalStockholmNightTheme.current) {
+        Box(
+            modifier = Modifier
+                .fillMaxWidth()
+                .padding(horizontal = 16.dp, vertical = 5.dp),
+        ) {
+            Card(
+                onClick = { onOpenRoutine(routine.id) },
+                shape = RoundedCornerShape(16.dp),
+                colors = CardDefaults.cardColors(containerColor = StockholmNightSurfaces.Card),
+                border = BorderStroke(1.dp, StockholmNightSurfaces.Border),
+                elevation = CardDefaults.cardElevation(defaultElevation = 2.dp),
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .testTag("unlabeled_routine_card_${routine.id}"),
+            ) {
+                UnlabeledRoutineContent(
+                    routine = routine,
+                    allowed = allowed,
+                    onSelectFreeRoutine = onSelectFreeRoutine,
+                    containerColor = Color.Transparent,
+                    modifier = Modifier.fillMaxWidth(),
+                )
+            }
+        }
+    } else {
+        UnlabeledRoutineContent(
+            routine = routine,
+            allowed = allowed,
+            onSelectFreeRoutine = onSelectFreeRoutine,
+            containerColor = MaterialTheme.colorScheme.surface,
+            modifier = Modifier.clickable { onOpenRoutine(routine.id) },
+        )
+    }
+}
+
+@Composable
+private fun UnlabeledRoutineContent(
+    routine: CommuteRoutine,
+    allowed: Boolean,
+    onSelectFreeRoutine: (String) -> Unit,
+    containerColor: Color,
+    modifier: Modifier,
+) {
+    ListItem(
+        // The same colored line-number badge used throughout the app (route
+        // selection, Routine Details, departure rows, and the home-screen
+        // widget) — null only for a routine with no specific line configured,
+        // matching every other display site's identical null-check.
+        leadingContent = routine.lineDesignation?.let { designation ->
+            { LineBadge(lineDesignation = designation, transportMode = routine.transportMode) }
+        },
+        // One line only: badge + "{stop} → {direction}" (routine.name's own
+        // default pattern, see RoutineCreateViewModel.selectDirection) — no
+        // separate supportingContent line for the site name, which would just
+        // repeat it a second time since the name already includes it.
+        headlineContent = { Text(routine.name) },
+        // Consistent with the details screen: enabled/disabled is always
+        // stated in words here too, never colour-only (see
+        // RoutineDetailsScreen's statusLabel for the same rule; "paused
+        // today" isn't surfaced here since it requires the injected Clock,
+        // which this list-only screen has no other reason to depend on).
+        supportingContent = if (!allowed) {
+            { Text(stringResource(R.string.routine_list_premium_locked)) }
+        } else null,
+        trailingContent = when {
+            !allowed && routine.type == RoutineType.LINE_DIRECTION -> ({
+                TextButton(onClick = { onSelectFreeRoutine(routine.id) }) {
+                    Text(stringResource(R.string.routine_list_use_free))
+                }
+            })
+            !routine.enabled -> ({
+                Text(
+                    text = stringResource(R.string.routine_details_status_disabled),
+                    color = RoutineDestructiveRed,
+                )
+            })
+            else -> null
+        },
+        colors = ListItemDefaults.colors(containerColor = containerColor),
+        modifier = modifier,
+    )
+}
+
+@Composable
 private fun LabeledRoutineCard(
     routine: CommuteRoutine,
     allowed: Boolean,
@@ -373,6 +433,7 @@ private fun LabeledRoutineCard(
         !routine.enabled -> stringResource(R.string.routine_details_status_disabled)
         else -> null
     }
+    val statusColor = if (!allowed) MaterialTheme.colorScheme.onSurfaceVariant else RoutineDestructiveRed
 
     Box(
         modifier = Modifier
@@ -384,11 +445,16 @@ private fun LabeledRoutineCard(
             shape = RoundedCornerShape(16.dp),
             colors = CardDefaults.cardColors(
                 containerColor = if (useStockholmNightSurface) {
-                    StockholmNightRoutineSurface
+                    StockholmNightSurfaces.Card
                 } else {
                     MaterialTheme.colorScheme.surface
                 },
             ),
+            border = if (useStockholmNightSurface) {
+                BorderStroke(1.dp, StockholmNightSurfaces.Border)
+            } else {
+                null
+            },
             elevation = CardDefaults.cardElevation(defaultElevation = 2.dp),
             modifier = Modifier
                 .fillMaxWidth()
@@ -452,7 +518,7 @@ private fun LabeledRoutineCard(
                             Text(
                                 text = it,
                                 style = MaterialTheme.typography.bodySmall,
-                                color = MaterialTheme.colorScheme.onSurfaceVariant,
+                                color = statusColor,
                                 maxLines = 1,
                             )
                         }

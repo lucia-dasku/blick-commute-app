@@ -40,6 +40,7 @@ import androidx.compose.material3.Icon
 import androidx.compose.material3.ListItem
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.OutlinedTextField
+import androidx.compose.material3.OutlinedTextFieldDefaults
 import androidx.compose.material3.Scaffold
 import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
@@ -83,6 +84,8 @@ import se.blick.app.ui.theme.CalmBlue40
 import se.blick.app.ui.theme.CalmBlue80
 import se.blick.app.ui.theme.Neutral40
 import se.blick.app.ui.theme.Neutral80
+import se.blick.app.ui.theme.LocalStockholmNightTheme
+import se.blick.app.ui.theme.StockholmNightSurfaces
 import java.time.DayOfWeek
 import java.time.LocalTime
 import java.time.format.DateTimeFormatter
@@ -549,6 +552,18 @@ internal fun ScheduleStep(
                         value = uiState.name,
                         onValueChange = onNameChanged,
                         singleLine = true,
+                        colors = if (LocalStockholmNightTheme.current) {
+                            OutlinedTextFieldDefaults.colors(
+                                focusedContainerColor = StockholmNightSurfaces.Control,
+                                unfocusedContainerColor = StockholmNightSurfaces.Control,
+                                disabledContainerColor = StockholmNightSurfaces.Control,
+                                errorContainerColor = StockholmNightSurfaces.Control,
+                                unfocusedBorderColor = StockholmNightSurfaces.Border,
+                                disabledBorderColor = StockholmNightSurfaces.Border,
+                            )
+                        } else {
+                            OutlinedTextFieldDefaults.colors()
+                        },
                         keyboardOptions = KeyboardOptions(imeAction = ImeAction.Done),
                         keyboardActions = KeyboardActions(onDone = { focusManager.clearFocus() }),
                         modifier = Modifier
@@ -688,20 +703,39 @@ private fun WeekdayRow(
     locale: java.util.Locale,
 ) {
     val isDarkTheme = MaterialTheme.colorScheme.background.luminance() < 0.5f
-    val selectedBackground = if (isDarkTheme) Neutral40 else CalmBlue80
+    val useStockholmNightSurface = LocalStockholmNightTheme.current
+    val selectedBackground = when {
+        useStockholmNightSurface -> StockholmNightSurfaces.SelectedControl
+        isDarkTheme -> Neutral40
+        else -> CalmBlue80
+    }
+    val unselectedBackground = if (useStockholmNightSurface) {
+        StockholmNightSurfaces.Control
+    } else {
+        MaterialTheme.colorScheme.surface
+    }
     val selectedContent = MaterialTheme.colorScheme.onSurface
-    val selectedOutline = if (isDarkTheme) Neutral80 else CalmBlue40
+    val selectedOutline = when {
+        useStockholmNightSurface -> MaterialTheme.colorScheme.outline
+        isDarkTheme -> Neutral80
+        else -> CalmBlue40
+    }
+    val unselectedOutline = if (useStockholmNightSurface) {
+        StockholmNightSurfaces.Border
+    } else {
+        MaterialTheme.colorScheme.outlineVariant
+    }
 
     Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(2.dp)) {
         days.forEach { day ->
             val selected = day in activeDays
             Surface(
-                color = if (selected) selectedBackground else MaterialTheme.colorScheme.surface,
+                color = if (selected) selectedBackground else unselectedBackground,
                 contentColor = if (selected) selectedContent else MaterialTheme.colorScheme.onSurface,
                 shape = MaterialTheme.shapes.small,
                 border = BorderStroke(
                     width = if (selected) 2.dp else 1.dp,
-                    color = if (selected) selectedOutline else MaterialTheme.colorScheme.outlineVariant,
+                    color = if (selected) selectedOutline else unselectedOutline,
                 ),
                 modifier = Modifier
                     .weight(1f)
@@ -761,11 +795,15 @@ private fun TimeControl(
 ) {
     val formattedTime = time.format(DateTimeFormatter.ofPattern("HH:mm"))
     val description = stringResource(R.string.routine_create_time_control_description, accessibilityLabel, formattedTime)
+    val useStockholmNightSurface = LocalStockholmNightTheme.current
     Surface(
         onClick = onClick,
         shape = MaterialTheme.shapes.medium,
-        color = MaterialTheme.colorScheme.surface,
-        border = BorderStroke(1.dp, MaterialTheme.colorScheme.outlineVariant),
+        color = if (useStockholmNightSurface) StockholmNightSurfaces.Control else MaterialTheme.colorScheme.surface,
+        border = BorderStroke(
+            1.dp,
+            if (useStockholmNightSurface) StockholmNightSurfaces.Border else MaterialTheme.colorScheme.outlineVariant,
+        ),
         modifier = modifier
             .height(80.dp)
             .semantics { contentDescription = description },
