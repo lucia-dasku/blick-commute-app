@@ -15,6 +15,8 @@ import se.blick.app.data.remote.dto.JourneyDisruptionRelevanceResponseDto
 import se.blick.app.data.remote.dto.JourneyLegDto
 import se.blick.app.data.remote.dto.JourneyPlanDto
 import se.blick.app.data.remote.dto.JourneysResponseDto
+import se.blick.app.data.remote.dto.JourneyContextDto
+import se.blick.app.data.remote.dto.JourneySearchModeDto
 import se.blick.app.data.remote.dto.StopSearchResponseDto
 import se.blick.app.domain.model.DEFAULT_JOURNEY_TRANSPORT_MODES
 import se.blick.app.domain.model.ExactDestinationChangesPreference
@@ -22,8 +24,12 @@ import se.blick.app.domain.model.JourneyDisruptionContext
 import se.blick.app.domain.model.JourneyDisruptionContextLeg
 import se.blick.app.domain.model.JourneyLeg
 import se.blick.app.domain.model.JourneyRole
+import se.blick.app.domain.model.JourneySearchMode
 import se.blick.app.domain.model.TransportMode
 import java.time.Instant
+import java.time.LocalDate
+import java.time.LocalTime
+import java.time.ZoneId
 
 /**
  * Backend roles are authoritative — see [se.blick.app.domain.model.toJourneyRole]'s own doc.
@@ -164,6 +170,106 @@ class JourneyRepositoryTest {
         RemoteJourneyRepository(client).getJourneys("origin", "destination", DEFAULT_JOURNEY_TRANSPORT_MODES)
 
         assertEquals("BOTH", client.receivedChangesPreference)
+    }
+
+    private class CapturingPlannedApiClient : BlickApiClient {
+        var receivedMode: JourneySearchModeDto? = null
+        var receivedDateTime: String? = null
+        var responseContext = JourneyContextDto.PLANNED
+        var responseMode: JourneySearchModeDto? = null
+
+        override suspend fun searchStops(query: String): StopSearchResponseDto = throw NotImplementedError("unused")
+        override suspend fun getDepartures(siteId: Long, forecastMinutes: Int?): DeparturesResponseDto = throw NotImplementedError("unused")
+        override suspend fun getDisruptions(siteId: Long, lineId: Long?, transportMode: String?): DisruptionsResponseDto =
+            throw NotImplementedError("unused")
+
+        override suspend fun getPlannedJourneys(
+            originId: String,
+            destinationId: String,
+            transportModes: String,
+            searchMode: JourneySearchModeDto,
+            requestedDateTime: String,
+            changesPreference: String,
+        ): JourneysResponseDto {
+            receivedMode = searchMode
+            receivedDateTime = requestedDateTime
+            return JourneysResponseDto(
+                fetchedAt = "2026-01-01T00:00:00Z",
+                journeys = emptyList(),
+                journeyContext = responseContext,
+                searchMode = responseMode ?: searchMode,
+                requestedDateTime = java.time.OffsetDateTime.parse(requestedDateTime).toInstant().toString(),
+            )
+        }
+    }
+
+    @Test
+    fun `ARRIVE_BY serializes a Stockholm summer event with the correct offset`() = runTest {
+        val client = CapturingPlannedApiClient()
+
+        RemoteJourneyRepository(client).getPlannedJourneys(
+            originId = "origin",
+            destinationId = "destination",
+            allowedTransportModes = DEFAULT_JOURNEY_TRANSPORT_MODES,
+            searchMode = JourneySearchMode.ARRIVE_BY,
+            requestedDateTime = LocalDate.of(2026, 8, 10).atTime(LocalTime.of(18, 30))
+                .atZone(ZoneId.of("Europe/Stockholm")),
+        )
+
+        assertEquals(JourneySearchModeDto.ARRIVE_BY, client.receivedMode)
+        assertEquals("2026-08-10T18:30+02:00", client.receivedDateTime)
+    }
+
+    @Test
+    fun `LEAVE_AT serializes a Stockholm winter event with the correct offset`() = runTest {
+        val client = CapturingPlannedApiClient()
+
+        RemoteJourneyRepository(client).getPlannedJourneys(
+            originId = "origin",
+            destinationId = "destination",
+            allowedTransportModes = DEFAULT_JOURNEY_TRANSPORT_MODES,
+            searchMode = JourneySearchMode.LEAVE_AT,
+            requestedDateTime = LocalDate.of(2026, 12, 10).atTime(LocalTime.of(8, 15))
+                .atZone(ZoneId.of("Europe/Stockholm")),
+        )
+
+        assertEquals(JourneySearchModeDto.LEAVE_AT, client.receivedMode)
+        assertEquals("2026-12-10T08:15+01:00", client.receivedDateTime)
+    }
+
+    @Test
+    fun `planned search rejects a LIVE response instead of rendering it as planned`() = runTest {
+        val client = CapturingPlannedApiClient().apply { responseContext = JourneyContextDto.LIVE }
+
+        val failure = runCatching {
+            RemoteJourneyRepository(client).getPlannedJourneys(
+                "origin",
+                "destination",
+                DEFAULT_JOURNEY_TRANSPORT_MODES,
+                JourneySearchMode.ARRIVE_BY,
+                LocalDate.of(2026, 8, 10).atTime(18, 30).atZone(ZoneId.of("Europe/Stockholm")),
+            )
+        }.exceptionOrNull()
+
+        assertTrue(failure is UnexpectedJourneyContextException)
+    }
+
+    @Test
+    fun `live search rejects a PLANNED response`() = runTest {
+        val response = JourneysResponseDto(
+            fetchedAt = "2026-08-10T07:00:00Z",
+            journeys = emptyList(),
+            journeyContext = JourneyContextDto.PLANNED,
+            searchMode = JourneySearchModeDto.ARRIVE_BY,
+            requestedDateTime = "2026-08-10T16:30:00Z",
+        )
+
+        val failure = runCatching {
+            RemoteJourneyRepository(FakeApiClient(response))
+                .getJourneys("origin", "destination", DEFAULT_JOURNEY_TRANSPORT_MODES)
+        }.exceptionOrNull()
+
+        assertTrue(failure is UnexpectedJourneyContextException)
     }
 
     // ---- disruptionContext: additive structural metadata carried opaquely between

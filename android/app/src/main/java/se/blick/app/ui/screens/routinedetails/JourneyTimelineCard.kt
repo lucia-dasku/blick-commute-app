@@ -43,6 +43,7 @@ import androidx.compose.ui.unit.dp
 import se.blick.app.R
 import se.blick.app.domain.model.JourneyPlan
 import se.blick.app.domain.model.JourneyRole
+import se.blick.app.domain.model.STOCKHOLM_ZONE
 import se.blick.app.domain.model.TransportMode
 import se.blick.app.domain.usecase.countdownMinutes
 import se.blick.app.domain.usecase.effectiveFirstDeparture
@@ -145,6 +146,73 @@ internal fun JourneyTimelineCard(
     }
 }
 
+/** Planned-event presentation reuses the exact-destination timeline, transport glyphs and line
+ * badges, but deliberately uses absolute Stockholm times and has no live countdown or role-based
+ * re-ranking UI. */
+@Composable
+internal fun PlannedJourneyTimelineCard(
+    journey: JourneyPlan,
+    locale: Locale,
+    modifier: Modifier = Modifier,
+) {
+    val useStockholmNightSurface = LocalStockholmNightTheme.current
+    val timeline = journey.toTimelinePresentation()
+    val firstLeg = journey.firstLeg
+    val departure = formatDepartureTime(journey.effectiveFirstDeparture(), locale, STOCKHOLM_ZONE)
+    val arrival = formatDepartureTime(timeline.finalArrivalTime, locale, STOCKHOLM_ZONE)
+    val modeLabel = stringResource(firstLeg.transportMode.journeyLabelResId())
+    val changeLabel = if (timeline.transferCount == 0) {
+        stringResource(R.string.journey_direct)
+    } else {
+        pluralStringResource(R.plurals.journey_changes, timeline.transferCount, timeline.transferCount)
+    }
+
+    Surface(
+        color = if (useStockholmNightSurface) StockholmNightSurfaces.Card else MaterialTheme.colorScheme.surface,
+        border = if (useStockholmNightSurface) BorderStroke(1.dp, StockholmNightSurfaces.CardBorder) else null,
+        tonalElevation = if (useStockholmNightSurface) 0.dp else 1.dp,
+        shape = MaterialTheme.shapes.medium,
+        modifier = modifier.fillMaxWidth(),
+    ) {
+        Column(Modifier.padding(16.dp)) {
+            Text(
+                stringResource(R.string.one_time_event_planned_time_range, departure, arrival),
+                style = MaterialTheme.typography.headlineSmall,
+                fontWeight = FontWeight.SemiBold,
+            )
+            Spacer(Modifier.height(10.dp))
+            Row(
+                horizontalArrangement = Arrangement.spacedBy(8.dp),
+                verticalAlignment = Alignment.CenterVertically,
+            ) {
+                firstLeg.lineDesignation?.takeIf { it.isNotBlank() }?.let {
+                    LineBadge(it, firstLeg.transportMode)
+                }
+                CompactTransportGlyph(firstLeg.transportMode)
+                Text(
+                    firstLeg.lineDesignation?.takeIf { it.isNotBlank() }?.let {
+                        stringResource(R.string.journey_mode_line_format, modeLabel, it)
+                    } ?: modeLabel,
+                    style = MaterialTheme.typography.titleMedium,
+                    fontWeight = FontWeight.SemiBold,
+                )
+            }
+            Spacer(Modifier.height(4.dp))
+            Text(
+                changeLabel,
+                style = MaterialTheme.typography.bodyMedium,
+                color = MaterialTheme.colorScheme.onSurfaceVariant,
+            )
+            Spacer(Modifier.height(18.dp))
+            JourneyTimeline(timeline.items, locale, STOCKHOLM_ZONE)
+            Spacer(Modifier.height(14.dp))
+            HorizontalDivider(color = MaterialTheme.colorScheme.outlineVariant)
+            Spacer(Modifier.height(8.dp))
+            JourneyDurationFooter(timeline.totalDurationMinutes)
+        }
+    }
+}
+
 @Composable
 private fun JourneyCardHeader(role: JourneyRole, expanded: Boolean) {
     Row(
@@ -170,12 +238,17 @@ private fun JourneyCardHeader(role: JourneyRole, expanded: Boolean) {
 }
 
 @Composable
-private fun JourneyTimeline(items: List<JourneyTimelineItem>, locale: Locale) {
+private fun JourneyTimeline(
+    items: List<JourneyTimelineItem>,
+    locale: Locale,
+    zone: java.time.ZoneId = java.time.ZoneId.systemDefault(),
+) {
     Column(Modifier.fillMaxWidth()) {
         items.forEachIndexed { index, item ->
             JourneyTimelineRow(
                 item = item,
                 locale = locale,
+                zone = zone,
                 first = index == 0,
                 last = index == items.lastIndex,
             )
@@ -187,6 +260,7 @@ private fun JourneyTimeline(items: List<JourneyTimelineItem>, locale: Locale) {
 private fun JourneyTimelineRow(
     item: JourneyTimelineItem,
     locale: Locale,
+    zone: java.time.ZoneId,
     first: Boolean,
     last: Boolean,
 ) {
@@ -200,7 +274,7 @@ private fun JourneyTimelineRow(
         verticalAlignment = Alignment.Top,
     ) {
         Text(
-            text = departureTime?.let { formatDepartureTime(it, locale) }.orEmpty(),
+            text = departureTime?.let { formatDepartureTime(it, locale, zone) }.orEmpty(),
             modifier = Modifier.width(TIMELINE_TIME_COLUMN_WIDTH).padding(top = 3.dp, end = 8.dp),
             style = MaterialTheme.typography.bodySmall,
             color = MaterialTheme.colorScheme.onSurfaceVariant,

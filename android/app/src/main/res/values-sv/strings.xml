@@ -345,6 +345,16 @@
     <string name="one_time_event_save_error">Det gick inte att spara händelsen. Försök igen.</string>
     <string name="one_time_event_preview_title">Reseförhandsvisning</string>
     <string name="one_time_event_preview_future">Framtida tidtabellsinformation visas inte som live. Öppna händelsen på resdagen för att granska resplanen.</string>
+    <string name="one_time_event_planned_label">PLANERAD</string>
+    <string name="one_time_event_planned_title">Planerad resa</string>
+    <string name="one_time_event_planned_refresh">Uppdatera</string>
+    <string name="one_time_event_planned_retry">Försök igen</string>
+    <string name="one_time_event_planned_error">Det gick inte att läsa in den planerade resan.</string>
+    <string name="one_time_event_planned_no_journey">Ingen planerad resa hittades för den här tiden.</string>
+    <string name="one_time_event_planned_expired">Händelsen har passerat.</string>
+    <string name="one_time_event_planned_premium_required">Premium krävs för att visa den planerade resan.</string>
+    <string name="one_time_event_planned_explanation">Baserad på den aktuella tidtabellen. Kontrollera igen närmare avresan.</string>
+    <string name="one_time_event_planned_time_range">%1$s → %2$s</string>
     <string name="one_time_event_upcoming_title">Kommande händelser</string>
     <string name="one_time_event_view_all">Visa alla</string>
     <string name="one_time_event_calendar_title">Händelser</string>

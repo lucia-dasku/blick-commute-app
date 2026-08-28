@@ -14,6 +14,7 @@ import se.blick.app.data.remote.dto.JourneyLocationSearchDto
 import se.blick.app.data.remote.dto.JourneysResponseDto
 import se.blick.app.data.remote.dto.JourneyDisruptionRelevanceRequestDto
 import se.blick.app.data.remote.dto.JourneyDisruptionRelevanceResponseDto
+import se.blick.app.data.remote.dto.JourneySearchModeDto
 
 /**
  * Retrofit service definition. Every response is wrapped in the success envelope
@@ -52,6 +53,8 @@ interface RetrofitBlickApiService {
         @Query("transportModes") transportModes: String,
         @Query("searchUntil") searchUntil: String?,
         @Query("changesPreference") changesPreference: String,
+        @Query("searchMode") searchMode: JourneySearchModeDto?,
+        @Query("requestedDateTime") requestedDateTime: String?,
     ): SuccessEnvelopeDto<JourneysResponseDto>
 
     /** See `backend/src/routes/journeyDisruptions.ts`'s own doc — a POST (not GET) specifically
@@ -76,7 +79,23 @@ class RetrofitBlickApiClient(
         service.verifyPurchase(PurchaseVerificationRequestDto(productId, purchaseToken)).data
     override suspend fun searchJourneyLocations(query: String) = service.searchJourneyLocations(query).data
     override suspend fun getJourneys(originId: String, destinationId: String, transportModes: String, searchUntil: String?, changesPreference: String) =
-        service.getJourneys(originId, destinationId, transportModes, searchUntil, changesPreference).data
+        service.getJourneys(originId, destinationId, transportModes, searchUntil, changesPreference, null, null).data
+    override suspend fun getPlannedJourneys(
+        originId: String,
+        destinationId: String,
+        transportModes: String,
+        searchMode: JourneySearchModeDto,
+        requestedDateTime: String,
+        changesPreference: String,
+    ) = service.getJourneys(
+        originId,
+        destinationId,
+        transportModes,
+        null,
+        changesPreference,
+        searchMode,
+        requestedDateTime,
+    ).data
     override suspend fun getJourneyDisruptionRelevance(request: JourneyDisruptionRelevanceRequestDto) =
         service.getJourneyDisruptionRelevance(request).data
 }

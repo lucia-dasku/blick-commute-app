@@ -464,6 +464,16 @@
     <string name="one_time_event_save_error">Couldn’t save the event. Try again.</string>
     <string name="one_time_event_preview_title">Journey preview</string>
     <string name="one_time_event_preview_future">Future timetable information is not presented as live. Open this event on its date to review the transport plan.</string>
+    <string name="one_time_event_planned_label">PLANNED</string>
+    <string name="one_time_event_planned_title">Planned journey</string>
+    <string name="one_time_event_planned_refresh">Refresh</string>
+    <string name="one_time_event_planned_retry">Retry</string>
+    <string name="one_time_event_planned_error">Couldn’t load the planned journey.</string>
+    <string name="one_time_event_planned_no_journey">No planned journey found for this time.</string>
+    <string name="one_time_event_planned_expired">This event has passed.</string>
+    <string name="one_time_event_planned_premium_required">Premium is required to view the planned journey.</string>
+    <string name="one_time_event_planned_explanation">Based on the current timetable. Check again closer to departure.</string>
+    <string name="one_time_event_planned_time_range">%1$s → %2$s</string>
     <string name="one_time_event_upcoming_title">Upcoming events</string>
     <string name="one_time_event_view_all">View all</string>
     <string name="one_time_event_calendar_title">Events</string>

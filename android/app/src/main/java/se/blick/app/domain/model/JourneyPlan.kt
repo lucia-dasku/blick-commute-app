@@ -2,6 +2,15 @@ package se.blick.app.domain.model
 
 import java.time.Instant
 
+enum class JourneySearchMode { NOW, LEAVE_AT, ARRIVE_BY }
+
+data class PlannedJourneyResult(
+    val fetchedAt: Instant,
+    val searchMode: JourneySearchMode,
+    val requestedDateTime: Instant,
+    val journeys: List<JourneyPlan>,
+)
+
 data class JourneyLocation(val id: String, val name: String)
 
 data class JourneyLeg(

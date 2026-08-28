@@ -53,6 +53,7 @@ import se.blick.app.domain.model.OneTimeEventTimeType
 import se.blick.app.domain.model.STOCKHOLM_ZONE
 import se.blick.app.locale.currentBlickLocale
 import se.blick.app.ui.components.BlickTopBar
+import se.blick.app.ui.screens.routinedetails.PlannedJourneyTimelineCard
 import java.time.LocalDate
 import java.time.YearMonth
 import java.time.format.DateTimeFormatter
@@ -267,39 +268,45 @@ fun OneTimeEventDetailsScreen(
             Box(Modifier.fillMaxSize().padding(padding), contentAlignment = Alignment.Center) { CircularProgressIndicator() }
         } else if (event != null) {
             val locale = currentBlickLocale()
-            Column(
-                Modifier.fillMaxSize().padding(padding).padding(16.dp),
+            LazyColumn(
+                modifier = Modifier.fillMaxSize().padding(padding),
+                contentPadding = androidx.compose.foundation.layout.PaddingValues(16.dp),
                 verticalArrangement = Arrangement.spacedBy(16.dp),
             ) {
-                Text(eventLabelText(event.label), color = MaterialTheme.colorScheme.primary, fontWeight = FontWeight.SemiBold)
-                Text(
-                    event.date.format(DateTimeFormatter.ofLocalizedDate(FormatStyle.FULL).withLocale(locale)),
-                    style = MaterialTheme.typography.titleMedium,
-                )
-                Text(stringResource(R.string.one_time_event_route_format, event.originName, event.destinationName))
-                Text(
-                    stringResource(
-                        if (event.timeType == OneTimeEventTimeType.ARRIVE_BY) R.string.one_time_event_arrive_by_value
-                        else R.string.one_time_event_leave_at_value,
-                        event.time.toString(),
-                    ),
-                    style = MaterialTheme.typography.titleLarge,
-                )
-                Card(colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surfaceContainer)) {
-                    Column(Modifier.padding(16.dp)) {
-                        Text(stringResource(R.string.one_time_event_preview_title), fontWeight = FontWeight.SemiBold)
-                        Spacer(Modifier.size(6.dp))
+                item {
+                    Column(verticalArrangement = Arrangement.spacedBy(16.dp)) {
+                        Text(eventLabelText(event.label), color = MaterialTheme.colorScheme.primary, fontWeight = FontWeight.SemiBold)
                         Text(
-                            stringResource(R.string.one_time_event_preview_future),
-                            color = MaterialTheme.colorScheme.onSurfaceVariant,
+                            event.date.format(DateTimeFormatter.ofLocalizedDate(FormatStyle.FULL).withLocale(locale)),
+                            style = MaterialTheme.typography.titleMedium,
+                        )
+                        Text(stringResource(R.string.one_time_event_route_format, event.originName, event.destinationName))
+                        Text(
+                            stringResource(
+                                if (event.timeType == OneTimeEventTimeType.ARRIVE_BY) R.string.one_time_event_arrive_by_value
+                                else R.string.one_time_event_leave_at_value,
+                                event.time.toString(),
+                            ),
+                            style = MaterialTheme.typography.titleLarge,
                         )
                     }
                 }
-                Button(onClick = { onEdit(event.id) }, modifier = Modifier.fillMaxWidth()) {
-                    Text(stringResource(R.string.one_time_event_edit_action))
+                item {
+                    PlannedJourneySection(
+                        preview = state.preview,
+                        locale = locale,
+                        onRefresh = viewModel::refreshPreview,
+                    )
                 }
-                TextButton(onClick = { confirmDelete = true }, modifier = Modifier.fillMaxWidth()) {
-                    Text(stringResource(R.string.one_time_event_delete_action), color = MaterialTheme.colorScheme.error)
+                item {
+                    Button(onClick = { onEdit(event.id) }, modifier = Modifier.fillMaxWidth()) {
+                        Text(stringResource(R.string.one_time_event_edit_action))
+                    }
+                }
+                item {
+                    TextButton(onClick = { confirmDelete = true }, modifier = Modifier.fillMaxWidth()) {
+                        Text(stringResource(R.string.one_time_event_delete_action), color = MaterialTheme.colorScheme.error)
+                    }
                 }
             }
         }
@@ -320,6 +327,86 @@ fun OneTimeEventDetailsScreen(
                 }
             },
         )
+    }
+}
+
+@Composable
+internal fun PlannedJourneySection(
+    preview: PlannedJourneyPreviewState,
+    locale: java.util.Locale,
+    onRefresh: () -> Unit,
+) {
+    Column(verticalArrangement = Arrangement.spacedBy(10.dp)) {
+        Row(
+            modifier = Modifier.fillMaxWidth(),
+            horizontalArrangement = Arrangement.SpaceBetween,
+            verticalAlignment = Alignment.CenterVertically,
+        ) {
+            Column(verticalArrangement = Arrangement.spacedBy(4.dp)) {
+                if (preview is PlannedJourneyPreviewState.Ready) {
+                    Surface(
+                        color = MaterialTheme.colorScheme.primary.copy(alpha = 0.14f),
+                        contentColor = MaterialTheme.colorScheme.primary,
+                        shape = MaterialTheme.shapes.small,
+                    ) {
+                        Text(
+                            stringResource(R.string.one_time_event_planned_label),
+                            style = MaterialTheme.typography.labelSmall,
+                            modifier = Modifier.padding(horizontal = 8.dp, vertical = 3.dp),
+                        )
+                    }
+                }
+                Text(
+                    stringResource(R.string.one_time_event_planned_title),
+                    style = MaterialTheme.typography.titleMedium,
+                    fontWeight = FontWeight.SemiBold,
+                )
+            }
+            if (preview is PlannedJourneyPreviewState.Ready) {
+                TextButton(onClick = onRefresh) { Text(stringResource(R.string.one_time_event_planned_refresh)) }
+            }
+        }
+        when (preview) {
+            PlannedJourneyPreviewState.WaitingForEntitlement,
+            PlannedJourneyPreviewState.Loading,
+            -> Box(Modifier.fillMaxWidth().padding(vertical = 24.dp), contentAlignment = Alignment.Center) {
+                CircularProgressIndicator()
+            }
+            is PlannedJourneyPreviewState.Ready -> {
+                PlannedJourneyTimelineCard(preview.primary, locale)
+                Text(
+                    stringResource(R.string.one_time_event_planned_explanation),
+                    style = MaterialTheme.typography.bodySmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                )
+            }
+            PlannedJourneyPreviewState.NoJourney -> PlannedPreviewMessage(
+                text = stringResource(R.string.one_time_event_planned_no_journey),
+                action = onRefresh,
+            )
+            PlannedJourneyPreviewState.Error -> PlannedPreviewMessage(
+                text = stringResource(R.string.one_time_event_planned_error),
+                action = onRefresh,
+            )
+            PlannedJourneyPreviewState.Expired -> PlannedPreviewMessage(
+                text = stringResource(R.string.one_time_event_planned_expired),
+            )
+            PlannedJourneyPreviewState.PremiumRequired -> PlannedPreviewMessage(
+                text = stringResource(R.string.one_time_event_planned_premium_required),
+            )
+        }
+    }
+}
+
+@Composable
+private fun PlannedPreviewMessage(text: String, action: (() -> Unit)? = null) {
+    Card(colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surfaceContainer)) {
+        Column(Modifier.fillMaxWidth().padding(16.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
+            Text(text, color = MaterialTheme.colorScheme.onSurfaceVariant)
+            if (action != null) {
+                TextButton(onClick = action) { Text(stringResource(R.string.one_time_event_planned_retry)) }
+            }
+        }
     }
 }
 

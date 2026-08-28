@@ -7,6 +7,9 @@ import se.blick.app.data.remote.dto.JourneyDisruptionNoticeDto
 import se.blick.app.data.remote.dto.JourneyDisruptionRelevanceLegDto
 import se.blick.app.data.remote.dto.JourneyDisruptionRelevanceRequestDto
 import se.blick.app.data.remote.dto.JourneyLegDto
+import se.blick.app.data.remote.dto.JourneyContextDto
+import se.blick.app.data.remote.dto.JourneySearchModeDto
+import se.blick.app.data.remote.dto.JourneysResponseDto
 import se.blick.app.data.remote.dto.ResolvedJourneyDisruptionDto
 import se.blick.app.domain.model.DisruptionRelevance
 import se.blick.app.domain.model.DisruptionSource
@@ -17,13 +20,16 @@ import se.blick.app.domain.model.JourneyDisruptionNotice
 import se.blick.app.domain.model.JourneyLeg
 import se.blick.app.domain.model.JourneyLocation
 import se.blick.app.domain.model.JourneyPlan
+import se.blick.app.domain.model.JourneySearchMode
 import se.blick.app.domain.model.JOURNEY_TRANSPORT_MODE_OPTIONS
+import se.blick.app.domain.model.PlannedJourneyResult
 import se.blick.app.domain.model.ResolvedJourneyDisruption
 import se.blick.app.domain.model.TransportMode
 import se.blick.app.domain.model.toDisruptionEffect
 import se.blick.app.domain.model.toJourneyRole
 import se.blick.app.domain.model.toTransportMode
 import java.time.Instant
+import java.time.ZonedDateTime
 import javax.inject.Inject
 
 interface JourneyRepository {
@@ -41,6 +47,14 @@ interface JourneyRepository {
         searchUntil: Instant? = null,
         changesPreference: ExactDestinationChangesPreference = ExactDestinationChangesPreference.BOTH,
     ): List<JourneyPlan>
+
+    suspend fun getPlannedJourneys(
+        originId: String,
+        destinationId: String,
+        allowedTransportModes: Set<TransportMode>,
+        searchMode: JourneySearchMode,
+        requestedDateTime: ZonedDateTime,
+    ): PlannedJourneyResult = throw UnsupportedOperationException("Planned journey search is not implemented")
 
     /** Resolves the current PRIMARY exact-destination journey's own live disruption relevance —
      * see `backend/src/routes/journeyDisruptions.ts`'s own doc. The backend is the single
@@ -96,13 +110,60 @@ class RemoteJourneyRepository @Inject constructor(private val apiClient: BlickAp
         allowedTransportModes: Set<TransportMode>,
         searchUntil: Instant?,
         changesPreference: ExactDestinationChangesPreference,
-    ) = apiClient.getJourneys(
-        originId,
-        destinationId,
-        JOURNEY_TRANSPORT_MODE_OPTIONS.filter(allowedTransportModes::contains).joinToString(",") { it.name },
-        searchUntil?.toString(),
-        changesPreference.name,
-    ).journeys.mapNotNull { dto ->
+    ): List<JourneyPlan> {
+        val response = apiClient.getJourneys(
+            originId,
+            destinationId,
+            JOURNEY_TRANSPORT_MODE_OPTIONS.filter(allowedTransportModes::contains).joinToString(",") { it.name },
+            searchUntil?.toString(),
+            changesPreference.name,
+        )
+        if (response.journeyContext != JourneyContextDto.LIVE || response.searchMode != JourneySearchModeDto.NOW) {
+            throw UnexpectedJourneyContextException(
+                "Expected LIVE/NOW but received ${response.journeyContext}/${response.searchMode}",
+            )
+        }
+        return response.toDomainJourneys()
+    }
+
+    override suspend fun getPlannedJourneys(
+        originId: String,
+        destinationId: String,
+        allowedTransportModes: Set<TransportMode>,
+        searchMode: JourneySearchMode,
+        requestedDateTime: ZonedDateTime,
+    ): PlannedJourneyResult {
+        require(searchMode != JourneySearchMode.NOW) { "A planned journey requires LEAVE_AT or ARRIVE_BY" }
+        val requested = requestedDateTime.toOffsetDateTime()
+        val response = apiClient.getPlannedJourneys(
+            originId = originId,
+            destinationId = destinationId,
+            transportModes = JOURNEY_TRANSPORT_MODE_OPTIONS
+                .filter(allowedTransportModes::contains)
+                .joinToString(",") { it.name },
+            searchMode = JourneySearchModeDto.valueOf(searchMode.name),
+            requestedDateTime = requested.toString(),
+        )
+        val responseRequestedInstant = response.requestedDateTime?.let(Instant::parse)
+        if (
+            response.journeyContext != JourneyContextDto.PLANNED ||
+            response.searchMode.name != searchMode.name ||
+            responseRequestedInstant != requested.toInstant()
+        ) {
+            throw UnexpectedJourneyContextException(
+                "Expected PLANNED/$searchMode for ${requested.toInstant()} but received " +
+                    "${response.journeyContext}/${response.searchMode}/${response.requestedDateTime}",
+            )
+        }
+        return PlannedJourneyResult(
+            fetchedAt = Instant.parse(response.fetchedAt),
+            searchMode = searchMode,
+            requestedDateTime = responseRequestedInstant,
+            journeys = response.toDomainJourneys(),
+        )
+    }
+
+    private fun JourneysResponseDto.toDomainJourneys() = journeys.mapNotNull { dto ->
             // Fail closed, never invent a role -- see toJourneyRole's own doc. A single
             // malformed entry is dropped rather than failing the whole response: the
             // remaining, validly-roled journeys are still genuinely useful to show, and
@@ -115,7 +176,7 @@ class RemoteJourneyRepository @Inject constructor(private val apiClient: BlickAp
                 role, dto.disruptionNotices.map(JourneyDisruptionNoticeDto::toDomain),
                 dto.disruptionContext?.toDomain(),
             )
-    }
+        }
 
     override suspend fun getRelevantDeviationNotices(
         legs: List<JourneyLeg>,
@@ -149,6 +210,8 @@ class RemoteJourneyRepository @Inject constructor(private val apiClient: BlickAp
         return apiClient.getJourneyDisruptionRelevance(request).disruptions.mapNotNull(ResolvedJourneyDisruptionDto::toDomain)
     }
 }
+
+class UnexpectedJourneyContextException(message: String) : IllegalStateException(message)
 
 private fun JourneyLegDto.toDomain() = JourneyLeg(
     transportMode.toTransportMode(), lineDesignation, direction, originName, destinationName,

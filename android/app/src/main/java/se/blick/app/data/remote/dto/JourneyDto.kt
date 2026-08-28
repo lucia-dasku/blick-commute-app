@@ -72,7 +72,18 @@ data class JourneyPlanDto(
     val disruptionContext: JourneyDisruptionContextDto? = null,
 )
 
-@Serializable data class JourneysResponseDto(val fetchedAt: String, val journeys: List<JourneyPlanDto>)
+@Serializable enum class JourneyContextDto { LIVE, PLANNED }
+
+@Serializable enum class JourneySearchModeDto { NOW, LEAVE_AT, ARRIVE_BY }
+
+@Serializable
+data class JourneysResponseDto(
+    val fetchedAt: String,
+    val journeys: List<JourneyPlanDto>,
+    val journeyContext: JourneyContextDto = JourneyContextDto.LIVE,
+    val searchMode: JourneySearchModeDto = JourneySearchModeDto.NOW,
+    val requestedDateTime: String? = null,
+)
 
 /** One PRIMARY transit leg's own transport mode + line designation — a WALK leg or one with no
  * line designation carries no line-scope signal and must never be included (see
