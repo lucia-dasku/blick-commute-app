@@ -224,7 +224,8 @@ class RoutineNotificationBuilder @Inject constructor(
             localizedContext.getString(R.string.notification_disruption_line_relevant_generic)
         }
 
-    /** Up to two lines: the soonest departure's own countdown+status (or "Cancelled"), then
+    /** Up to two lines: the soonest departure's own countdown (plus "Scheduled" when it is not
+     * real-time, or "Cancelled"), then
      * the following departure's own countdown (or "Cancelled") -- omitted entirely when there
      * is no following departure, never padded or placeheld. Neither line repeats the line
      * designation or destination, both already shown once in the title (see this class's own
@@ -305,11 +306,14 @@ class RoutineNotificationBuilder @Inject constructor(
             // countdown entirely, matching the existing routine-details-screen convention
             // (departureStatusLabel).
             localizedContext.getString(R.string.routine_details_departure_cancelled)
+        } else if (row.isRealTime) {
+            countdownText(row.minutesRemaining)
         } else {
-            val statusText = localizedContext.getString(
-                if (row.isRealTime) R.string.routine_details_departure_live else R.string.routine_details_departure_scheduled,
+            localizedContext.getString(
+                R.string.notification_departure_status_format,
+                countdownText(row.minutesRemaining),
+                localizedContext.getString(R.string.routine_details_departure_scheduled),
             )
-            localizedContext.getString(R.string.notification_departure_status_format, countdownText(row.minutesRemaining), statusText)
         }
 
     /** ALTERNATIVE (see [JourneyRole]) visibly says so — a genuinely different way to travel,

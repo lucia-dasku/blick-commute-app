@@ -335,8 +335,13 @@ fun RoutineListContent(
                         ) {
                             Text(
                                 stringResource(R.string.one_time_event_upcoming_title),
-                                style = MaterialTheme.typography.titleMedium,
-                                fontWeight = FontWeight.SemiBold,
+                                color = sectionLabelColor,
+                                style = TextStyle(
+                                    fontSize = 12.sp,
+                                    lineHeight = 16.sp,
+                                    fontWeight = FontWeight.SemiBold,
+                                    letterSpacing = 0.8.sp,
+                                ),
                             )
                             TextButton(
                                 onClick = {

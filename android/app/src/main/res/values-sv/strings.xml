@@ -364,7 +364,7 @@
     <string name="one_time_event_disruptions_loading">Kontrollerar aktuell trafikinformation…</string>
     <string name="one_time_event_disruptions_unavailable">Aktuell trafikinformation kunde inte läsas in.</string>
     <string name="one_time_event_planned_time_range">%1$s → %2$s</string>
-    <string name="one_time_event_upcoming_title">Kommande händelser</string>
+    <string name="one_time_event_upcoming_title">KOMMANDE HÄNDELSER</string>
     <string name="one_time_event_view_all">Visa alla</string>
     <string name="one_time_event_calendar_title">Händelser</string>
     <string name="one_time_event_no_upcoming">Inga kommande engångshändelser.</string>

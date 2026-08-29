@@ -458,14 +458,12 @@ class RoutineNotificationBuilderTest {
     }
 
     @Test
-    fun `the primary departure line shows its countdown and Live status`() {
+    fun `the primary realtime departure line shows its countdown without Live wording`() {
         val notification = builder.build(
             model(content = RoutineNotificationContent.Live(listOf(sampleRow(minutesRemaining = 3, isRealTime = true)))),
         )
-        assertEquals(
-            listOf(context.getString(R.string.notification_departure_status_format, "3 min", context.getString(R.string.routine_details_departure_live))),
-            bigTextLines(notification),
-        )
+        assertEquals(listOf("3 min"), bigTextLines(notification))
+        assertFalse(contentText(notification).contains("Live"))
     }
 
     @Test
