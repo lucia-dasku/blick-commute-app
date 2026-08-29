@@ -1079,6 +1079,21 @@ class RoutineDetailsScreenTest {
     }
 
     @Test
+    fun noUpcomingDepartures_showsOnlyThePrimaryRefreshButton() {
+        setContent(
+            disruptionsState = DisruptionsState.NoDisruptions,
+            departuresState = LiveDeparturesState.NoUpcomingDepartures(Instant.parse("2026-08-02T07:00:00Z")),
+        )
+
+        composeRule.onNodeWithText(
+            composeRule.activity.getString(R.string.routine_details_no_departures),
+        ).assertExists()
+        composeRule.onAllNodesWithText(
+            composeRule.activity.getString(R.string.routine_details_refresh_action),
+        ).assertCountEquals(1)
+    }
+
+    @Test
     fun pauseTodayButton_showsResumeTodayWhenAlreadyPausedToday() {
         setContent(DisruptionsState.NoDisruptions, isPausedToday = true)
 

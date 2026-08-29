@@ -20,6 +20,7 @@ import androidx.compose.foundation.lazy.grid.LazyVerticalGrid
 import androidx.compose.foundation.lazy.grid.items as gridItems
 import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.Button
+import androidx.compose.material3.ButtonDefaults
 import androidx.compose.material3.Card
 import androidx.compose.material3.CardDefaults
 import androidx.compose.material3.CircularProgressIndicator
@@ -47,6 +48,7 @@ import androidx.hilt.navigation.compose.hiltViewModel
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import se.blick.app.R
 import se.blick.app.ui.theme.LocalStockholmNightTheme
+import se.blick.app.ui.theme.RoutineDestructiveRed
 import se.blick.app.ui.theme.StockholmNightSurfaces
 import se.blick.app.domain.model.OneTimeEvent
 import se.blick.app.domain.model.OneTimeEventLabel
@@ -343,8 +345,15 @@ internal fun OneTimeEventDetailsContent(
                     }
                 }
                 item {
-                    TextButton(onClick = { confirmDelete = true }, modifier = Modifier.fillMaxWidth()) {
-                        Text(stringResource(R.string.one_time_event_delete_action), color = MaterialTheme.colorScheme.error)
+                    Button(
+                        onClick = { confirmDelete = true },
+                        colors = ButtonDefaults.buttonColors(
+                            containerColor = RoutineDestructiveRed,
+                            contentColor = Color.White,
+                        ),
+                        modifier = Modifier.fillMaxWidth(),
+                    ) {
+                        Text(stringResource(R.string.one_time_event_delete_action))
                     }
                 }
             }

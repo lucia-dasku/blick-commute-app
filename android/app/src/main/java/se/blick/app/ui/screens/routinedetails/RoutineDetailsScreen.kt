@@ -1205,7 +1205,10 @@ private fun DeparturesSection(
             Spacer(Modifier.height(8.dp))
             DeparturesList(state.snapshot.departures, transportMode, locale)
         }
-        is LiveDeparturesState.NoUpcomingDepartures -> RetryableMessage(R.string.routine_details_no_departures, onRefresh)
+        is LiveDeparturesState.NoUpcomingDepartures -> Text(
+            stringResource(R.string.routine_details_no_departures),
+            style = MaterialTheme.typography.bodyMedium,
+        )
         is LiveDeparturesState.Offline -> RetryableMessage(R.string.routine_details_offline, onRefresh)
         is LiveDeparturesState.Unavailable -> RetryableMessage(R.string.routine_details_unavailable, onRefresh)
     }
