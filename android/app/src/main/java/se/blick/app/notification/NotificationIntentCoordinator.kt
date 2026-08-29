@@ -1,6 +1,9 @@
 package se.blick.app.notification
 
 import android.content.Intent
+import se.blick.app.domain.model.ActiveCommuteSource
+import se.blick.app.domain.model.ActiveCommuteSourceType
+import se.blick.app.domain.model.activeCommuteSource
 
 /**
  * Ensures a notification-tap [Intent] is only ever processed once.
@@ -26,6 +29,17 @@ import android.content.Intent
  * without needing a full Activity, Hilt component, or Compose Navigation test harness.
  */
 object NotificationIntentCoordinator {
+
+    /** Consumes the explicit source type/id carried by the single active commute notification. */
+    fun consumeActiveCommuteSource(intent: Intent): ActiveCommuteSource? {
+        val encodedType = intent.getStringExtra(RoutineNotificationIds.EXTRA_ACTIVE_COMMUTE_SOURCE_TYPE)
+        val sourceId = intent.getStringExtra(RoutineNotificationIds.EXTRA_ACTIVE_COMMUTE_SOURCE_ID)
+        intent.removeExtra(RoutineNotificationIds.EXTRA_ACTIVE_COMMUTE_SOURCE_TYPE)
+        intent.removeExtra(RoutineNotificationIds.EXTRA_ACTIVE_COMMUTE_SOURCE_ID)
+        if (encodedType == null || sourceId == null) return null
+        val type = runCatching { ActiveCommuteSourceType.valueOf(encodedType) }.getOrNull() ?: return null
+        return activeCommuteSource(type, sourceId)
+    }
 
     /**
      * Returns the routine id carried by [intent] (or null if it carries none) and removes it

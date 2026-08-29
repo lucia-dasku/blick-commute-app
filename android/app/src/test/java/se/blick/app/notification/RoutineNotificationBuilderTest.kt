@@ -160,7 +160,8 @@ class RoutineNotificationBuilderTest {
         val notification = builder.build(model(routineId = "r-42"))
         val savedIntent = shadowOf(notification.contentIntent).savedIntent
         assertEquals(MainActivity::class.java.name, savedIntent.component?.className)
-        assertEquals("r-42", savedIntent.getStringExtra(RoutineNotificationIds.EXTRA_ROUTINE_ID))
+        assertEquals("ROUTINE", savedIntent.getStringExtra(RoutineNotificationIds.EXTRA_ACTIVE_COMMUTE_SOURCE_TYPE))
+        assertEquals("r-42", savedIntent.getStringExtra(RoutineNotificationIds.EXTRA_ACTIVE_COMMUTE_SOURCE_ID))
     }
 
     @Test
@@ -168,7 +169,7 @@ class RoutineNotificationBuilderTest {
         builder.build(model(routineId = "r1"))
         val second = builder.build(model(routineId = "r2"))
         val savedIntent = shadowOf(second.contentIntent).savedIntent
-        assertEquals("r2", savedIntent.getStringExtra(RoutineNotificationIds.EXTRA_ROUTINE_ID))
+        assertEquals("r2", savedIntent.getStringExtra(RoutineNotificationIds.EXTRA_ACTIVE_COMMUTE_SOURCE_ID))
     }
 
     // ---- Stop action ("Stop/Unpin" control) ----

@@ -7,6 +7,7 @@ import org.junit.Test
 import org.junit.runner.RunWith
 import org.robolectric.RobolectricTestRunner
 import org.robolectric.annotation.Config
+import se.blick.app.domain.model.ActiveCommuteSource
 
 /**
  * Robolectric-backed tests against a REAL [Intent]/[android.os.Bundle] — not a mock — since
@@ -18,6 +19,40 @@ import org.robolectric.annotation.Config
 @RunWith(RobolectricTestRunner::class)
 @Config(sdk = [34], application = android.app.Application::class)
 class NotificationIntentCoordinatorTest {
+
+    @Test
+    fun `active commute intent consumes an explicit routine source exactly once`() {
+        val intent = Intent()
+            .putExtra(RoutineNotificationIds.EXTRA_ACTIVE_COMMUTE_SOURCE_TYPE, "ROUTINE")
+            .putExtra(RoutineNotificationIds.EXTRA_ACTIVE_COMMUTE_SOURCE_ID, "r1")
+
+        assertEquals(ActiveCommuteSource.Routine("r1"), NotificationIntentCoordinator.consumeActiveCommuteSource(intent))
+        assertNull(NotificationIntentCoordinator.consumeActiveCommuteSource(intent))
+    }
+
+    @Test
+    fun `active commute intent consumes an explicit event source exactly once`() {
+        val intent = Intent()
+            .putExtra(RoutineNotificationIds.EXTRA_ACTIVE_COMMUTE_SOURCE_TYPE, "ONE_TIME_EVENT")
+            .putExtra(RoutineNotificationIds.EXTRA_ACTIVE_COMMUTE_SOURCE_ID, "e1")
+
+        assertEquals(
+            ActiveCommuteSource.OneTimeEvent("e1"),
+            NotificationIntentCoordinator.consumeActiveCommuteSource(intent),
+        )
+        assertNull(NotificationIntentCoordinator.consumeActiveCommuteSource(intent))
+    }
+
+    @Test
+    fun `malformed active source is consumed and fails closed`() {
+        val intent = Intent()
+            .putExtra(RoutineNotificationIds.EXTRA_ACTIVE_COMMUTE_SOURCE_TYPE, "UNKNOWN")
+            .putExtra(RoutineNotificationIds.EXTRA_ACTIVE_COMMUTE_SOURCE_ID, "x")
+
+        assertNull(NotificationIntentCoordinator.consumeActiveCommuteSource(intent))
+        assertNull(intent.getStringExtra(RoutineNotificationIds.EXTRA_ACTIVE_COMMUTE_SOURCE_TYPE))
+        assertNull(intent.getStringExtra(RoutineNotificationIds.EXTRA_ACTIVE_COMMUTE_SOURCE_ID))
+    }
 
     @Test
     fun `consumeRoutineId returns the routine id extra`() {

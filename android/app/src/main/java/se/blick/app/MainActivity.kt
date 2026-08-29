@@ -20,6 +20,7 @@ import se.blick.app.data.local.datastore.AppSettingsDataStore
 import se.blick.app.locale.withAppLocale
 import se.blick.app.notification.NotificationIntentCoordinator
 import se.blick.app.notification.RoutineNotificationIds
+import se.blick.app.domain.model.ActiveCommuteSource
 import se.blick.app.ui.navigation.BlickNavHost
 import se.blick.app.ui.navigation.Routes
 import se.blick.app.ui.theme.BlickTheme
@@ -32,19 +33,19 @@ import javax.inject.Inject
  *
  * Handles tapping the ongoing commute notification (see
  * `notification/RoutineNotificationBuilder.contentIntent`), which targets this Activity with
- * a [RoutineNotificationIds.EXTRA_ROUTINE_ID] extra and `FLAG_ACTIVITY_SINGLE_TOP` — so an
+ * explicit active-commute source type/id and `FLAG_ACTIVITY_SINGLE_TOP` — so an
  * already-running instance receives [onNewIntent] instead of a second instance being
- * created. [pendingRoutineId] is populated by both [onCreate] (cold start: the routine id
- * arrives via the launching [getIntent]) and [onNewIntent] (warm/hot start), via
- * [NotificationIntentCoordinator.consumeRoutineId] — which both reads AND removes the extra
+ * created. The pending Routine/Event destination is populated by both [onCreate] (cold start)
+ * and [onNewIntent] (warm/hot start), via
+ * [NotificationIntentCoordinator.consumeActiveCommuteSource] — which reads AND removes the extras
  * from the underlying `Intent` in one step. That removal matters: `Activity.getIntent()`
  * returns the SAME `Intent` object across an in-process recreation (e.g. a screen rotation),
  * so without removing the extra, a later `onCreate` after such a recreation would observe the
- * exact same routine id again and silently re-navigate the user back to a routine they may
+ * exact same source again and silently re-navigate the user back to details they may
  * have already left — see [NotificationIntentCoordinator]'s own doc and
  * `NotificationIntentCoordinatorTest` for the regression this fixes.
  *
- * [pendingRoutineId] is consumed by a [LaunchedEffect] inside the Compose tree that actually
+ * The pending destination is consumed by a [LaunchedEffect] inside the Compose tree that actually
  * owns the [androidx.navigation.NavHostController] — an Activity method can't call
  * `navController.navigate` directly since the controller only exists inside composition.
  *
@@ -107,8 +108,7 @@ class MainActivity : AppCompatActivity() {
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
         enableEdgeToEdge()
-        pendingRoutineId = NotificationIntentCoordinator.consumeRoutineId(intent)
-        pendingOneTimeEventId = consumeOneTimeEventId(intent)
+        consumeNotificationNavigation(intent)
         setContent {
             val appSettings by appSettingsDataStore.settings.collectAsStateWithLifecycle(
                 initialValue = AppSettings(),
@@ -146,8 +146,20 @@ class MainActivity : AppCompatActivity() {
     override fun onNewIntent(intent: Intent) {
         super.onNewIntent(intent)
         setIntent(intent)
-        pendingRoutineId = NotificationIntentCoordinator.consumeRoutineId(intent)
-        pendingOneTimeEventId = consumeOneTimeEventId(intent)
+        consumeNotificationNavigation(intent)
+    }
+
+    private fun consumeNotificationNavigation(intent: Intent) {
+        when (val source = NotificationIntentCoordinator.consumeActiveCommuteSource(intent)) {
+            is ActiveCommuteSource.Routine -> pendingRoutineId = source.id
+            is ActiveCommuteSource.OneTimeEvent -> pendingOneTimeEventId = source.id
+            null -> {
+                // Backward compatibility for an already-posted notification created by an
+                // older app version, plus the separate event-day reminder notification.
+                pendingRoutineId = NotificationIntentCoordinator.consumeRoutineId(intent)
+                pendingOneTimeEventId = consumeOneTimeEventId(intent)
+            }
+        }
     }
 
     private fun consumeOneTimeEventId(intent: Intent): String? =

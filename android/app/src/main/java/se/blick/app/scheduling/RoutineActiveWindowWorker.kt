@@ -19,9 +19,10 @@ import kotlinx.coroutines.withTimeoutOrNull
 import se.blick.app.data.repository.RoutineOccurrenceRuntimeRepository
 import se.blick.app.data.repository.RoutineOccurrenceRuntimeState
 import se.blick.app.data.repository.RoutineRepository
-import se.blick.app.data.repository.RoutineWorkOwnershipRepository
+import se.blick.app.data.repository.ActiveCommuteOwnershipRepository
 import se.blick.app.data.repository.StaleSnapshotRepository
 import se.blick.app.domain.model.CommuteRoutine
+import se.blick.app.domain.model.ActiveCommuteSource
 import se.blick.app.domain.model.Disruption
 import se.blick.app.domain.model.toPresentation
 import se.blick.app.domain.usecase.DisruptionsState
@@ -245,7 +246,7 @@ internal fun effectiveHardCapMinutes(routine: CommuteRoutine, windowStart: Zoned
  * retry keeps the same authoritative request and the next execution reuses the original runtime
  * accounting. [routineNotifier.remove] runs in a `finally`, whichever of these paths is taken —
  * but ONLY if this run is still the recorded content owner at that point
- * (see [claimContentOwnership] and [se.blick.app.data.repository.RoutineWorkOwnershipRepository]'s
+ * (see [claimContentOwnership] and [se.blick.app.data.repository.ActiveCommuteOwnershipRepository]'s
  * own doc): a cancelled run that has since been superseded by a replacement (e.g. editing this
  * active routine, which cancels this worker and immediately starts a new one for the same
  * routine id) must never let its own cleanup clear content the replacement has already posted.
@@ -258,14 +259,14 @@ internal fun effectiveHardCapMinutes(routine: CommuteRoutine, windowStart: Zoned
  * must succeed, before this worker posts anything at all — reversing that order (claim only
  * once content has already been posted) leaves a window where a REPLACEMENT run's freshly-posted
  * notification is on screen but the ownership record still names the OLD run, so the old run's
- * own `finally` (checking [se.blick.app.data.repository.RoutineWorkOwnershipRepository.isOwner])
+ * own `finally` (checking [se.blick.app.data.repository.ActiveCommuteOwnershipRepository.isOwner])
  * would wrongly see itself as still the owner and delete the replacement's content out from under
  * it. Claiming first closes that window: by the time any content exists, the ownership record
  * already names whichever run posted it. A failed claim is treated as a required precondition,
  * not a best-effort step — this run refuses to enter foreground execution at all rather than post
  * content it cannot prove it owns (see [claimContentOwnership]'s own doc). Once ownership is
  * claimed, the `finally` block's cleanup runs unconditionally (gated only by
- * [se.blick.app.data.repository.RoutineWorkOwnershipRepository.isOwner], never by whether
+ * [se.blick.app.data.repository.ActiveCommuteOwnershipRepository.isOwner], never by whether
  * [setForeground] itself went on to succeed) — so if [setForeground] throws right after a
  * successful claim, this run still safely reconciles whatever content exists via the exact same
  * ownership-aware mechanism, rather than a separate path.
@@ -298,7 +299,7 @@ class RoutineActiveWindowWorker @AssistedInject constructor(
     private val routineScheduler: RoutineScheduler,
     private val notificationAvailabilityChecker: NotificationAvailabilityChecker,
     private val notificationRecoveryReporter: NotificationRecoveryReporter,
-    private val routineWorkOwnershipRepository: RoutineWorkOwnershipRepository,
+    private val activeCommuteOwnershipRepository: ActiveCommuteOwnershipRepository,
     private val routineOccurrenceRuntimeRepository: RoutineOccurrenceRuntimeRepository,
     private val clock: Clock,
     private val deviceZoneProvider: DeviceZoneProvider,
@@ -881,7 +882,10 @@ class RoutineActiveWindowWorker @AssistedInject constructor(
             // clear against unknown ownership -- see this worker's own class doc.
             val stillOwnsContent = withContext(NonCancellable) {
                 try {
-                    routineWorkOwnershipRepository.isOwner(routineId, id.toString())
+                    activeCommuteOwnershipRepository.isOwner(
+                        ActiveCommuteSource.Routine(routineId),
+                        id.toString(),
+                    )
                 } catch (e: CancellationException) {
                     throw e
                 } catch (e: Exception) {
@@ -907,6 +911,18 @@ class RoutineActiveWindowWorker @AssistedInject constructor(
                     runWidgetUpdateSafely { routineWidgetUpdater.reconcile() }
                 } else {
                     runWidgetUpdateSafely { routineWidgetUpdater.clear() }
+                }
+                withContext(NonCancellable) {
+                    try {
+                        activeCommuteOwnershipRepository.releaseIfOwner(
+                            ActiveCommuteSource.Routine(routineId),
+                            id.toString(),
+                        )
+                    } catch (e: CancellationException) {
+                        throw e
+                    } catch (e: Exception) {
+                        Log.w(LOG_TAG, "Failed to release active commute ownership for routine $routineId", e)
+                    }
                 }
             }
         }
@@ -1011,10 +1027,10 @@ class RoutineActiveWindowWorker @AssistedInject constructor(
     }
 
     /** Claims this run as the current content owner for [routineId] — see
-     * `data/local/room/RoutineWorkOwnershipEntity.kt`'s own doc for exactly what this protects
+     * `data/local/room/ActiveCommuteOwnershipEntity.kt`'s own doc for exactly what this protects
      * against. Called once, as early as possible — BEFORE [setForeground]/any content is posted,
      * not after: claiming first is what guarantees an old run's own `finally` (which checks
-     * [RoutineWorkOwnershipRepository.isOwner]) can never observe itself as "still the owner"
+     * [ActiveCommuteOwnershipRepository.isOwner]) can never observe itself as "still the owner"
      * while this run's replacement content is on screen but not yet recorded as such. Required,
      * not best-effort: unlike most other cleanup/bookkeeping calls in this worker, a FAILED claim
      * here means this run has no confirmed right to the content it's about to post, so
@@ -1022,7 +1038,10 @@ class RoutineActiveWindowWorker @AssistedInject constructor(
      * like the runtime-state read/write failures earlier in [doWork]. */
     private suspend fun claimContentOwnership(routineId: String): Boolean {
         return try {
-            routineWorkOwnershipRepository.claim(routineId, id.toString())
+            activeCommuteOwnershipRepository.claim(
+                ActiveCommuteSource.Routine(routineId),
+                id.toString(),
+            )
             true
         } catch (e: CancellationException) {
             throw e

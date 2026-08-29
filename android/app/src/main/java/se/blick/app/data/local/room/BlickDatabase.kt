@@ -12,8 +12,9 @@ import androidx.sqlite.db.SupportSQLiteDatabase
         RoutineWorkOwnershipEntity::class,
         RoutineOccurrenceRuntimeEntity::class,
         OneTimeEventEntity::class,
+        ActiveCommuteOwnershipEntity::class,
     ],
-    version = 9,
+    version = 10,
     exportSchema = true,
 )
 abstract class BlickDatabase : RoomDatabase() {
@@ -22,6 +23,24 @@ abstract class BlickDatabase : RoomDatabase() {
     abstract fun routineWorkOwnershipDao(): RoutineWorkOwnershipDao
     abstract fun routineOccurrenceRuntimeDao(): RoutineOccurrenceRuntimeDao
     abstract fun oneTimeEventDao(): OneTimeEventDao
+    abstract fun activeCommuteOwnershipDao(): ActiveCommuteOwnershipDao
+}
+
+/** Adds one durable global ownership row without modifying existing routine/event data. */
+val MIGRATION_9_10: Migration = object : Migration(9, 10) {
+    override fun migrate(db: SupportSQLiteDatabase) {
+        db.execSQL(
+            """
+            CREATE TABLE IF NOT EXISTS `active_commute_ownership` (
+                `singletonId` INTEGER NOT NULL,
+                `sourceType` TEXT NOT NULL,
+                `sourceId` TEXT NOT NULL,
+                `ownerRunId` TEXT NOT NULL,
+                PRIMARY KEY(`singletonId`)
+            )
+            """.trimIndent(),
+        )
+    }
 }
 
 /** Adds dedicated one-time transport intentions without changing any existing routine row. */

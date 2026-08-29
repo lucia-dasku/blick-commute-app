@@ -31,9 +31,11 @@ import se.blick.app.data.repository.JourneyRepository
 import se.blick.app.data.repository.RoutineOccurrenceRuntimeRepository
 import se.blick.app.data.repository.RoutineOccurrenceRuntimeState
 import se.blick.app.data.repository.RoutineRepository
-import se.blick.app.data.repository.RoutineWorkOwnershipRepository
+import se.blick.app.data.repository.ActiveCommuteOwnership
+import se.blick.app.data.repository.ActiveCommuteOwnershipRepository
 import se.blick.app.data.repository.StaleSnapshotRepository
 import se.blick.app.domain.model.CommuteRoutine
+import se.blick.app.domain.model.ActiveCommuteSource
 import se.blick.app.domain.model.DeparturesResult
 import se.blick.app.domain.model.Departure
 import se.blick.app.domain.model.Disruption
@@ -590,12 +592,14 @@ class RoutineActiveWindowWorkerTest {
      * to prove a superseded run's `finally`-block cleanup is correctly suppressed instead. */
     private class FakeRoutineWorkOwnershipRepository(
         private val isOwnerResult: Boolean = true,
-    ) : RoutineWorkOwnershipRepository {
+    ) : ActiveCommuteOwnershipRepository {
         val claimedIds = mutableListOf<Pair<String, String>>()
-        override suspend fun claim(routineId: String, workId: String) {
-            claimedIds += routineId to workId
+        override suspend fun claim(source: ActiveCommuteSource, ownerRunId: String) {
+            claimedIds += source.id to ownerRunId
         }
-        override suspend fun isOwner(routineId: String, workId: String): Boolean = isOwnerResult
+        override suspend fun currentOwner(): ActiveCommuteOwnership? = null
+        override suspend fun isOwner(source: ActiveCommuteSource, ownerRunId: String): Boolean = isOwnerResult
+        override suspend fun releaseIfOwner(source: ActiveCommuteSource, ownerRunId: String): Boolean = isOwnerResult
     }
 
     private fun buildWorker(
@@ -612,7 +616,7 @@ class RoutineActiveWindowWorkerTest {
         widgetUpdater: RoutineWidgetUpdater = RecordingWidgetUpdater(),
         getDisruptions: GetDisruptionsUseCase = GetDisruptionsUseCase(FakeDisruptionRepository()),
         notificationRecoveryReporter: NotificationRecoveryReporter = FakeNotificationRecoveryReporter(),
-        routineWorkOwnershipRepository: RoutineWorkOwnershipRepository = FakeRoutineWorkOwnershipRepository(),
+        routineWorkOwnershipRepository: ActiveCommuteOwnershipRepository = FakeRoutineWorkOwnershipRepository(),
         routineOccurrenceRuntimeRepository: RoutineOccurrenceRuntimeRepository = FakeRoutineOccurrenceRuntimeRepository(),
         elapsedRealtimeProvider: ElapsedRealtimeProvider = FakeElapsedRealtimeProvider(),
         bootCountProvider: BootCountProvider = FakeBootCountProvider(),
@@ -2941,15 +2945,20 @@ class RoutineActiveWindowWorkerTest {
      * gated, so it can finish claiming and posting before the test starts the replacement). */
     private class SecondClaimGatedOwnershipRepository(
         private val gate: CompletableDeferred<Unit>,
-    ) : RoutineWorkOwnershipRepository {
-        private var currentOwner: String? = null
+    ) : ActiveCommuteOwnershipRepository {
+        private var owner: ActiveCommuteOwnership? = null
         private var claimCount = 0
-        override suspend fun claim(routineId: String, workId: String) {
+        override suspend fun claim(source: ActiveCommuteSource, ownerRunId: String) {
             claimCount++
-            currentOwner = workId
+            owner = ActiveCommuteOwnership(source, ownerRunId)
             if (claimCount == 2) gate.await()
         }
-        override suspend fun isOwner(routineId: String, workId: String): Boolean = currentOwner == workId
+        override suspend fun currentOwner(): ActiveCommuteOwnership? = owner
+        override suspend fun releaseIfOwner(source: ActiveCommuteSource, ownerRunId: String): Boolean {
+            if (owner != ActiveCommuteOwnership(source, ownerRunId)) return false
+            owner = null
+            return true
+        }
     }
 
     @Test

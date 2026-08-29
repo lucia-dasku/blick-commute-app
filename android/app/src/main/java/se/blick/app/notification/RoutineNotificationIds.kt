@@ -14,6 +14,9 @@ internal object RoutineNotificationIds {
     /** Intent extra key carrying the routine id to reopen — read by [se.blick.app.MainActivity]. */
     const val EXTRA_ROUTINE_ID = "se.blick.app.EXTRA_ROUTINE_ID"
 
+    const val EXTRA_ACTIVE_COMMUTE_SOURCE_TYPE = "se.blick.app.EXTRA_ACTIVE_COMMUTE_SOURCE_TYPE"
+    const val EXTRA_ACTIVE_COMMUTE_SOURCE_ID = "se.blick.app.EXTRA_ACTIVE_COMMUTE_SOURCE_ID"
+
     /** A single stable request code: there is only ever one notification, so only one
      * content [android.app.PendingIntent] ever needs to exist. Combined with
      * `FLAG_UPDATE_CURRENT`, rebuilding it on every [RoutineNotifier.showOrUpdate] call

@@ -15,6 +15,8 @@ import se.blick.app.data.local.room.MIGRATION_5_6
 import se.blick.app.data.local.room.MIGRATION_6_7
 import se.blick.app.data.local.room.MIGRATION_7_8
 import se.blick.app.data.local.room.MIGRATION_8_9
+import se.blick.app.data.local.room.MIGRATION_9_10
+import se.blick.app.data.local.room.ActiveCommuteOwnershipDao
 import se.blick.app.data.local.room.OneTimeEventDao
 import se.blick.app.data.local.room.RoutineDao
 import se.blick.app.data.local.room.BlickDatabase
@@ -40,6 +42,7 @@ object DatabaseModule {
                 MIGRATION_6_7,
                 MIGRATION_7_8,
                 MIGRATION_8_9,
+                MIGRATION_9_10,
             )
             .build()
 
@@ -59,4 +62,8 @@ object DatabaseModule {
 
     @Provides
     fun provideOneTimeEventDao(database: BlickDatabase): OneTimeEventDao = database.oneTimeEventDao()
+
+    @Provides
+    fun provideActiveCommuteOwnershipDao(database: BlickDatabase): ActiveCommuteOwnershipDao =
+        database.activeCommuteOwnershipDao()
 }

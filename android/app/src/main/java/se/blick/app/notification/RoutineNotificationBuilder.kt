@@ -11,6 +11,7 @@ import dagger.hilt.android.qualifiers.ApplicationContext
 import se.blick.app.MainActivity
 import se.blick.app.R
 import se.blick.app.domain.model.DisruptionEffect
+import se.blick.app.domain.model.ActiveCommuteSourceType
 import se.blick.app.domain.model.JourneyRole
 import se.blick.app.domain.model.RoutineType
 import se.blick.app.domain.model.TransportMode
@@ -402,7 +403,8 @@ class RoutineNotificationBuilder @Inject constructor(
     private fun contentIntent(routineId: String): PendingIntent {
         val intent = Intent(context, MainActivity::class.java).apply {
             flags = Intent.FLAG_ACTIVITY_SINGLE_TOP
-            putExtra(RoutineNotificationIds.EXTRA_ROUTINE_ID, routineId)
+            putExtra(RoutineNotificationIds.EXTRA_ACTIVE_COMMUTE_SOURCE_TYPE, ActiveCommuteSourceType.ROUTINE.name)
+            putExtra(RoutineNotificationIds.EXTRA_ACTIVE_COMMUTE_SOURCE_ID, routineId)
         }
         return PendingIntent.getActivity(
             context,
