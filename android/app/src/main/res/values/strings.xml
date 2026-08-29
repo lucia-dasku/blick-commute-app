@@ -462,17 +462,24 @@
     <string name="one_time_event_validation_past">Choose a future date and time.</string>
     <string name="one_time_event_validation_same_location">Origin and destination must be different.</string>
     <string name="one_time_event_save_error">Couldn’t save the event. Try again.</string>
-    <string name="one_time_event_preview_title">Journey preview</string>
-    <string name="one_time_event_preview_future">Future timetable information is not presented as live. Open this event on its date to review the transport plan.</string>
-    <string name="one_time_event_planned_label">PLANNED</string>
-    <string name="one_time_event_planned_title">Planned journey</string>
+    <string name="one_time_event_preview_title">Plan after saving</string>
+    <string name="one_time_event_preview_future">Your preliminary journey plan will appear immediately after you save the event.</string>
+    <string name="one_time_event_preliminary_plan_title">Preliminary plan</string>
+    <string name="one_time_event_today_plan_title">Today’s plan</string>
+    <string name="one_time_event_plan_recommended">Recommended</string>
+    <string name="one_time_event_plan_next_option">Next option</string>
+    <string name="one_time_event_plan_alternative">Alternative</string>
+    <string name="one_time_event_plan_updated">Updated %1$s</string>
     <string name="one_time_event_planned_refresh">Refresh</string>
     <string name="one_time_event_planned_retry">Retry</string>
-    <string name="one_time_event_planned_error">Couldn’t load the planned journey.</string>
+    <string name="one_time_event_planned_error">Couldn’t load the plan.</string>
     <string name="one_time_event_planned_no_journey">No planned journey found for this time.</string>
     <string name="one_time_event_planned_expired">This event has passed.</string>
     <string name="one_time_event_planned_premium_required">Premium is required to view the planned journey.</string>
-    <string name="one_time_event_planned_explanation">Based on the current timetable. Check again closer to departure.</string>
+    <string name="one_time_event_preliminary_plan_disclaimer">This is a preliminary plan. Timetables may change. On the day of your event, Blick will show an updated plan with current service disruptions.</string>
+    <string name="one_time_event_today_plan_explanation">Based on the latest available timetable and current service information. Refresh to check again.</string>
+    <string name="one_time_event_disruptions_loading">Checking current service information…</string>
+    <string name="one_time_event_disruptions_unavailable">Current service information couldn’t be loaded.</string>
     <string name="one_time_event_planned_time_range">%1$s → %2$s</string>
     <string name="one_time_event_upcoming_title">Upcoming events</string>
     <string name="one_time_event_view_all">View all</string>
@@ -491,5 +498,5 @@
     <string name="one_time_event_locked">Premium event</string>
     <string name="one_time_event_notification_channel">One-time event reminders</string>
     <string name="one_time_event_today_notification_title">%1$s today</string>
-    <string name="one_time_event_today_notification_body">%1$s · Open Blick to review your transport plan.</string>
+    <string name="one_time_event_today_notification_body">Your travel plan is ready. Tap to view.</string>
 </resources>

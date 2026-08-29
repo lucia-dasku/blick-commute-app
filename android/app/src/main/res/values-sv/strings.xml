@@ -343,17 +343,24 @@
     <string name="one_time_event_validation_past">Välj ett framtida datum och klockslag.</string>
     <string name="one_time_event_validation_same_location">Start och destination måste vara olika.</string>
     <string name="one_time_event_save_error">Det gick inte att spara händelsen. Försök igen.</string>
-    <string name="one_time_event_preview_title">Reseförhandsvisning</string>
-    <string name="one_time_event_preview_future">Framtida tidtabellsinformation visas inte som live. Öppna händelsen på resdagen för att granska resplanen.</string>
-    <string name="one_time_event_planned_label">PLANERAD</string>
-    <string name="one_time_event_planned_title">Planerad resa</string>
+    <string name="one_time_event_preview_title">Plan efter att du sparat</string>
+    <string name="one_time_event_preview_future">Din preliminära resplan visas direkt när du har sparat händelsen.</string>
+    <string name="one_time_event_preliminary_plan_title">Preliminär plan</string>
+    <string name="one_time_event_today_plan_title">Dagens plan</string>
+    <string name="one_time_event_plan_recommended">Rekommenderad</string>
+    <string name="one_time_event_plan_next_option">Nästa alternativ</string>
+    <string name="one_time_event_plan_alternative">Alternativ</string>
+    <string name="one_time_event_plan_updated">Uppdaterad %1$s</string>
     <string name="one_time_event_planned_refresh">Uppdatera</string>
     <string name="one_time_event_planned_retry">Försök igen</string>
-    <string name="one_time_event_planned_error">Det gick inte att läsa in den planerade resan.</string>
+    <string name="one_time_event_planned_error">Det gick inte att läsa in planen.</string>
     <string name="one_time_event_planned_no_journey">Ingen planerad resa hittades för den här tiden.</string>
     <string name="one_time_event_planned_expired">Händelsen har passerat.</string>
     <string name="one_time_event_planned_premium_required">Premium krävs för att visa den planerade resan.</string>
-    <string name="one_time_event_planned_explanation">Baserad på den aktuella tidtabellen. Kontrollera igen närmare avresan.</string>
+    <string name="one_time_event_preliminary_plan_disclaimer">Det här är en preliminär plan. Tidtabeller kan ändras. På händelsedagen visar Blick en uppdaterad plan med aktuell trafikinformation.</string>
+    <string name="one_time_event_today_plan_explanation">Baserad på senast tillgängliga tidtabell och aktuell trafikinformation. Uppdatera för att kontrollera igen.</string>
+    <string name="one_time_event_disruptions_loading">Kontrollerar aktuell trafikinformation…</string>
+    <string name="one_time_event_disruptions_unavailable">Aktuell trafikinformation kunde inte läsas in.</string>
     <string name="one_time_event_planned_time_range">%1$s → %2$s</string>
     <string name="one_time_event_upcoming_title">Kommande händelser</string>
     <string name="one_time_event_view_all">Visa alla</string>
@@ -372,5 +379,5 @@
     <string name="one_time_event_locked">Premiumhändelse</string>
     <string name="one_time_event_notification_channel">Påminnelser om engångshändelser</string>
     <string name="one_time_event_today_notification_title">%1$s i dag</string>
-    <string name="one_time_event_today_notification_body">%1$s · Öppna Blick för att granska resplanen.</string>
+    <string name="one_time_event_today_notification_body">Din resplan är klar. Tryck för att visa den.</string>
 </resources>

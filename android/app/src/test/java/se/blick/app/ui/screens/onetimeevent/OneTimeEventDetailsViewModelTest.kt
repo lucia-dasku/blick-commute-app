@@ -40,6 +40,10 @@ import se.blick.app.domain.model.OneTimeEventLabel
 import se.blick.app.domain.model.OneTimeEventTimeType
 import se.blick.app.domain.model.PlannedJourneyResult
 import se.blick.app.domain.model.TransportMode
+import se.blick.app.domain.model.JourneyDisruptionContext
+import se.blick.app.domain.model.JourneyDisruptionNotice
+import se.blick.app.domain.model.ResolvedJourneyDisruption
+import se.blick.app.domain.usecase.GetJourneyDisruptionRelevanceUseCase
 
 @OptIn(ExperimentalCoroutinesApi::class)
 class OneTimeEventDetailsViewModelTest {
@@ -65,6 +69,66 @@ class OneTimeEventDetailsViewModelTest {
         assertEquals(JourneySearchMode.ARRIVE_BY, journeyRepository.requests.single().mode)
         val ready = viewModel.uiState.value.preview as PlannedJourneyPreviewState.Ready
         assertEquals("primary", ready.primary.journeyId)
+        assertEquals(EventPlanPresentation.PRELIMINARY, viewModel.uiState.value.presentation)
+        assertTrue(journeyRepository.disruptionRequests == 0)
+    }
+
+    @Test
+    fun `event on Stockholm today presents todays plan and resolves disruptions only after journey success`() = runTest(dispatcher.scheduler) {
+        val event = event(date = LocalDate.of(2026, 8, 10), time = LocalTime.of(18, 30))
+        val journeyRepository = FakeJourneyRepository().apply {
+            handler = { request -> plannedResult(request.mode, event) }
+        }
+        val viewModel = viewModel(event, journeyRepository)
+
+        advanceUntilIdle()
+
+        assertEquals(EventPlanPresentation.TODAY, viewModel.uiState.value.presentation)
+        assertTrue(viewModel.uiState.value.preview is PlannedJourneyPreviewState.Ready)
+        assertEquals(1, journeyRepository.disruptionRequests)
+        assertTrue(viewModel.uiState.value.disruptionState is EventPlanDisruptionState.Ready)
+    }
+
+    @Test
+    fun `event day disruption failure never removes the journey`() = runTest(dispatcher.scheduler) {
+        val event = event(date = LocalDate.of(2026, 8, 10), time = LocalTime.of(18, 30))
+        val journeyRepository = FakeJourneyRepository().apply {
+            handler = { request -> plannedResult(request.mode, event) }
+            disruptionHandler = { throw java.io.IOException("disruptions unavailable") }
+        }
+        val viewModel = viewModel(event, journeyRepository)
+
+        advanceUntilIdle()
+
+        assertTrue(viewModel.uiState.value.preview is PlannedJourneyPreviewState.Ready)
+        assertTrue(viewModel.uiState.value.disruptionState is EventPlanDisruptionState.Unavailable)
+    }
+
+    @Test
+    fun `event day refresh replaces the journey before resolving its disruptions`() = runTest(dispatcher.scheduler) {
+        val event = event(date = LocalDate.of(2026, 8, 10), time = LocalTime.of(18, 30))
+        var planNumber = 0
+        val journeyRepository = FakeJourneyRepository().apply {
+            handler = { request ->
+                planNumber++
+                plannedResult(
+                    request.mode,
+                    event,
+                    journeys = listOf(journey("primary-$planNumber")),
+                )
+            }
+        }
+        val viewModel = viewModel(event, journeyRepository)
+        advanceUntilIdle()
+
+        viewModel.refreshPreview()
+        advanceUntilIdle()
+
+        val ready = viewModel.uiState.value.preview as PlannedJourneyPreviewState.Ready
+        assertEquals("primary-2", ready.primary.journeyId)
+        assertEquals(2, journeyRepository.requests.size)
+        assertEquals(2, journeyRepository.disruptionRequests)
+        assertTrue(viewModel.uiState.value.disruptionState is EventPlanDisruptionState.Ready)
     }
 
     @Test
@@ -185,6 +249,7 @@ class OneTimeEventDetailsViewModelTest {
             savedStateHandle = SavedStateHandle(mapOf("eventId" to event.id)),
             repository = FakeEventRepository(event),
             journeyRepository = journeyRepository,
+            getJourneyDisruptionRelevance = GetJourneyDisruptionRelevanceUseCase(journeyRepository),
             entitlementRepository = entitlementRepository,
             clock = Clock.fixed(now, ZoneOffset.UTC),
         )
@@ -211,6 +276,7 @@ class OneTimeEventDetailsViewModelTest {
         savedStateHandle = SavedStateHandle(mapOf("eventId" to requireNotNull(eventRepository.current).id)),
         repository = eventRepository,
         journeyRepository = journeyRepository,
+        getJourneyDisruptionRelevance = GetJourneyDisruptionRelevanceUseCase(journeyRepository),
         entitlementRepository = FakeEntitlementRepository(entitlement),
         clock = Clock.fixed(now, ZoneOffset.UTC),
     )
@@ -286,7 +352,9 @@ class OneTimeEventDetailsViewModelTest {
 
     private class FakeJourneyRepository : JourneyRepository {
         val requests = mutableListOf<PlannedRequest>()
+        var disruptionRequests = 0
         var handler: suspend (PlannedRequest) -> PlannedJourneyResult = { throw AssertionError("Unexpected request") }
+        var disruptionHandler: suspend () -> List<ResolvedJourneyDisruption> = { emptyList() }
 
         override suspend fun searchLocations(query: String): List<JourneyLocation> = emptyList()
         override suspend fun getJourneys(
@@ -307,6 +375,20 @@ class OneTimeEventDetailsViewModelTest {
             val request = PlannedRequest(originId, destinationId, searchMode, requestedDateTime)
             requests += request
             return handler(request)
+        }
+
+        override suspend fun getRelevantDeviationNotices(
+            legs: List<JourneyLeg>,
+            originSiteId: Long?,
+            journeyPlannerNotices: List<JourneyDisruptionNotice>,
+            disruptionContext: JourneyDisruptionContext?,
+            departureTime: Instant?,
+            arrivalTime: Instant?,
+            journeyOriginId: String?,
+            journeyDestinationId: String?,
+        ): List<ResolvedJourneyDisruption> {
+            disruptionRequests++
+            return disruptionHandler()
         }
     }
 

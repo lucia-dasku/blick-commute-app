@@ -27,7 +27,6 @@ import se.blick.app.billing.PremiumEntitlementRepository
 import se.blick.app.billing.hasPremiumAccess
 import se.blick.app.data.repository.OneTimeEventRepository
 import se.blick.app.domain.model.OneTimeEvent
-import se.blick.app.domain.model.OneTimeEventTimeType
 import se.blick.app.domain.model.STOCKHOLM_ZONE
 import se.blick.app.locale.withAppLocale
 import java.time.Clock
@@ -91,31 +90,7 @@ class OneTimeEventReminderWorker @AssistedInject constructor(
 
         val localizedContext = applicationContext.withAppLocale()
         createChannel(localizedContext)
-        val time = event.time.toString()
-        val timing = localizedContext.getString(
-            if (event.timeType == OneTimeEventTimeType.ARRIVE_BY) {
-                R.string.one_time_event_arrive_by_value
-            } else {
-                R.string.one_time_event_leave_at_value
-            },
-            time,
-        )
-        val openApp = PendingIntent.getActivity(
-            localizedContext,
-            WorkManagerOneTimeEventScheduler.notificationId(event.id),
-            Intent(localizedContext, MainActivity::class.java)
-                .putExtra(EXTRA_ONE_TIME_EVENT_ID, event.id)
-                .addFlags(Intent.FLAG_ACTIVITY_SINGLE_TOP),
-            PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE,
-        )
-        val notification = NotificationCompat.Builder(localizedContext, CHANNEL_ID)
-            .setSmallIcon(R.drawable.ic_stat_blick)
-            .setContentTitle(localizedContext.getString(R.string.one_time_event_today_notification_title, event.name))
-            .setContentText(localizedContext.getString(R.string.one_time_event_today_notification_body, timing))
-            .setContentIntent(openApp)
-            .setAutoCancel(true)
-            .setCategory(NotificationCompat.CATEGORY_REMINDER)
-            .build()
+        val notification = buildOneTimeEventReminderNotification(localizedContext, event)
         if (
             Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU &&
             ContextCompat.checkSelfPermission(localizedContext, Manifest.permission.POST_NOTIFICATIONS) !=
@@ -148,7 +123,37 @@ class OneTimeEventReminderWorker @AssistedInject constructor(
 
     companion object {
         const val KEY_EVENT_ID = "oneTimeEventId"
-        const val EXTRA_ONE_TIME_EVENT_ID = "se.blick.app.extra.ONE_TIME_EVENT_ID"
         const val CHANNEL_ID = "blick_one_time_events"
     }
 }
+
+object OneTimeEventReminderNavigation {
+    const val EXTRA_ONE_TIME_EVENT_ID = "se.blick.app.extra.ONE_TIME_EVENT_ID"
+
+    fun putEventId(intent: Intent, eventId: String): Intent =
+        intent.putExtra(EXTRA_ONE_TIME_EVENT_ID, eventId)
+
+    fun consumeEventId(intent: Intent): String? =
+        intent.getStringExtra(EXTRA_ONE_TIME_EVENT_ID)
+            ?.also { intent.removeExtra(EXTRA_ONE_TIME_EVENT_ID) }
+}
+
+internal fun buildOneTimeEventReminderNotification(context: Context, event: OneTimeEvent) =
+    NotificationCompat.Builder(context, OneTimeEventReminderWorker.CHANNEL_ID)
+        .setSmallIcon(R.drawable.ic_stat_blick)
+        .setContentTitle(context.getString(R.string.one_time_event_today_notification_title, event.name))
+        .setContentText(context.getString(R.string.one_time_event_today_notification_body))
+        .setContentIntent(
+            PendingIntent.getActivity(
+                context,
+                WorkManagerOneTimeEventScheduler.notificationId(event.id),
+                OneTimeEventReminderNavigation.putEventId(
+                    Intent(context, MainActivity::class.java).addFlags(Intent.FLAG_ACTIVITY_SINGLE_TOP),
+                    event.id,
+                ),
+                PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE,
+            ),
+        )
+        .setAutoCancel(true)
+        .setCategory(NotificationCompat.CATEGORY_REMINDER)
+        .build()

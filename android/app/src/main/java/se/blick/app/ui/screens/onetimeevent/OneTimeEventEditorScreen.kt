@@ -62,12 +62,12 @@ import java.time.format.FormatStyle
 @Composable
 fun OneTimeEventEditorScreen(
     onBack: () -> Unit,
-    onDone: () -> Unit,
+    onDone: (String) -> Unit,
     onOpenPremium: () -> Unit,
     viewModel: OneTimeEventEditorViewModel = hiltViewModel(),
 ) {
     val state by viewModel.uiState.collectAsStateWithLifecycle()
-    LaunchedEffect(state.saved) { if (state.saved) onDone() }
+    LaunchedEffect(state.savedEventId) { state.savedEventId?.let(onDone) }
     OneTimeEventEditorContent(
         state = state,
         onBack = onBack,

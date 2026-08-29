@@ -25,7 +25,7 @@ import se.blick.app.ui.navigation.BlickNavHost
 import se.blick.app.ui.navigation.Routes
 import se.blick.app.ui.theme.BlickTheme
 import se.blick.app.ui.theme.shouldUseStockholmNightTheme
-import se.blick.app.scheduling.OneTimeEventReminderWorker
+import se.blick.app.scheduling.OneTimeEventReminderNavigation
 import javax.inject.Inject
 
 /**
@@ -163,6 +163,5 @@ class MainActivity : AppCompatActivity() {
     }
 
     private fun consumeOneTimeEventId(intent: Intent): String? =
-        intent.getStringExtra(OneTimeEventReminderWorker.EXTRA_ONE_TIME_EVENT_ID)
-            ?.also { intent.removeExtra(OneTimeEventReminderWorker.EXTRA_ONE_TIME_EVENT_ID) }
+        OneTimeEventReminderNavigation.consumeEventId(intent)
 }

@@ -50,6 +50,9 @@ import se.blick.app.ui.theme.StockholmNightSurfaces
 import se.blick.app.domain.model.OneTimeEvent
 import se.blick.app.domain.model.OneTimeEventLabel
 import se.blick.app.domain.model.OneTimeEventTimeType
+import se.blick.app.domain.model.JourneyPlan
+import se.blick.app.domain.model.JourneyRole
+import se.blick.app.domain.model.toPresentation
 import se.blick.app.domain.model.STOCKHOLM_ZONE
 import se.blick.app.locale.currentBlickLocale
 import se.blick.app.ui.components.BlickTopBar
@@ -59,6 +62,7 @@ import java.time.YearMonth
 import java.time.format.DateTimeFormatter
 import java.time.format.FormatStyle
 import java.time.format.TextStyle
+import java.time.format.DateTimeFormatterBuilder
 
 @Composable
 fun OneTimeEventsScreen(
@@ -295,6 +299,10 @@ fun OneTimeEventDetailsScreen(
                     PlannedJourneySection(
                         preview = state.preview,
                         locale = locale,
+                        presentation = state.presentation,
+                        isRefreshing = state.isRefreshing,
+                        refreshFailed = state.refreshFailed,
+                        disruptionState = state.disruptionState,
                         onRefresh = viewModel::refreshPreview,
                     )
                 }
@@ -334,6 +342,10 @@ fun OneTimeEventDetailsScreen(
 internal fun PlannedJourneySection(
     preview: PlannedJourneyPreviewState,
     locale: java.util.Locale,
+    presentation: EventPlanPresentation? = EventPlanPresentation.PRELIMINARY,
+    isRefreshing: Boolean = false,
+    refreshFailed: Boolean = false,
+    disruptionState: EventPlanDisruptionState = EventPlanDisruptionState.NotRequested,
     onRefresh: () -> Unit,
 ) {
     Column(verticalArrangement = Arrangement.spacedBy(10.dp)) {
@@ -343,27 +355,37 @@ internal fun PlannedJourneySection(
             verticalAlignment = Alignment.CenterVertically,
         ) {
             Column(verticalArrangement = Arrangement.spacedBy(4.dp)) {
-                if (preview is PlannedJourneyPreviewState.Ready) {
-                    Surface(
-                        color = MaterialTheme.colorScheme.primary.copy(alpha = 0.14f),
-                        contentColor = MaterialTheme.colorScheme.primary,
-                        shape = MaterialTheme.shapes.small,
-                    ) {
-                        Text(
-                            stringResource(R.string.one_time_event_planned_label),
-                            style = MaterialTheme.typography.labelSmall,
-                            modifier = Modifier.padding(horizontal = 8.dp, vertical = 3.dp),
-                        )
-                    }
-                }
                 Text(
-                    stringResource(R.string.one_time_event_planned_title),
+                    stringResource(
+                        if (presentation == EventPlanPresentation.TODAY) {
+                            R.string.one_time_event_today_plan_title
+                        } else {
+                            R.string.one_time_event_preliminary_plan_title
+                        },
+                    ),
                     style = MaterialTheme.typography.titleMedium,
                     fontWeight = FontWeight.SemiBold,
                 )
+                if (presentation == EventPlanPresentation.TODAY && preview is PlannedJourneyPreviewState.Ready) {
+                    Text(
+                        stringResource(
+                            R.string.one_time_event_plan_updated,
+                            DateTimeFormatterBuilder().appendPattern("HH:mm").toFormatter(locale)
+                                .withZone(STOCKHOLM_ZONE).format(preview.result.fetchedAt),
+                        ),
+                        style = MaterialTheme.typography.bodySmall,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    )
+                }
             }
             if (preview is PlannedJourneyPreviewState.Ready) {
-                TextButton(onClick = onRefresh) { Text(stringResource(R.string.one_time_event_planned_refresh)) }
+                TextButton(onClick = onRefresh, enabled = !isRefreshing) {
+                    if (isRefreshing) {
+                        CircularProgressIndicator(modifier = Modifier.size(18.dp), strokeWidth = 2.dp)
+                    } else {
+                        Text(stringResource(R.string.one_time_event_planned_refresh))
+                    }
+                }
             }
         }
         when (preview) {
@@ -373,9 +395,46 @@ internal fun PlannedJourneySection(
                 CircularProgressIndicator()
             }
             is PlannedJourneyPreviewState.Ready -> {
-                PlannedJourneyTimelineCard(preview.primary, locale)
+                val next = preview.result.journeys.firstOrNull { it.role == JourneyRole.NEXT }
+                val alternative = preview.result.journeys.firstOrNull { it.role == JourneyRole.ALTERNATIVE }
+                PlannedJourneyOption(
+                    title = stringResource(R.string.one_time_event_plan_recommended),
+                    journey = preview.primary,
+                    locale = locale,
+                    primary = true,
+                )
+                if (presentation == EventPlanPresentation.TODAY) {
+                    EventPlanDisruptions(disruptionState)
+                }
+                next?.let {
+                    PlannedJourneyOption(
+                        title = stringResource(R.string.one_time_event_plan_next_option),
+                        journey = it,
+                        locale = locale,
+                    )
+                }
+                alternative?.let {
+                    PlannedJourneyOption(
+                        title = stringResource(R.string.one_time_event_plan_alternative),
+                        journey = it,
+                        locale = locale,
+                    )
+                }
+                if (refreshFailed) {
+                    Text(
+                        stringResource(R.string.one_time_event_planned_error),
+                        style = MaterialTheme.typography.bodySmall,
+                        color = MaterialTheme.colorScheme.error,
+                    )
+                }
                 Text(
-                    stringResource(R.string.one_time_event_planned_explanation),
+                    stringResource(
+                        if (presentation == EventPlanPresentation.TODAY) {
+                            R.string.one_time_event_today_plan_explanation
+                        } else {
+                            R.string.one_time_event_preliminary_plan_disclaimer
+                        },
+                    ),
                     style = MaterialTheme.typography.bodySmall,
                     color = MaterialTheme.colorScheme.onSurfaceVariant,
                 )
@@ -394,6 +453,70 @@ internal fun PlannedJourneySection(
             PlannedJourneyPreviewState.PremiumRequired -> PlannedPreviewMessage(
                 text = stringResource(R.string.one_time_event_planned_premium_required),
             )
+        }
+    }
+}
+
+@Composable
+private fun PlannedJourneyOption(
+    title: String,
+    journey: JourneyPlan,
+    locale: java.util.Locale,
+    primary: Boolean = false,
+) {
+    Column(verticalArrangement = Arrangement.spacedBy(6.dp)) {
+        Text(
+            title,
+            style = if (primary) MaterialTheme.typography.titleSmall else MaterialTheme.typography.labelLarge,
+            fontWeight = if (primary) FontWeight.SemiBold else FontWeight.Medium,
+            color = if (primary) MaterialTheme.colorScheme.onSurface else MaterialTheme.colorScheme.onSurfaceVariant,
+        )
+        PlannedJourneyTimelineCard(journey, locale)
+    }
+}
+
+@Composable
+private fun EventPlanDisruptions(state: EventPlanDisruptionState) {
+    when (state) {
+        EventPlanDisruptionState.NotRequested -> Unit
+        EventPlanDisruptionState.Loading -> Row(
+            horizontalArrangement = Arrangement.spacedBy(8.dp),
+            verticalAlignment = Alignment.CenterVertically,
+        ) {
+            CircularProgressIndicator(modifier = Modifier.size(16.dp), strokeWidth = 2.dp)
+            Text(
+                stringResource(R.string.one_time_event_disruptions_loading),
+                style = MaterialTheme.typography.bodySmall,
+                color = MaterialTheme.colorScheme.onSurfaceVariant,
+            )
+        }
+        EventPlanDisruptionState.Unavailable -> Text(
+            stringResource(R.string.one_time_event_disruptions_unavailable),
+            style = MaterialTheme.typography.bodySmall,
+            color = MaterialTheme.colorScheme.onSurfaceVariant,
+        )
+        is EventPlanDisruptionState.Ready -> {
+            val disruptions = state.disruptions.distinctBy { it.id ?: it.headline }
+            if (disruptions.isNotEmpty()) {
+                Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                    disruptions.forEach { resolved ->
+                        val disruption = resolved.toPresentation()
+                        Surface(
+                            modifier = Modifier.fillMaxWidth(),
+                            shape = MaterialTheme.shapes.medium,
+                            color = MaterialTheme.colorScheme.errorContainer,
+                            contentColor = MaterialTheme.colorScheme.onErrorContainer,
+                        ) {
+                            Column(Modifier.padding(12.dp), verticalArrangement = Arrangement.spacedBy(4.dp)) {
+                                Text("⚠️ ${disruption.headline}", style = MaterialTheme.typography.bodyMedium)
+                                disruption.details?.let {
+                                    Text(it, style = MaterialTheme.typography.bodySmall)
+                                }
+                            }
+                        }
+                    }
+                }
+            }
         }
     }
 }

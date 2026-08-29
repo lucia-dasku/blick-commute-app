@@ -211,6 +211,30 @@ describe("journey routes", () => {
       expect(body.data.journeys.some((journey) => journey.journeyId === "after-deadline")).toBe(false);
     });
 
+    it("same-day ARRIVE_BY excludes a proposal that has already departed at fetchedAt", async () => {
+      const nowAt1815Stockholm = () => new Date("2026-08-10T16:15:00Z");
+      const { client } = scriptedClient([
+        [
+          rawJourney("departed", "2026-08-10T16:13:00Z", "2026-08-10T16:23:00Z", 0, "metro"),
+          rawJourney("catchable", "2026-08-10T16:20:00Z", "2026-08-10T16:29:00Z", 0, "metro"),
+        ],
+      ]);
+
+      const response = await createJourneyRoutes(client, nowAt1815Stockholm).request(
+        "/?originId=origin&destinationId=destination&searchMode=ARRIVE_BY&requestedDateTime=2026-08-10T18:30:00%2B02:00",
+      );
+      const body = (await response.json()) as SuccessEnvelope<JourneyResponse>;
+
+      expect(response.status).toBe(200);
+      expect(body.data.journeyContext).toBe("PLANNED");
+      expect(body.data.journeys.map((journey) => journey.journeyId)).toEqual(["catchable"]);
+      expect(body.data.journeys[0]).toMatchObject({
+        role: "PRIMARY",
+        departureTime: "2026-08-10T16:20:00Z",
+        arrivalTime: "2026-08-10T16:29:00Z",
+      });
+    });
+
     it("validates mode and timestamp combinations without calling SL", async () => {
       const { client, requests } = scriptedClient([]);
       const app = new Hono();

@@ -1,17 +1,22 @@
 package se.blick.app.scheduling
 
+import android.app.Notification
+import android.content.Intent
 import androidx.work.Configuration
 import androidx.work.WorkInfo
 import androidx.work.WorkManager
 import androidx.work.testing.SynchronousExecutor
 import androidx.work.testing.WorkManagerTestInitHelper
 import org.junit.Assert.assertEquals
+import org.junit.Assert.assertFalse
+import org.junit.Assert.assertNull
 import org.junit.Assert.assertTrue
 import org.junit.Before
 import org.junit.Test
 import org.junit.runner.RunWith
 import org.robolectric.RobolectricTestRunner
 import org.robolectric.RuntimeEnvironment
+import org.robolectric.Shadows.shadowOf
 import org.robolectric.annotation.Config
 import se.blick.app.domain.model.OneTimeEvent
 import se.blick.app.domain.model.OneTimeEventLabel
@@ -62,6 +67,36 @@ class WorkManagerOneTimeEventSchedulerTest {
             WorkManagerOneTimeEventScheduler.uniqueWorkName("event"),
         ).get()
         assertTrue(infos.none { it.state == WorkInfo.State.ENQUEUED })
+    }
+
+    @Test fun `reminder is ordinary auto cancel and opens the exact event without journey data`() {
+        val context = RuntimeEnvironment.getApplication()
+        val notification = buildOneTimeEventReminderNotification(context, event())
+
+        assertEquals("Concert today", notification.extras.getCharSequence(Notification.EXTRA_TITLE).toString())
+        assertEquals(
+            "Your travel plan is ready. Tap to view.",
+            notification.extras.getCharSequence(Notification.EXTRA_TEXT).toString(),
+        )
+        assertEquals(androidx.core.app.NotificationCompat.CATEGORY_REMINDER, notification.category)
+        assertTrue(notification.flags and Notification.FLAG_AUTO_CANCEL != 0)
+        assertFalse(notification.flags and Notification.FLAG_ONGOING_EVENT != 0)
+
+        val intent = shadowOf(notification.contentIntent).savedIntent
+        assertEquals(
+            setOf(OneTimeEventReminderNavigation.EXTRA_ONE_TIME_EVENT_ID),
+            intent.extras?.keySet(),
+        )
+        assertEquals("event", OneTimeEventReminderNavigation.consumeEventId(intent))
+        assertNull(OneTimeEventReminderNavigation.consumeEventId(intent))
+    }
+
+    @Test fun `separate reminder intents support cold and warm delivery independently`() {
+        val cold = OneTimeEventReminderNavigation.putEventId(Intent(), "cold-event")
+        val warm = OneTimeEventReminderNavigation.putEventId(Intent(), "warm-event")
+
+        assertEquals("cold-event", OneTimeEventReminderNavigation.consumeEventId(cold))
+        assertEquals("warm-event", OneTimeEventReminderNavigation.consumeEventId(warm))
     }
 
     private fun event() = OneTimeEvent(

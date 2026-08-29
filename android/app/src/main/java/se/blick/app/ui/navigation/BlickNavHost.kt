@@ -69,7 +69,11 @@ fun BlickNavHost(navController: NavHostController = rememberNavController()) {
         composable(Routes.OneTimeEventCreate.route) {
             OneTimeEventEditorScreen(
                 onBack = { navController.popBackStack() },
-                onDone = { navController.popBackStack() },
+                onDone = { eventId ->
+                    navController.navigate(Routes.OneTimeEventDetails.routeFor(eventId)) {
+                        popUpTo(Routes.OneTimeEventCreate.route) { inclusive = true }
+                    }
+                },
                 onOpenPremium = { navController.navigate(Routes.Premium.route) },
             )
         }

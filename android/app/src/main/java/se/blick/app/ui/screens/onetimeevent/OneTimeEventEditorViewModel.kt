@@ -50,7 +50,7 @@ data class OneTimeEventEditorUiState(
     val isSearchingDestination: Boolean = false,
     val searchFailed: Boolean = false,
     val isSaving: Boolean = false,
-    val saved: Boolean = false,
+    val savedEventId: String? = null,
     val error: OneTimeEventEditorError? = null,
 ) {
     val canSave: Boolean
@@ -80,7 +80,11 @@ class OneTimeEventEditorViewModel @Inject constructor(
             original = event
             nameEditedManually = event != null
             _uiState.value = if (event == null) {
-                OneTimeEventEditorUiState(isLoading = false, hasPremium = hasPremium)
+                OneTimeEventEditorUiState(
+                    isLoading = false,
+                    hasPremium = hasPremium,
+                    date = clock.instant().atZone(STOCKHOLM_ZONE).toLocalDate().plusDays(1),
+                )
             } else {
                 OneTimeEventEditorUiState(
                     isLoading = false,
@@ -189,7 +193,7 @@ class OneTimeEventEditorViewModel @Inject constructor(
             try {
                 repository.save(event)
                 original = event
-                update { it.copy(isSaving = false, saved = true) }
+                update { it.copy(isSaving = false, savedEventId = event.id) }
             } catch (_: OneTimeEventPremiumRequiredException) {
                 update { it.copy(isSaving = false, error = OneTimeEventEditorError.PREMIUM_REQUIRED) }
             } catch (_: Exception) {
