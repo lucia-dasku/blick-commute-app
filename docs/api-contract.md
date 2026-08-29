@@ -733,7 +733,10 @@ validation is intentionally a different, stricter check than how the response's 
 `transportMode` fields are validated** — see "Request validation vs. response
 compatibility" below.
 
-`Cache-Control: public, s-maxage=60, stale-while-revalidate=60` (see §7, fair use).
+`Cache-Control: public, s-maxage=<remaining source freshness>, must-revalidate` (see §7,
+fair use). The value is at most 60 seconds and is calculated from `fetchedAt`; a stale or
+malformed source timestamp receives `s-maxage=0`. There is no independent edge stale
+window because the shared snapshot service already owns stale fallback.
 
 Response shape: `data: { fetchedAt, disruptions }`. `fetchedAt` is the shared snapshot's
 own fetch time — the *original* upstream-fetch time, never a freshly generated one,
@@ -1004,7 +1007,7 @@ exactly one upstream fetch, not N — tested in `tests/cache.test.ts`.
 | `/api/v1/health` | `no-store` | never cache a liveness check |
 | `/api/v1/stops/search` | `public, s-maxage=3600, stale-while-revalidate=86400` | site data changes rarely |
 | `/api/v1/departures` | `public, s-maxage=30, stale-while-revalidate=30` | near-real-time data |
-| `/api/v1/disruptions` | `public, s-maxage=60, stale-while-revalidate=60` | see fair use below |
+| `/api/v1/disruptions` | `public, s-maxage=<0..60>, must-revalidate` | remaining lifetime of the shared snapshot's source freshness; no compounding edge stale window |
 
 The shared, cross-instance protection described below is scoped specifically to SL
 Deviations — SL's own fair-use guidance is a per-minute limit unique to that upstream.

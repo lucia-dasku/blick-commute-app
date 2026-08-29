@@ -14,6 +14,7 @@ import kotlinx.coroutines.CompletableDeferred
 import kotlinx.coroutines.cancelAndJoin
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.test.advanceUntilIdle
 import kotlinx.coroutines.test.currentTime
 import kotlinx.coroutines.test.runCurrent
 import kotlinx.coroutines.test.runTest
@@ -2303,7 +2304,113 @@ class RoutineActiveWindowWorkerTest {
         assertNoZeroDelayReschedule(scheduler, clock)
     }
 
-    // ---- Disruptions fetched AFTER departures, never stopping/delaying/replacing them ----
+    // ---- Disruptions acquired concurrently, consumed only AFTER departures post ----
+
+    @Test
+    fun `line disruption acquisition starts before departures finish but is consumed only after the first notification and widget post`() = runTest {
+        val clock = TickingClock(Instant.parse("2026-07-27T05:00:00Z"), zone)
+        val testRoutine = routine()
+        val routineRepository = ScriptedRoutineRepository(clock, advanceSecondsPerCall = 0) { callIndex ->
+            if (callIndex < 2) testRoutine else null
+        }
+        val disruptionStarted = CompletableDeferred<Unit>()
+        val releaseDisruption = CompletableDeferred<Unit>()
+        val departures = object : DepartureRepository {
+            override suspend fun getDepartures(siteId: Long, forecastMinutes: Int?): DeparturesResult {
+                // This cannot finish until the sibling disruption coroutine has actually begun.
+                disruptionStarted.await()
+                return DeparturesResult(clock.instant(), siteId, listOf(sampleDeparture()))
+            }
+        }
+        val disruptions = object : DisruptionRepository {
+            var callCount = 0
+            override suspend fun getDisruptions(
+                siteId: Long,
+                lineId: Long?,
+                transportMode: TransportMode?,
+            ): List<Disruption> {
+                callCount++
+                disruptionStarted.complete(Unit)
+                releaseDisruption.await()
+                return listOf(sampleDisruption())
+            }
+        }
+        val notifier = RecordingNotifier()
+        val widgetUpdater = RecordingWidgetUpdater()
+        val worker = buildWorker(
+            testRoutine.id,
+            routineRepository,
+            GetLiveDeparturesUseCase(departures, clock),
+            notifier,
+            RecordingScheduler(),
+            clock,
+            widgetUpdater = widgetUpdater,
+            getDisruptions = GetDisruptionsUseCase(disruptions),
+        )
+
+        val work = launch { worker.doWork() }
+        runCurrent()
+
+        assertTrue(disruptionStarted.isCompleted)
+        assertEquals(1, disruptions.callCount)
+        assertEquals(1, notifier.shown.size)
+        assertEquals(null, notifier.shown.single().disruptionHeadline)
+        assertEquals(listOf<Disruption?>(null), widgetUpdater.disruptionsAtUpdate)
+
+        releaseDisruption.complete(Unit)
+        advanceUntilIdle()
+        work.join()
+
+        assertEquals(1, disruptions.callCount)
+        assertEquals(sampleDisruption().message.header, notifier.shown.last().disruptionHeadline)
+        assertEquals(sampleDisruption(), widgetUpdater.disruptionsAtUpdate.last())
+    }
+
+    @Test
+    fun `cancelling a tick cancels its line disruption child`() = runTest {
+        val clock = TickingClock(Instant.parse("2026-07-27T05:00:00Z"), zone)
+        val testRoutine = routine()
+        val disruptionStarted = CompletableDeferred<Unit>()
+        val disruptionCancelled = CompletableDeferred<Unit>()
+        val neverComplete = CompletableDeferred<Unit>()
+        val disruptions = object : DisruptionRepository {
+            override suspend fun getDisruptions(
+                siteId: Long,
+                lineId: Long?,
+                transportMode: TransportMode?,
+            ): List<Disruption> {
+                disruptionStarted.complete(Unit)
+                try {
+                    neverComplete.await()
+                } finally {
+                    disruptionCancelled.complete(Unit)
+                }
+                return emptyList()
+            }
+        }
+        val notifier = RecordingNotifier()
+        val worker = buildWorker(
+            testRoutine.id,
+            ScriptedRoutineRepository(clock, advanceSecondsPerCall = 0) { testRoutine },
+            GetLiveDeparturesUseCase(
+                FakeDepartureRepository { DeparturesResult(clock.instant(), 9145, listOf(sampleDeparture())) },
+                clock,
+            ),
+            notifier,
+            RecordingScheduler(),
+            clock,
+            getDisruptions = GetDisruptionsUseCase(disruptions),
+        )
+
+        val work = launch { worker.doWork() }
+        runCurrent()
+        assertTrue(disruptionStarted.isCompleted)
+        assertEquals(1, notifier.shown.size)
+
+        work.cancelAndJoin()
+
+        assertTrue(disruptionCancelled.isCompleted)
+    }
 
     @Test
     fun `disruptions are fetched every tick, and a newly-discovered one triggers exactly one extra silent update`() = runTest {

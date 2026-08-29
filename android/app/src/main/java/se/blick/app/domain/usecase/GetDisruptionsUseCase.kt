@@ -43,7 +43,8 @@ sealed interface DisruptionsState {
  * [se.blick.app.data.remote.cache.DisruptionCache] — see that class's own doc for why one
  * cache shared between [se.blick.app.scheduling.RoutineActiveWindowWorker] and
  * [se.blick.app.ui.screens.routinedetails.RoutineDetailsViewModel] is what keeps concurrent
- * requests for the same routine down to one upstream-bound fetch per minute).
+ * requests for the same routine deduplicated while respecting the backend snapshot's own source
+ * age).
  *
  * A failure here is always isolated to [DisruptionsState.Unavailable] — this use case never
  * throws (besides a real [CancellationException], which always propagates unconverted, same

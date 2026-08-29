@@ -26,11 +26,28 @@ const RATE_LIMIT_KEY = "sl-deviations:rate-limit:v1";
  * considered fresh enough to skip refreshing, and the minimum spacing between upstream
  * attempts, including failed ones.
  */
-const FRESH_WINDOW_MS = 60_000;
+export const DEVIATIONS_FRESH_WINDOW_MS = 60_000;
+
+/** Remaining whole seconds for an HTTP edge cache without extending the source snapshot beyond
+ * [DEVIATIONS_FRESH_WINDOW_MS]. Floors partial seconds so the advertised lifetime is never
+ * longer than the actual remaining source freshness. A malformed timestamp is immediately
+ * stale; a slightly future timestamp caused by clock skew is clamped to the normal maximum. */
+export function remainingDeviationsFreshnessSeconds(fetchedAt: string, nowMs = Date.now()): number {
+  const sourceFetchedAtMs = Date.parse(fetchedAt);
+  if (!Number.isFinite(sourceFetchedAtMs)) return 0;
+  const sourceAgeMs = Math.max(0, nowMs - sourceFetchedAtMs);
+  const remainingMs = Math.max(0, DEVIATIONS_FRESH_WINDOW_MS - sourceAgeMs);
+  return Math.min(DEVIATIONS_FRESH_WINDOW_MS / 1000, Math.floor(remainingMs / 1000));
+}
+
+function snapshotAgeMs(snapshot: DeviationsSnapshot, nowMs = Date.now()): number | null {
+  const sourceFetchedAtMs = Date.parse(snapshot.fetchedAt);
+  return Number.isFinite(sourceFetchedAtMs) ? Math.max(0, nowMs - sourceFetchedAtMs) : null;
+}
 
 /**
  * How long the last successful snapshot is kept as a stale fallback once it is no longer
- * "fresh" — deliberately much longer than `FRESH_WINDOW_MS`, so a prolonged SL Deviations
+ * "fresh" — deliberately much longer than `DEVIATIONS_FRESH_WINDOW_MS`, so a prolonged SL Deviations
  * outage degrades to "possibly-outdated disruption data" rather than a hard failure on
  * every request. 6 hours is a deliberate, generous choice for a feed that stays broadly
  * useful even somewhat stale — SL does not itself document a recommended value.
@@ -59,7 +76,7 @@ function delay(ms: number): Promise<void> {
 }
 
 function isFresh(snapshot: DeviationsSnapshot, nowMs: number): boolean {
-  return nowMs - new Date(snapshot.fetchedAt).getTime() < FRESH_WINDOW_MS;
+  return nowMs - new Date(snapshot.fetchedAt).getTime() < DEVIATIONS_FRESH_WINDOW_MS;
 }
 
 const NOT_YET_AVAILABLE = new AppError(
@@ -79,7 +96,7 @@ const NOT_YET_AVAILABLE = new AppError(
  *
  * Call sequence for every `getSnapshot()` call, from any instance:
  *
- * 1. If a cached snapshot exists and is still within `FRESH_WINDOW_MS` of its own
+ * 1. If a cached snapshot exists and is still within `DEVIATIONS_FRESH_WINDOW_MS` of its own
  *    `fetchedAt`, return it immediately — no lock, no rate-limit check, no upstream call.
  * 2. Otherwise, try to acquire the short-lived `REFRESH_LOCK_KEY`. If another instance
  *    already holds it (actively refreshing right now), wait briefly
@@ -91,7 +108,7 @@ const NOT_YET_AVAILABLE = new AppError(
  *    `RATE_LIMIT_KEY` window. If someone else already claimed it (successfully or not)
  *    within the last 60s, this instance must not fetch either — same stale/error
  *    fallback as step 2. The rate-limit claim is deliberately NEVER released early: it
- *    is set with the full `FRESH_WINDOW_MS` as its own TTL and left to expire naturally,
+ *    is set with the full `DEVIATIONS_FRESH_WINDOW_MS` as its own TTL and left to expire naturally,
  *    so a claim made moments before a fetch FAILS still blocks every instance from
  *    retrying for the rest of that 60s window, exactly like a successful claim would.
  * 4. Only the instance that won both the refresh lock and the rate-limit claim actually
@@ -109,6 +126,25 @@ export function createDeviationsSnapshotService(
   cache: Cache,
   lock: DistributedLock,
 ): DeviationsSnapshotService {
+  const loggedStaleFallbacks = new Set<string>();
+
+  function logStaleFallback(
+    snapshot: DeviationsSnapshot,
+    reason: string,
+    error?: unknown,
+    deduplicate = true,
+  ): void {
+    const errorClass = error instanceof Error ? error.constructor.name : error == null ? "none" : typeof error;
+    const diagnosticKey = `${snapshot.fetchedAt}:${reason}:${errorClass}`;
+    if (deduplicate) {
+      if (loggedStaleFallbacks.has(diagnosticKey)) return;
+      loggedStaleFallbacks.add(diagnosticKey);
+    }
+    console.warn(
+      `event=sl_deviations_stale_fallback reason=${reason} snapshotAgeMs=${snapshotAgeMs(snapshot) ?? "unknown"} errorClass=${errorClass}`,
+    );
+  }
+
   async function attempt(retriesLeft: number): Promise<DeviationsSnapshot> {
     const existing = await cache.get<DeviationsSnapshot>(SNAPSHOT_CACHE_KEY);
     if (existing && isFresh(existing, Date.now())) {
@@ -122,7 +158,10 @@ export function createDeviationsSnapshotService(
         await delay(WAIT_RETRY_DELAY_MS);
         return attempt(retriesLeft - 1);
       }
-      if (existing) return existing;
+      if (existing) {
+        logStaleFallback(existing, "refresh_lock_contention");
+        return existing;
+      }
       throw NOT_YET_AVAILABLE;
     }
 
@@ -134,7 +173,7 @@ export function createDeviationsSnapshotService(
         return refreshedByOther;
       }
 
-      const rateLimitToken = await lock.acquire(RATE_LIMIT_KEY, FRESH_WINDOW_MS);
+      const rateLimitToken = await lock.acquire(RATE_LIMIT_KEY, DEVIATIONS_FRESH_WINDOW_MS);
       if (rateLimitToken == null) {
         // Another instance already attempted (successfully or not) within the last
         // 60s. Must not attempt again ourselves, even though we hold the refresh lock.
@@ -144,7 +183,10 @@ export function createDeviationsSnapshotService(
         // 60s window, far longer than a "wait briefly" is meant to cover — so this
         // resolves immediately, one way or the other.
         const fallback = refreshedByOther ?? existing;
-        if (fallback) return fallback;
+        if (fallback) {
+          logStaleFallback(fallback, "rate_limit_window");
+          return fallback;
+        }
         throw NOT_YET_AVAILABLE;
       }
       // rateLimitToken is deliberately never released — see this function's own doc.
@@ -159,7 +201,16 @@ export function createDeviationsSnapshotService(
         // ORIGINAL fetchedAt, if one exists; otherwise let the real, already-controlled
         // upstream error through completely unchanged.
         const fallback = refreshedByOther ?? existing;
-        if (fallback) return fallback;
+        if (fallback) {
+          // One upstream attempt per minute at most, so logging every actual refresh failure is
+          // bounded and lets operations count failures. Contention/rate-window fallbacks above
+          // remain de-duplicated because many client requests can observe the same event.
+          logStaleFallback(fallback, "refresh_failed", err, false);
+          return fallback;
+        }
+        console.warn(
+          `event=sl_deviations_refresh_failed staleFallback=false snapshotAgeMs=unavailable errorClass=${err instanceof Error ? err.constructor.name : typeof err}`,
+        );
         throw err;
       }
     } finally {

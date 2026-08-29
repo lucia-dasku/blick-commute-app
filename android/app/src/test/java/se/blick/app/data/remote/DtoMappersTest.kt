@@ -6,8 +6,10 @@ import org.junit.Test
 import se.blick.app.data.remote.dto.DisruptionDto
 import se.blick.app.data.remote.dto.DisruptionMessageDto
 import se.blick.app.data.remote.dto.DisruptionPriorityDto
+import se.blick.app.data.remote.dto.DisruptionsResponseDto
 import se.blick.app.domain.model.DisruptionEffect
 import se.blick.app.domain.model.toDisruptionEffect
+import java.time.Instant
 
 /**
  * Forward/backward compatibility for [DisruptionDto.effect] ↔ [DisruptionEffect] — the one part
@@ -143,5 +145,22 @@ class DtoMappersTest {
         """.trimIndent()
         val decoded = json.decodeFromString<DisruptionDto>(responseJson)
         assertEquals(DisruptionEffect.DISRUPTION, decoded.toDomain().effect)
+    }
+
+    @Test
+    fun `response fetchedAt is preserved as the source snapshot timestamp`() {
+        val fetchedAt = "2026-07-28T08:00:00Z"
+        val domain = DisruptionsResponseDto(fetchedAt, listOf(dto("DELAYS"))).toDomain()
+
+        assertEquals(Instant.parse(fetchedAt), domain.sourceFetchedAt)
+        assertEquals(DisruptionEffect.DELAYS, domain.disruptions.single().effect)
+    }
+
+    @Test
+    fun `a malformed response fetchedAt becomes unknown without losing disruptions`() {
+        val domain = DisruptionsResponseDto("not-an-instant", listOf(dto("DELAYS"))).toDomain()
+
+        assertEquals(null, domain.sourceFetchedAt)
+        assertEquals("d1", domain.disruptions.single().disruptionId)
     }
 }

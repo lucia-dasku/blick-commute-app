@@ -1,7 +1,25 @@
 import type { RawDeviation, RawMessageVariant } from "../services/upstreamTypes.js";
 import type { Disruption, DisruptionMessage } from "../models/disruption.js";
 import { asTransportMode } from "./transportMode.js";
-import { classifyDisruptionEffect } from "./classifyDisruptionEffect.js";
+import { classifyDisruptionEffectWithDiagnostics } from "./classifyDisruptionEffect.js";
+
+/** Avoid a success log on every 30-second client poll: one diagnostic per disruption version per
+ * process is enough to identify the deterministic rule/version that produced its category. */
+const loggedClassifications = new Set<string>();
+const MAX_LOGGED_CLASSIFICATIONS = 2_000;
+
+function logClassificationOnce(raw: RawDeviation, diagnostic: ReturnType<typeof classifyDisruptionEffectWithDiagnostics>): void {
+  const key = `${raw.deviation_case_id}:${raw.version}`;
+  if (loggedClassifications.has(key)) return;
+  if (loggedClassifications.size >= MAX_LOGGED_CLASSIFICATIONS) {
+    const oldest = loggedClassifications.values().next().value as string | undefined;
+    if (oldest != null) loggedClassifications.delete(oldest);
+  }
+  loggedClassifications.add(key);
+  console.info(
+    `event=disruption_classified disruptionId=${raw.deviation_case_id} disruptionVersion=${raw.version} classifierVersion=${diagnostic.classifierVersion} matchedRule=${diagnostic.matchedRule} matchedTextSource=${diagnostic.matchedTextSource} effect=${diagnostic.effect} importance=${raw.priority.importance_level} influence=${raw.priority.influence_level} urgency=${raw.priority.urgency_level}`,
+  );
+}
 
 /**
  * Selects the Swedish-language message variant. Falls back to the first available
@@ -28,6 +46,8 @@ function normalizeMessage(raw: RawMessageVariant): DisruptionMessage {
 
 export function normalizeDisruption(raw: RawDeviation): Disruption {
   const message = normalizeMessage(selectMessageVariant(raw.message_variants));
+  const classification = classifyDisruptionEffectWithDiagnostics(message);
+  logClassificationOnce(raw, classification);
   const affectedLines = (raw.scope.lines ?? []).map((l) => ({
     id: l.id,
     designation: l.designation,
@@ -47,7 +67,7 @@ export function normalizeDisruption(raw: RawDeviation): Disruption {
       influence: raw.priority.influence_level,
       urgency: raw.priority.urgency_level,
     },
-    effect: classifyDisruptionEffect(message),
+    effect: classification.effect,
     message,
     affectedStopAreas: (raw.scope.stop_areas ?? []).map((a) => ({ id: a.id, name: a.name, type: a.type ?? null })),
     affectedLines,

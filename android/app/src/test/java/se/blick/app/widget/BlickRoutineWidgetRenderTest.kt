@@ -295,26 +295,79 @@ class BlickRoutineWidgetRenderTest {
         }
 
     @Test
-    fun `4x4 shows the existing real disruption message at the bottom`() =
+    fun `4x4 renders the classified Delays category and never the raw disruption headline`() =
         runGlanceAppWidgetUnitTest {
             setContext(context)
             setAppWidgetSize(DpSize(340.dp, 300.dp))
             val primary = journeyRow(now.plusSeconds(180), lineDesignation = "13")
-            val message = "Reduced service between Slussen and Skanstull"
+            val rawHeadline = "Reduced service between Slussen and Skanstull"
             provideComposable {
                 BlickWidgetContent(
                     activeRoutineState(
                         primary,
                         null,
-                        disruptionHeadline = message,
+                        disruptionHeadline = rawHeadline,
                         disruptionEffect = DisruptionEffect.DELAYS,
                     ),
                     now,
                 )
             }
 
-            onNode(hasTextEqualTo(message)).assertExists()
-            onNode(hasText(effectText(DisruptionEffect.DELAYS))).assertDoesNotExist()
+            val delaysLabel = effectText(DisruptionEffect.DELAYS)
+            assertEquals("Delays", delaysLabel)
+            onNode(hasText(delaysLabel)).assertExists()
+            onNode(hasTextEqualTo(rawHeadline)).assertDoesNotExist()
+        }
+
+    @Test
+    @Config(qualifiers = "sv")
+    fun `4x4 renders the Swedish classified Delays category and never the raw Swedish headline`() =
+        runGlanceAppWidgetUnitTest {
+            setContext(context)
+            setAppWidgetSize(DpSize(340.dp, 300.dp))
+            val primary = journeyRow(now.plusSeconds(180), lineDesignation = "13")
+            val rawHeadline = "Försenad avgång mot Alvik"
+            provideComposable {
+                BlickWidgetContent(
+                    activeRoutineState(
+                        primary,
+                        null,
+                        disruptionHeadline = rawHeadline,
+                        disruptionEffect = DisruptionEffect.DELAYS,
+                    ),
+                    now,
+                )
+            }
+
+            val delaysLabel = effectText(DisruptionEffect.DELAYS)
+            assertEquals("Förseningar", delaysLabel)
+            onNode(hasText(delaysLabel)).assertExists()
+            onNode(hasTextEqualTo(rawHeadline)).assertDoesNotExist()
+        }
+
+    @Test
+    fun `4x4 LINE_RELEVANT renders the conservative line label and never the effect or raw headline`() =
+        runGlanceAppWidgetUnitTest {
+            setContext(context)
+            setAppWidgetSize(DpSize(340.dp, 300.dp))
+            val primary = journeyRow(now.plusSeconds(180), lineDesignation = "11")
+            val rawHeadline = "No service between T-Centralen and Kungstradgarden"
+            provideComposable {
+                BlickWidgetContent(
+                    activeRoutineState(
+                        primary,
+                        null,
+                        disruptionHeadline = rawHeadline,
+                        disruptionUncertainLineDesignations = listOf("11"),
+                        disruptionEffect = DisruptionEffect.NO_SERVICE,
+                    ),
+                    now,
+                )
+            }
+
+            onNode(hasText(lineRelevantSingleText("11"))).assertExists()
+            onNode(hasTextEqualTo(rawHeadline)).assertDoesNotExist()
+            onNode(hasText(effectText(DisruptionEffect.NO_SERVICE))).assertDoesNotExist()
         }
 
     @Test
@@ -600,8 +653,8 @@ class BlickRoutineWidgetRenderTest {
     // disruptionStripText's own doc: SL's free text is never machine-translated, so it stays
     // reserved for Routine Details' own full-text display). A LINE_RELEVANT one instead renders
     // the same conservative "Line X disruption" label the notification shows -- see the
-    // Akalla -> T-Centralen false-positive this exists to prevent. All use a tall Standard size,
-    // where the compact summary is present; Large has separate real-message coverage above. ----
+    // Akalla -> T-Centralen false-positive this exists to prevent. These use a tall Standard size;
+    // the matching Large behavior has dedicated regression coverage above. ----
 
     @Test
     fun `a CONFIRMED disruption renders its classified effect's localized category, never the raw SL headline`() =

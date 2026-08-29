@@ -524,11 +524,7 @@ private fun ActiveRoutineContent(context: Context, model: RoutineWidgetModel, no
     // header-level marker a genuinely failed refresh could look identical to a healthy state in
     // either case.
     val isStale = model.content is RoutineWidgetContent.Stale
-    val disruptionStripText = disruptionStripText(
-        context = context,
-        model = model,
-        useFullMessage = layout.tier == WidgetLayoutTier.LARGE,
-    ).takeIf { layout.showDisruption }
+    val disruptionStripText = disruptionStripText(context, model).takeIf { layout.showDisruption }
 
     Box(
         modifier = GlanceModifier
@@ -594,9 +590,7 @@ private fun ActiveRoutineContent(context: Context, model: RoutineWidgetModel, no
     }
 }
 
-/** The widget's disruption-strip text. At the Large tier [useFullMessage] is true, so the bottom
- * area uses the real message already present on [RoutineWidgetModel.disruptionHeadline]. Standard
- * keeps the existing short localized summary because space is constrained. Its cases are:
+/** The widget's disruption-strip text at every size that displays one. Its cases are:
  * 1. [RoutineWidgetModel.disruptionUncertainLineDesignations] non-empty (`LINE_RELEVANT`: SL's
  *    line/mode scope matched but the affected segment/stop was not proven to intersect this
  *    exact journey) — a conservative "Line 11 disruption"-style label built from it, via the
@@ -616,9 +610,8 @@ private fun ActiveRoutineContent(context: Context, model: RoutineWidgetModel, no
  *    persisted yet (the worker's next ~30-second tick overwrites it with a real effect).
  *
  * Null exactly when [RoutineWidgetModel.disruptionHeadline] is null. */
-private fun disruptionStripText(context: Context, model: RoutineWidgetModel, useFullMessage: Boolean): String? {
+private fun disruptionStripText(context: Context, model: RoutineWidgetModel): String? {
     if (model.disruptionHeadline == null) return null
-    if (useFullMessage) return model.disruptionHeadline
     val designations = model.disruptionUncertainLineDesignations
     return when {
         designations.size == 1 -> context.getString(R.string.notification_disruption_line_relevant_single_format, designations.single())
@@ -675,7 +668,8 @@ private fun RoutineLabelChip(context: Context, label: RoutineLabel, tier: Widget
 }
 
 /**
- * [disruptionStripText]'s size-appropriate text as a distinct, full-bleed band along the very
+ * [disruptionStripText]'s localized category or conservative line-disruption text as a distinct,
+ * full-bleed band along the very
  * bottom edge, outside the
  * main content [Column]'s own padding (see [ActiveRoutineContent]), so it touches the widget's
  * left/right/bottom edges directly rather than sitting inset like the rest of the content.

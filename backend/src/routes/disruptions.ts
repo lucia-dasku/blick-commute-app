@@ -4,6 +4,7 @@ import { AppError } from "../lib/errors.js";
 import { normalizeDisruption } from "../normalize/normalizeDisruption.js";
 import { matchesDeviationsQuery, resolveSiteStopAreaIds } from "../services/deviationsFilter.js";
 import type { DeviationsSnapshotService } from "../services/deviationsSnapshotService.js";
+import { remainingDeviationsFreshnessSeconds } from "../services/deviationsSnapshotService.js";
 import type { SiteDirectory } from "../services/siteDirectory.js";
 
 /**
@@ -49,6 +50,7 @@ function parseTransportModeFilter(raw: string | undefined): string | undefined {
  */
 export function createDisruptionsRoute(snapshotService: DeviationsSnapshotService, siteDirectory: SiteDirectory) {
   const route = new Hono();
+  let lastLoggedStaleFetchedAt: string | null = null;
 
   route.get("/", async (c) => {
     const siteIdRaw = c.req.query("siteId");
@@ -86,7 +88,19 @@ export function createDisruptionsRoute(snapshotService: DeviationsSnapshotServic
       .filter((raw) => matchesDeviationsQuery(raw, { siteId, lineId, transportMode, future }, siteStopAreaIds, now))
       .map(normalizeDisruption);
 
-    c.header("Cache-Control", "public, s-maxage=60, stale-while-revalidate=60");
+    const remainingFreshnessSeconds = remainingDeviationsFreshnessSeconds(snapshot.fetchedAt);
+    // Redis/shared-snapshot freshness is authoritative. No stale-while-revalidate here: the
+    // snapshot service already owns stale fallback and upstream fair-use protection, while an
+    // independent edge stale window would compound source age after this response expires.
+    c.header("Cache-Control", `public, s-maxage=${remainingFreshnessSeconds}, must-revalidate`);
+    if (remainingFreshnessSeconds === 0 && lastLoggedStaleFetchedAt !== snapshot.fetchedAt) {
+      lastLoggedStaleFetchedAt = snapshot.fetchedAt;
+      const sourceFetchedAtMs = Date.parse(snapshot.fetchedAt);
+      const snapshotAgeMs = Number.isFinite(sourceFetchedAtMs) ? Math.max(0, Date.now() - sourceFetchedAtMs) : "unknown";
+      console.warn(`event=sl_deviations_stale_snapshot_served snapshotAgeMs=${snapshotAgeMs}`);
+    } else if (remainingFreshnessSeconds > 0) {
+      lastLoggedStaleFetchedAt = null;
+    }
     return c.json(successEnvelope({ fetchedAt: snapshot.fetchedAt, disruptions }));
   });
 

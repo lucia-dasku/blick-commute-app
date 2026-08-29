@@ -10,6 +10,7 @@ import org.junit.Test
 import se.blick.app.domain.model.Disruption
 import se.blick.app.domain.model.DisruptionMessage
 import se.blick.app.domain.model.DisruptionPriority
+import se.blick.app.domain.model.DisruptionsSnapshot
 import java.io.IOException
 import java.time.Clock
 import java.time.Duration
@@ -57,6 +58,11 @@ class DisruptionCacheTest {
 
     private val key = DisruptionCacheKey(siteId = 9145, lineId = null, transportMode = null)
 
+    private fun snapshot(
+        sourceFetchedAt: Instant? = now,
+        disruptions: List<Disruption> = listOf(sampleDisruption()),
+    ) = DisruptionsSnapshot(disruptions, sourceFetchedAt)
+
     // ---- TTL ----
 
     @Test
@@ -64,7 +70,7 @@ class DisruptionCacheTest {
         val clock = MutableClock(now)
         val cache = DisruptionCache(clock)
         var callCount = 0
-        val fetch: suspend () -> List<Disruption> = { callCount++; listOf(sampleDisruption()) }
+        val fetch: suspend () -> DisruptionsSnapshot = { callCount++; snapshot() }
 
         cache.getOrFetch(key, fetch)
         clock.advance(Duration.ofSeconds(59))
@@ -78,7 +84,7 @@ class DisruptionCacheTest {
         val clock = MutableClock(now)
         val cache = DisruptionCache(clock)
         var callCount = 0
-        val fetch: suspend () -> List<Disruption> = { callCount++; listOf(sampleDisruption()) }
+        val fetch: suspend () -> DisruptionsSnapshot = { callCount++; snapshot() }
 
         cache.getOrFetch(key, fetch)
         clock.advance(Duration.ofSeconds(61))
@@ -92,12 +98,103 @@ class DisruptionCacheTest {
         val clock = MutableClock(now)
         val cache = DisruptionCache(clock)
         var callCount = 0
-        val fetch: suspend () -> List<Disruption> = { callCount++; listOf(sampleDisruption()) }
+        val fetch: suspend () -> DisruptionsSnapshot = { callCount++; snapshot() }
 
         cache.getOrFetch(key, fetch)
         clock.advance(DisruptionCache.CACHE_TTL)
         cache.getOrFetch(key, fetch)
 
+        assertEquals(2, callCount)
+    }
+
+    @Test
+    fun `a ten-second-old backend snapshot remains fresh for only another fifty seconds`() = runTest {
+        val clock = MutableClock(now)
+        val cache = DisruptionCache(clock)
+        var callCount = 0
+        val sourceFetchedAt = now.minusSeconds(10)
+        val fetch: suspend () -> DisruptionsSnapshot = { callCount++; snapshot(sourceFetchedAt) }
+
+        cache.getOrFetch(key, fetch)
+        clock.advance(Duration.ofSeconds(49))
+        cache.getOrFetch(key, fetch)
+        assertEquals(1, callCount)
+
+        clock.advance(Duration.ofSeconds(1))
+        cache.getOrFetch(key, fetch)
+        assertEquals(2, callCount)
+    }
+
+    @Test
+    fun `a nearly-expired backend snapshot does not gain a new sixty-second Android lifetime`() = runTest {
+        val clock = MutableClock(now)
+        val cache = DisruptionCache(clock)
+        var callCount = 0
+        val sourceFetchedAt = now.minusSeconds(55)
+        val fetch: suspend () -> DisruptionsSnapshot = { callCount++; snapshot(sourceFetchedAt) }
+
+        cache.getOrFetch(key, fetch)
+        clock.advance(Duration.ofSeconds(4))
+        cache.getOrFetch(key, fetch)
+        assertEquals(1, callCount)
+
+        clock.advance(Duration.ofSeconds(1))
+        cache.getOrFetch(key, fetch)
+        assertEquals(2, callCount)
+    }
+
+    @Test
+    fun `an already-stale backend fallback stays source-stale but uses a short request throttle`() = runTest {
+        val clock = MutableClock(now)
+        val cache = DisruptionCache(clock)
+        var callCount = 0
+        val staleSourceFetchedAt = now.minusSeconds(61)
+        val fetch: suspend () -> DisruptionsSnapshot = { callCount++; snapshot(staleSourceFetchedAt) }
+
+        val received = cache.getOrFetch(key, fetch)
+        assertEquals(staleSourceFetchedAt, received.sourceFetchedAt)
+
+        cache.getOrFetch(key, fetch)
+        clock.advance(DisruptionCache.STALE_RESPONSE_RETRY_THROTTLE.minusSeconds(1))
+        cache.getOrFetch(key, fetch)
+        assertEquals(1, callCount)
+
+        clock.advance(Duration.ofSeconds(1))
+        cache.getOrFetch(key, fetch)
+        assertEquals(2, callCount)
+    }
+
+    @Test
+    fun `a malformed source timestamp fallback cannot crash or gain excessive freshness`() = runTest {
+        val clock = MutableClock(now)
+        val cache = DisruptionCache(clock)
+        var callCount = 0
+        val fetch: suspend () -> DisruptionsSnapshot = { callCount++; snapshot(sourceFetchedAt = null) }
+
+        val received = cache.getOrFetch(key, fetch)
+        assertEquals(null, received.sourceFetchedAt)
+
+        cache.getOrFetch(key, fetch)
+        assertEquals(1, callCount)
+        clock.advance(DisruptionCache.STALE_RESPONSE_RETRY_THROTTLE)
+        cache.getOrFetch(key, fetch)
+        assertEquals(2, callCount)
+    }
+
+    @Test
+    fun `a future source timestamp from clock skew is capped to one normal freshness window`() = runTest {
+        val clock = MutableClock(now)
+        val cache = DisruptionCache(clock)
+        var callCount = 0
+        val fetch: suspend () -> DisruptionsSnapshot = { callCount++; snapshot(now.plus(Duration.ofDays(1))) }
+
+        cache.getOrFetch(key, fetch)
+        clock.advance(DisruptionCache.CACHE_TTL.minusSeconds(1))
+        cache.getOrFetch(key, fetch)
+        assertEquals(1, callCount)
+
+        clock.advance(Duration.ofSeconds(1))
+        cache.getOrFetch(key, fetch)
         assertEquals(2, callCount)
     }
 
@@ -107,7 +204,7 @@ class DisruptionCacheTest {
     fun `different keys are cached and fetched independently`() = runTest {
         val cache = DisruptionCache(MutableClock(now))
         var callCount = 0
-        val fetch: suspend () -> List<Disruption> = { callCount++; listOf(sampleDisruption()) }
+        val fetch: suspend () -> DisruptionsSnapshot = { callCount++; snapshot() }
 
         cache.getOrFetch(DisruptionCacheKey(9145, null, null), fetch)
         cache.getOrFetch(DisruptionCacheKey(9192, null, null), fetch)
@@ -123,10 +220,10 @@ class DisruptionCacheTest {
         val cache = DisruptionCache(MutableClock(now))
         var callCount = 0
         val gate = CompletableDeferred<Unit>()
-        val fetch: suspend () -> List<Disruption> = {
+        val fetch: suspend () -> DisruptionsSnapshot = {
             callCount++
             gate.await()
-            listOf(sampleDisruption())
+            snapshot()
         }
 
         // Both launched before the gate is released -- neither's fetch can complete until
@@ -148,9 +245,9 @@ class DisruptionCacheTest {
     fun `a caller cancelled while another awaits the same in-flight fetch does not affect the other`() = runTest {
         val cache = DisruptionCache(MutableClock(now))
         val gate = CompletableDeferred<Unit>()
-        val fetch: suspend () -> List<Disruption> = {
+        val fetch: suspend () -> DisruptionsSnapshot = {
             gate.await()
-            listOf(sampleDisruption())
+            snapshot()
         }
 
         val leader = async(Dispatchers.Default) { cache.getOrFetch(key, fetch) }
@@ -161,7 +258,7 @@ class DisruptionCacheTest {
         follower.cancel()
         gate.complete(Unit)
 
-        assertEquals(listOf(sampleDisruption()), leader.await())
+        assertEquals(snapshot(), leader.await())
     }
 
     // ---- Failure isolation ----
@@ -170,7 +267,7 @@ class DisruptionCacheTest {
     fun `a failed fetch is not cached -- the next call retries`() = runTest {
         val cache = DisruptionCache(MutableClock(now))
         var callCount = 0
-        val failing: suspend () -> List<Disruption> = { callCount++; throw IOException("boom") }
+        val failing: suspend () -> DisruptionsSnapshot = { callCount++; throw IOException("boom") }
 
         try {
             cache.getOrFetch(key, failing)
@@ -179,10 +276,10 @@ class DisruptionCacheTest {
             // expected
         }
 
-        val succeeding: suspend () -> List<Disruption> = { callCount++; listOf(sampleDisruption()) }
+        val succeeding: suspend () -> DisruptionsSnapshot = { callCount++; snapshot() }
         val result = cache.getOrFetch(key, succeeding)
 
         assertEquals(2, callCount)
-        assertEquals(listOf(sampleDisruption()), result)
+        assertEquals(snapshot(), result)
     }
 }

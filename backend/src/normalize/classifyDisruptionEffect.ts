@@ -1,5 +1,20 @@
 import type { DisruptionEffect, DisruptionMessage } from "../models/disruption.js";
 
+/** Increment only when passenger-facing classification behavior materially changes. */
+export const DISRUPTION_CLASSIFIER_VERSION = 1;
+
+export type DisruptionClassifierRule =
+  | Exclude<DisruptionEffect, "DISRUPTION">
+  | "GENERIC_FALLBACK"
+  | "UNSUPPORTED_LANGUAGE";
+
+export interface DisruptionClassificationDiagnostic {
+  effect: DisruptionEffect;
+  classifierVersion: number;
+  matchedRule: DisruptionClassifierRule;
+  matchedTextSource: "HEADER" | "DETAILS" | "NONE" | "LANGUAGE_GATE";
+}
+
 /**
  * Swedish letters — used to build word-boundary-safe patterns that correctly treat å/ä/ö as
  * ordinary letters. JavaScript's native `\b` is ASCII-only (`\w` is `[A-Za-z0-9_]`), so a plain
@@ -323,15 +338,21 @@ type MatchContext = {
  * comment for the source wording it implements (docs/api-contract.md §3, "Disruption effect
  * classification").
  */
-const RULES: ReadonlyArray<{ effect: Exclude<DisruptionEffect, "DISRUPTION">; test: (ctx: MatchContext) => boolean }> = [
+const RULES: ReadonlyArray<{
+  rule: Exclude<DisruptionEffect, "DISRUPTION">;
+  effect: Exclude<DisruptionEffect, "DISRUPTION">;
+  test: (ctx: MatchContext) => boolean;
+}> = [
   {
     // Whole-service suspension. "ingen trafik" and the exact phrase "inställd trafik" only —
     // never bare "inställd" — "En avgång är inställd" (ONE cancelled departure) must never
     // become NO_SERVICE.
+    rule: "NO_SERVICE",
     effect: "NO_SERVICE",
     test: ({ whole }) => hasPhrase(whole, "ingen trafik") || hasPhrase(whole, "inställd trafik"),
   },
   {
+    rule: "REPLACEMENT_SERVICE",
     effect: "REPLACEMENT_SERVICE",
     test: ({ whole }) => startsWord(whole, "ersättningsbuss") || startsWord(whole, "ersättningstrafik"),
   },
@@ -339,10 +360,12 @@ const RULES: ReadonlyArray<{ effect: Exclude<DisruptionEffect, "DISRUPTION">; te
     // "En avgång är inställd" intentionally does not reach this rule either (no wording here
     // means "only some/a few" the way "glesare"/"reducerad"/"färre" unambiguously do) — it falls
     // all the way through to the generic DISRUPTION fallback, never confidently guessed at.
+    rule: "REDUCED_SERVICE",
     effect: "REDUCED_SERVICE",
     test: ({ whole }) => hasPhrase(whole, "glesare trafik") || hasPhrase(whole, "reducerad trafik") || hasPhrase(whole, "färre avgångar"),
   },
   {
+    rule: "ROUTE_CHANGE",
     effect: "ROUTE_CHANGE",
     test: ({ whole }) =>
       startsWord(whole, "omled") || startsWord(whole, "omlag") || hasPhrase(whole, "annan körväg") || hasPhrase(whole, "ändrad körväg"),
@@ -350,6 +373,7 @@ const RULES: ReadonlyArray<{ effect: Exclude<DisruptionEffect, "DISRUPTION">; te
   {
     // "hållplats" + an affirmed moved/withdrawn word in the SAME unit is the strong, specific
     // combined signal; the two standalone phrases are strong on their own regardless of scope.
+    rule: "STOP_CHANGE",
     effect: "STOP_CHANGE",
     test: ({ whole, units }) =>
       hasPhrase(whole, "stannar inte vid") ||
@@ -360,6 +384,7 @@ const RULES: ReadonlyArray<{ effect: Exclude<DisruptionEffect, "DISRUPTION">; te
     // Accessibility requires an actual, affirmed problem in the same unit as "hiss"/"rulltrappa"
     // — not merely the word existing somewhere in the message. "tillgänglighetsproblem" is the
     // one standalone exception, since it already names the problem outright.
+    rule: "ACCESSIBILITY_ISSUE",
     effect: "ACCESSIBILITY_ISSUE",
     test: ({ whole, units }) =>
       startsWord(whole, "tillgänglighetsproblem") ||
@@ -371,6 +396,7 @@ const RULES: ReadonlyArray<{ effect: Exclude<DisruptionEffect, "DISRUPTION">; te
       ),
   },
   {
+    rule: "STATION_ACCESS",
     effect: "STATION_ACCESS",
     test: ({ units }) =>
       compoundInAnyUnit(
@@ -379,6 +405,7 @@ const RULES: ReadonlyArray<{ effect: Exclude<DisruptionEffect, "DISRUPTION">; te
       ),
   },
   {
+    rule: "DELAYS",
     effect: "DELAYS",
     test: ({ whole }) => startsWord(whole, "försen"),
   },
@@ -392,9 +419,17 @@ const RULES: ReadonlyArray<{ effect: Exclude<DisruptionEffect, "DISRUPTION">; te
  * only in the former case.
  */
 export function classifyEffectFromText(rawText: string): DisruptionEffect | null {
+  return classifyEffectFromTextWithDiagnostics(rawText)?.effect ?? null;
+}
+
+/** The same deterministic single-string classification as [classifyEffectFromText], with the
+ * matched rule retained for tests and internal diagnostics. Null still means no confident rule. */
+export function classifyEffectFromTextWithDiagnostics(
+  rawText: string,
+): Pick<DisruptionClassificationDiagnostic, "effect" | "matchedRule"> | null {
   const ctx: MatchContext = { whole: normalize(rawText), units: segmentIntoUnits(rawText) };
   for (const rule of RULES) {
-    if (rule.test(ctx)) return rule.effect;
+    if (rule.test(ctx)) return { effect: rule.effect, matchedRule: rule.rule };
   }
   return null;
 }
@@ -415,6 +450,33 @@ export function classifyEffectFromText(rawText: string): DisruptionEffect | null
  * confidently wrong classification is worse than a generic one.
  */
 export function classifyDisruptionEffect(message: DisruptionMessage): DisruptionEffect {
-  if (message.language !== "sv") return "DISRUPTION";
-  return classifyEffectFromText(message.header) ?? classifyEffectFromText(message.details) ?? "DISRUPTION";
+  return classifyDisruptionEffectWithDiagnostics(message).effect;
+}
+
+/** Full-message classification plus internal-only version/rule/source diagnostics. The public
+ * disruption API still exposes only [DisruptionEffect]; these fields are for regression tests
+ * and structured operational logging. */
+export function classifyDisruptionEffectWithDiagnostics(message: DisruptionMessage): DisruptionClassificationDiagnostic {
+  if (message.language !== "sv") {
+    return {
+      effect: "DISRUPTION",
+      classifierVersion: DISRUPTION_CLASSIFIER_VERSION,
+      matchedRule: "UNSUPPORTED_LANGUAGE",
+      matchedTextSource: "LANGUAGE_GATE",
+    };
+  }
+  const header = classifyEffectFromTextWithDiagnostics(message.header);
+  if (header != null) {
+    return { ...header, classifierVersion: DISRUPTION_CLASSIFIER_VERSION, matchedTextSource: "HEADER" };
+  }
+  const details = classifyEffectFromTextWithDiagnostics(message.details);
+  if (details != null) {
+    return { ...details, classifierVersion: DISRUPTION_CLASSIFIER_VERSION, matchedTextSource: "DETAILS" };
+  }
+  return {
+    effect: "DISRUPTION",
+    classifierVersion: DISRUPTION_CLASSIFIER_VERSION,
+    matchedRule: "GENERIC_FALLBACK",
+    matchedTextSource: "NONE",
+  };
 }

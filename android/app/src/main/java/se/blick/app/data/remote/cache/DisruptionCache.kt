@@ -7,7 +7,7 @@ import kotlinx.coroutines.SupervisorJob
 import kotlinx.coroutines.async
 import kotlinx.coroutines.sync.Mutex
 import kotlinx.coroutines.sync.withLock
-import se.blick.app.domain.model.Disruption
+import se.blick.app.domain.model.DisruptionsSnapshot
 import se.blick.app.domain.model.TransportMode
 import java.time.Clock
 import java.time.Duration
@@ -23,11 +23,12 @@ data class DisruptionCacheKey(val siteId: Long, val lineId: Long?, val transport
  * endpoint, so that [se.blick.app.scheduling.RoutineActiveWindowWorker] (posting/refreshing the
  * ongoing notification roughly every 30 seconds) and [se.blick.app.ui.screens.routinedetails.RoutineDetailsViewModel]
  * (its own ~30-second auto-refresh loop while the screen is visible) can request the exact
- * same routine's disruptions concurrently without ever making more than one upstream-bound
- * request per [CACHE_TTL] for that [DisruptionCacheKey] — mirroring, on the client side, the
- * same "one shared fetch per filter, not one per caller" shape the backend itself already
- * enforces server-side for the SL Deviations upstream (see docs/api-contract.md, "Caching and
- * fair use").
+ * same routine's disruptions concurrently without duplicating an in-flight request. A fresh
+ * response is reused only until its backend [DisruptionsSnapshot.sourceFetchedAt] reaches
+ * [CACHE_TTL]; an already-stale or timestamp-invalid response uses the shorter
+ * [STALE_RESPONSE_RETRY_THROTTLE] before another backend request is allowed. The backend itself
+ * remains the authority enforcing SL Deviations' network-wide fair-use limit (see
+ * docs/api-contract.md, "Caching and fair use").
  *
  * Two callers racing for the same key never trigger two fetches: the first to arrive starts
  * one [fetch] as a child of [scope] (a detached, [SupervisorJob]-backed scope owned by this
@@ -46,22 +47,37 @@ class DisruptionCache @Inject constructor(
     private val scope = CoroutineScope(SupervisorJob() + Dispatchers.Default)
     private val mutex = Mutex()
     private val entries = mutableMapOf<DisruptionCacheKey, Entry>()
-    private val inFlight = mutableMapOf<DisruptionCacheKey, Deferred<List<Disruption>>>()
+    private val inFlight = mutableMapOf<DisruptionCacheKey, Deferred<DisruptionsSnapshot>>()
 
-    private data class Entry(val disruptions: List<Disruption>, val fetchedAt: Instant)
+    /** Source freshness describes the DATA. [nextRequestAllowedAt] independently throttles
+     * backend requests after receiving an already-stale or timestamp-invalid fallback. Keeping
+     * these separate prevents response arrival from relabelling old source data as fresh without
+     * turning Routine Details plus the worker into a tight retry loop. */
+    private data class Entry(val snapshot: DisruptionsSnapshot, val nextRequestAllowedAt: Instant)
 
-    suspend fun getOrFetch(key: DisruptionCacheKey, fetch: suspend () -> List<Disruption>): List<Disruption> {
+    suspend fun getOrFetch(key: DisruptionCacheKey, fetch: suspend () -> DisruptionsSnapshot): DisruptionsSnapshot {
         val deferred = mutex.withLock {
+            val now = clock.instant()
             val cached = entries[key]
-            if (cached != null && Duration.between(cached.fetchedAt, clock.instant()) < CACHE_TTL) {
-                return cached.disruptions
+            if (cached != null && now.isBefore(cached.nextRequestAllowedAt)) {
+                return cached.snapshot
             }
             inFlight.getOrPut(key) {
                 scope.async {
                     try {
-                        val result = fetch()
-                        mutex.withLock { entries[key] = Entry(result, clock.instant()) }
-                        result
+                        val snapshot = fetch()
+                        val receivedAt = clock.instant()
+                        // A slightly future source timestamp can result from harmless clock skew,
+                        // but must never create more than the normal freshness window on Android.
+                        val boundedSourceFetchedAt = snapshot.sourceFetchedAt?.let { minOf(it, receivedAt) }
+                        val sourceFreshUntil = boundedSourceFetchedAt?.plus(CACHE_TTL)
+                        val nextRequestAllowedAt = sourceFreshUntil
+                            ?.takeIf { it.isAfter(receivedAt) }
+                            ?: receivedAt.plus(STALE_RESPONSE_RETRY_THROTTLE)
+                        mutex.withLock {
+                            entries[key] = Entry(snapshot, nextRequestAllowedAt)
+                        }
+                        snapshot
                     } finally {
                         mutex.withLock { inFlight.remove(key) }
                     }
@@ -77,5 +93,10 @@ class DisruptionCache @Inject constructor(
          * keeps this app's own request volume proportionate to it, not an independently chosen
          * number. */
         val CACHE_TTL: Duration = Duration.ofSeconds(60)
+
+        /** An already-stale or timestamp-invalid backend response is eligible for acquisition
+         * again on the next ordinary active-window tick, not immediately from another caller.
+         * This is request throttling only; it never changes the source data's stale status. */
+        val STALE_RESPONSE_RETRY_THROTTLE: Duration = Duration.ofSeconds(30)
     }
 }

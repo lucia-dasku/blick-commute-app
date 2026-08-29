@@ -38,6 +38,15 @@ data class Disruption(
     val effect: DisruptionEffect = DisruptionEffect.DISRUPTION,
 )
 
+/** One backend disruption response kept as a unit so the source snapshot timestamp cannot be
+ * lost or incorrectly replaced with the Android response-arrival time. [sourceFetchedAt] is null
+ * only when the backend's timestamp was malformed; callers may still use [disruptions] as a
+ * conservative fallback, but must not treat their source data as fresh. */
+data class DisruptionsSnapshot(
+    val disruptions: List<Disruption>,
+    val sourceFetchedAt: Instant?,
+)
+
 /**
  * The small, shared shape [se.blick.app.notification.RoutineNotificationMapper],
  * [se.blick.app.widget.RoutineWidgetMapper], and Routine Details' own disruption cards actually
@@ -165,6 +174,9 @@ fun ResolvedJourneyDisruption.toPresentation(): DisruptionPresentation = Disrupt
  * docs/api-contract.md §3.3), so "higher number = more important" is this app's own
  * assumption, applied consistently everywhere a single ranking is needed (the Routine
  * Details disruptions section, and picking the one disruption shown in the notification).
+ * The checked-in SL sample has only two entries and puts the lower numeric priority first, so
+ * it is not evidence for either direction; backend classification diagnostics include all three
+ * raw priority fields to support a later evidence-based decision without changing behavior now.
  */
 private val disruptionPriorityComparator: Comparator<Disruption> =
     compareByDescending<Disruption> { it.priority.importance }

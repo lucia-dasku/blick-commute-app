@@ -1393,8 +1393,12 @@ The backend selects the message variant whose language is `sv`. It falls back to
 Cache policy:
 
 ```text
-Cache-Control: public, s-maxage=60, stale-while-revalidate=60
+Cache-Control: public, s-maxage=<remaining source freshness>, must-revalidate
 ```
+
+The disruption edge lifetime is derived from the shared snapshot's original `fetchedAt`
+and never exceeds its remaining 60-second source-freshness window. Stale or malformed
+timestamps use `s-maxage=0`; stale fallback remains the snapshot service's responsibility.
 
 The public contract does not include an unused lines endpoint. One may be added later only when it has a defined consumer, normalized schema, and tests.
 

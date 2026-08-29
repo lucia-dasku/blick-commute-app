@@ -6,7 +6,10 @@ import { createStopsRoute } from "../src/routes/stops.js";
 import { createDeparturesRoute } from "../src/routes/departures.js";
 import { createDisruptionsRoute } from "../src/routes/disruptions.js";
 import { createSiteDirectory } from "../src/services/siteDirectory.js";
-import { createDeviationsSnapshotService } from "../src/services/deviationsSnapshotService.js";
+import {
+  createDeviationsSnapshotService,
+  remainingDeviationsFreshnessSeconds,
+} from "../src/services/deviationsSnapshotService.js";
 import { InFlightDeduper, InMemoryCache } from "../src/lib/cache.js";
 import { InMemoryLock } from "../src/lib/distributedLock.js";
 import type { SlTransportClient } from "../src/services/slTransportClient.js";
@@ -196,11 +199,73 @@ describe("GET /api/v1/departures", () => {
 });
 
 describe("GET /api/v1/disruptions", () => {
-  it("returns the 60s+ Cache-Control header required by SL's fair-use guidance", async () => {
-    const app = buildTestApp();
-    const res = await app.request("/api/v1/disruptions?siteId=9192");
-    expect(res.status).toBe(200);
-    expect(res.headers.get("Cache-Control")).toBe("public, s-maxage=60, stale-while-revalidate=60");
+  it("caps edge caching at the shared snapshot's remaining source freshness", async () => {
+    vi.useFakeTimers();
+    try {
+      vi.setSystemTime(new Date("2026-08-29T08:00:00.000Z"));
+      const app = buildTestApp();
+      const res = await app.request("/api/v1/disruptions?siteId=9192");
+      expect(res.status).toBe(200);
+      expect(res.headers.get("Cache-Control")).toBe("public, s-maxage=60, must-revalidate");
+      expect(res.headers.get("Cache-Control")).not.toContain("stale-while-revalidate");
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("uses only the remaining source freshness for an aged shared snapshot", async () => {
+    vi.useFakeTimers();
+    const warn = vi.spyOn(console, "warn").mockImplementation(() => undefined);
+    try {
+      vi.setSystemTime(new Date("2026-08-29T08:01:00.000Z"));
+      const app = new Hono().basePath("/api/v1");
+      app.route(
+        "/disruptions",
+        createDisruptionsRoute(
+          {
+            async getSnapshot() {
+              return { fetchedAt: "2026-08-29T08:00:50.000Z", deviations: [] };
+            },
+          },
+          emptySiteDirectory,
+        ),
+      );
+
+      const res = await app.request("/api/v1/disruptions?siteId=9192");
+
+      expect(res.headers.get("Cache-Control")).toBe("public, s-maxage=50, must-revalidate");
+    } finally {
+      warn.mockRestore();
+      vi.useRealTimers();
+    }
+  });
+
+  it("does not edge-cache an already-stale shared snapshot as fresh", async () => {
+    vi.useFakeTimers();
+    const warn = vi.spyOn(console, "warn").mockImplementation(() => undefined);
+    try {
+      vi.setSystemTime(new Date("2026-08-29T08:01:01.000Z"));
+      const app = new Hono().basePath("/api/v1");
+      app.route(
+        "/disruptions",
+        createDisruptionsRoute(
+          {
+            async getSnapshot() {
+              return { fetchedAt: "2026-08-29T08:00:00.000Z", deviations: [] };
+            },
+          },
+          emptySiteDirectory,
+        ),
+      );
+
+      const res = await app.request("/api/v1/disruptions?siteId=9192");
+
+      expect(res.headers.get("Cache-Control")).toBe("public, s-maxage=0, must-revalidate");
+      expect(res.headers.get("Cache-Control")).not.toContain("stale-while-revalidate");
+    } finally {
+      warn.mockRestore();
+      vi.useRealTimers();
+    }
   });
 
   it("rejects a non-integer lineId", async () => {
@@ -221,6 +286,20 @@ describe("GET /api/v1/disruptions", () => {
     const app = buildTestApp();
     const res = await app.request("/api/v1/disruptions?lineId=17&transportMode=METRO");
     expect(res.status).toBe(400);
+  });
+});
+
+describe("remainingDeviationsFreshnessSeconds", () => {
+  const nowMs = Date.parse("2026-08-29T08:01:00.000Z");
+
+  it.each([
+    ["2026-08-29T08:00:50.000Z", 50],
+    ["2026-08-29T08:00:01.000Z", 1],
+    ["2026-08-29T07:59:59.000Z", 0],
+    ["2026-08-29T08:01:05.000Z", 60],
+    ["not-a-timestamp", 0],
+  ])("derives remaining freshness from source time %s", (fetchedAt, expectedSeconds) => {
+    expect(remainingDeviationsFreshnessSeconds(fetchedAt, nowMs)).toBe(expectedSeconds);
   });
 });
 

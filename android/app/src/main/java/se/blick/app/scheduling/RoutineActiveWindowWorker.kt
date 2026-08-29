@@ -12,6 +12,8 @@ import dagger.assisted.Assisted
 import dagger.assisted.AssistedInject
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.NonCancellable
+import kotlinx.coroutines.async
+import kotlinx.coroutines.coroutineScope
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.last
 import kotlinx.coroutines.withContext
@@ -84,6 +86,21 @@ internal const val ACTIVE_WINDOW_REFRESH_INTERVAL_MS = 30_000L
  * spacing stays close to [ACTIVE_WINDOW_REFRESH_INTERVAL_MS] rather than drifting up to this
  * much beyond it on every slow tick. */
 internal const val DISRUPTIONS_FETCH_TIMEOUT_MS = 5_000L
+
+/** Logs the first timeout and then powers of two for the same worker run. This preserves a useful
+ * cumulative count without emitting an identical warning on every 30-second tick during a long
+ * upstream incident. */
+private fun shouldLogDisruptionTimeout(timeoutCount: Int): Boolean =
+    timeoutCount > 0 && timeoutCount and (timeoutCount - 1) == 0
+
+private fun logDisruptionTimeout(routineId: String, path: String, timeoutCount: Int) {
+    if (!shouldLogDisruptionTimeout(timeoutCount)) return
+    Log.w(
+        LOG_TAG,
+        "event=disruption_wait_timeout routineId=$routineId path=$path " +
+            "timeoutMs=$DISRUPTIONS_FETCH_TIMEOUT_MS timeoutCount=$timeoutCount",
+    )
+}
 
 /** Hard, real-elapsed-time safety backstop for this worker's own foreground execution —
  * independent of a routine's configured [ACTIVE_WINDOW_REFRESH_INTERVAL_MS]-ticked `windowEnd`,
@@ -187,9 +204,10 @@ internal fun effectiveHardCapMinutes(routine: CommuteRoutine, windowStart: Zoned
 /**
  * Runs one routine's active window end to end: checks notification availability, enters
  * foreground execution immediately with a valid notification, fetches and shows departures
- * right away — never waiting on disruptions, which are fetched only AFTER departures have
- * already posted, bounded by a short timeout, and folded in with a second, silent notification
- * update only if they change what's already shown (see the main loop's own comment) — then
+ * right away — never waiting on disruptions. LINE_DIRECTION disruption acquisition starts as a
+ * structured child near the beginning of the tick, but its result is awaited only AFTER
+ * departures have posted, bounded by a short timeout, and folded in with a second, silent
+ * notification update only if it changes what's already shown (see the main loop's own comment) — then
  * re-fetches and silently updates the SAME notification (stable
  * [RoutineNotificationIds.NOTIFICATION_ID], `setOnlyAlertOnce`, no repeated sound/vibration/
  * heads-up — see [RoutineNotificationBuilder]) roughly every [ACTIVE_WINDOW_REFRESH_INTERVAL_MS]
@@ -504,6 +522,8 @@ class RoutineActiveWindowWorker @AssistedInject constructor(
         // loop's own comment) so an already-expired fallback can never be shown indefinitely
         // just because every subsequent fetch happens to time out or fail.
         var lastKnownDisruption: Disruption? = null
+        var lineDirectionDisruptionTimeoutCount = 0
+        var exactDestinationDisruptionTimeoutCount = 0
 
         try {
             setForeground(createForegroundInfo(routine))
@@ -558,6 +578,19 @@ class RoutineActiveWindowWorker @AssistedInject constructor(
                     // before the loop actually breaks, not be inferred later.
                     notificationRecoveryReporter.reportUnavailable()
                     break
+                }
+
+                coroutineScope {
+                // LINE_DIRECTION can begin acquiring disruptions immediately because its query
+                // depends only on the routine. This Deferred is a child of this tick: replacing or
+                // cancelling the worker cancels the await, while DisruptionCache's existing
+                // singleton-owned in-flight request may still complete for another caller/tick.
+                // EXACT_DESTINATION remains unchanged because its relevance request needs the
+                // freshly fetched PRIMARY journey and its structural context.
+                val lineDirectionDisruptionDeferred = if (current.type == RoutineType.LINE_DIRECTION) {
+                    async { getDisruptions(current).last() }
+                } else {
+                    null
                 }
 
                 // Departures/journeys are fetched and posted ALONE first -- disruptions are never
@@ -704,7 +737,8 @@ class RoutineActiveWindowWorker @AssistedInject constructor(
                     }
                 }
 
-                // Disruptions are fetched only AFTER departures have already posted, bounded by
+                // The LINE_DIRECTION acquisition started near the beginning of this tick, but is
+                // awaited only AFTER departures have already posted, bounded by
                 // DISRUPTIONS_FETCH_TIMEOUT_MS so a slow SL Deviations request can never delay --
                 // or, worse, indefinitely hang -- the departures notification above.
                 // GetDisruptionsUseCase itself never throws (besides a real
@@ -719,8 +753,19 @@ class RoutineActiveWindowWorker @AssistedInject constructor(
                 // on the other hand, DOES clear it, since that is a genuine, positive
                 // confirmation that nothing is currently affecting this routine, not merely an
                 // absence of information.
-                when (val disruptionResult = if (current.type == RoutineType.EXACT_DESTINATION) null else
-                    withTimeoutOrNull(DISRUPTIONS_FETCH_TIMEOUT_MS) { getDisruptions(current).last() }) {
+                val lineDirectionDisruptionResult = lineDirectionDisruptionDeferred?.let { deferred ->
+                    withTimeoutOrNull(DISRUPTIONS_FETCH_TIMEOUT_MS) { deferred.await() }.also { result ->
+                        if (result == null) {
+                            lineDirectionDisruptionTimeoutCount += 1
+                            logDisruptionTimeout(routineId, "LINE_DIRECTION", lineDirectionDisruptionTimeoutCount)
+                            // The Deferred belongs to this tick and must not keep coroutineScope
+                            // open after the bounded wait. Production's underlying shared cache
+                            // request has its own lifetime and is not cancelled by this awaiter.
+                            deferred.cancel()
+                        }
+                    }
+                }
+                when (val disruptionResult = lineDirectionDisruptionResult) {
                     is DisruptionsState.Loaded -> lastKnownDisruption = disruptionResult.disruptions.firstOrNull()
                     is DisruptionsState.NoDisruptions -> lastKnownDisruption = null
                     is DisruptionsState.Unavailable, is DisruptionsState.Loading, null -> Unit
@@ -770,7 +815,7 @@ class RoutineActiveWindowWorker @AssistedInject constructor(
                 // Deviations snapshot (see `backend/src/routes/journeyDisruptions.ts`'s own doc).
                 if (current.type == RoutineType.EXACT_DESTINATION && getJourneyDisruptionRelevance != null) {
                     val primary = journeyPlans.firstOrNull { it.role == JourneyRole.PRIMARY }
-                    val resolvedDisruptions = if (primary != null) {
+                    val resolvedDisruptionsOrTimeout = if (primary != null) {
                         withTimeoutOrNull(DISRUPTIONS_FETCH_TIMEOUT_MS) {
                             try {
                                 getJourneyDisruptionRelevance(
@@ -781,12 +826,17 @@ class RoutineActiveWindowWorker @AssistedInject constructor(
                             } catch (e: CancellationException) {
                                 throw e
                             } catch (_: Exception) {
-                                null
+                                emptyList()
                             }
-                        } ?: emptyList()
+                        }
                     } else {
                         emptyList()
                     }
+                    if (resolvedDisruptionsOrTimeout == null) {
+                        exactDestinationDisruptionTimeoutCount += 1
+                        logDisruptionTimeout(routineId, "EXACT_DESTINATION", exactDestinationDisruptionTimeoutCount)
+                    }
+                    val resolvedDisruptions = resolvedDisruptionsOrTimeout.orEmpty()
                     if (resolvedDisruptions.isNotEmpty()) {
                         // Already the backend's own fully resolved, deduplicated, merged result --
                         // renders exactly what was returned, no Android-side relevance inference.
@@ -834,6 +884,7 @@ class RoutineActiveWindowWorker @AssistedInject constructor(
                 // is zero and the existing loop immediately starts its next fetch.
                 val primaryExpiryDelayMs = primaryExpiryBoundary?.remainingMillis(clock.instant())
                 delay(minOf(normalDelayMs, primaryExpiryDelayMs ?: normalDelayMs))
+                }
             }
         } catch (e: CancellationException) {
             // A real coroutine cancellation (this worker's own work was replaced or cancelled

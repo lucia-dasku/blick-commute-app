@@ -11,6 +11,7 @@ import se.blick.app.domain.model.Disruption
 import se.blick.app.domain.model.DisruptionAffectedLine
 import se.blick.app.domain.model.DisruptionMessage
 import se.blick.app.domain.model.DisruptionPriority
+import se.blick.app.domain.model.DisruptionsSnapshot
 import se.blick.app.domain.model.toDisruptionEffect
 import se.blick.app.domain.model.Journey
 import se.blick.app.domain.model.LineRef
@@ -32,6 +33,11 @@ import java.time.OffsetDateTime
  * happened server-side.
  */
 private fun String.toInstant(): Instant = OffsetDateTime.parse(this).toInstant()
+
+/** Unlike disruption validity timestamps, a malformed response-level `fetchedAt` must not make
+ * the whole live update fail. Null preserves the disruptions as a stale fallback while ensuring
+ * [se.blick.app.data.remote.cache.DisruptionCache] never grants them a fresh source lifetime. */
+private fun String.toSourceInstantOrNull(): Instant? = runCatching { toInstant() }.getOrNull()
 
 fun SiteDto.toDomain(): Site = Site(
     siteId = siteId,
@@ -82,4 +88,7 @@ fun DisruptionDto.toDomain(): Disruption = Disruption(
     effect = effect.toDisruptionEffect(),
 )
 
-fun DisruptionsResponseDto.toDomain(): List<Disruption> = disruptions.map { it.toDomain() }
+fun DisruptionsResponseDto.toDomain(): DisruptionsSnapshot = DisruptionsSnapshot(
+    disruptions = disruptions.map { it.toDomain() },
+    sourceFetchedAt = fetchedAt.toSourceInstantOrNull(),
+)
