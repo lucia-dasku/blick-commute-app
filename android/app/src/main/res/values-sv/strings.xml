@@ -331,7 +331,9 @@
     <string name="one_time_event_name_hint">Valfritt namn på händelsen</string>
     <string name="one_time_event_from">Från</string>
     <string name="one_time_event_to">Till</string>
+    <string name="one_time_event_route_heading">Resväg</string>
     <string name="one_time_event_date">Datum</string>
+    <string name="one_time_event_schedule_heading">Datum och tid</string>
     <string name="one_time_event_time_type">Tidstyp</string>
     <string name="one_time_event_arrive_by">Framme senast</string>
     <string name="one_time_event_leave_at">Avgång</string>

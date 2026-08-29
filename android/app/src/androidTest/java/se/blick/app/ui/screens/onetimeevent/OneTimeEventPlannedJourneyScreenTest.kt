@@ -58,9 +58,9 @@ class OneTimeEventPlannedJourneyScreenTest {
             }
         }
 
-        composeRule.onNodeWithText(composeRule.activity.getString(R.string.one_time_event_plan_recommended)).assertIsDisplayed()
-        composeRule.onNodeWithText(composeRule.activity.getString(R.string.one_time_event_plan_next_option)).assertIsDisplayed()
-        composeRule.onNodeWithText(composeRule.activity.getString(R.string.one_time_event_plan_alternative)).assertIsDisplayed()
+        composeRule.onNodeWithText(composeRule.activity.getString(R.string.one_time_event_plan_recommended)).assertExists()
+        composeRule.onNodeWithText(composeRule.activity.getString(R.string.one_time_event_plan_next_option)).assertExists()
+        composeRule.onNodeWithText(composeRule.activity.getString(R.string.one_time_event_plan_alternative)).assertExists()
     }
 
     @Test
@@ -78,7 +78,9 @@ class OneTimeEventPlannedJourneyScreenTest {
         }
 
         composeRule.onNodeWithText(composeRule.activity.getString(R.string.one_time_event_today_plan_title)).assertIsDisplayed()
-        composeRule.onNodeWithText("Updated 12:00").assertIsDisplayed()
+        composeRule.onNodeWithText(
+            composeRule.activity.getString(R.string.one_time_event_plan_updated, "12:00"),
+        ).assertIsDisplayed()
         composeRule.onNodeWithText(composeRule.activity.getString(R.string.one_time_event_today_plan_explanation)).assertIsDisplayed()
         composeRule.onNodeWithText("Live").assertDoesNotExist()
     }

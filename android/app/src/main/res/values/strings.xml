@@ -450,7 +450,9 @@
     <string name="one_time_event_name_hint">Optional event name</string>
     <string name="one_time_event_from">From</string>
     <string name="one_time_event_to">To</string>
+    <string name="one_time_event_route_heading">Route</string>
     <string name="one_time_event_date">Date</string>
+    <string name="one_time_event_schedule_heading">Date &amp; time</string>
     <string name="one_time_event_time_type">Time type</string>
     <string name="one_time_event_arrive_by">Arrive by</string>
     <string name="one_time_event_leave_at">Leave at</string>

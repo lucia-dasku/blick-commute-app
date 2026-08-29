@@ -38,6 +38,7 @@ import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextOverflow
@@ -242,11 +243,12 @@ internal fun OneTimeEventCard(
 }
 
 @Composable
-private fun OneTimeEventLabelPill(label: OneTimeEventLabel) {
+internal fun OneTimeEventLabelPill(label: OneTimeEventLabel) {
     Surface(
         color = MaterialTheme.colorScheme.primary.copy(alpha = 0.14f),
         contentColor = MaterialTheme.colorScheme.primary,
         shape = MaterialTheme.shapes.small,
+        modifier = Modifier.testTag("one-time-event-label-pill-${label.name.lowercase()}"),
     ) {
         Text(
             text = eventLabelText(label),
@@ -264,8 +266,25 @@ fun OneTimeEventDetailsScreen(
     viewModel: OneTimeEventDetailsViewModel = hiltViewModel(),
 ) {
     val state by viewModel.uiState.collectAsStateWithLifecycle()
-    var confirmDelete by remember { mutableStateOf(false) }
     LaunchedEffect(state.deleted) { if (state.deleted) onDeleted() }
+    OneTimeEventDetailsContent(
+        state = state,
+        onBack = onBack,
+        onEdit = onEdit,
+        onDelete = viewModel::delete,
+        onRefresh = viewModel::refreshPreview,
+    )
+}
+
+@Composable
+internal fun OneTimeEventDetailsContent(
+    state: OneTimeEventDetailsUiState,
+    onBack: () -> Unit,
+    onEdit: (String) -> Unit,
+    onDelete: () -> Unit,
+    onRefresh: () -> Unit,
+) {
+    var confirmDelete by remember { mutableStateOf(false) }
     Scaffold(topBar = { BlickTopBar(state.event?.name, onBack) }) { padding ->
         val event = state.event
         if (state.isLoading) {
@@ -278,21 +297,33 @@ fun OneTimeEventDetailsScreen(
                 verticalArrangement = Arrangement.spacedBy(16.dp),
             ) {
                 item {
-                    Column(verticalArrangement = Arrangement.spacedBy(16.dp)) {
-                        Text(eventLabelText(event.label), color = MaterialTheme.colorScheme.primary, fontWeight = FontWeight.SemiBold)
-                        Text(
-                            event.date.format(DateTimeFormatter.ofLocalizedDate(FormatStyle.FULL).withLocale(locale)),
-                            style = MaterialTheme.typography.titleMedium,
-                        )
-                        Text(stringResource(R.string.one_time_event_route_format, event.originName, event.destinationName))
-                        Text(
-                            stringResource(
-                                if (event.timeType == OneTimeEventTimeType.ARRIVE_BY) R.string.one_time_event_arrive_by_value
-                                else R.string.one_time_event_leave_at_value,
-                                event.time.toString(),
-                            ),
-                            style = MaterialTheme.typography.titleLarge,
-                        )
+                    Surface(
+                        shape = MaterialTheme.shapes.medium,
+                        color = MaterialTheme.colorScheme.background,
+                        modifier = Modifier.fillMaxWidth().testTag("one-time-event-summary"),
+                    ) {
+                        Column(
+                            modifier = Modifier.padding(16.dp),
+                            verticalArrangement = Arrangement.spacedBy(8.dp),
+                        ) {
+                            OneTimeEventLabelPill(event.label)
+                            Text(
+                                event.date.format(DateTimeFormatter.ofLocalizedDate(FormatStyle.FULL).withLocale(locale)),
+                                style = MaterialTheme.typography.titleMedium,
+                            )
+                            Text(
+                                stringResource(R.string.one_time_event_route_format, event.originName, event.destinationName),
+                                color = MaterialTheme.colorScheme.onSurfaceVariant,
+                            )
+                            Text(
+                                stringResource(
+                                    if (event.timeType == OneTimeEventTimeType.ARRIVE_BY) R.string.one_time_event_arrive_by_value
+                                    else R.string.one_time_event_leave_at_value,
+                                    event.time.toString(),
+                                ),
+                                style = MaterialTheme.typography.titleLarge,
+                            )
+                        }
                     }
                 }
                 item {
@@ -303,7 +334,7 @@ fun OneTimeEventDetailsScreen(
                         isRefreshing = state.isRefreshing,
                         refreshFailed = state.refreshFailed,
                         disruptionState = state.disruptionState,
-                        onRefresh = viewModel::refreshPreview,
+                        onRefresh = onRefresh,
                     )
                 }
                 item {
@@ -325,7 +356,7 @@ fun OneTimeEventDetailsScreen(
             title = { Text(stringResource(R.string.one_time_event_delete_title)) },
             text = { Text(stringResource(R.string.one_time_event_delete_body)) },
             confirmButton = {
-                TextButton(onClick = { confirmDelete = false; viewModel.delete() }) {
+                TextButton(onClick = { confirmDelete = false; onDelete() }) {
                     Text(stringResource(R.string.one_time_event_delete_confirm), color = MaterialTheme.colorScheme.error)
                 }
             },

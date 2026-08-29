@@ -25,7 +25,6 @@ import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.text.KeyboardActions
 import androidx.compose.foundation.text.KeyboardOptions
 import androidx.compose.material.icons.Icons
-import androidx.compose.material.icons.automirrored.filled.KeyboardArrowRight
 import androidx.compose.material.icons.filled.DateRange
 import androidx.compose.material.icons.filled.Edit
 import androidx.compose.foundation.lazy.LazyColumn
@@ -40,7 +39,6 @@ import androidx.compose.material3.Icon
 import androidx.compose.material3.ListItem
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.OutlinedTextField
-import androidx.compose.material3.OutlinedTextFieldDefaults
 import androidx.compose.material3.Scaffold
 import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
@@ -80,6 +78,9 @@ import se.blick.app.ui.components.BlickTopBar
 import se.blick.app.ui.components.BlickWizardHeader
 import se.blick.app.ui.components.LineBadge
 import se.blick.app.ui.components.RoutineLabelSelector
+import se.blick.app.ui.components.ScheduleSectionCard
+import se.blick.app.ui.components.ScheduleValueControl
+import se.blick.app.ui.components.scheduleFormOutlinedTextFieldColors
 import se.blick.app.ui.notification.rememberNotificationPermissionGate
 import se.blick.app.ui.theme.CalmBlue40
 import se.blick.app.ui.theme.CalmBlue80
@@ -553,18 +554,7 @@ internal fun ScheduleStep(
                         value = uiState.name,
                         onValueChange = onNameChanged,
                         singleLine = true,
-                        colors = if (LocalStockholmNightTheme.current) {
-                            OutlinedTextFieldDefaults.colors(
-                                focusedContainerColor = StockholmNightSurfaces.Control,
-                                unfocusedContainerColor = StockholmNightSurfaces.Control,
-                                disabledContainerColor = StockholmNightSurfaces.Control,
-                                errorContainerColor = StockholmNightSurfaces.Control,
-                                unfocusedBorderColor = StockholmNightSurfaces.Border,
-                                disabledBorderColor = StockholmNightSurfaces.Border,
-                            )
-                        } else {
-                            OutlinedTextFieldDefaults.colors()
-                        },
+                        colors = scheduleFormOutlinedTextFieldColors(),
                         keyboardOptions = KeyboardOptions(imeAction = ImeAction.Done),
                         keyboardActions = KeyboardActions(onDone = { focusManager.clearFocus() }),
                         modifier = Modifier
@@ -765,28 +755,6 @@ private fun WeekdayRow(
 }
 
 @Composable
-private fun ScheduleSectionCard(
-    icon: @Composable () -> Unit,
-    title: String,
-    modifier: Modifier = Modifier,
-    content: @Composable () -> Unit,
-) {
-    Surface(
-        shape = MaterialTheme.shapes.medium,
-        color = MaterialTheme.colorScheme.background,
-        modifier = modifier.fillMaxWidth(),
-    ) {
-        Column(Modifier.padding(16.dp), verticalArrangement = Arrangement.spacedBy(12.dp)) {
-            Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(12.dp)) {
-                Box(Modifier.size(24.dp), contentAlignment = Alignment.Center) { icon() }
-                Text(title, style = MaterialTheme.typography.titleMedium, modifier = Modifier.weight(1f))
-            }
-            content()
-        }
-    }
-}
-
-@Composable
 private fun TimeControl(
     visibleLabel: String,
     accessibilityLabel: String,
@@ -796,32 +764,13 @@ private fun TimeControl(
 ) {
     val formattedTime = time.format(DateTimeFormatter.ofPattern("HH:mm"))
     val description = stringResource(R.string.routine_create_time_control_description, accessibilityLabel, formattedTime)
-    val useStockholmNightSurface = LocalStockholmNightTheme.current
-    Surface(
+    ScheduleValueControl(
+        visibleLabel = visibleLabel,
+        value = formattedTime,
+        accessibilityDescription = description,
         onClick = onClick,
-        shape = MaterialTheme.shapes.medium,
-        color = if (useStockholmNightSurface) StockholmNightSurfaces.Control else MaterialTheme.colorScheme.surface,
-        border = BorderStroke(
-            1.dp,
-            if (useStockholmNightSurface) StockholmNightSurfaces.Border else MaterialTheme.colorScheme.outlineVariant,
-        ),
-        modifier = modifier
-            .height(80.dp)
-            .semantics { contentDescription = description },
-    ) {
-        Column(Modifier.fillMaxSize().padding(horizontal = 12.dp, vertical = 10.dp)) {
-            Text(
-                visibleLabel,
-                style = MaterialTheme.typography.labelMedium,
-                color = MaterialTheme.colorScheme.onSurfaceVariant,
-            )
-            Spacer(Modifier.weight(1f))
-            Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
-                Text(formattedTime, style = MaterialTheme.typography.titleLarge, modifier = Modifier.weight(1f))
-                Icon(Icons.AutoMirrored.Filled.KeyboardArrowRight, contentDescription = null, modifier = Modifier.size(20.dp))
-            }
-        }
-    }
+        modifier = modifier,
+    )
 }
 
 @Composable
