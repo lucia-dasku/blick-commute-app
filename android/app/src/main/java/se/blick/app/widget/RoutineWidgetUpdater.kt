@@ -8,6 +8,12 @@ import androidx.glance.appwidget.updateAll
 import dagger.hilt.android.qualifiers.ApplicationContext
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.flow.first
+import se.blick.app.billing.FreePremiumEntitlementRepository
+import se.blick.app.billing.FreeRoutineSelectionStore
+import se.blick.app.billing.PremiumEntitlementRepository
+import se.blick.app.billing.RoutineTierPolicy
+import se.blick.app.billing.hasPremiumAccess
+import se.blick.app.data.local.datastore.AppSettingsDataStore
 import se.blick.app.data.repository.RoutineRepository
 import se.blick.app.domain.model.CommuteRoutine
 import se.blick.app.domain.model.Disruption
@@ -18,15 +24,12 @@ import se.blick.app.domain.usecase.LiveDeparturesState
 import se.blick.app.notification.NotificationAvailability
 import se.blick.app.notification.NotificationAvailabilityChecker
 import se.blick.app.scheduling.DeviceZoneProvider
+import se.blick.app.ui.theme.shouldUseStockholmNightTheme
 import java.time.Clock
 import java.time.Instant
 import java.time.ZonedDateTime
 import javax.inject.Inject
 import javax.inject.Singleton
-import se.blick.app.billing.FreePremiumEntitlementRepository
-import se.blick.app.billing.FreeRoutineSelectionStore
-import se.blick.app.billing.PremiumEntitlementRepository
-import se.blick.app.billing.RoutineTierPolicy
 
 /**
  * Pushes [RoutineWidgetUiState] to every placed [BlickRoutineWidget] instance. Never fetches
@@ -122,10 +125,9 @@ interface RoutineWidgetUpdater {
      * risk of dropping an active widget to [RoutineWidgetContent.Loading]/[RoutineWidgetUiState.NoActiveCommute]
      * (see [reconcile]'s own doc: it re-derives state from scratch, which [decideReconciledWidgetState]
      * only ever reports as [RoutineWidgetContent.Loading] for a genuinely active window — never
-     * safe to use for a purely presentational refresh). The only reason to call this today is
-     * that Blick's own selected app language changed (see [se.blick.app.locale.withAppLocale]) —
-     * every placed instance should re-render its CURRENT content through freshly resolved string
-     * resources, without touching what that content actually says.
+     * safe to use for a purely presentational refresh). Call this when Blick's selected app
+     * language or appearance changes: every placed instance should re-render its CURRENT content
+     * through freshly resolved presentation resources, without touching what that content says.
      *
      * Defaults to a no-op so every existing [RoutineWidgetUpdater] fake across this codebase's
      * tests keeps compiling unchanged (the same reasoning as the four-argument
@@ -182,6 +184,7 @@ class GlanceRoutineWidgetUpdater @Inject constructor(
     private val notificationAvailabilityChecker: NotificationAvailabilityChecker,
     private val clock: Clock,
     private val deviceZoneProvider: DeviceZoneProvider,
+    private val appSettingsDataStore: AppSettingsDataStore,
     private val entitlementRepository: PremiumEntitlementRepository = FreePremiumEntitlementRepository,
     private val freeRoutineSelectionStore: FreeRoutineSelectionStore? = null,
 ) : RoutineWidgetUpdater {
@@ -229,12 +232,19 @@ class GlanceRoutineWidgetUpdater @Inject constructor(
         applyToAllInstances(RoutineWidgetUiState.ActiveRoutine(RoutineWidgetMapper.notificationsUnavailable(routine)))
     }
 
-    /** Deliberately does NOT go through [applyToAllInstances] — that WRITES a (possibly
-     * different) [RoutineWidgetUiState] into each instance's persisted preferences first; this
-     * only re-triggers [BlickRoutineWidget.provideGlance] for every already-placed instance,
-     * which reads whatever is ALREADY there, completely unchanged, and re-renders it — see this
-     * method's own interface doc. */
+    /** Deliberately does NOT go through [applyToAllInstances], so the current
+     * [RoutineWidgetUiState] remains untouched. This updates only the effective appearance flag,
+     * then re-triggers [BlickRoutineWidget.provideGlance] for every already-placed instance. */
     override suspend fun refreshPresentation() {
+        val manager = GlanceAppWidgetManager(context)
+        val ids = manager.getGlanceIds(BlickRoutineWidget::class.java)
+        if (ids.isEmpty()) return
+        val useStockholmNightTheme = effectiveStockholmNightTheme()
+        ids.forEach { id ->
+            updateAppWidgetState(context, id) { prefs ->
+                prefs.setStockholmNightWidgetTheme(useStockholmNightTheme)
+            }
+        }
         BlickRoutineWidget().updateAll(context)
     }
 
@@ -242,7 +252,18 @@ class GlanceRoutineWidgetUpdater @Inject constructor(
         val manager = GlanceAppWidgetManager(context)
         val ids = manager.getGlanceIds(BlickRoutineWidget::class.java)
         if (ids.isEmpty()) return
-        ids.forEach { id -> updateAppWidgetState(context, id) { prefs -> state.writeInto(prefs) } }
+        val useStockholmNightTheme = effectiveStockholmNightTheme()
+        ids.forEach { id ->
+            updateAppWidgetState(context, id) { prefs ->
+                state.writeInto(prefs)
+                prefs.setStockholmNightWidgetTheme(useStockholmNightTheme)
+            }
+        }
         BlickRoutineWidget().updateAll(context)
     }
+
+    private suspend fun effectiveStockholmNightTheme(): Boolean = shouldUseStockholmNightTheme(
+        requested = appSettingsDataStore.settings.first().useStockholmNightTheme,
+        hasPremiumAccess = entitlementRepository.entitlement.value.hasPremiumAccess,
+    )
 }

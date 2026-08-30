@@ -11,6 +11,7 @@ import org.robolectric.RobolectricTestRunner
 import org.robolectric.RuntimeEnvironment
 import org.robolectric.annotation.Config
 import se.blick.app.data.repository.RoutineRepository
+import se.blick.app.data.local.datastore.AppSettingsDataStore
 import se.blick.app.domain.model.CommuteRoutine
 import se.blick.app.domain.model.Disruption
 import se.blick.app.domain.model.DisruptionMessage
@@ -109,6 +110,7 @@ class GlanceRoutineWidgetUpdaterRefreshPresentationTest {
     private val context: Context = RuntimeEnvironment.getApplication()
     private val routineRepository = mockk<RoutineRepository>()
     private val notificationAvailabilityChecker = mockk<NotificationAvailabilityChecker>()
+    private val appSettingsDataStore = mockk<AppSettingsDataStore>()
     private val deviceZoneProvider = DeviceZoneProvider { ZoneId.of("UTC") }
     private val updater = GlanceRoutineWidgetUpdater(
         context = context,
@@ -116,6 +118,7 @@ class GlanceRoutineWidgetUpdaterRefreshPresentationTest {
         notificationAvailabilityChecker = notificationAvailabilityChecker,
         clock = Clock.systemUTC(),
         deviceZoneProvider = deviceZoneProvider,
+        appSettingsDataStore = appSettingsDataStore,
     )
 
     @Test

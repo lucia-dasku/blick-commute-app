@@ -582,8 +582,11 @@ class RoutineWidgetPreferencesTest {
 
     @Test
     fun `legBadges round-trips in order for a multi-leg primary and secondary`() {
-        val primaryBadges = listOf(WidgetJourneyLegBadge("14", TransportMode.METRO), WidgetJourneyLegBadge("40", TransportMode.BUS))
-        val secondaryBadges = listOf(WidgetJourneyLegBadge("17", TransportMode.METRO))
+        val primaryBadges = listOf(
+            WidgetJourneyLegBadge("14", TransportMode.METRO, "Fruängen"),
+            WidgetJourneyLegBadge("40", TransportMode.BUS, "Slussen: terminal | south"),
+        )
+        val secondaryBadges = listOf(WidgetJourneyLegBadge("17", TransportMode.METRO, "T-Centralen"))
         val primary = WidgetJourneyRow(
             "14", TransportMode.METRO, Instant.parse("2026-08-10T07:03:00Z"), Instant.parse("2026-08-10T07:31:00Z"),
             1, isRealtime = true, role = JourneyRole.PRIMARY, legBadges = primaryBadges,
@@ -636,5 +639,39 @@ class RoutineWidgetPreferencesTest {
 
         val restored = prefs.toPreferences().toWidgetUiState() as RoutineWidgetUiState.ActiveRoutine
         assertEquals(emptyList<WidgetJourneyLegBadge>(), (restored.model.content as RoutineWidgetContent.Journeys).primary.legBadges)
+    }
+
+    @Test
+    fun `legacy legBadge entries decode without boarding stations`() {
+        val prefs = mutablePreferencesOf()
+        val primary = WidgetJourneyRow(
+            "14", TransportMode.METRO, Instant.parse("2026-08-10T07:03:00Z"), Instant.parse("2026-08-10T07:31:00Z"),
+            1, isRealtime = true, role = JourneyRole.PRIMARY,
+        )
+        RoutineWidgetUiState.ActiveRoutine(
+            RoutineWidgetModel("exact-1", "To work", "Fruangen", "Slussen", RoutineWidgetContent.Journeys(primary, null)),
+        ).writeInto(prefs)
+        prefs[stringPreferencesKey("journeyPrimaryLegBadges")] = "14:METRO|40:BUS"
+
+        val restored = prefs.toPreferences().toWidgetUiState() as RoutineWidgetUiState.ActiveRoutine
+        val restoredPrimary = (restored.model.content as RoutineWidgetContent.Journeys).primary
+
+        assertEquals(
+            listOf(WidgetJourneyLegBadge("14", TransportMode.METRO), WidgetJourneyLegBadge("40", TransportMode.BUS)),
+            restoredPrimary.legBadges,
+        )
+    }
+
+    @Test
+    fun `Stockholm night widget theme defaults off and survives content rewrites`() {
+        val prefs = mutablePreferencesOf()
+        assertEquals(false, prefs.toPreferences().usesStockholmNightWidgetTheme())
+
+        prefs.setStockholmNightWidgetTheme(true)
+        RoutineWidgetUiState.NoActiveCommute.writeInto(prefs)
+
+        assertEquals(true, prefs.toPreferences().usesStockholmNightWidgetTheme())
+        prefs.setStockholmNightWidgetTheme(false)
+        assertEquals(false, prefs.toPreferences().usesStockholmNightWidgetTheme())
     }
 }

@@ -325,6 +325,33 @@ class BlickRoutineWidgetTest {
         assertEquals(ExactDestinationChangesPreference.WITH_CHANGES_ONLY, (resolved.content as RoutineWidgetContent.Journeys).changesPreference)
     }
 
+    @Test
+    fun `large widget station captions remove city municipality and region suffixes`() {
+        assertEquals("Mälarhöjden", compactWidgetStationName("Mälarhöjden, Stockholm"))
+        assertEquals("Tumba", compactWidgetStationName("Tumba, Botkyrka kommun, Stockholms län"))
+    }
+
+    @Test
+    fun `large widget station captions preserve parenthetical station descriptors`() {
+        assertEquals("Arlanda central (pendeltåg)", compactWidgetStationName(" Arlanda central (pendeltåg) "))
+    }
+
+    @Test
+    fun `phone-sized Large widget station captions stay capped at two lines`() {
+        assertEquals(2, largeJourneyStationMaxLinesFor(340.dp))
+    }
+
+    @Test
+    fun `wide tablet Large widget station captions are not line-capped`() {
+        assertEquals(Int.MAX_VALUE, largeJourneyStationMaxLinesFor(500.dp))
+    }
+
+    @Test
+    fun `Large widget one-change connector is longer than multi-change connectors`() {
+        assertEquals(24, largeJourneyConnectorDotsFor(stageCount = 2).length)
+        assertEquals(16, largeJourneyConnectorDotsFor(stageCount = 3).length)
+    }
+
     // ---- legBadgesOrFallback: falls back to a single header-derived badge only when legBadges
     // itself is genuinely empty (state persisted by a version predating that field). ----
 

@@ -262,7 +262,10 @@ class RoutineWidgetJourneysMapperTest {
 
         val content = ((state as RoutineWidgetUiState.ActiveRoutine).model.content) as RoutineWidgetContent.Journeys
         assertEquals(
-            listOf(WidgetJourneyLegBadge("14", TransportMode.METRO), WidgetJourneyLegBadge("40", TransportMode.BUS)),
+            listOf(
+                WidgetJourneyLegBadge("14", TransportMode.METRO, "Fruängen"),
+                WidgetJourneyLegBadge("40", TransportMode.BUS, "Slussen"),
+            ),
             content.primary.legBadges,
         )
     }
@@ -281,7 +284,10 @@ class RoutineWidgetJourneysMapperTest {
 
         val content = ((state as RoutineWidgetUiState.ActiveRoutine).model.content) as RoutineWidgetContent.Journeys
         assertEquals(
-            listOf(WidgetJourneyLegBadge("14", TransportMode.METRO), WidgetJourneyLegBadge("40", TransportMode.BUS)),
+            listOf(
+                WidgetJourneyLegBadge("14", TransportMode.METRO, "Fruängen"),
+                WidgetJourneyLegBadge("40", TransportMode.BUS, "Slussen"),
+            ),
             content.primary.legBadges,
         )
     }
@@ -292,7 +298,7 @@ class RoutineWidgetJourneysMapperTest {
         val state = decideJourneysWidgetState(routine(), listOf(primary), now)
 
         val content = ((state as RoutineWidgetUiState.ActiveRoutine).model.content) as RoutineWidgetContent.Journeys
-        assertEquals(listOf(WidgetJourneyLegBadge("14", TransportMode.METRO)), content.primary.legBadges)
+        assertEquals(listOf(WidgetJourneyLegBadge("14", TransportMode.METRO, "Fruängen")), content.primary.legBadges)
     }
 
     // ---- disruption: the current PRIMARY journey's own DisruptionPresentation, already derived

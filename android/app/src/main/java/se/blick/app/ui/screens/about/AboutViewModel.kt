@@ -87,6 +87,7 @@ class AboutViewModel @Inject constructor(
                 appSettingsDataStore.setUseStockholmNightTheme(false)
                 appSettingsDataStore.setUseDarkTheme(mode.useDarkTheme)
             }
+            runWidgetUpdateSafely { routineWidgetUpdater.refreshPresentation() }
         }
     }
 

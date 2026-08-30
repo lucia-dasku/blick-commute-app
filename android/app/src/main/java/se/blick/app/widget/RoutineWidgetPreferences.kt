@@ -14,6 +14,9 @@ import se.blick.app.domain.model.toExactDestinationChangesPreference
 import se.blick.app.domain.model.toJourneyRole
 import se.blick.app.domain.model.toRoutineLabelOrNull
 import se.blick.app.domain.model.toTransportMode
+import java.net.URLDecoder
+import java.net.URLEncoder
+import java.nio.charset.StandardCharsets
 import java.time.Instant
 
 /**
@@ -25,6 +28,10 @@ import java.time.Instant
  * [android.content.Context], or Robolectric involved.
  */
 private object WidgetKeys {
+    /** Presentation-only flag maintained by [GlanceRoutineWidgetUpdater]. It is deliberately
+     * independent of the routine/content keys below so an appearance change can redraw an
+     * already-active widget without replacing its current departures or journeys. */
+    val USE_STOCKHOLM_NIGHT_THEME = booleanPreferencesKey("useStockholmNightTheme")
     val CONTENT_TYPE = stringPreferencesKey("contentType")
     val ROUTINE_ID = stringPreferencesKey("routineId")
     val ROUTINE_NAME = stringPreferencesKey("routineName")
@@ -83,14 +90,20 @@ private object WidgetKeys {
     val JOURNEY_SECONDARY_LEG_BADGES = stringPreferencesKey("journeySecondaryLegBadges")
 }
 
-/** Encodes [this] as `"14:METRO|40:BUS"` — pipe-separated leg entries, each a colon-separated
- * `lineDesignation:transportMode` pair, in journey order. [Preferences] has no native list/struct
+/** Encodes [this] as `"14:METRO:Fru%C3%A4ngen|40:BUS:Slussen"` — pipe-separated leg entries,
+ * each a colon-separated `lineDesignation:transportMode:boardingStationName` tuple in journey
+ * order. Station names are URL-encoded so punctuation cannot collide with the tuple delimiters.
+ * An entry written by an older version as `lineDesignation:transportMode` remains valid and
+ * decodes with a null station name. [Preferences] has no native list/struct
  * type (only flat primitives, plus an unordered `Set<String>` unsuited to this ordered,
  * paired data — see [androidx.datastore.preferences.core.stringSetPreferencesKey]), so this
  * mirrors [se.blick.app.data.local.room.RoutineMappers.kt]'s own comma-joined
  * `allowedJourneyTransportModes` encoding: a real SL line designation never itself contains `:`
  * or `|`, exactly like a [TransportMode] enum name never contains a comma. */
-private fun List<WidgetJourneyLegBadge>.encodeLegBadges(): String = joinToString("|") { "${it.lineDesignation}:${it.transportMode.name}" }
+private fun List<WidgetJourneyLegBadge>.encodeLegBadges(): String = joinToString("|") { badge ->
+    val station = badge.boardingStationName?.let { URLEncoder.encode(it, StandardCharsets.UTF_8.name()) }
+    listOfNotNull(badge.lineDesignation, badge.transportMode.name, station).joinToString(":")
+}
 
 /** The exact inverse of [encodeLegBadges] — a null/blank/malformed value (absent key, a version
  * predating this field, or unlikely datastore corruption) decodes to an empty list rather than
@@ -100,8 +113,15 @@ private fun String?.decodeLegBadges(): List<WidgetJourneyLegBadge> =
     this?.takeIf(String::isNotEmpty)
         ?.split("|")
         ?.mapNotNull { entry ->
-            val parts = entry.split(":", limit = 2)
-            if (parts.size != 2 || parts[0].isEmpty()) null else WidgetJourneyLegBadge(parts[0], parts[1].toTransportMode())
+            val parts = entry.split(":", limit = 3)
+            if (parts.size < 2 || parts[0].isEmpty()) {
+                null
+            } else {
+                val station = parts.getOrNull(2)?.let { encoded ->
+                    runCatching { URLDecoder.decode(encoded, StandardCharsets.UTF_8.name()) }.getOrNull()
+                }
+                WidgetJourneyLegBadge(parts[0], parts[1].toTransportMode(), station)
+            }
         }
         .orEmpty()
 
@@ -119,9 +139,12 @@ private enum class ContentType { NO_ACTIVE_COMMUTE, LOADING, LIVE, STALE, NO_UPC
 
 /** Clears every key this codec owns before writing new ones — a widget state transition (e.g.
  * [RoutineWidgetContent.Live] to [RoutineWidgetContent.Offline]) must never leave a stale
- * `nextLine`/`nextMinutes` from a previous state lingering unread-but-present in the datastore. */
+ * `nextLine`/`nextMinutes` from a previous state lingering unread-but-present in the datastore.
+ * The independent appearance flag is preserved because it is not content state. */
 internal fun RoutineWidgetUiState.writeInto(prefs: MutablePreferences) {
+    val existingStockholmNightTheme = prefs[WidgetKeys.USE_STOCKHOLM_NIGHT_THEME]
     prefs.clear()
+    existingStockholmNightTheme?.let { prefs[WidgetKeys.USE_STOCKHOLM_NIGHT_THEME] = it }
     when (this) {
         RoutineWidgetUiState.NoActiveCommute -> prefs[WidgetKeys.CONTENT_TYPE] = ContentType.NO_ACTIVE_COMMUTE.name
         is RoutineWidgetUiState.ActiveRoutine -> {
@@ -167,6 +190,13 @@ internal fun RoutineWidgetUiState.writeInto(prefs: MutablePreferences) {
             }
         }
     }
+}
+
+internal fun Preferences.usesStockholmNightWidgetTheme(): Boolean =
+    this[WidgetKeys.USE_STOCKHOLM_NIGHT_THEME] ?: false
+
+internal fun MutablePreferences.setStockholmNightWidgetTheme(enabled: Boolean) {
+    this[WidgetKeys.USE_STOCKHOLM_NIGHT_THEME] = enabled
 }
 
 private fun MutablePreferences.writeJourney(row: WidgetJourneyRow, isSecondary: Boolean) {

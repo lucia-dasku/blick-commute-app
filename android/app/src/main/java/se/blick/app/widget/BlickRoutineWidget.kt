@@ -28,6 +28,7 @@ import androidx.glance.appwidget.cornerRadius
 import androidx.glance.appwidget.provideContent
 import androidx.glance.background
 import androidx.glance.currentState
+import androidx.glance.color.colorProviders
 import androidx.glance.layout.Alignment
 import androidx.glance.layout.Box
 import androidx.glance.layout.Column
@@ -57,6 +58,7 @@ import se.blick.app.locale.withAppLocale
 import se.blick.app.notification.disruptionEffectLabelRes
 import se.blick.app.ui.components.stringResourceId
 import se.blick.app.ui.components.visuals
+import se.blick.app.ui.theme.StockholmNightSurfaces
 import java.time.format.DateTimeFormatter
 
 /**
@@ -94,7 +96,10 @@ class BlickRoutineWidget : GlanceAppWidget() {
     override suspend fun provideGlance(context: Context, id: GlanceId) {
         provideContent {
             val prefs = currentState<Preferences>()
-            BlickWidgetContent(prefs.toWidgetUiState())
+            BlickWidgetContent(
+                state = prefs.toWidgetUiState(),
+                useStockholmNightTheme = prefs.usesStockholmNightWidgetTheme(),
+            )
         }
     }
 }
@@ -263,9 +268,37 @@ private fun sizeTierFor(layoutTier: WidgetLayoutTier): WidgetSizeTier = when (la
 // source of truth rather than duplicating these literals. Only this Glance-specific white-text
 // ColorProvider stays here, since androidx.glance.unit.ColorProvider has no standard-Compose use.
 private val BADGE_TEXT_WHITE = ColorProvider(Color.White)
-private val INACTIVE_WIDGET_BACKGROUND = ColorProvider(Color(0xFF010C2F))
-private val INACTIVE_WIDGET_SECONDARY = ColorProvider(Color(0xFFC5C8CF))
 private val INACTIVE_WIDGET_MINT = ColorProvider(Color(0xFF33E4A1))
+private val STOCKHOLM_NIGHT_WIDGET_BORDER = ColorProvider(StockholmNightSurfaces.CardBorder)
+private val STOCKHOLM_NIGHT_WIDGET_COLORS = colorProviders(
+    primary = ColorProvider(Color(0xFFA9C7E0)),
+    onPrimary = ColorProvider(Color(0xFF10213B)),
+    primaryContainer = ColorProvider(StockholmNightSurfaces.SelectedControl),
+    onPrimaryContainer = ColorProvider(Color(0xFFF4F6FB)),
+    secondary = ColorProvider(Color(0xFFB7C0D1)),
+    onSecondary = ColorProvider(Color(0xFF07142B)),
+    secondaryContainer = ColorProvider(StockholmNightSurfaces.Control),
+    onSecondaryContainer = ColorProvider(Color(0xFFF4F6FB)),
+    tertiary = ColorProvider(Color(0xFFF4C47A)),
+    onTertiary = ColorProvider(Color(0xFF3A2A0D)),
+    tertiaryContainer = ColorProvider(Color(0xFF4A3A20)),
+    onTertiaryContainer = ColorProvider(Color(0xFFF7D9A0)),
+    error = ColorProvider(Color(0xFFF2B8B5)),
+    errorContainer = ColorProvider(Color(0xFF4A2A27)),
+    onError = ColorProvider(Color(0xFF601410)),
+    onErrorContainer = ColorProvider(Color(0xFFF2B8B5)),
+    background = ColorProvider(StockholmNightSurfaces.Card),
+    onBackground = ColorProvider(Color(0xFFF4F6FB)),
+    surface = ColorProvider(StockholmNightSurfaces.Card),
+    onSurface = ColorProvider(Color(0xFFF4F6FB)),
+    surfaceVariant = ColorProvider(StockholmNightSurfaces.Control),
+    onSurfaceVariant = ColorProvider(Color(0xFFB7C0D1)),
+    outline = ColorProvider(StockholmNightSurfaces.Divider),
+    inverseOnSurface = ColorProvider(Color(0xFF07142B)),
+    inverseSurface = ColorProvider(Color(0xFFF4F6FB)),
+    inversePrimary = ColorProvider(Color(0xFF3A5A78)),
+    widgetBackground = ColorProvider(StockholmNightSurfaces.Card),
+)
 private val INACTIVE_WIDGET_WATER_HEIGHT = 12.dp
 // The skyline makes geometric centering read slightly low. This extra space below the centered
 // branding content shifts its visual center upward by 14dp -- approximately one status-text
@@ -369,7 +402,11 @@ internal fun inactiveWidgetLayoutFor(width: Dp, height: Dp): InactiveWidgetLayou
  * [BlickRoutineWidgetRenderTest]'s own doc for the race a second, independent clock read used to
  * cause. */
 @Composable
-internal fun BlickWidgetContent(state: RoutineWidgetUiState, now: java.time.Instant = java.time.Instant.now()) {
+internal fun BlickWidgetContent(
+    state: RoutineWidgetUiState,
+    now: java.time.Instant = java.time.Instant.now(),
+    useStockholmNightTheme: Boolean = false,
+) {
     // .withAppLocale() -- this Context flows down into every Blick-owned string lookup below
     // (ActiveRoutineContent and everything under it already take context as a plain parameter,
     // see this file's own doc), resolving against Blick's own selected app language rather than
@@ -377,13 +414,14 @@ internal fun BlickWidgetContent(state: RoutineWidgetUiState, now: java.time.Inst
     // (station/destination/line/disruption headline) is untouched either way -- it was never a
     // string resource to begin with.
     val context = LocalContext.current.withAppLocale()
-    GlanceTheme {
+    GlanceTheme(colors = if (useStockholmNightTheme) STOCKHOLM_NIGHT_WIDGET_COLORS else GlanceTheme.colors) {
         when (state) {
             RoutineWidgetUiState.NoActiveCommute -> Scaffold(
-                backgroundColor = INACTIVE_WIDGET_BACKGROUND,
+                backgroundColor = GlanceTheme.colors.widgetBackground,
                 horizontalPadding = 0.dp,
             ) { NoActiveCommuteContent() }
-            is RoutineWidgetUiState.ActiveRoutine -> ActiveRoutineContent(context, state.model, now)
+            is RoutineWidgetUiState.ActiveRoutine ->
+                ActiveRoutineContent(context, state.model, now, useStockholmNightTheme)
         }
     }
 }
@@ -458,7 +496,7 @@ private fun InactiveBrandingContent(context: Context, layout: InactiveWidgetLayo
         maxLines = 2,
         modifier = GlanceModifier.fillMaxWidth(),
         style = TextStyle(
-            color = INACTIVE_WIDGET_SECONDARY,
+            color = onSurfaceVariantColor(),
             fontSize = layout.statusSize,
             textAlign = TextAlign.Center,
         ),
@@ -469,9 +507,23 @@ private fun InactiveBrandingContent(context: Context, layout: InactiveWidgetLayo
  * look closely enough that [NoActiveCommuteContent] (which still uses [Scaffold]) and this look
  * like the same widget shell. */
 private val WIDGET_CORNER_RADIUS = 16.dp
+private val WIDGET_INNER_CORNER_RADIUS = 15.dp
+private val LARGE_JOURNEY_CORNER_RADIUS = 24.dp
+private val LARGE_JOURNEY_INNER_CORNER_RADIUS = 23.dp
+private val LARGE_JOURNEY_COUNTDOWN_SIZE = 52.sp
+private val LARGE_JOURNEY_STATION_SIZE = 10.sp
+private val LARGE_JOURNEY_MULTI_CHANGE_CONNECTOR_WIDTH = 40.dp
+private val LARGE_JOURNEY_SINGLE_CHANGE_CONNECTOR_WIDTH = 72.dp
+private val LARGE_JOURNEY_WIDE_CAPTIONS_MIN_WIDTH = 420.dp
 
-/** Horizontal inset for the main content column — matches [Scaffold]'s own default
- * `horizontalPadding` (16dp) so this hand-built chrome reads identically to [Scaffold]'s. */
+internal fun largeJourneyStationMaxLinesFor(widgetWidth: Dp): Int =
+    if (widgetWidth >= LARGE_JOURNEY_WIDE_CAPTIONS_MIN_WIDTH) Int.MAX_VALUE else 2
+
+internal fun largeJourneyConnectorDotsFor(stageCount: Int): String =
+    "•".repeat(if (stageCount == 2) 24 else 16)
+
+/** Default horizontal inset for the main content column — matches [Scaffold]'s own default.
+ * The approved Large exact-destination card uses its own 20dp inset. */
 private val WIDGET_HORIZONTAL_PADDING = 16.dp
 
 /**
@@ -492,7 +544,12 @@ private val WIDGET_HORIZONTAL_PADDING = 16.dp
  * (see [WIDGET_HORIZONTAL_PADDING]), so the common (no disruption) case looks unchanged.
  */
 @Composable
-private fun ActiveRoutineContent(context: Context, model: RoutineWidgetModel, now: java.time.Instant) {
+private fun ActiveRoutineContent(
+    context: Context,
+    model: RoutineWidgetModel,
+    now: java.time.Instant,
+    useStockholmNightTheme: Boolean,
+) {
     // [now] is BlickWidgetContent's own single Instant for this whole render (see that
     // function's own doc) -- never read independently here. Threaded through render-time
     // journey resolution (header selection AND eligibility) below, and further into
@@ -511,6 +568,7 @@ private fun ActiveRoutineContent(context: Context, model: RoutineWidgetModel, no
     val size = LocalSize.current
     val layout = widgetLayoutRulesFor(size.width, size.height)
     val tier = sizeTierFor(layout.tier)
+    val isLargeJourney = layout.tier == WidgetLayoutTier.LARGE && model.content is RoutineWidgetContent.Journeys
     // "{station} → {destination}" -- matches the same pattern the ongoing notification's own
     // title and a routine's own default name both use (see RoutineNotificationBuilder.title,
     // RoutineCreateViewModel.selectDirection); falls back to the station alone when the
@@ -530,11 +588,21 @@ private fun ActiveRoutineContent(context: Context, model: RoutineWidgetModel, no
         modifier = GlanceModifier
             .fillMaxSize()
             .appWidgetBackground()
-            .background(GlanceTheme.colors.widgetBackground)
-            .cornerRadius(WIDGET_CORNER_RADIUS)
+            .background(if (useStockholmNightTheme) STOCKHOLM_NIGHT_WIDGET_BORDER else GlanceTheme.colors.widgetBackground)
+            .cornerRadius(if (isLargeJourney) LARGE_JOURNEY_CORNER_RADIUS else WIDGET_CORNER_RADIUS)
             .clickable(clickAction),
     ) {
-        Column(modifier = GlanceModifier.fillMaxSize()) {
+        Column(
+            modifier = if (useStockholmNightTheme) {
+                GlanceModifier
+                    .fillMaxSize()
+                    .padding(1.dp)
+                    .background(GlanceTheme.colors.widgetBackground)
+                    .cornerRadius(if (isLargeJourney) LARGE_JOURNEY_INNER_CORNER_RADIUS else WIDGET_INNER_CORNER_RADIUS)
+            } else {
+                GlanceModifier.fillMaxSize()
+            },
+        ) {
             // defaultWeight() so this main block always fills whatever height the (optional)
             // disruption strip below doesn't need -- see this composable's own doc on why
             // "content fills the widget instead of being cramped at the top" is achieved by
@@ -544,18 +612,18 @@ private fun ActiveRoutineContent(context: Context, model: RoutineWidgetModel, no
                     .fillMaxWidth()
                     .defaultWeight()
                     .padding(
-                        horizontal = WIDGET_HORIZONTAL_PADDING,
+                        horizontal = if (isLargeJourney) 20.dp else WIDGET_HORIZONTAL_PADDING,
                         vertical = when (layout.tier) {
                             WidgetLayoutTier.SMALL -> 10.dp
                             WidgetLayoutTier.STANDARD -> 6.dp
-                            WidgetLayoutTier.LARGE -> 10.dp
+                            WidgetLayoutTier.LARGE -> if (isLargeJourney) 16.dp else 10.dp
                         },
                     ),
                 verticalAlignment = if (layout.tier == WidgetLayoutTier.LARGE) Alignment.Top else Alignment.CenterVertically,
             ) {
                 if (layout.showRoutineLabel) {
                     model.label?.let { label ->
-                        RoutineLabelChip(context, label, tier)
+                        RoutineLabelChip(context, label, tier, useStockholmNightTheme)
                         Spacer(
                             modifier = GlanceModifier.height(
                                 when (layout.tier) {
@@ -567,7 +635,13 @@ private fun ActiveRoutineContent(context: Context, model: RoutineWidgetModel, no
                         )
                     }
                 }
-                WidgetHeader(tier, routeText, isStale, layout.routeMaxLines)
+                WidgetHeader(
+                    tier = tier,
+                    routeText = routeText,
+                    isStale = isStale,
+                    routeMaxLines = layout.routeMaxLines,
+                    textColor = onBackgroundColor(),
+                )
                 Spacer(
                     modifier = GlanceModifier.height(
                         when (layout.tier) {
@@ -621,13 +695,19 @@ private fun disruptionStripText(context: Context, model: RoutineWidgetModel): St
 }
 
 @Composable
-private fun WidgetHeader(tier: WidgetSizeTier, routeText: String, isStale: Boolean, routeMaxLines: Int) {
+private fun WidgetHeader(
+    tier: WidgetSizeTier,
+    routeText: String,
+    isStale: Boolean,
+    routeMaxLines: Int,
+    textColor: ColorProvider,
+) {
     Row(modifier = GlanceModifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
         Text(
             text = routeText,
             maxLines = routeMaxLines,
             modifier = GlanceModifier.defaultWeight(),
-            style = TextStyle(fontWeight = FontWeight.Bold, fontSize = tier.headerSize, color = onBackgroundColor()),
+            style = TextStyle(fontWeight = FontWeight.Bold, fontSize = tier.headerSize, color = textColor),
         )
         if (isStale) {
             StaleIndicator(tier)
@@ -638,11 +718,24 @@ private fun WidgetHeader(tier: WidgetSizeTier, routeText: String, isStale: Boole
 /** Compact label identity shared with the app: same localized name, icon resource, and
  * light/dark accent/container colors. The icon is decorative because its text sits beside it. */
 @Composable
-private fun RoutineLabelChip(context: Context, label: RoutineLabel, tier: WidgetSizeTier) {
+private fun RoutineLabelChip(
+    context: Context,
+    label: RoutineLabel,
+    tier: WidgetSizeTier,
+    useStockholmNightTheme: Boolean,
+) {
     val light = label.visuals(darkTheme = false)
     val dark = label.visuals(darkTheme = true)
-    val accent = androidx.glance.color.ColorProvider(day = light.accent, night = dark.accent)
-    val container = androidx.glance.color.ColorProvider(day = light.container, night = dark.container)
+    val accent = if (useStockholmNightTheme) {
+        ColorProvider(dark.accent)
+    } else {
+        androidx.glance.color.ColorProvider(day = light.accent, night = dark.accent)
+    }
+    val container = if (useStockholmNightTheme) {
+        ColorProvider(dark.container)
+    } else {
+        androidx.glance.color.ColorProvider(day = light.container, night = dark.container)
+    }
     Box(
         modifier = GlanceModifier
             .background(container)
@@ -816,8 +909,9 @@ private fun WidgetContentBody(
 }
 
 /**
- * Renders one of three layouts, switched ONLY on [RoutineWidgetContent.Journeys.changesPreference]
- * — the routine's own persisted Direct/Both/With-changes choice — never inferred from
+ * Small and Standard preserve their existing layouts, whose optional wording is switched only
+ * on [RoutineWidgetContent.Journeys.changesPreference] — the routine's own persisted
+ * Direct/Both/With-changes choice — never inferred from
  * [content.primary][RoutineWidgetContent.Journeys.primary]'s own [WidgetJourneyRow.transferCount]:
  * a [ExactDestinationChangesPreference.BOTH] routine and a
  * [ExactDestinationChangesPreference.WITH_CHANGES_ONLY] one can both be showing a journey with the
@@ -830,7 +924,8 @@ private fun WidgetContentBody(
  * `JourneyChangesPreference` doc) — it only ever matters for [ExactDestinationChangesPreference.BOTH],
  * where a direct PRIMARY still reads "Direct" rather than the arguably-nonsensical "0 changes".
  *
- * A left-aligned vertical stack: the big countdown, then [JourneyCompositionRow] (line badge(s),
+ * Large uses [LargeJourneySummary]'s dedicated compact route strip. Small and Standard remain a
+ * left-aligned vertical stack: the big countdown, then [JourneyCompositionRow] (line badge(s),
  * "Direct" or "Arrive HH:mm · N change(s)", and — [ExactDestinationChangesPreference.WITH_CHANGES_ONLY]
  * only — the small green "With changes" label), then — when [WidgetLayoutRules.showSecondary]
  * allows it, exactly
@@ -864,6 +959,10 @@ private fun JourneyMainContent(
     // primary departure.
     val primaryMinutes = countdownMinutes(now, content.primary.departureTime)
     val arrivalFormatter = DateTimeFormatter.ofPattern("HH:mm").withZone(java.time.ZoneId.systemDefault())
+    if (layout.tier == WidgetLayoutTier.LARGE) {
+        LargeJourneySummary(context, content, primaryMinutes, arrivalFormatter, tier, now)
+        return
+    }
     Column(modifier = GlanceModifier.fillMaxWidth()) {
         Text(
             formatWidgetCountdown(context, primaryMinutes),
@@ -906,6 +1005,208 @@ private fun JourneyMainContent(
             NextJourneyRow(context, secondary, now, tier)
         }
     }
+}
+
+/** The approved biggest-widget exact-destination summary. It deliberately exists as a separate
+ * Large-only path so the established Small and Standard journey trees remain pixel-identical.
+ * Every value comes from the already-selected [RoutineWidgetContent.Journeys] rows; this function
+ * only changes their presentation. */
+@Composable
+private fun LargeJourneySummary(
+    context: Context,
+    content: RoutineWidgetContent.Journeys,
+    primaryMinutes: Long,
+    timeFormatter: DateTimeFormatter,
+    tier: WidgetSizeTier,
+    now: java.time.Instant,
+) {
+    val primary = content.primary
+    Column(modifier = GlanceModifier.fillMaxWidth()) {
+        Text(
+            formatWidgetCountdown(context, primaryMinutes),
+            maxLines = 1,
+            style = TextStyle(
+                fontWeight = FontWeight.Bold,
+                fontSize = LARGE_JOURNEY_COUNTDOWN_SIZE,
+                color = onBackgroundColor(),
+            ),
+        )
+        if (primary.transferCount == 0) {
+            JourneyCompositionRow(
+                context = context,
+                primary = primary,
+                changesPreference = content.changesPreference,
+                arrivalFormatter = timeFormatter,
+                includeArrivalInComposition = false,
+                tier = tier,
+            )
+        } else {
+            Text(
+                text = context.resources.getQuantityString(
+                    R.plurals.widget_journey_changes,
+                    primary.transferCount,
+                    primary.transferCount,
+                ),
+                maxLines = 1,
+                style = TextStyle(fontSize = tier.secondarySize, color = onSurfaceVariantColor()),
+            )
+            Spacer(modifier = GlanceModifier.height(8.dp))
+            LargeJourneyRouteStrip(
+                stages = primary.legBadgesOrFallback(),
+                tier = tier,
+            )
+        }
+        Spacer(modifier = GlanceModifier.height(7.dp))
+        LargeJourneyDivider()
+        Spacer(modifier = GlanceModifier.height(7.dp))
+        LargeJourneyTimesRow(context, primary, timeFormatter, tier)
+
+        val secondary = content.secondary?.takeIf { isDepartureCurrent(now, it.departureTime) }
+        if (secondary != null) {
+            Spacer(modifier = GlanceModifier.height(7.dp))
+            LargeJourneyDivider()
+            Spacer(modifier = GlanceModifier.height(7.dp))
+            LargeSecondaryJourneyRow(context, secondary, now, tier)
+        }
+    }
+}
+
+/** One compact stage per boarded public-transport leg. The station shown under a badge is that
+ * same leg's authoritative origin, which naturally yields the initial boarding point followed
+ * by each change location. Walking legs have already been excluded by the mapper. */
+@Composable
+private fun LargeJourneyRouteStrip(
+    stages: List<WidgetJourneyLegBadge>,
+    tier: WidgetSizeTier,
+) {
+    val stationMaxLines = largeJourneyStationMaxLinesFor(LocalSize.current.width)
+    val connectorWidth = if (stages.size == 2) {
+        LARGE_JOURNEY_SINGLE_CHANGE_CONNECTOR_WIDTH
+    } else {
+        LARGE_JOURNEY_MULTI_CHANGE_CONNECTOR_WIDTH
+    }
+    val connectorDots = largeJourneyConnectorDotsFor(stages.size)
+    Row(modifier = GlanceModifier.fillMaxWidth(), verticalAlignment = Alignment.Top) {
+        stages.forEachIndexed { index, stage ->
+            Column(
+                modifier = GlanceModifier.defaultWeight(),
+                horizontalAlignment = Alignment.CenterHorizontally,
+            ) {
+                LineBadge(
+                    stage.lineDesignation,
+                    LineBadgeColorMapping.colorFor(stage.transportMode, stage.lineDesignation),
+                    tier.badgeSize,
+                )
+                stage.boardingStationName
+                    ?.takeIf(String::isNotBlank)
+                    ?.let { stationName ->
+                    Spacer(modifier = GlanceModifier.height(4.dp))
+                    Text(
+                        text = compactWidgetStationName(stationName),
+                        maxLines = stationMaxLines,
+                        modifier = GlanceModifier.fillMaxWidth(),
+                        style = TextStyle(
+                            fontSize = LARGE_JOURNEY_STATION_SIZE,
+                            color = onSurfaceVariantColor(),
+                            textAlign = TextAlign.Center,
+                        ),
+                    )
+                }
+            }
+            if (index != stages.lastIndex) {
+                Column(
+                    modifier = GlanceModifier.width(connectorWidth),
+                    horizontalAlignment = Alignment.CenterHorizontally,
+                ) {
+                    Spacer(modifier = GlanceModifier.height(4.dp))
+                    Text(
+                        text = connectorDots,
+                        maxLines = 1,
+                        modifier = GlanceModifier.fillMaxWidth(),
+                        style = TextStyle(
+                            fontSize = 8.sp,
+                            color = onSurfaceVariantColor(),
+                            textAlign = TextAlign.Center,
+                        ),
+                    )
+                }
+            }
+        }
+    }
+}
+
+/** Large route-strip captions need the stop identity only. Journey Planner appends locality,
+ * municipality, and region qualifiers after commas; parenthetical platform/mode descriptors are
+ * part of the station name and remain untouched. */
+internal fun compactWidgetStationName(name: String): String {
+    val trimmed = name.trim()
+    return trimmed.substringBefore(',').trim().ifEmpty { trimmed }
+}
+
+@Composable
+private fun LargeJourneyTimesRow(
+    context: Context,
+    primary: WidgetJourneyRow,
+    timeFormatter: DateTimeFormatter,
+    tier: WidgetSizeTier,
+) {
+    Row(modifier = GlanceModifier.fillMaxWidth()) {
+        Column(modifier = GlanceModifier.defaultWeight(), horizontalAlignment = Alignment.Start) {
+            Text(
+                context.getString(R.string.widget_journey_depart_label),
+                maxLines = 1,
+                style = TextStyle(fontSize = tier.statusSize, color = onSurfaceVariantColor()),
+            )
+            Text(
+                timeFormatter.format(primary.departureTime),
+                maxLines = 1,
+                style = TextStyle(fontWeight = FontWeight.Bold, fontSize = 18.sp, color = onBackgroundColor()),
+            )
+        }
+        Column(modifier = GlanceModifier.defaultWeight(), horizontalAlignment = Alignment.End) {
+            Text(
+                context.getString(R.string.widget_journey_arrive_label),
+                maxLines = 1,
+                style = TextStyle(fontSize = tier.statusSize, color = onSurfaceVariantColor()),
+            )
+            Text(
+                timeFormatter.format(primary.arrivalTime),
+                maxLines = 1,
+                style = TextStyle(fontWeight = FontWeight.Bold, fontSize = 18.sp, color = onBackgroundColor()),
+            )
+        }
+    }
+}
+
+@Composable
+private fun LargeSecondaryJourneyRow(
+    context: Context,
+    secondary: WidgetJourneyRow,
+    now: java.time.Instant,
+    tier: WidgetSizeTier,
+) {
+    val labelRes = if (secondary.role == JourneyRole.ALTERNATIVE) {
+        R.string.widget_journey_alternative_label
+    } else {
+        R.string.widget_journey_next_label
+    }
+    val secondarySummary = buildString {
+        append(context.getString(labelRes))
+        append(' ')
+        append(formatWidgetCountdown(context, countdownMinutes(now, secondary.departureTime)))
+        append("  ›")
+    }
+    Text(
+        text = secondarySummary,
+        maxLines = 1,
+        modifier = GlanceModifier.fillMaxWidth(),
+        style = TextStyle(fontSize = tier.secondarySize, color = onSurfaceVariantColor()),
+    )
+}
+
+@Composable
+private fun LargeJourneyDivider() {
+    Box(modifier = GlanceModifier.fillMaxWidth().height(1.dp).background(GlanceTheme.colors.outline)) {}
 }
 
 /** [primary]'s own composition: one badge per public-transport leg (see [legBadgesOrFallback]),

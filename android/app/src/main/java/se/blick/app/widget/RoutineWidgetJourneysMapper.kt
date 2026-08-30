@@ -60,7 +60,9 @@ internal fun decideJourneysWidgetState(
             journey.transferCount,
             journey.firstLeg.isRealtime,
             journey.role,
-            journey.legs.mapNotNull { leg -> leg.lineDesignation?.let { WidgetJourneyLegBadge(it, leg.transportMode) } },
+            journey.legs.mapNotNull { leg ->
+                leg.lineDesignation?.let { WidgetJourneyLegBadge(it, leg.transportMode, leg.originName) }
+            },
         )
     }
     val primary = rows.firstOrNull() ?: return RoutineWidgetUiState.ActiveRoutine(

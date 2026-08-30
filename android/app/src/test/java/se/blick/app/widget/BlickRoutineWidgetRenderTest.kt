@@ -106,6 +106,7 @@ class BlickRoutineWidgetRenderTest {
     private fun withChangesText() = context.getString(R.string.journey_with_changes)
     private fun nextLabelText() = context.getString(R.string.widget_journey_next_label)
     private fun alternativeLabelText() = context.getString(R.string.widget_journey_alternative_label)
+    private fun changesText(changes: Int) = context.resources.getQuantityString(R.plurals.widget_journey_changes, changes, changes)
     private fun arriveWithChangesText(arrival: Instant, changes: Int) = context.resources.getQuantityString(
         R.plurals.widget_journey_arrive_with_changes, changes, arrivalFormatter.format(arrival), changes,
     )
@@ -182,7 +183,7 @@ class BlickRoutineWidgetRenderTest {
     // each supported tier. Pure rule tests separately pin the small route to two lines. ----
 
     @Test
-    fun `2x2 shows label route dominant countdown badge and Direct without secondary details`() =
+    fun `Stockholm 2x2 shows label route dominant countdown badge and Direct without secondary details`() =
         runGlanceAppWidgetUnitTest {
             setContext(context)
             setAppWidgetSize(DpSize(180.dp, 130.dp))
@@ -198,6 +199,7 @@ class BlickRoutineWidgetRenderTest {
                         directionLabel = "Skanstull",
                     ),
                     now,
+                    useStockholmNightTheme = true,
                 )
             }
 
@@ -234,13 +236,19 @@ class BlickRoutineWidgetRenderTest {
         }
 
     @Test
-    fun `3x2 shows label route composition divider and Next but omits journey times`() =
+    fun `Stockholm 3x2 shows label route composition divider and Next but omits journey times`() =
         runGlanceAppWidgetUnitTest {
             setContext(context)
             setAppWidgetSize(DpSize(260.dp, 150.dp))
             val primary = journeyRow(now.plusSeconds(180), lineDesignation = "13", transportMode = TransportMode.METRO)
             val next = journeyRow(now.plusSeconds(780), lineDesignation = "13", role = JourneyRole.NEXT)
-            provideComposable { BlickWidgetContent(activeRoutineState(primary, next, label = RoutineLabel.WORK), now) }
+            provideComposable {
+                BlickWidgetContent(
+                    activeRoutineState(primary, next, label = RoutineLabel.WORK),
+                    now,
+                    useStockholmNightTheme = true,
+                )
+            }
 
             onNode(hasTextEqualTo("Work")).assertExists()
             onNode(hasTextEqualTo(countdownText(3))).assertExists()
@@ -251,34 +259,119 @@ class BlickRoutineWidgetRenderTest {
         }
 
     @Test
-    fun `4x4 shows label full route current journey times and Next`() =
+    fun `Stockholm 4x4 shows the approved route strip, journey times, and Alternative`() =
         runGlanceAppWidgetUnitTest {
             setContext(context)
             setAppWidgetSize(DpSize(340.dp, 280.dp))
-            val primary = journeyRow(now.plusSeconds(180), lineDesignation = "13", transportMode = TransportMode.METRO)
-            val next = journeyRow(now.plusSeconds(780), lineDesignation = "13", role = JourneyRole.NEXT)
+            val primary = journeyRow(
+                now.plusSeconds(180),
+                lineDesignation = "129",
+                transportMode = TransportMode.BUS,
+                transferCount = 2,
+                legBadges = listOf(
+                    WidgetJourneyLegBadge("129", TransportMode.BUS, "Släggbacken, Stockholm"),
+                    WidgetJourneyLegBadge("10", TransportMode.METRO, "Huvudsta centrum, Solna kommun"),
+                    WidgetJourneyLegBadge("19", TransportMode.METRO, "T-Centralen, Stockholm, Stockholms län"),
+                ),
+            )
+            val alternative = journeyRow(now.plusSeconds(780), lineDesignation = "57", role = JourneyRole.ALTERNATIVE)
             provideComposable {
                 BlickWidgetContent(
                     activeRoutineState(
                         primary,
-                        next,
-                        label = RoutineLabel.HOME,
-                        stationName = "T-Centralen",
-                        directionLabel = "Malarhojden",
+                        alternative,
+                        label = RoutineLabel.STUDY,
+                        stationName = "Släggbacken",
+                        directionLabel = "Globen",
                     ),
                     now,
+                    useStockholmNightTheme = true,
                 )
             }
 
-            onNode(hasTextEqualTo("Home")).assertExists()
-            onNode(hasTextEqualTo("T-Centralen → Malarhojden")).assertExists()
+            onNode(hasTextEqualTo(context.getString(R.string.routine_label_study))).assertExists()
+            onNode(hasTextEqualTo("Släggbacken → Globen")).assertExists()
             onNode(hasTextEqualTo(countdownText(3))).assertExists()
+            onNode(hasTextEqualTo(changesText(2))).assertExists()
+            onNode(hasTextEqualTo("129")).assertExists()
+            onNode(hasTextEqualTo("10")).assertExists()
+            onNode(hasTextEqualTo("19")).assertExists()
+            onAllNodes(hasTextEqualTo("••••••••••••••••")).assertCountEquals(2)
+            onNode(hasTextEqualTo("Släggbacken")).assertExists()
+            onNode(hasTextEqualTo("Huvudsta centrum")).assertExists()
+            onNode(hasTextEqualTo("T-Centralen")).assertExists()
+            onNode(hasTextEqualTo("Släggbacken, Stockholm")).assertDoesNotExist()
+            onNode(hasTextEqualTo("Huvudsta centrum, Solna kommun")).assertDoesNotExist()
+            onNode(hasTextEqualTo("T-Centralen, Stockholm, Stockholms län")).assertDoesNotExist()
+            onNode(hasTextEqualTo("Bus")).assertDoesNotExist()
+            onNode(hasTextEqualTo("Metro")).assertDoesNotExist()
             onNode(hasTextEqualTo(context.getString(R.string.widget_journey_depart_label))).assertExists()
             onNode(hasTextEqualTo(arrivalFormatter.format(primary.departureTime))).assertExists()
             onNode(hasTextEqualTo(context.getString(R.string.widget_journey_arrive_label))).assertExists()
             onNode(hasTextEqualTo(arrivalFormatter.format(primary.arrivalTime))).assertExists()
-            onNode(hasTextEqualTo(nextLabelText())).assertExists()
-            onNode(hasTextEqualTo(countdownText(13))).assertExists()
+            onNode(hasTextEqualTo("${alternativeLabelText()} ${countdownText(13)}  ›")).assertExists()
+            onNode(hasTextEqualTo(nextLabelText())).assertDoesNotExist()
+        }
+
+    @Test
+    fun `Stockholm 4x4 visibly renders a NEXT journey below the second divider`() =
+        runGlanceAppWidgetUnitTest {
+            setContext(context)
+            setAppWidgetSize(DpSize(340.dp, 280.dp))
+            val primary = journeyRow(
+                now.plusSeconds(720),
+                lineDesignation = "13",
+                transportMode = TransportMode.METRO,
+                transferCount = 1,
+                legBadges = listOf(
+                    WidgetJourneyLegBadge("13", TransportMode.METRO, "Mälarhöjden"),
+                    WidgetJourneyLegBadge("41", TransportMode.TRAIN, "Stockholms södra"),
+                ),
+            )
+            val next = journeyRow(
+                now.plusSeconds(1_320),
+                lineDesignation = "13",
+                transportMode = TransportMode.METRO,
+                role = JourneyRole.NEXT,
+            )
+
+            provideComposable {
+                BlickWidgetContent(
+                    activeRoutineState(
+                        primary = primary,
+                        secondary = next,
+                        stationName = "Mälarhöjden",
+                        directionLabel = "Tumba",
+                    ),
+                    now,
+                    useStockholmNightTheme = true,
+                )
+            }
+
+            onNode(hasTextEqualTo("${nextLabelText()} ${countdownText(22)}  ›")).assertExists()
+        }
+
+    @Test
+    fun `3x2 keeps the existing composition and does not render Large route-strip station names`() =
+        runGlanceAppWidgetUnitTest {
+            setContext(context)
+            setAppWidgetSize(DpSize(260.dp, 150.dp))
+            val primary = journeyRow(
+                now.plusSeconds(300),
+                lineDesignation = "14",
+                transportMode = TransportMode.METRO,
+                transferCount = 1,
+                legBadges = listOf(
+                    WidgetJourneyLegBadge("14", TransportMode.METRO, "Fruängen"),
+                    WidgetJourneyLegBadge("40", TransportMode.BUS, "Slussen"),
+                ),
+            )
+            provideComposable { BlickWidgetContent(activeRoutineState(primary, null), now) }
+
+            onNode(hasTextEqualTo("14")).assertExists()
+            onNode(hasTextEqualTo("40")).assertExists()
+            onNode(hasTextEqualTo("Fruängen")).assertDoesNotExist()
+            onNode(hasTextEqualTo("Slussen")).assertDoesNotExist()
         }
 
     @Test
@@ -292,6 +385,39 @@ class BlickRoutineWidgetRenderTest {
             onNode(hasTextEqualTo("Home")).assertDoesNotExist()
             onNode(hasTextEqualTo(context.getString(R.string.routine_label_work))).assertDoesNotExist()
             onNode(hasText(lineRelevantGenericText())).assertDoesNotExist()
+        }
+
+    @Test
+    fun `4x4 direct journey omits the redundant boarding station caption`() =
+        runGlanceAppWidgetUnitTest {
+            setContext(context)
+            setAppWidgetSize(DpSize(340.dp, 280.dp))
+            val primary = journeyRow(
+                departureTime = now.plusSeconds(180),
+                lineDesignation = "13",
+                transportMode = TransportMode.METRO,
+                transferCount = 0,
+                legBadges = listOf(
+                    WidgetJourneyLegBadge("13", TransportMode.METRO, "Mälarhöjden, Stockholm"),
+                ),
+            )
+
+            provideComposable {
+                BlickWidgetContent(
+                    activeRoutineState(
+                        primary = primary,
+                        secondary = null,
+                        stationName = "Mälarhöjden",
+                        directionLabel = "Tumba",
+                    ),
+                    now,
+                )
+            }
+
+            onNode(hasTextEqualTo("13")).assertExists()
+            onNode(hasTextEqualTo(directText())).assertExists()
+            onNode(hasTextEqualTo("Mälarhöjden")).assertDoesNotExist()
+            onNode(hasTextEqualTo("Mälarhöjden, Stockholm")).assertDoesNotExist()
         }
 
     @Test
@@ -376,10 +502,19 @@ class BlickRoutineWidgetRenderTest {
         runGlanceAppWidgetUnitTest {
             setContext(context)
             setAppWidgetSize(DpSize(340.dp, 280.dp))
-            val primary = journeyRow(now.plusSeconds(180), lineDesignation = "13")
+            val primary = journeyRow(
+                now.plusSeconds(180),
+                lineDesignation = "13",
+                transferCount = 1,
+                legBadges = listOf(
+                    WidgetJourneyLegBadge("13", TransportMode.METRO, "Mälarhöjden"),
+                    WidgetJourneyLegBadge("41", TransportMode.TRAIN, "Stockholms södra"),
+                ),
+            )
             provideComposable { BlickWidgetContent(activeRoutineState(primary, null, label = RoutineLabel.STUDY), now) }
 
             onNode(hasTextEqualTo("Skola")).assertExists()
+            onNode(hasTextEqualTo("••••••••••••••••••••••••")).assertExists()
             onNode(hasTextEqualTo("Avgång")).assertExists()
             onNode(hasTextEqualTo("Ankomst")).assertExists()
         }

@@ -147,12 +147,18 @@ sealed interface RoutineWidgetContent {
     ) : RoutineWidgetContent
 }
 
-/** One leg's own line badge — [lineDesignation] is never null here (unlike
+/** One leg's own route-strip stage — [lineDesignation] is never null here (unlike
  * [WidgetJourneyRow.lineDesignation], the first leg's own designation kept for the header badge):
  * [RoutineWidgetJourneysMapper] only ever includes a leg that has one, silently dropping a walking
- * transfer leg (which has none) rather than rendering an empty/meaningless badge for it — see that
- * mapper's own doc. */
-data class WidgetJourneyLegBadge(val lineDesignation: String, val transportMode: TransportMode)
+ * transfer leg (which has none) rather than rendering an empty/meaningless badge for it. The
+ * boarding station is carried with the same authoritative leg for the Large widget's compact
+ * route strip; null preserves compatibility with widget state written before that presentation
+ * field existed. */
+data class WidgetJourneyLegBadge(
+    val lineDesignation: String,
+    val transportMode: TransportMode,
+    val boardingStationName: String? = null,
+)
 
 data class WidgetJourneyRow(
     val lineDesignation: String?,
@@ -169,12 +175,11 @@ data class WidgetJourneyRow(
      * (e.g. debugging, or a future primary-slot label) always sees this journey's genuine
      * backend meaning. */
     val role: JourneyRole,
-    /** One badge per public-transport leg, in journey order — e.g. `["14", "40"]` for a
-     * one-change journey — for the Both/With-changes layouts' own "relevant line badge(s)" row
-     * (see [BlickRoutineWidget]'s own doc). Empty for state persisted by a version predating this
-     * field; render-time falls back to a single badge built from [lineDesignation]/[transportMode]
-     * in that case — see [legBadgesOrFallback]'s own doc — never zero badges for a journey that
-     * plainly has a line. */
+    /** One stage per public-transport leg, in journey order — e.g. lines 14 then 40, with each
+     * leg's boarding station — for the Large route strip and the existing compact badge row.
+     * Empty for state persisted by a version predating this field; render-time falls back to a
+     * single badge built from [lineDesignation]/[transportMode] in that case — see
+     * [legBadgesOrFallback]'s own doc — never zero badges for a journey that plainly has a line. */
     val legBadges: List<WidgetJourneyLegBadge> = emptyList(),
 )
 

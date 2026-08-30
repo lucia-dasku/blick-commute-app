@@ -15,4 +15,6 @@
     <color name="widget_preview_label_container">#E7F3EC</color>
     <color name="widget_preview_disruption_background">#F6DEDC</color>
     <color name="widget_preview_disruption_text">#8A2A22</color>
+    <color name="widget_preview_label_study">#F6C76C</color>
+    <color name="widget_preview_label_study_container">#3B352F</color>
 </resources>

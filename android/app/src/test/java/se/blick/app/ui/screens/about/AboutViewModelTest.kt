@@ -156,6 +156,17 @@ class AboutViewModelTest {
     }
 
     @Test
+    fun `appearance selection refreshes widget presentation exactly once`() = runTest(dispatcher) {
+        val updater = RecordingWidgetUpdater()
+        val viewModel = viewModel(widgetUpdater = updater)
+
+        viewModel.onAppearanceSelected(AppearanceMode.Dark)
+        dispatcher.scheduler.runCurrent()
+
+        assertEquals(1, updater.refreshPresentationCallCount)
+    }
+
+    @Test
     fun `Premium can select Stockholm night without overwriting the regular fallback`() = runTest(dispatcher) {
         val settings = FakeSettingsDataStore(AppSettings(useDarkTheme = false))
         val viewModel = viewModel(settings = settings, entitlement = EntitlementState.Premium)
