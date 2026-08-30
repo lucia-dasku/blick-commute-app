@@ -3,6 +3,7 @@ package se.blick.app.ui.screens.onetimeevent
 import androidx.activity.ComponentActivity
 import androidx.compose.ui.test.assertIsDisplayed
 import androidx.compose.ui.test.junit4.v2.createAndroidComposeRule
+import androidx.compose.ui.test.onNodeWithTag
 import androidx.compose.ui.test.onNodeWithText
 import androidx.compose.ui.test.performClick
 import androidx.test.ext.junit.runners.AndroidJUnit4
@@ -43,15 +44,16 @@ class OneTimeEventPlannedJourneyScreenTest {
         composeRule.onNodeWithText("17:36 → 18:18").assertIsDisplayed()
         composeRule.onNodeWithText("19").assertIsDisplayed()
         composeRule.onNodeWithText(composeRule.activity.getString(R.string.one_time_event_preliminary_plan_disclaimer)).assertIsDisplayed()
+        composeRule.onNodeWithTag("one-time-event-plan-info").assertIsDisplayed()
         composeRule.onNodeWithText("Live").assertDoesNotExist()
     }
 
     @Test
-    fun backendNextAndAlternativeRenderInRoleOrderWithoutInventingMissingHeadings() {
+    fun backendPrimaryAndNextRenderTheirOwnHeadingAndJourneyData() {
         composeRule.setContent {
             BlickTheme {
                 PlannedJourneySection(
-                    preview = readyPreview(includeNext = true, includeAlternative = true),
+                    preview = readyPreview(includeNext = true),
                     locale = Locale.ENGLISH,
                     onRefresh = {},
                 )
@@ -60,7 +62,8 @@ class OneTimeEventPlannedJourneyScreenTest {
 
         composeRule.onNodeWithText(composeRule.activity.getString(R.string.one_time_event_plan_recommended)).assertExists()
         composeRule.onNodeWithText(composeRule.activity.getString(R.string.one_time_event_plan_next_option)).assertExists()
-        composeRule.onNodeWithText(composeRule.activity.getString(R.string.one_time_event_plan_alternative)).assertExists()
+        composeRule.onNodeWithText("17:36 → 18:18").assertIsDisplayed()
+        composeRule.onNodeWithText("17:46 → 18:28").assertIsDisplayed()
     }
 
     @Test
@@ -82,6 +85,7 @@ class OneTimeEventPlannedJourneyScreenTest {
             composeRule.activity.getString(R.string.one_time_event_plan_updated, "12:00"),
         ).assertIsDisplayed()
         composeRule.onNodeWithText(composeRule.activity.getString(R.string.one_time_event_today_plan_explanation)).assertIsDisplayed()
+        composeRule.onNodeWithTag("one-time-event-plan-info").assertIsDisplayed()
         composeRule.onNodeWithText("Live").assertDoesNotExist()
     }
 
@@ -153,9 +157,25 @@ class OneTimeEventPlannedJourneyScreenTest {
             disruptions = emptyList(),
             role = JourneyRole.PRIMARY,
         )
+        val nextFirstLeg = firstLeg.copy(
+            departureTime = Instant.parse("2026-09-17T15:46:00Z"),
+            arrivalTime = Instant.parse("2026-09-17T16:01:00Z"),
+        )
+        val nextSecondLeg = secondLeg.copy(
+            departureTime = Instant.parse("2026-09-17T16:10:00Z"),
+            arrivalTime = Instant.parse("2026-09-17T16:28:00Z"),
+        )
+        val nextJourney = journey.copy(
+            journeyId = "next",
+            departureTime = requireNotNull(nextFirstLeg.departureTime),
+            arrivalTime = requireNotNull(nextSecondLeg.arrivalTime),
+            firstLeg = nextFirstLeg,
+            legs = listOf(nextFirstLeg, nextSecondLeg),
+            role = JourneyRole.NEXT,
+        )
         val journeys = buildList {
             add(journey)
-            if (includeNext) add(journey.copy(journeyId = "next", role = JourneyRole.NEXT))
+            if (includeNext) add(nextJourney)
             if (includeAlternative) add(journey.copy(journeyId = "alternative", role = JourneyRole.ALTERNATIVE))
         }
         return PlannedJourneyPreviewState.Ready(

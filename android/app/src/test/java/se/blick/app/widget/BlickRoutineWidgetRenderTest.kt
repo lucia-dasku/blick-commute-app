@@ -1,11 +1,16 @@
 package se.blick.app.widget
 
 import android.content.res.Configuration
+import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.unit.DpSize
 import androidx.compose.ui.unit.dp
+import androidx.glance.BackgroundModifier
 import androidx.glance.appwidget.testing.unit.runGlanceAppWidgetUnitTest
+import androidx.glance.testing.GlanceNodeMatcher
+import androidx.glance.testing.unit.MappedNode
 import androidx.glance.testing.unit.hasText
 import androidx.glance.testing.unit.hasTextEqualTo
+import androidx.glance.unit.ColorProvider
 import org.junit.Assert.assertEquals
 import org.junit.Test
 import org.junit.runner.RunWith
@@ -114,6 +119,14 @@ class BlickRoutineWidgetRenderTest {
     private fun lineRelevantGenericText() = context.getString(R.string.notification_disruption_line_relevant_generic)
     private fun effectText(effect: DisruptionEffect) = context.getString(disruptionEffectLabelRes(effect))
 
+    private fun hasBackgroundColor(color: Color) = GlanceNodeMatcher<MappedNode>(
+        "has background color $color",
+    ) { node ->
+        node.value.emittable.modifier.any { modifier ->
+            modifier is BackgroundModifier.Color && modifier.colorProvider == ColorProvider(color)
+        }
+    }
+
     @Test
     fun `widget countdown changes from minutes to localized hours at sixty minutes`() {
         assertEquals("59 min", formatWidgetCountdown(context, 59))
@@ -154,6 +167,7 @@ class BlickRoutineWidgetRenderTest {
             setAppWidgetSize(DpSize(260.dp, 150.dp))
             provideComposable { BlickWidgetContent(RoutineWidgetUiState.NoActiveCommute, now) }
 
+            onNode(hasBackgroundColor(Color(0xFF010C2F))).assertExists()
             onNode(hasTextEqualTo(context.getString(R.string.app_name))).assertDoesNotExist()
             onNode(hasTextEqualTo(context.getString(R.string.widget_no_active_commute))).assertExists()
         }

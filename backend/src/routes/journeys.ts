@@ -187,6 +187,23 @@ function deriveSelection(pool: NormalizedJourney[], primaryMode: "LIVE_OR_LEAVE_
   return { rankablePool, primary, next };
 }
 
+/** Keeps the explicit planned-time bounds at the pool boundary, so both the initial batch
+ * and any targeted batch are evaluated under the same Event intent. LEAVE_AT's lower bound
+ * is already enforced by CandidateCollector's request-scoped eligibility instant; ARRIVE_BY
+ * additionally needs its upper arrival bound because the targeted lookup is a forward
+ * departure search from PRIMARY. */
+function derivePlannedSelection(
+  pool: NormalizedJourney[],
+  searchMode: Exclude<JourneySearchMode, "NOW">,
+  requestedDateTime: Date,
+): Selection {
+  const eligiblePool =
+    searchMode === "ARRIVE_BY"
+      ? pool.filter((journey) => Date.parse(journey.arrivalTime) <= requestedDateTime.getTime())
+      : pool;
+  return deriveSelection(eligiblePool, searchMode === "ARRIVE_BY" ? "ARRIVE_BY" : "LIVE_OR_LEAVE_AT");
+}
+
 /**
  * The transport modes PRIMARY's own route family actually uses — for narrowing a targeted
  * NEXT search to "what SL can actually filter on" (see this route's own doc). Never used
@@ -255,6 +272,36 @@ function sameTarget(a: PrimaryTarget, b: PrimaryTarget): boolean {
     a.transportModes.length === b.transportModes.length &&
     a.transportModes.every((mode, i) => mode === b.transportModes[i])
   );
+}
+
+/** Resolves a planned timetable selection with one optional targeted NEXT acquisition.
+ * Unlike live resolution, this never searches a horizon or loops: when the initial planned
+ * batch has PRIMARY but no NEXT, one departure-mode request is anchored at PRIMARY's own
+ * request minute and narrowed to its actual modes and transfer count. The full merged pool
+ * is then re-filtered under the Event's LEAVE_AT/ARRIVE_BY bounds and re-derived, so a newly
+ * discovered candidate may legitimately change PRIMARY and NEXT is always selected relative
+ * to that resulting PRIMARY by the existing selector. */
+async function resolvePlannedSelection(
+  collector: CandidateCollector,
+  transportModes: readonly JourneyTransportMode[],
+  searchMode: Exclude<JourneySearchMode, "NOW">,
+  requestedDateTime: Date,
+): Promise<{ selection: Selection; nextCalls: number }> {
+  let selection = derivePlannedSelection(collector.pool, searchMode, requestedDateTime);
+  if (selection.primary == null || selection.next != null || collector.budgetExhausted) {
+    return { selection, nextCalls: 0 };
+  }
+
+  const target = primaryTargetOf(selection.primary, transportModes);
+  const callsBefore = collector.batchesUsedSoFar;
+  await collector.fetchBatch({
+    transportModes: target.transportModes,
+    maxChanges: target.transferCount,
+    departureAt: floorToStockholmRequestMinute(new Date(selection.primary.departureTime)),
+    dateTimeMode: "DEPARTURE",
+  });
+  selection = derivePlannedSelection(collector.pool, searchMode, requestedDateTime);
+  return { selection, nextCalls: collector.batchesUsedSoFar - callsBefore };
 }
 
 /**
@@ -536,8 +583,10 @@ function toPublicJourney(journey: RankableNormalizedJourney, role: JourneyRole) 
  * `toItdDateTime`/`floorToStockholmRequestMinute` doc). The initial request asks broadly
  * (every allowed mode, `MAX_CHANGES`) anchored at this request's own single `requestedAt`
  * instant — SL is never left to independently resolve its own notion of "now" (see
- * slJourneyPlannerClient.ts's own `itd_date`/`itd_time` doc). If that alone doesn't
- * establish NEXT, a second, TARGETED request follows — anchored at PRIMARY's own departure
+ * slJourneyPlannerClient.ts's own `itd_date`/`itd_time` doc).
+ *
+ * For LIVE requests, if that alone doesn't establish NEXT, a second, TARGETED request
+ * follows — anchored at PRIMARY's own departure
  * MINUTE (never a step derived from its exact second — a departure sharing PRIMARY's own
  * request minute is not skipped, and PRIMARY itself is correctly excluded from becoming its
  * own NEXT by `selectNext`'s own identity check, not by the anchor), narrowed to PRIMARY's
@@ -563,6 +612,12 @@ function toPublicJourney(journey: RankableNormalizedJourney, role: JourneyRole) 
  * the conditions just listed are trusted to mean "there is nothing more to find here". If
  * NEXT still cannot be established, the response contains PRIMARY alone — never an
  * unrelated journey mislabelled NEXT merely to fill a second slot.
+ *
+ * A PLANNED request never enters that live loop. When its initial arrival/departure batch
+ * establishes PRIMARY but not NEXT, it performs at most one targeted departure request from
+ * PRIMARY's own minute, narrowed in the same structural way. The merged pool is then
+ * re-evaluated under the original LEAVE_AT lower bound or ARRIVE_BY deadline. There is no
+ * horizon, cursor loop, or planned ALTERNATIVE acquisition.
  *
  * Only once PRIMARY and NEXT both exist does an ALTERNATIVE search run, using the full
  * allowed mode set (an alternative is, by definition, route-incompatible with PRIMARY, so it
@@ -664,7 +719,7 @@ export function createJourneyRoutes(
     const initialCalls = collector.batchesUsedSoFar;
 
     let selection: Selection;
-    let nextCalls = 0;
+    let nextCalls: number;
     let alternativeCalls = 0;
     let primaryDiscoveryCalls = 0;
     let primaryRetargets = 0;
@@ -683,19 +738,17 @@ export function createJourneyRoutes(
       primaryDiscoveryCalls = liveResolution.primaryDiscoveryCalls;
       primaryRetargets = liveResolution.primaryRetargets;
     } else {
-      // A planned lookup is a single user-initiated timetable query, never live forward
-      // acquisition. ARRIVE_BY is also checked defensively against the exact requested
-      // instant even though SL was asked structurally in arrival mode.
-      const plannedPool =
-        search.searchMode === "ARRIVE_BY"
-          ? collector.pool.filter(
-              (journey) => Date.parse(journey.arrivalTime) <= search.requestedDateTime!.getTime(),
-            )
-          : collector.pool;
-      selection = deriveSelection(
-        plannedPool,
-        search.searchMode === "ARRIVE_BY" ? "ARRIVE_BY" : "LIVE_OR_LEAVE_AT",
+      if (search.searchMode === "NOW" || search.requestedDateTime == null) {
+        throw new Error("Planned journey search is missing its planned-time contract");
+      }
+      const plannedResolution = await resolvePlannedSelection(
+        collector,
+        transportModes,
+        search.searchMode,
+        search.requestedDateTime,
       );
+      selection = plannedResolution.selection;
+      nextCalls = plannedResolution.nextCalls;
     }
 
     const alternative =

@@ -295,38 +295,16 @@ internal fun OneTimeEventDetailsContent(
             val locale = currentBlickLocale()
             LazyColumn(
                 modifier = Modifier.fillMaxSize().padding(padding),
-                contentPadding = androidx.compose.foundation.layout.PaddingValues(16.dp),
-                verticalArrangement = Arrangement.spacedBy(16.dp),
+                contentPadding = androidx.compose.foundation.layout.PaddingValues(
+                    start = 16.dp,
+                    top = 8.dp,
+                    end = 16.dp,
+                    bottom = 16.dp,
+                ),
+                verticalArrangement = Arrangement.spacedBy(12.dp),
             ) {
                 item {
-                    Surface(
-                        shape = MaterialTheme.shapes.medium,
-                        color = MaterialTheme.colorScheme.background,
-                        modifier = Modifier.fillMaxWidth().testTag("one-time-event-summary"),
-                    ) {
-                        Column(
-                            modifier = Modifier.padding(16.dp),
-                            verticalArrangement = Arrangement.spacedBy(8.dp),
-                        ) {
-                            OneTimeEventLabelPill(event.label)
-                            Text(
-                                event.date.format(DateTimeFormatter.ofLocalizedDate(FormatStyle.FULL).withLocale(locale)),
-                                style = MaterialTheme.typography.titleMedium,
-                            )
-                            Text(
-                                stringResource(R.string.one_time_event_route_format, event.originName, event.destinationName),
-                                color = MaterialTheme.colorScheme.onSurfaceVariant,
-                            )
-                            Text(
-                                stringResource(
-                                    if (event.timeType == OneTimeEventTimeType.ARRIVE_BY) R.string.one_time_event_arrive_by_value
-                                    else R.string.one_time_event_leave_at_value,
-                                    event.time.toString(),
-                                ),
-                                style = MaterialTheme.typography.titleLarge,
-                            )
-                        }
-                    }
+                    OneTimeEventSummary(event, locale)
                 }
                 item {
                     PlannedJourneySection(
@@ -379,6 +357,44 @@ internal fun OneTimeEventDetailsContent(
 }
 
 @Composable
+private fun OneTimeEventSummary(event: OneTimeEvent, locale: java.util.Locale) {
+    val useStockholmNightSurface = LocalStockholmNightTheme.current
+    Surface(
+        shape = MaterialTheme.shapes.medium,
+        color = if (useStockholmNightSurface) StockholmNightSurfaces.Card else MaterialTheme.colorScheme.surface,
+        border = if (useStockholmNightSurface) BorderStroke(1.dp, StockholmNightSurfaces.CardBorder) else null,
+        tonalElevation = if (useStockholmNightSurface) 0.dp else 1.dp,
+        modifier = Modifier.fillMaxWidth().testTag("one-time-event-summary"),
+    ) {
+        Column(
+            modifier = Modifier.padding(16.dp),
+            verticalArrangement = Arrangement.spacedBy(8.dp),
+        ) {
+            OneTimeEventLabelPill(event.label)
+            Text(
+                event.date.format(DateTimeFormatter.ofLocalizedDate(FormatStyle.FULL).withLocale(locale)),
+                style = MaterialTheme.typography.titleMedium,
+                fontWeight = FontWeight.SemiBold,
+            )
+            Text(
+                stringResource(R.string.one_time_event_route_format, event.originName, event.destinationName),
+                style = MaterialTheme.typography.bodyMedium,
+                color = MaterialTheme.colorScheme.onSurfaceVariant,
+            )
+            Text(
+                stringResource(
+                    if (event.timeType == OneTimeEventTimeType.ARRIVE_BY) R.string.one_time_event_arrive_by_value
+                    else R.string.one_time_event_leave_at_value,
+                    event.time.toString(),
+                ),
+                style = MaterialTheme.typography.titleLarge,
+                fontWeight = FontWeight.SemiBold,
+            )
+        }
+    }
+}
+
+@Composable
 internal fun PlannedJourneySection(
     preview: PlannedJourneyPreviewState,
     locale: java.util.Locale,
@@ -419,7 +435,7 @@ internal fun PlannedJourneySection(
                 }
             }
             if (preview is PlannedJourneyPreviewState.Ready) {
-                TextButton(onClick = onRefresh, enabled = !isRefreshing) {
+                Button(onClick = onRefresh, enabled = !isRefreshing) {
                     if (isRefreshing) {
                         CircularProgressIndicator(modifier = Modifier.size(18.dp), strokeWidth = 2.dp)
                     } else {
@@ -467,16 +483,14 @@ internal fun PlannedJourneySection(
                         color = MaterialTheme.colorScheme.error,
                     )
                 }
-                Text(
-                    stringResource(
+                PlannedJourneyInfoSurface(
+                    text = stringResource(
                         if (presentation == EventPlanPresentation.TODAY) {
                             R.string.one_time_event_today_plan_explanation
                         } else {
                             R.string.one_time_event_preliminary_plan_disclaimer
                         },
                     ),
-                    style = MaterialTheme.typography.bodySmall,
-                    color = MaterialTheme.colorScheme.onSurfaceVariant,
                 )
             }
             PlannedJourneyPreviewState.NoJourney -> PlannedPreviewMessage(
@@ -494,6 +508,29 @@ internal fun PlannedJourneySection(
                 text = stringResource(R.string.one_time_event_planned_premium_required),
             )
         }
+    }
+}
+
+@Composable
+private fun PlannedJourneyInfoSurface(text: String) {
+    val useStockholmNightSurface = LocalStockholmNightTheme.current
+    Surface(
+        shape = MaterialTheme.shapes.medium,
+        color = if (useStockholmNightSurface) {
+            StockholmNightSurfaces.Control
+        } else {
+            MaterialTheme.colorScheme.surfaceContainerLow
+        },
+        border = if (useStockholmNightSurface) BorderStroke(1.dp, StockholmNightSurfaces.CardBorder) else null,
+        tonalElevation = 0.dp,
+        modifier = Modifier.fillMaxWidth().testTag("one-time-event-plan-info"),
+    ) {
+        Text(
+            text = text,
+            modifier = Modifier.padding(horizontal = 12.dp, vertical = 10.dp),
+            style = MaterialTheme.typography.bodySmall,
+            color = MaterialTheme.colorScheme.onSurfaceVariant,
+        )
     }
 }
 

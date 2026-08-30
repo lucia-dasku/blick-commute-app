@@ -268,6 +268,8 @@ private fun sizeTierFor(layoutTier: WidgetLayoutTier): WidgetSizeTier = when (la
 // source of truth rather than duplicating these literals. Only this Glance-specific white-text
 // ColorProvider stays here, since androidx.glance.unit.ColorProvider has no standard-Compose use.
 private val BADGE_TEXT_WHITE = ColorProvider(Color.White)
+private val INACTIVE_WIDGET_BACKGROUND = ColorProvider(Color(0xFF010C2F))
+private val INACTIVE_WIDGET_SECONDARY = ColorProvider(Color(0xFFC5C8CF))
 private val INACTIVE_WIDGET_MINT = ColorProvider(Color(0xFF33E4A1))
 private val STOCKHOLM_NIGHT_WIDGET_BORDER = ColorProvider(StockholmNightSurfaces.CardBorder)
 private val STOCKHOLM_NIGHT_WIDGET_COLORS = colorProviders(
@@ -417,7 +419,7 @@ internal fun BlickWidgetContent(
     GlanceTheme(colors = if (useStockholmNightTheme) STOCKHOLM_NIGHT_WIDGET_COLORS else GlanceTheme.colors) {
         when (state) {
             RoutineWidgetUiState.NoActiveCommute -> Scaffold(
-                backgroundColor = GlanceTheme.colors.widgetBackground,
+                backgroundColor = INACTIVE_WIDGET_BACKGROUND,
                 horizontalPadding = 0.dp,
             ) { NoActiveCommuteContent() }
             is RoutineWidgetUiState.ActiveRoutine ->
@@ -496,7 +498,7 @@ private fun InactiveBrandingContent(context: Context, layout: InactiveWidgetLayo
         maxLines = 2,
         modifier = GlanceModifier.fillMaxWidth(),
         style = TextStyle(
-            color = onSurfaceVariantColor(),
+            color = INACTIVE_WIDGET_SECONDARY,
             fontSize = layout.statusSize,
             textAlign = TextAlign.Center,
         ),
