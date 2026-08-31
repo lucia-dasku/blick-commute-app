@@ -231,23 +231,24 @@ internal fun PlannedJourneyTimelineCard(
 
 @Composable
 private fun JourneyCardHeader(kind: RoutineJourneyCardKind, expanded: Boolean) {
+    val labelRes = when (kind) {
+        RoutineJourneyCardKind.PRIMARY -> R.string.journey_fastest
+        RoutineJourneyCardKind.NEXT -> R.string.journey_next
+        RoutineJourneyCardKind.ALTERNATIVE -> R.string.journey_alternative
+        RoutineJourneyCardKind.UPCOMING -> R.string.journey_upcoming_departure
+        RoutineJourneyCardKind.LATER -> null
+    }
     Row(
         modifier = Modifier.fillMaxWidth(),
-        horizontalArrangement = Arrangement.SpaceBetween,
+        horizontalArrangement = if (labelRes == null) Arrangement.End else Arrangement.SpaceBetween,
         verticalAlignment = Alignment.CenterVertically,
     ) {
-        Text(
-            stringResource(
-                when (kind) {
-                    RoutineJourneyCardKind.PRIMARY -> R.string.journey_fastest
-                    RoutineJourneyCardKind.NEXT -> R.string.journey_next
-                    RoutineJourneyCardKind.ALTERNATIVE -> R.string.journey_alternative
-                    RoutineJourneyCardKind.UPCOMING -> R.string.journey_upcoming_departure
-                    RoutineJourneyCardKind.LATER -> R.string.journey_later_departure
-                },
-            ),
-            style = MaterialTheme.typography.labelLarge,
-        )
+        if (labelRes != null) {
+            Text(
+                stringResource(labelRes),
+                style = MaterialTheme.typography.labelLarge,
+            )
+        }
         Icon(
             imageVector = if (expanded) Icons.Filled.KeyboardArrowUp else Icons.Filled.KeyboardArrowDown,
             contentDescription = stringResource(if (expanded) R.string.journey_collapse else R.string.journey_expand),

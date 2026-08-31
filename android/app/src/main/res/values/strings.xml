@@ -78,7 +78,6 @@
     <string name="journey_next">Next departure</string>
     <string name="journey_alternative">Alternative</string>
     <string name="journey_upcoming_departure">Upcoming departure</string>
-    <string name="journey_later_departure">Later departure</string>
     <string name="routine_details_more_journey_options">More options</string>
     <string name="routine_details_show_fewer_journey_options">Show fewer</string>
     <string name="routine_details_loading_more_journeys">Loading more options…</string>
