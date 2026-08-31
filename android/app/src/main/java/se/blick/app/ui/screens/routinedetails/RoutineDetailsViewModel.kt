@@ -70,6 +70,7 @@ import java.util.Optional
 import javax.inject.Inject
 
 private const val LOG_TAG = "RoutineDetailsViewModel"
+private const val ROUTINE_DETAILS_LINE_DEPARTURE_LIMIT = 5
 
 /**
  * Foreground, manually-refreshable UI state for the routine details/live-preview screen.
@@ -199,8 +200,9 @@ data class PrimaryDisruptionState(
 )
 
 /**
- * Loads one saved [CommuteRoutine] by the id supplied via navigation, then fetches its next
- * two relevant departures through the existing [GetLiveDeparturesUseCase] — no departure
+ * Loads one saved [CommuteRoutine] by the id supplied via navigation, then fetches up to five
+ * relevant departures for the ordinary foreground screen through the existing
+ * [GetLiveDeparturesUseCase] — no departure
  * filtering, sorting, countdown, or failure-classification logic is reimplemented here.
  *
  * This is a foreground, manually-refreshable preview only: there is no periodic background
@@ -1060,7 +1062,11 @@ class RoutineDetailsViewModel @Inject constructor(
             // following an edit to a different site/line/direction/mode must not.
             val previousForThisFetch = staleSnapshotRepository.get(routineId, identity)
 
-            getLiveDepartures(routine, previous = previousForThisFetch).collect { state ->
+            getLiveDepartures(
+                routine = routine,
+                previous = previousForThisFetch,
+                maxDepartures = ROUTINE_DETAILS_LINE_DEPARTURE_LIMIT,
+            ).collect { state ->
                 if (requestId != departuresRequestId) return@collect
 
                 if (state is LiveDeparturesState.Loading) {

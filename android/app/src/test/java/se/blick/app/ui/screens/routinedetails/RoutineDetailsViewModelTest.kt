@@ -148,6 +148,11 @@ class RoutineDetailsViewModelTest {
         tripDeviations = emptyList(),
     )
 
+    private fun fiveUpcomingDepartures(prefix: String = "dep"): List<Departure> =
+        (1..5).map { index ->
+            upcomingDeparture("$prefix-$index").copy(scheduledTime = now.plusSeconds(index * 60L))
+        }
+
     private fun resultOf(vararg departures: Departure) = DeparturesResult(
         fetchedAt = now,
         siteId = 9145,
@@ -775,14 +780,37 @@ class RoutineDetailsViewModelTest {
     }
 
     @Test
-    fun `a Live state exposes the prepared departures returned by the engine`() = runTest(dispatcher) {
-        val a = upcomingDeparture("dep-a")
-        val b = upcomingDeparture("dep-b").copy(scheduledTime = now.plusSeconds(600))
-        val vm = viewModel(departures = FakeDepartureRepository(resultOf(a, b)))
+    fun `an ordinary Live state retains up to five prepared departures from one fetch`() = runTest(dispatcher) {
+        val sixDepartures = fiveUpcomingDepartures() +
+            upcomingDeparture("dep-6").copy(scheduledTime = now.plusSeconds(6 * 60L))
+        val departures = FakeDepartureRepository(resultOf(*sixDepartures.reversed().toTypedArray()))
+        val vm = viewModel(departures = departures)
         dispatcher.scheduler.advanceUntilIdle()
 
         val live = vm.uiState.value.departures as LiveDeparturesState.Live
-        assertEquals(listOf("dep-a", "dep-b"), live.snapshot.departures.map { it.departureId })
+        assertEquals((1..5).map { "dep-$it" }, live.snapshot.departures.map { it.departureId })
+        assertEquals(1, departures.callCount)
+    }
+
+    @Test
+    fun `an exact-destination routine bypasses the line departure fetch`() = runTest(dispatcher) {
+        val routine = exactDestinationRoutine()
+        val departures = FakeDepartureRepository(resultOf(*fiveUpcomingDepartures().toTypedArray()))
+        val journeys = FixedJourneyRepository(
+            listOf(journeyPlan("journey-1", now.plusSeconds(300))),
+        )
+        val vm = viewModel(
+            routine = routine,
+            routines = FakeRoutineRepository(routine),
+            departures = departures,
+            getRankedJourneys = GetRankedJourneysUseCase(journeys, clock),
+        )
+
+        dispatcher.scheduler.advanceUntilIdle()
+
+        assertEquals(0, departures.callCount)
+        assertEquals(1, journeys.callCount)
+        assertEquals(listOf("journey-1"), vm.uiState.value.journeys.map { it.journeyId })
     }
 
     @Test
@@ -873,15 +901,23 @@ class RoutineDetailsViewModelTest {
 
     @Test
     fun `refresh triggers a new departures fetch`() = runTest(dispatcher) {
-        val departures = FakeDepartureRepository(resultOf(upcomingDeparture()))
+        val departures = FakeDepartureRepository(resultOf(*fiveUpcomingDepartures().toTypedArray()))
         val vm = viewModel(departures = departures)
         dispatcher.scheduler.advanceUntilIdle()
         assertEquals(1, departures.callCount)
+        assertEquals(
+            (1..5).map { "dep-$it" },
+            (vm.uiState.value.departures as LiveDeparturesState.Live).snapshot.departures.map { it.departureId },
+        )
 
         vm.refresh()
         dispatcher.scheduler.advanceUntilIdle()
 
         assertEquals(2, departures.callCount)
+        assertEquals(
+            (1..5).map { "dep-$it" },
+            (vm.uiState.value.departures as LiveDeparturesState.Live).snapshot.departures.map { it.departureId },
+        )
     }
 
     @Test
@@ -2003,10 +2039,14 @@ class RoutineDetailsViewModelTest {
 
     @Test
     fun `runAutoRefresh fetches again after 30 seconds`() = runTest(dispatcher) {
-        val departures = FakeDepartureRepository(resultOf(upcomingDeparture()))
+        val departures = FakeDepartureRepository(resultOf(*fiveUpcomingDepartures().toTypedArray()))
         val vm = viewModel(departures = departures)
         dispatcher.scheduler.advanceUntilIdle()
         assertEquals(1, departures.callCount)
+        assertEquals(
+            (1..5).map { "dep-$it" },
+            (vm.uiState.value.departures as LiveDeparturesState.Live).snapshot.departures.map { it.departureId },
+        )
 
         val job = launch { vm.runAutoRefresh() }
         // See `runAutoRefresh's first-ever call...`'s comment on why this is runCurrent(), not
@@ -2016,6 +2056,10 @@ class RoutineDetailsViewModelTest {
         dispatcher.scheduler.runCurrent()
 
         assertEquals(2, departures.callCount)
+        assertEquals(
+            (1..5).map { "dep-$it" },
+            (vm.uiState.value.departures as LiveDeparturesState.Live).snapshot.departures.map { it.departureId },
+        )
         job.cancel()
     }
 

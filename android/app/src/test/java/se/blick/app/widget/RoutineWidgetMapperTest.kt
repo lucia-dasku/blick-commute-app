@@ -296,6 +296,28 @@ class RoutineWidgetMapperTest {
     }
 
     @Test
+    fun `a five-row stale foreground snapshot still exposes only the two soonest unexpired widget rows`() {
+        val fetchedAt = now.minusSeconds(600)
+        val state = LiveDeparturesState.Stale(
+            snapshot(
+                prepared(departureId = "later-5", effectiveTime = now.plusSeconds(500)),
+                prepared(departureId = "expired", effectiveTime = now.minusSeconds(30)),
+                prepared(departureId = "next", effectiveTime = now.plusSeconds(60)),
+                prepared(departureId = "later-3", effectiveTime = now.plusSeconds(300)),
+                prepared(departureId = "following", effectiveTime = now.plusSeconds(120)),
+                prepared(departureId = "later-4", effectiveTime = now.plusSeconds(400)),
+                fetchedAt = fetchedAt,
+            ),
+        )
+
+        val content = RoutineWidgetMapper.map(routine(), state, now).content as RoutineWidgetContent.Stale
+
+        assertEquals(1L, content.next?.minutesRemaining)
+        assertEquals(2L, content.following?.minutesRemaining)
+        assertEquals(fetchedAt, content.lastCheckedAt)
+    }
+
+    @Test
     fun `a stale snapshot where every departure has expired remains Stale, not NoUpcomingDepartures, with null next and following`() {
         // Matches RoutineNotificationMapper's identical rule: Stale must keep communicating
         // "the last refresh failed," even once its own cached departures have all expired too

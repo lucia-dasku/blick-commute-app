@@ -51,12 +51,14 @@ import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
+import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.LocalLifecycleOwner
+import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.unit.dp
 import androidx.hilt.navigation.compose.hiltViewModel
@@ -92,9 +94,17 @@ import se.blick.app.ui.notification.notificationSettingsIntent
 import se.blick.app.ui.notification.rememberNotificationPermissionGate
 import se.blick.app.widget.LINE_BADGE_GREEN
 
+internal const val ROUTINE_DETAILS_DEPARTURES_TOGGLE_TAG = "routine-details-departures-toggle"
+internal const val ROUTINE_DETAILS_COLLAPSED_DEPARTURE_COUNT = 2
+internal const val ROUTINE_DETAILS_EXPANDED_DEPARTURE_COUNT = 5
+
+internal fun routineDetailsDepartureRowTag(departureId: String): String =
+    "routine-details-departure-$departureId"
+
 /**
- * Routine details / live-preview screen: loads one saved routine and shows its next two
- * relevant departures via [RoutineDetailsViewModel] + the existing live-departure engine.
+ * Routine details / live-preview screen: loads one saved routine and initially shows its next
+ * two relevant departures via [RoutineDetailsViewModel] + the existing live-departure engine.
+ * An ordinary line/direction routine may locally reveal up to five results from that same fetch.
  * While this screen is open it automatically refreshes about every 30 seconds (independent
  * of the separate ~30s ongoing-notification loop driven by `scheduling/RoutineActiveWindowWorker`),
  * plus a manual Refresh action; a notification-status hint on this screen (see
@@ -551,7 +561,15 @@ internal fun RoutineDetailsContent(
                 onChangesPreferenceChange = onUpdateChangesPreference,
             )
         } else {
-            DeparturesSection(departuresState, routine.transportMode, locale, onRefresh)
+            var departuresExpanded by rememberSaveable(routine.id) { mutableStateOf(false) }
+            DeparturesSection(
+                state = departuresState,
+                transportMode = routine.transportMode,
+                locale = locale,
+                expanded = departuresExpanded,
+                onExpandedChange = { departuresExpanded = it },
+                onRefresh = onRefresh,
+            )
         }
 
         // Manual refresh and pause/resume today share one compact action row directly under the
@@ -1189,13 +1207,21 @@ private fun DeparturesSection(
     state: LiveDeparturesState,
     transportMode: TransportMode,
     locale: java.util.Locale,
+    expanded: Boolean,
+    onExpandedChange: (Boolean) -> Unit,
     onRefresh: () -> Unit,
 ) {
     when (state) {
         is LiveDeparturesState.Loading -> CenteredBox(Modifier.fillMaxWidth().padding(vertical = 16.dp)) {
             CircularProgressIndicator()
         }
-        is LiveDeparturesState.Live -> DeparturesList(state.snapshot.departures, transportMode, locale)
+        is LiveDeparturesState.Live -> DeparturesList(
+            departures = state.snapshot.departures,
+            transportMode = transportMode,
+            locale = locale,
+            expanded = expanded,
+            onExpandedChange = onExpandedChange,
+        )
         is LiveDeparturesState.Stale -> Column {
             Text(
                 stringResource(R.string.routine_details_stale_warning),
@@ -1203,7 +1229,13 @@ private fun DeparturesSection(
                 style = MaterialTheme.typography.bodySmall,
             )
             Spacer(Modifier.height(8.dp))
-            DeparturesList(state.snapshot.departures, transportMode, locale)
+            DeparturesList(
+                departures = state.snapshot.departures,
+                transportMode = transportMode,
+                locale = locale,
+                expanded = expanded,
+                onExpandedChange = onExpandedChange,
+            )
         }
         is LiveDeparturesState.NoUpcomingDepartures -> Text(
             stringResource(R.string.routine_details_no_departures),
@@ -1332,18 +1364,63 @@ private fun RetryableMessage(messageRes: Int, onRefresh: () -> Unit) {
 }
 
 @Composable
-private fun DeparturesList(departures: List<PreparedDeparture>, transportMode: TransportMode, locale: java.util.Locale) {
+private fun DeparturesList(
+    departures: List<PreparedDeparture>,
+    transportMode: TransportMode,
+    locale: java.util.Locale,
+    expanded: Boolean,
+    onExpandedChange: (Boolean) -> Unit,
+) {
+    val boundedDepartures = departures.take(ROUTINE_DETAILS_EXPANDED_DEPARTURE_COUNT)
+    val visibleDepartures = if (expanded) {
+        boundedDepartures
+    } else {
+        boundedDepartures.take(ROUTINE_DETAILS_COLLAPSED_DEPARTURE_COUNT)
+    }
     Column {
-        departures.forEach { departure ->
+        visibleDepartures.forEach { departure ->
             DepartureRow(departure, transportMode, locale)
             Spacer(Modifier.height(8.dp))
+        }
+        if (boundedDepartures.size > ROUTINE_DETAILS_COLLAPSED_DEPARTURE_COUNT) {
+            TextButton(
+                onClick = { onExpandedChange(!expanded) },
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .testTag(ROUTINE_DETAILS_DEPARTURES_TOGGLE_TAG),
+            ) {
+                Text(
+                    stringResource(
+                        if (expanded) {
+                            R.string.routine_details_show_fewer_departures
+                        } else {
+                            R.string.routine_details_more_departures
+                        },
+                    ),
+                )
+                Spacer(Modifier.width(4.dp))
+                Icon(
+                    imageVector = if (expanded) {
+                        Icons.Filled.KeyboardArrowUp
+                    } else {
+                        Icons.Filled.KeyboardArrowDown
+                    },
+                    contentDescription = null,
+                    modifier = Modifier.size(20.dp),
+                )
+            }
         }
     }
 }
 
 @Composable
 private fun DepartureRow(departure: PreparedDeparture, transportMode: TransportMode, locale: java.util.Locale) {
-    Column(Modifier.fillMaxWidth().padding(vertical = 4.dp)) {
+    Column(
+        Modifier
+            .fillMaxWidth()
+            .testTag(routineDetailsDepartureRowTag(departure.departureId))
+            .padding(vertical = 4.dp),
+    ) {
         Row(
             modifier = Modifier.fillMaxWidth(),
             horizontalArrangement = Arrangement.SpaceBetween,

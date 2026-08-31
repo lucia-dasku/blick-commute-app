@@ -112,6 +112,8 @@
     <string name="routine_details_departure_live">Live</string>
     <string name="routine_details_departure_scheduled">Planerad</string>
     <string name="routine_details_departure_cancelled">Inställd</string>
+    <string name="routine_details_more_departures">Fler avgångar</string>
+    <string name="routine_details_show_fewer_departures">Visa färre</string>
     <string name="routine_details_minutes_remaining">%1$d min</string>
 
     <string name="routine_details_disruptions_heading">Trafikstörningar kopplade till denna station och linje</string>

@@ -120,6 +120,8 @@
     <string name="routine_details_departure_live">Live</string>
     <string name="routine_details_departure_scheduled">Scheduled</string>
     <string name="routine_details_departure_cancelled">Cancelled</string>
+    <string name="routine_details_more_departures">More departures</string>
+    <string name="routine_details_show_fewer_departures">Show fewer</string>
     <string name="routine_details_minutes_remaining">%1$d min</string>
 
     <!-- Deliberately describes matching precisely rather than implying more than is true:

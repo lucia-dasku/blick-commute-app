@@ -395,6 +395,27 @@ class RoutineNotificationMapperTest {
     }
 
     @Test
+    fun `a five-row stale foreground snapshot still exposes only the two soonest unexpired notification rows`() {
+        val fetchedAt = now.minusSeconds(600)
+        val state = LiveDeparturesState.Stale(
+            snapshot(
+                prepared(departureId = "later-5", effectiveTime = now.plusSeconds(500)),
+                prepared(departureId = "expired", effectiveTime = now.minusSeconds(30)),
+                prepared(departureId = "next", effectiveTime = now.plusSeconds(60)),
+                prepared(departureId = "later-3", effectiveTime = now.plusSeconds(300)),
+                prepared(departureId = "following", effectiveTime = now.plusSeconds(120)),
+                prepared(departureId = "later-4", effectiveTime = now.plusSeconds(400)),
+                fetchedAt = fetchedAt,
+            ),
+        )
+
+        val content = RoutineNotificationMapper.map(routine(), state, now).content as RoutineNotificationContent.Stale
+
+        assertEquals(listOf(now.plusSeconds(60), now.plusSeconds(120)), content.departures.map { it.effectiveTime })
+        assertEquals(fetchedAt, content.lastCheckedAt)
+    }
+
+    @Test
     fun `a stale snapshot where every departure has expired remains Stale, not NoUpcomingDepartures, with an empty row list`() {
         // Unlike an expired Live snapshot (which is re-reported as NoUpcomingDepartures — see
         // above), a Stale snapshot must keep communicating "the last refresh failed", even
