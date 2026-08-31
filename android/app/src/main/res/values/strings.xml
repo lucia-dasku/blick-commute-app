@@ -74,8 +74,8 @@
     <string name="routine_details_transport_one_required">Select at least one transport type.</string>
     <string name="routine_details_transport_update_failed">Couldn\'t update transport choices. Try again.</string>
     <string name="routine_details_changes_preference_update_failed">Couldn\'t update journey preference. Try again.</string>
-    <string name="journey_fastest">FASTEST</string>
-    <string name="journey_next">NEXT</string>
+    <string name="journey_fastest">Earliest departure</string>
+    <string name="journey_next">Next departure</string>
     <string name="journey_alternative">ALTERNATIVE</string>
     <string name="journey_departure_in">in %1$s</string>
     <string name="journey_direct">Direct</string>
