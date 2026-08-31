@@ -21,6 +21,17 @@ data class PlannedJourneyChoice(
     val journey: JourneyPlan,
 )
 
+/** A role-free foreground option returned separately from the backend-authoritative live list.
+ * The wrapper is the authority that this is supplemental; the contained JourneyPlan is reused
+ * only for itinerary/timeline data and must never enter notification, widget or disruption
+ * selection. */
+data class LaterJourneyOption(val journey: JourneyPlan)
+
+data class LiveJourneyOptions(
+    val journeys: List<JourneyPlan>,
+    val laterJourneys: List<LaterJourneyOption>,
+)
+
 /** Fail-closed counterpart to [toJourneyRole] for the planned Event contract. */
 fun String?.toPlannedJourneyRole(): PlannedJourneyRole? =
     this?.let { runCatching { PlannedJourneyRole.valueOf(it) }.getOrNull() }

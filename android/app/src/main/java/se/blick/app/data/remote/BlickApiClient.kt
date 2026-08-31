@@ -37,6 +37,7 @@ interface BlickApiClient {
         transportModes: String,
         searchUntil: String? = null,
         changesPreference: String = "BOTH",
+        laterJourneyCount: Int? = null,
     ): JourneysResponseDto =
         throw UnsupportedOperationException("Journey search is not implemented by this test client")
 

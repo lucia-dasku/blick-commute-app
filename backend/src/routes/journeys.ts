@@ -2,7 +2,7 @@ import { Hono } from "hono";
 import { AppError } from "../lib/errors.js";
 import { successEnvelope } from "../models/common.js";
 import { buildRoutePattern, type RoutePattern } from "../domain/routePattern.js";
-import { selectAlternative, selectNext, selectPrimary } from "../domain/journeyRoles.js";
+import { selectAlternative, selectLaterJourneys, selectNext, selectPrimary } from "../domain/journeyRoles.js";
 import {
   selectPlannedJourneyChoices,
   type PlannedJourneyRole,
@@ -64,6 +64,18 @@ function parseChangesPreference(value: string | undefined): JourneyChangesPrefer
     throw new AppError("VALIDATION_ERROR", "Query parameter 'changesPreference' is invalid");
   }
   return normalized;
+}
+
+export const MAX_LATER_JOURNEYS = 3;
+
+function parseLaterJourneyCount(value: string | undefined): number {
+  if (value == null) return 0;
+  if (!/^\d+$/.test(value)) throw new AppError("VALIDATION_ERROR", "Query parameter 'laterJourneyCount' is invalid");
+  const count = Number(value);
+  if (!Number.isSafeInteger(count) || count < 0 || count > MAX_LATER_JOURNEYS) {
+    throw new AppError("VALIDATION_ERROR", "Query parameter 'laterJourneyCount' is invalid");
+  }
+  return count;
 }
 
 export type JourneySearchMode = "NOW" | "LEAVE_AT" | "ARRIVE_BY";
@@ -232,6 +244,13 @@ interface AcquisitionResult {
    * longer the current PRIMARY (a different journeyId) partway through a targeted search,
    * and had to abandon that search and retarget — see `resolveSelection`'s own doc. Zero
    * in the common case where PRIMARY never changes after the initial batch. */
+  primaryRetargets: number;
+}
+
+interface LaterAcquisitionResult {
+  selection: Selection;
+  laterJourneys: RankableNormalizedJourney[];
+  laterCalls: number;
   primaryRetargets: number;
 }
 
@@ -482,6 +501,65 @@ async function resolveSelection(
   return { selection, nextCalls, alternativeCalls, primaryDiscoveryCalls, primaryRetargets };
 }
 
+/** Extends the already-settled live candidate pool with a small, foreground-only reserve.
+ * It reuses CandidateCollector's query dedupe, cursor rules, upserts and shared budget. The
+ * optional missing-NEXT probe is deliberately handled by deriveSelection: Android never
+ * promotes a supplemental row, and no later rows are returned unless a final authoritative
+ * NEXT exists. */
+async function resolveLaterJourneys(
+  collector: CandidateCollector,
+  initialSelection: Selection,
+  transportModes: readonly JourneyTransportMode[],
+  searchUntil: Date | null,
+  requestedCount: number,
+): Promise<LaterAcquisitionResult> {
+  let selection = initialSelection;
+  let laterCalls = 0;
+  let primaryRetargets = 0;
+  const callCap = requestedCount === 1 ? 1 : 2;
+
+  const selectedLater = () => {
+    if (selection.primary == null || selection.next == null) return [];
+    const alternative = selectAlternative(selection.rankablePool, selection.primary, selection.next);
+    return selectLaterJourneys(selection.rankablePool, selection.primary, selection.next, requestedCount, alternative);
+  };
+
+  if (requestedCount === 0 || selection.primary == null || selectedLater().length >= requestedCount) {
+    return { selection, laterJourneys: selectedLater(), laterCalls, primaryRetargets };
+  }
+
+  while (selection.primary != null && laterCalls < callCap && !collector.budgetExhausted) {
+    const primary = selection.primary;
+    const target = primaryTargetOf(primary, transportModes);
+    const anchor = floorToStockholmRequestMinute(new Date((selection.next ?? primary).departureTime));
+    const callsBefore = collector.batchesUsedSoFar;
+    await collector.acquireUntil(
+      { transportModes: target.transportModes, maxChanges: target.transferCount },
+      anchor,
+      searchUntil,
+      (pool) => {
+        selection = deriveSelection(pool);
+        if (selection.primary == null) return true;
+        if (!sameTarget(primaryTargetOf(selection.primary, transportModes), target)) return true;
+        return selection.next != null && selectedLater().length >= requestedCount;
+      },
+      callCap - laterCalls,
+    );
+    const callsMade = collector.batchesUsedSoFar - callsBefore;
+    laterCalls += callsMade;
+    selection = deriveSelection(collector.pool);
+
+    if (selection.primary == null) break;
+    if (!sameTarget(primaryTargetOf(selection.primary, transportModes), target)) {
+      primaryRetargets++;
+      continue;
+    }
+    if (callsMade === 0 || selectedLater().length >= requestedCount) break;
+  }
+
+  return { selection, laterJourneys: selectedLater(), laterCalls, primaryRetargets };
+}
+
 /** The structured event this route emits once per request, purely for measuring real-world
  * SL request volume before release — see this route's own doc. Deliberately carries only
  * counts and booleans: no station names, stop ids, journey payloads, or anything else that
@@ -490,7 +568,7 @@ export interface JourneyAcquisitionMetrics {
   event: "journey_acquisition_metrics";
   /** Total real SL requests this one `/journeys` request spent, across the initial batch
    * and every acquisition phase/retarget — always `initialCalls + nextCalls +
-   * alternativeCalls + primaryDiscoveryCalls + plannedCalls`, kept as its own field so a
+   * alternativeCalls + primaryDiscoveryCalls + plannedCalls + laterCalls`, kept as its own field so a
    * consumer never has to re-derive it. */
   slCalls: number;
   initialCalls: number;
@@ -499,6 +577,14 @@ export interface JourneyAcquisitionMetrics {
   /** Real follow-up requests spent on the separate planned Event chooser. Always zero for
    * LIVE requests and bounded to at most two for PLANNED requests. */
   plannedCalls: number;
+  /** Foreground-only real requests spent looking for role-free later journeys. */
+  laterCalls: number;
+  laterRequested: number;
+  laterReturned: number;
+  primaryFound: boolean;
+  nextFound: boolean;
+  alternativeFound: boolean;
+  authoritativeJourneyCount: number;
   /** See `resolveSelection`'s own PRIMARY_DISCOVERY doc — real SL requests spent on the
    * `WITH_CHANGES_ONLY`-only bounded forward search for an initial PRIMARY. Zero for every
    * other case, including a `WITH_CHANGES_ONLY` request whose initial batch already
@@ -530,7 +616,7 @@ function logJourneyAcquisitionMetrics(metrics: JourneyAcquisitionMetrics): void 
  * response merely because this function wasn't also updated to exclude it. `role` belongs
  * to the request context: live responses use PRIMARY/NEXT/ALTERNATIVE, while planned Event
  * responses use EARLIER/RECOMMENDED/LATER. */
-function toPublicJourney(journey: RankableNormalizedJourney, role: JourneyRole) {
+function toPublicJourneyData(journey: RankableNormalizedJourney) {
   return {
     journeyId: journey.journeyId,
     originName: journey.originName,
@@ -561,8 +647,11 @@ function toPublicJourney(journey: RankableNormalizedJourney, role: JourneyRole) 
     // whichever journey currently holds PRIMARY and sends it back verbatim; it never interprets
     // it itself.
     disruptionContext: journey.disruptionContext,
-    role,
   };
+}
+
+function toPublicJourney(journey: RankableNormalizedJourney, role: JourneyRole) {
+  return { ...toPublicJourneyData(journey), role };
 }
 
 /**
@@ -722,6 +811,7 @@ export function createJourneyRoutes(
     const transportModes = requestedTransportModes(c.req.query("transportModes"));
     const searchUntil = parseSearchUntil(c.req.query("searchUntil"));
     const changesPreference = parseChangesPreference(c.req.query("changesPreference"));
+    const laterJourneyCount = parseLaterJourneyCount(c.req.query("laterJourneyCount"));
     if (originId === destinationId) throw new AppError("VALIDATION_ERROR", "Origin and destination must differ");
 
     // One timestamp for the whole request: every eligibility check and acquisition anchor
@@ -733,6 +823,9 @@ export function createJourneyRoutes(
       searchUntil,
       fetchedAt,
     );
+    if (search.journeyContext === "PLANNED" && laterJourneyCount !== 0) {
+      throw new AppError("VALIDATION_ERROR", "Query parameter 'laterJourneyCount' is only valid for NOW searches");
+    }
     const eligibilityStart = search.searchMode === "LEAVE_AT" ? search.requestedDateTime! : fetchedAt;
     const collector = new CandidateCollector(client, originId, destinationId, eligibilityStart.getTime(), changesPreference);
 
@@ -755,6 +848,8 @@ export function createJourneyRoutes(
     let plannedCalls = 0;
     let primaryDiscoveryCalls = 0;
     let primaryRetargets = 0;
+    let laterCalls = 0;
+    let laterJourneys: RankableNormalizedJourney[] = [];
 
     if (search.journeyContext === "LIVE") {
       const liveResolution = await resolveSelection(
@@ -769,6 +864,17 @@ export function createJourneyRoutes(
       alternativeCalls = liveResolution.alternativeCalls;
       primaryDiscoveryCalls = liveResolution.primaryDiscoveryCalls;
       primaryRetargets = liveResolution.primaryRetargets;
+      const laterResolution = await resolveLaterJourneys(
+        collector,
+        selection,
+        transportModes,
+        searchUntil,
+        laterJourneyCount,
+      );
+      selection = laterResolution.selection;
+      laterJourneys = laterResolution.laterJourneys;
+      laterCalls = laterResolution.laterCalls;
+      primaryRetargets += laterResolution.primaryRetargets;
     } else {
       if (search.searchMode === "NOW" || search.requestedDateTime == null) {
         throw new Error("Planned journey search is missing its planned-time contract");
@@ -807,6 +913,13 @@ export function createJourneyRoutes(
       nextCalls,
       alternativeCalls,
       plannedCalls,
+      laterCalls,
+      laterRequested: search.journeyContext === "LIVE" ? laterJourneyCount : 0,
+      laterReturned: laterJourneys.length,
+      primaryFound: selection?.primary != null,
+      nextFound: selection?.next != null,
+      alternativeFound: alternative != null,
+      authoritativeJourneyCount: journeys.length,
       primaryDiscoveryCalls,
       primaryChanged: primaryRetargets > 0,
       primaryRetargets,
@@ -821,6 +934,7 @@ export function createJourneyRoutes(
         searchMode: search.searchMode,
         requestedDateTime: search.requestedDateTime?.toISOString() ?? null,
         journeys,
+        laterJourneys: laterJourneys.map(toPublicJourneyData),
       }),
     );
   });

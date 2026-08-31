@@ -42,7 +42,6 @@ import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import se.blick.app.R
 import se.blick.app.domain.model.JourneyPlan
-import se.blick.app.domain.model.JourneyRole
 import se.blick.app.domain.model.STOCKHOLM_ZONE
 import se.blick.app.domain.model.TransportMode
 import se.blick.app.domain.usecase.countdownMinutes
@@ -60,11 +59,14 @@ private val TIMELINE_TIME_COLUMN_WIDTH = 64.dp
 private val TIMELINE_RAIL_WIDTH = 28.dp
 private val TIMELINE_MARKER_SIZE = 24.dp
 
+internal enum class RoutineJourneyCardKind { PRIMARY, NEXT, ALTERNATIVE, UPCOMING, LATER }
+
 /** One role-labelled journey card. Collapsed and expanded states share the same summary/footer;
  * expansion adds the structured timeline between them without changing journey selection. */
 @Composable
 internal fun JourneyTimelineCard(
     journey: JourneyPlan,
+    cardKind: RoutineJourneyCardKind,
     now: Instant,
     fastestArrival: Instant,
     locale: Locale,
@@ -85,7 +87,7 @@ internal fun JourneyTimelineCard(
     }
     val arrivalLabel = stringResource(R.string.journey_arrives, arrival)
     val laterMinutes = Duration.between(fastestArrival, timeline.finalArrivalTime).toMinutes()
-    val summaryMetadata = if (journey.role == JourneyRole.PRIMARY) {
+    val summaryMetadata = if (cardKind == RoutineJourneyCardKind.PRIMARY || laterMinutes <= 0) {
         stringResource(R.string.journey_summary_format, changeLabel, arrivalLabel)
     } else {
         stringResource(
@@ -104,7 +106,7 @@ internal fun JourneyTimelineCard(
         modifier = Modifier.fillMaxWidth().clickable { onExpandedChange(!expanded) },
     ) {
         Column(Modifier.padding(16.dp)) {
-            JourneyCardHeader(journey.role, expanded)
+            JourneyCardHeader(cardKind, expanded)
             Spacer(Modifier.height(10.dp))
             Row(
                 horizontalArrangement = Arrangement.spacedBy(8.dp),
@@ -228,7 +230,7 @@ internal fun PlannedJourneyTimelineCard(
 }
 
 @Composable
-private fun JourneyCardHeader(role: JourneyRole, expanded: Boolean) {
+private fun JourneyCardHeader(kind: RoutineJourneyCardKind, expanded: Boolean) {
     Row(
         modifier = Modifier.fillMaxWidth(),
         horizontalArrangement = Arrangement.SpaceBetween,
@@ -236,10 +238,12 @@ private fun JourneyCardHeader(role: JourneyRole, expanded: Boolean) {
     ) {
         Text(
             stringResource(
-                when (role) {
-                    JourneyRole.PRIMARY -> R.string.journey_fastest
-                    JourneyRole.NEXT -> R.string.journey_next
-                    JourneyRole.ALTERNATIVE -> R.string.journey_alternative
+                when (kind) {
+                    RoutineJourneyCardKind.PRIMARY -> R.string.journey_fastest
+                    RoutineJourneyCardKind.NEXT -> R.string.journey_next
+                    RoutineJourneyCardKind.ALTERNATIVE -> R.string.journey_alternative
+                    RoutineJourneyCardKind.UPCOMING -> R.string.journey_upcoming_departure
+                    RoutineJourneyCardKind.LATER -> R.string.journey_later_departure
                 },
             ),
             style = MaterialTheme.typography.labelLarge,

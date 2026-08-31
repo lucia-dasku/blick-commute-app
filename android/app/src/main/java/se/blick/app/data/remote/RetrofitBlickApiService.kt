@@ -55,6 +55,7 @@ interface RetrofitBlickApiService {
         @Query("changesPreference") changesPreference: String,
         @Query("searchMode") searchMode: JourneySearchModeDto?,
         @Query("requestedDateTime") requestedDateTime: String?,
+        @Query("laterJourneyCount") laterJourneyCount: Int?,
     ): SuccessEnvelopeDto<JourneysResponseDto>
 
     /** See `backend/src/routes/journeyDisruptions.ts`'s own doc — a POST (not GET) specifically
@@ -78,8 +79,14 @@ class RetrofitBlickApiClient(
     override suspend fun verifyPurchase(productId: String, purchaseToken: String) =
         service.verifyPurchase(PurchaseVerificationRequestDto(productId, purchaseToken)).data
     override suspend fun searchJourneyLocations(query: String) = service.searchJourneyLocations(query).data
-    override suspend fun getJourneys(originId: String, destinationId: String, transportModes: String, searchUntil: String?, changesPreference: String) =
-        service.getJourneys(originId, destinationId, transportModes, searchUntil, changesPreference, null, null).data
+    override suspend fun getJourneys(
+        originId: String,
+        destinationId: String,
+        transportModes: String,
+        searchUntil: String?,
+        changesPreference: String,
+        laterJourneyCount: Int?,
+    ) = service.getJourneys(originId, destinationId, transportModes, searchUntil, changesPreference, null, null, laterJourneyCount).data
     override suspend fun getPlannedJourneys(
         originId: String,
         destinationId: String,
@@ -95,6 +102,7 @@ class RetrofitBlickApiClient(
         changesPreference,
         searchMode,
         requestedDateTime,
+        null,
     ).data
     override suspend fun getJourneyDisruptionRelevance(request: JourneyDisruptionRelevanceRequestDto) =
         service.getJourneyDisruptionRelevance(request).data

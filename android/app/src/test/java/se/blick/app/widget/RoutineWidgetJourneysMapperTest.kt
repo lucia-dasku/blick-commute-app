@@ -195,25 +195,22 @@ class RoutineWidgetJourneysMapperTest {
         assertEquals(JourneyRole.NEXT, content.secondary?.role)
     }
 
-    @Test fun `an ALTERNATIVE-role second journey is persisted with role ALTERNATIVE`() {
+    @Test fun `an ALTERNATIVE-role journey is not persisted as the secondary row`() {
         val primary = journey("primary", now.plusSeconds(60), now.plusSeconds(60), role = JourneyRole.PRIMARY)
         val alternative = journey("alternative", now.plusSeconds(120), now.plusSeconds(90), role = JourneyRole.ALTERNATIVE)
 
         val state = decideJourneysWidgetState(routine(), listOf(primary, alternative), now)
 
         val content = ((state as RoutineWidgetUiState.ActiveRoutine).model.content) as RoutineWidgetContent.Journeys
-        assertEquals(JourneyRole.ALTERNATIVE, content.secondary?.role)
+        assertNull(content.secondary)
     }
 
     // ---- PRIMARY/ALTERNATIVE/NEXT: the backend now sends up to three role-tagged journeys in
-    // PRIMARY -> ALTERNATIVE? -> NEXT chronological order (see backend/src/routes/journeys.ts's
-    // own doc) instead of the old two-entry fastest/alternative pair. The widget only ever wants
-    // its own two most actionable rows -- taking the first two of that already-correctly-ordered
-    // list is sufficient with no other change: PRIMARY+ALTERNATIVE during a large gap (the
-    // genuinely useful third position, NEXT, stays available only in Routine Details), or
-    // PRIMARY+NEXT normally, exactly like the two-entry tests above already prove. ----
+    // PRIMARY -> ALTERNATIVE? -> NEXT order (see backend/src/routes/journeys.ts's own doc).
+    // The widget explicitly selects PRIMARY/NEXT: list position can never let ALTERNATIVE
+    // displace the regular next departure. ----
 
-    @Test fun `during a large gap, the widget shows PRIMARY and ALTERNATIVE, leaving the regular NEXT for Routine Details only`() {
+    @Test fun `during a large gap, ALTERNATIVE never displaces authoritative NEXT`() {
         val primary = journey("primary", now.plusSeconds(60), now.plusSeconds(60), lineDesignation = "1", role = JourneyRole.PRIMARY)
         val alternative = journey("alternative", now.plusSeconds(120), now.plusSeconds(90), lineDesignation = "2", role = JourneyRole.ALTERNATIVE)
         val next = journey("next", now.plusSeconds(3600), now.plusSeconds(3660), lineDesignation = "1", role = JourneyRole.NEXT)
@@ -222,8 +219,17 @@ class RoutineWidgetJourneysMapperTest {
 
         val content = ((state as RoutineWidgetUiState.ActiveRoutine).model.content) as RoutineWidgetContent.Journeys
         assertEquals("1", content.primary.lineDesignation)
-        assertEquals("2", content.secondary?.lineDesignation)
-        assertEquals(JourneyRole.ALTERNATIVE, content.secondary?.role)
+        assertEquals("1", content.secondary?.lineDesignation)
+        assertEquals(JourneyRole.NEXT, content.secondary?.role)
+    }
+
+    @Test fun `without a current PRIMARY the widget never promotes NEXT locally`() {
+        val next = journey("next", now.plusSeconds(120), now.plusSeconds(120), role = JourneyRole.NEXT)
+
+        val state = decideJourneysWidgetState(routine(), listOf(next), now)
+
+        val content = (state as RoutineWidgetUiState.ActiveRoutine).model.content
+        assertEquals(RoutineWidgetContent.NoUpcomingDepartures(now), content)
     }
 
     // ---- changesPreference: copied from the routine's own persisted field onto the produced

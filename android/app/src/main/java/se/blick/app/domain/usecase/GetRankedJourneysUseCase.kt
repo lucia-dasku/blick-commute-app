@@ -3,6 +3,7 @@ package se.blick.app.domain.usecase
 import se.blick.app.data.repository.JourneyRepository
 import se.blick.app.domain.model.ExactDestinationChangesPreference
 import se.blick.app.domain.model.JourneyPlan
+import se.blick.app.domain.model.LiveJourneyOptions
 import se.blick.app.domain.model.TransportMode
 import java.time.Clock
 import java.time.Instant
@@ -27,6 +28,9 @@ class GetRankedJourneysUseCase @Inject constructor(
     private val repository: JourneyRepository,
     private val clock: Clock,
 ) {
+    companion object {
+        const val MAX_LATER_JOURNEYS = 3
+    }
     /**
      * `now` is captured AFTER [repository.getJourneys] returns, never before it's called: the
      * network round-trip itself can take long enough that a journey departing while the request
@@ -68,5 +72,36 @@ class GetRankedJourneysUseCase @Inject constructor(
         val journeys = repository.getJourneys(originId, destinationId, allowedTransportModes, searchUntil, changesPreference)
         val now = clock.instant()
         return journeys.filterCurrentJourneys(now)
+    }
+
+    /** Foreground Routine Details variant. Backend ordering/roles remain authoritative; both
+     * lists receive only the same post-response currency/change-limit defense as [invoke]. */
+    suspend fun getOptions(
+        originId: String,
+        destinationId: String,
+        allowedTransportModes: Set<TransportMode>,
+        searchUntil: Instant? = null,
+        changesPreference: ExactDestinationChangesPreference = ExactDestinationChangesPreference.BOTH,
+        laterJourneyCount: Int,
+    ): LiveJourneyOptions {
+        require(laterJourneyCount in 0..MAX_LATER_JOURNEYS) { "laterJourneyCount must be between 0 and $MAX_LATER_JOURNEYS" }
+        val options = repository.getJourneyOptions(
+            originId,
+            destinationId,
+            allowedTransportModes,
+            searchUntil,
+            changesPreference,
+            laterJourneyCount,
+        )
+        val now = clock.instant()
+        val authoritative = options.journeys.filterCurrentJourneys(now)
+        val authoritativeIds = authoritative.mapTo(mutableSetOf(), JourneyPlan::journeyId)
+        val seen = mutableSetOf<String>()
+        val later = options.laterJourneys.filter { option ->
+            option.journey.isCurrentJourney(now) &&
+                option.journey.journeyId !in authoritativeIds &&
+                seen.add(option.journey.journeyId)
+        }
+        return LiveJourneyOptions(authoritative, later)
     }
 }

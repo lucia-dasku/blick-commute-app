@@ -16,10 +16,14 @@ skip those steps and save an exact-destination routine.
 Exact-destination routines store Journey Planner origin/destination IDs separately from SL
 Transport site/direction fields. Their Routine Details Transport row has a `+` multi-select whose
 persisted allow-list controls foreground refreshes, the widget, and the notification worker. They
-show the earliest-final-arrival journey and only label another journey Alternative when it uses a
-different public-transport mode combination; a later trip on the same mode is not an alternative.
-The compact widget shows only the fastest and a larger widget also shows a genuine alternative.
-The ongoing notification intentionally projects only the fastest
+show backend-authoritative PRIMARY and NEXT by default, while ALTERNATIVE cannot displace NEXT.
+The collapsed foreground request preloads one role-free, structurally compatible later reserve;
+More options performs one extended request and then the same existing approximately 30-second
+screen refresh asks for the extended list until collapsed. No second polling loop or worker
+exists. If PRIMARY expires while a response is in flight, the screen can show the still-current
+NEXT plus that reserve without changing either journey's role. Workers, notifications and widgets
+omit supplemental options; the widget explicitly selects authoritative PRIMARY/NEXT. The ongoing
+notification intentionally projects only the PRIMARY
 journey's first public-transport leg into the existing notification model—never the exact
 destination, alternative, transfer comparison, or final arrival.
 

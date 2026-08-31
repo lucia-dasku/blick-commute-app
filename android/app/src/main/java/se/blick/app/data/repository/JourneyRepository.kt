@@ -22,6 +22,8 @@ import se.blick.app.domain.model.JourneyLeg
 import se.blick.app.domain.model.JourneyLocation
 import se.blick.app.domain.model.JourneyPlan
 import se.blick.app.domain.model.JourneyRole
+import se.blick.app.domain.model.LaterJourneyOption
+import se.blick.app.domain.model.LiveJourneyOptions
 import se.blick.app.domain.model.JourneySearchMode
 import se.blick.app.domain.model.JOURNEY_TRANSPORT_MODE_OPTIONS
 import se.blick.app.domain.model.PlannedJourneyResult
@@ -51,6 +53,20 @@ interface JourneyRepository {
         searchUntil: Instant? = null,
         changesPreference: ExactDestinationChangesPreference = ExactDestinationChangesPreference.BOTH,
     ): List<JourneyPlan>
+
+    /** Foreground-only additive request. Background callers keep using [getJourneys], which
+     * requests and returns authoritative roles only. The default keeps existing fakes safe. */
+    suspend fun getJourneyOptions(
+        originId: String,
+        destinationId: String,
+        allowedTransportModes: Set<TransportMode>,
+        searchUntil: Instant? = null,
+        changesPreference: ExactDestinationChangesPreference = ExactDestinationChangesPreference.BOTH,
+        laterJourneyCount: Int,
+    ): LiveJourneyOptions = LiveJourneyOptions(
+        journeys = getJourneys(originId, destinationId, allowedTransportModes, searchUntil, changesPreference),
+        laterJourneys = emptyList(),
+    )
 
     suspend fun getPlannedJourneys(
         originId: String,
@@ -128,6 +144,42 @@ class RemoteJourneyRepository @Inject constructor(private val apiClient: BlickAp
             )
         }
         return response.toDomainJourneys()
+    }
+
+    override suspend fun getJourneyOptions(
+        originId: String,
+        destinationId: String,
+        allowedTransportModes: Set<TransportMode>,
+        searchUntil: Instant?,
+        changesPreference: ExactDestinationChangesPreference,
+        laterJourneyCount: Int,
+    ): LiveJourneyOptions {
+        val response = apiClient.getJourneys(
+            originId = originId,
+            destinationId = destinationId,
+            transportModes = JOURNEY_TRANSPORT_MODE_OPTIONS
+                .filter(allowedTransportModes::contains)
+                .joinToString(",") { it.name },
+            searchUntil = searchUntil?.toString(),
+            changesPreference = changesPreference.name,
+            laterJourneyCount = laterJourneyCount,
+        )
+        if (response.journeyContext != JourneyContextDto.LIVE || response.searchMode != JourneySearchModeDto.NOW) {
+            throw UnexpectedJourneyContextException(
+                "Expected LIVE/NOW but received ${response.journeyContext}/${response.searchMode}",
+            )
+        }
+        val authoritative = response.toDomainJourneys()
+        val authoritativeIds = authoritative.mapTo(mutableSetOf(), JourneyPlan::journeyId)
+        val seenSupplemental = mutableSetOf<String>()
+        val supplemental = response.laterJourneys.mapNotNull { dto ->
+            if (dto.journeyId in authoritativeIds || !seenSupplemental.add(dto.journeyId)) return@mapNotNull null
+            // JourneyPlan currently carries a live role for authoritative consumers. The
+            // placeholder below is never observed: LaterJourneyOption is the sole authority,
+            // and supplemental values never enter notifications/widgets/disruption ownership.
+            LaterJourneyOption(dto.toDomain(JourneyRole.PRIMARY))
+        }
+        return LiveJourneyOptions(authoritative, supplemental)
     }
 
     override suspend fun getPlannedJourneys(

@@ -31,6 +31,13 @@ interface JourneyResponse {
     disruptions: string[];
     disruptionNotices: Array<{ text: string; effect: string }>;
   }>;
+  laterJourneys: Array<{
+    journeyId: string;
+    departureTime: string;
+    arrivalTime: string;
+    transferCount: number;
+    role?: never;
+  }>;
 }
 
 interface LocationSearchResponse {
@@ -181,7 +188,16 @@ describe("journey routes", () => {
         ["recommended", "RECOMMENDED"],
         ["later", "LATER"],
       ]);
-      expect(metrics.events[0]).toMatchObject({ slCalls: 1, initialCalls: 1, plannedCalls: 0, nextCalls: 0 });
+      expect(body.data.laterJourneys).toEqual([]);
+      expect(metrics.events[0]).toMatchObject({
+        slCalls: 1,
+        initialCalls: 1,
+        plannedCalls: 0,
+        nextCalls: 0,
+        laterCalls: 0,
+        laterRequested: 0,
+        laterReturned: 0,
+      });
     });
 
     it("returns a complete ARRIVE_BY chooser from one sufficient initial request", async () => {
@@ -1658,13 +1674,20 @@ describe("journey routes", () => {
       expect(Object.keys(spy.events[0]!).sort()).toEqual(
         [
           "alternativeCalls",
+          "alternativeFound",
+          "authoritativeJourneyCount",
           "budgetExhausted",
           "event",
           "initialCalls",
+          "laterCalls",
+          "laterRequested",
+          "laterReturned",
           "nextCalls",
+          "nextFound",
           "plannedCalls",
           "primaryChanged",
           "primaryDiscoveryCalls",
+          "primaryFound",
           "primaryRetargets",
           "slCalls",
         ].sort(),
@@ -1684,6 +1707,7 @@ describe("journey routes", () => {
         "fetchedAt",
         "journeyContext",
         "journeys",
+        "laterJourneys",
         "requestedDateTime",
         "searchMode",
       ]);
@@ -2089,6 +2113,111 @@ describe("journey routes", () => {
         expect(body.data.journeys.map((journey) => journey.role)).toEqual(["PRIMARY", "NEXT"]);
         expect(requests[0]!.maxChanges).toBe(MAX_CHANGES);
       });
+    });
+  });
+
+  describe("live later journey options", () => {
+    it.each(["-1", "1.5", "4", "text"])("rejects invalid laterJourneyCount=%s", async (value) => {
+      const { client } = worldClient([]);
+      const app = new Hono();
+      app.onError(onError);
+      app.route("/", createJourneyRoutes(client, FIXED_NOW));
+      const response = await app.request(
+        `/?originId=origin&destinationId=destination&laterJourneyCount=${value}`,
+      );
+      expect(response.status).toBe(400);
+    });
+
+    it("rejects a non-zero live-only count for a planned Event request", async () => {
+      const { client } = worldClient([]);
+      const app = new Hono();
+      app.onError(onError);
+      app.route("/", createJourneyRoutes(client, FIXED_NOW));
+      const response = await app.request(
+        "/?originId=origin&destinationId=destination&searchMode=LEAVE_AT&requestedDateTime=2026-08-10T12:00:00%2B02:00&laterJourneyCount=1",
+      );
+      expect(response.status).toBe(400);
+    });
+
+    it("keeps omitted requests authoritative-only with zero later metrics", async () => {
+      const spy = metricsSpy();
+      const { client } = worldClient([
+        { id: "primary", departure: "2026-08-10T07:05:00Z", arrival: "2026-08-10T07:20:00Z", mode: "metro" },
+        { id: "next", departure: "2026-08-10T07:15:00Z", arrival: "2026-08-10T07:30:00Z", mode: "metro" },
+      ]);
+      const response = await createJourneyRoutes(client, FIXED_NOW, spy.emit).request(
+        "/?originId=origin&destinationId=destination",
+      );
+      const body = (await response.json()) as SuccessEnvelope<JourneyResponse>;
+
+      expect(body.data.laterJourneys).toEqual([]);
+      expect(spy.events[0]).toMatchObject({ laterRequested: 0, laterReturned: 0, laterCalls: 0 });
+    });
+
+    it("returns an already-pooled reserve without an authoritative role or supplemental call", async () => {
+      const spy = metricsSpy();
+      const { client } = worldClient([
+        { id: "primary", departure: "2026-08-10T07:05:00Z", arrival: "2026-08-10T07:20:00Z", mode: "metro" },
+        { id: "next", departure: "2026-08-10T07:15:00Z", arrival: "2026-08-10T07:30:00Z", mode: "metro" },
+        { id: "reserve", departure: "2026-08-10T07:25:00Z", arrival: "2026-08-10T07:40:00Z", mode: "metro" },
+      ]);
+      const response = await createJourneyRoutes(client, FIXED_NOW, spy.emit).request(
+        "/?originId=origin&destinationId=destination&laterJourneyCount=1",
+      );
+      const body = (await response.json()) as SuccessEnvelope<JourneyResponse>;
+
+      expect(body.data.journeys.map((it) => [it.journeyId, it.role])).toEqual([
+        ["primary", "PRIMARY"],
+        ["next", "NEXT"],
+      ]);
+      expect(body.data.laterJourneys.map((it) => it.journeyId)).toEqual(["reserve"]);
+      expect("role" in body.data.laterJourneys[0]!).toBe(false);
+      expect(spy.events[0]).toMatchObject({ laterRequested: 1, laterReturned: 1, laterCalls: 0 });
+    });
+
+    it("uses at most two real later calls for an expanded request", async () => {
+      const spy = metricsSpy();
+      const { client } = worldClient([
+        { id: "primary", departure: "2026-08-10T07:05:00Z", arrival: "2026-08-10T07:20:00Z", mode: "metro" },
+        { id: "next", departure: "2026-08-10T07:15:00Z", arrival: "2026-08-10T07:30:00Z", mode: "metro" },
+        { id: "later-1", departure: "2026-08-10T07:25:00Z", arrival: "2026-08-10T07:40:00Z", mode: "metro" },
+        { id: "later-2", departure: "2026-08-10T07:35:00Z", arrival: "2026-08-10T07:50:00Z", mode: "metro" },
+        { id: "later-3", departure: "2026-08-10T07:45:00Z", arrival: "2026-08-10T08:00:00Z", mode: "metro" },
+      ]);
+      const response = await createJourneyRoutes(client, FIXED_NOW, spy.emit).request(
+        "/?originId=origin&destinationId=destination&laterJourneyCount=3",
+      );
+      const body = (await response.json()) as SuccessEnvelope<JourneyResponse>;
+
+      expect(body.data.laterJourneys.map((it) => it.journeyId)).toEqual(["later-1", "later-2", "later-3"]);
+      expect(spy.events[0]!.laterCalls).toBeLessThanOrEqual(2);
+      expect(spy.events[0]!.slCalls).toBe(
+        spy.events[0]!.initialCalls + spy.events[0]!.nextCalls + spy.events[0]!.alternativeCalls +
+          spy.events[0]!.plannedCalls + spy.events[0]!.primaryDiscoveryCalls + spy.events[0]!.laterCalls,
+      );
+    });
+
+    it("can establish a missing NEXT through the bounded supplemental probe", async () => {
+      const spy = metricsSpy();
+      const { client, requests } = scriptedClient([
+        [rawJourney("primary", "2026-08-10T07:05:00Z", "2026-08-10T07:20:00Z", 0, "metro")],
+        [
+          rawJourney("next", "2026-08-10T07:15:00Z", "2026-08-10T07:30:00Z", 0, "metro"),
+          rawJourney("reserve", "2026-08-10T07:25:00Z", "2026-08-10T07:40:00Z", 0, "metro"),
+        ],
+      ]);
+      const response = await createJourneyRoutes(client, FIXED_NOW, spy.emit).request(
+        "/?originId=origin&destinationId=destination&laterJourneyCount=1",
+      );
+      const body = (await response.json()) as SuccessEnvelope<JourneyResponse>;
+
+      expect(body.data.journeys.map((it) => [it.journeyId, it.role])).toEqual([
+        ["primary", "PRIMARY"],
+        ["next", "NEXT"],
+      ]);
+      expect(body.data.laterJourneys.map((it) => it.journeyId)).toEqual(["reserve"]);
+      expect(requests).toHaveLength(2);
+      expect(spy.events[0]!.laterCalls).toBe(1);
     });
   });
 });

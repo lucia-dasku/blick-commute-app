@@ -50,7 +50,7 @@ Resolves a user-entered stop/location through Journey Planner Stop Finder and re
 global identifiers plus display names. Android must persist these identifiers; SL Transport's
 numeric site IDs are not assumed to be compatible.
 
-### `GET /api/v1/journeys?originId=&destinationId=&transportModes=METRO,TRAIN,BUS&searchUntil=&changesPreference=&searchMode=&requestedDateTime=`
+### `GET /api/v1/journeys?originId=&destinationId=&transportModes=METRO,TRAIN,BUS&searchUntil=&changesPreference=&searchMode=&requestedDateTime=&laterJourneyCount=`
 
 Calls Journey Planner Trips, normalizes complete legs (first public transport mode/line,
 departure and final arrival, transfer count, realtime flags, stop names, disruptions, and each
@@ -71,6 +71,16 @@ disallowed rows merely hidden afterward; an unrecognized value is a validation e
 timeout/network/schema failures retain the existing error-envelope behavior. Responses are
 public-cacheable for 30 seconds so app/detail/widget consumers do not independently amplify
 upstream traffic.
+
+`laterJourneyCount` is live-only and optional: omitted/`0` preserves the authoritative response
+and performs no supplemental acquisition; `1` asks for one hidden Routine Details reserve; `2`
+or `3` asks for that many later foreground options. It must be an integer in `0..3`, and a
+non-zero value is rejected for `LEAVE_AT`/`ARRIVE_BY`. Supplemental selection first reuses the
+existing eligible candidate pool. If more are needed, it reuses the same collector, query
+deduplication, realtime upserts, cursor logic and total request budget as authoritative
+acquisition. A count of `1` permits at most one real supplemental SL call; `2`/`3` permit at most
+two. With `searchUntil` the cursor never passes that boundary; without it the one/two-call cap is
+the bound, not an invented time horizon.
 
 `searchMode` is explicit and defaults to `NOW` when omitted. A `NOW` request rejects
 `requestedDateTime` and keeps the existing departure-at-current-time acquisition behavior.
@@ -103,6 +113,16 @@ are collapsed, while the same line at genuinely different times remains distinct
 neighbor does not exist, one or two choices are valid.
 Because planning mode and requested time are query parameters at whole-minute precision, CDN
 cache identity separates live, departure-planned, arrival-planned, and different planned minutes.
+
+The existing `journeys` array remains authoritative and contains only role-bearing live
+`PRIMARY`/`ALTERNATIVE`/`NEXT` (or planned Event `EARLIER`/`RECOMMENDED`/`LATER`) entries. The
+additive `laterJourneys` array contains role-free live supplemental itineraries and is empty for
+planned/default requests. A supplemental itinerary must be route-compatible with the final
+PRIMARY, depart strictly after the final NEXT, and not duplicate PRIMARY, NEXT, the selected
+ALTERNATIVE or another supplemental itinerary. It uses NEXT's departure-first deterministic
+ordering. Full PRIMARY/NEXT selection is re-derived after every supplemental batch, and any
+PRIMARY change retargets the remaining bounded acquisition before final ALTERNATIVE and
+`laterJourneys` are selected.
 
 Each journey additionally carries `disruptionContext` (`{ version, journeyStart, journeyEnd,
 legs: [{ transportMode, lineDesignation, boardingPatternPointGid?, alightingPatternPointGid?,
@@ -182,11 +202,12 @@ own doc for the full model):
   state machine). This retargeting draws from the same shared upstream request budget as everything
   else — it cannot itself cause unbounded requests.
 - The backend logs one structured `journey_acquisition_metrics` line per request (SL call counts
-  broken down by phase, whether PRIMARY retargeted, whether the budget was exhausted) purely for
+  broken down by phase, `laterRequested`/`laterReturned`/`laterCalls`, authoritative role-found
+  booleans/count, whether PRIMARY retargeted, whether the budget was exhausted) purely for
   operational visibility. It carries no station names, stop ids, or journey payloads, and is never
   part of the response body.
 
-A response therefore contains `PRIMARY` alone, `PRIMARY, NEXT`, or `PRIMARY, ALTERNATIVE, NEXT`
+A response's authoritative `journeys` therefore contains `PRIMARY` alone, `PRIMARY, NEXT`, or `PRIMARY, ALTERNATIVE, NEXT`
 (in that departure order) — never an unrelated journey mislabelled `NEXT` merely to fill a second
 slot, and never more than one upstream request in the common case where PRIMARY and NEXT are both
 already in the initial batch and no alternative exists to find.

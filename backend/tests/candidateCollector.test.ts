@@ -622,6 +622,42 @@ describe("CandidateCollector.acquireUntil", () => {
     expect(requests).toHaveLength(0);
   });
 
+  it("uses maxRealCalls as the sole bound when no search horizon is available", async () => {
+    const { client, requests } = scriptedClient([
+      [rawJourney("first", "2026-08-10T18:40:00Z", "2026-08-10T18:50:00Z")],
+      [rawJourney("second", "2026-08-10T18:45:00Z", "2026-08-10T18:55:00Z")],
+      [rawJourney("must-not-be-fetched", "2026-08-10T18:50:00Z", "2026-08-10T19:00:00Z")],
+    ]);
+    const collector = new CandidateCollector(client, ORIGIN, DESTINATION, REQUESTED_AT_MILLIS);
+
+    const pool = await collector.acquireUntil(
+      BASE_OPTIONS,
+      new Date("2026-08-10T18:36:00Z"),
+      null,
+      () => false,
+      2,
+    );
+
+    expect(pool.map((journey) => journey.journeyId)).toEqual(["first", "second"]);
+    expect(requests).toHaveLength(2);
+  });
+
+  it("does not charge a skipped duplicate probe against maxRealCalls", async () => {
+    const { client, requests } = scriptedClient([
+      [rawJourney("already-known", "2026-08-10T18:36:00Z", "2026-08-10T18:40:00Z")],
+      [rawJourney("new", "2026-08-10T18:41:00Z", "2026-08-10T18:50:00Z")],
+    ]);
+    const collector = new CandidateCollector(client, ORIGIN, DESTINATION, REQUESTED_AT_MILLIS);
+    const firstMinute = new Date("2026-08-10T18:36:00Z");
+    await collector.fetchBatch({ ...BASE_OPTIONS, departureAt: firstMinute });
+
+    const pool = await collector.acquireUntil(BASE_OPTIONS, firstMinute, null, () => false, 1);
+
+    expect(pool.map((journey) => journey.journeyId)).toEqual(["already-known", "new"]);
+    expect(requests).toHaveLength(2);
+    expect(requests[1]!.departureAt.toISOString()).toBe("2026-08-10T18:37:00.000Z");
+  });
+
   it("a targeted forward search finds a same-family NEXT missing from the first batch (a second, time-anchored batch)", async () => {
     // First batch (the initial acquisition, simulated as already in the pool): only PRIMARY.
     // acquireUntil's own forward search should need exactly one more batch to find NEXT.
