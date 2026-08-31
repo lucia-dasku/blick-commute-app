@@ -68,8 +68,8 @@
     <string name="routine_details_transport_one_required">Välj minst ett färdmedel.</string>
     <string name="routine_details_transport_update_failed">Kunde inte uppdatera färdmedlen. Försök igen.</string>
     <string name="routine_details_changes_preference_update_failed">Kunde inte uppdatera reseinställningen. Försök igen.</string>
-    <string name="journey_fastest">SNABBAST</string>
-    <string name="journey_next">NÄSTA</string>
+    <string name="journey_fastest">Tidigaste avgång</string>
+    <string name="journey_next">Nästa avgång</string>
     <string name="journey_alternative">ALTERNATIV</string>
     <string name="journey_departure_in">om %1$s</string>
     <string name="journey_direct">Direkt</string>
