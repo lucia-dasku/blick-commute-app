@@ -19,16 +19,15 @@ import se.blick.app.data.repository.JourneyRepository
 import se.blick.app.data.repository.OneTimeEventRepository
 import se.blick.app.domain.model.DEFAULT_JOURNEY_TRANSPORT_MODES
 import se.blick.app.domain.model.JourneyPlan
-import se.blick.app.domain.model.JourneyRole
 import se.blick.app.domain.model.JourneySearchMode
 import se.blick.app.domain.model.OneTimeEvent
 import se.blick.app.domain.model.OneTimeEventTimeType
 import se.blick.app.domain.model.PlannedJourneyResult
+import se.blick.app.domain.model.PlannedJourneyRole
 import se.blick.app.domain.model.ResolvedJourneyDisruption
 import se.blick.app.domain.model.STOCKHOLM_ZONE
 import se.blick.app.domain.model.upcomingAt
 import se.blick.app.domain.usecase.GetJourneyDisruptionRelevanceUseCase
-import se.blick.app.domain.usecase.primaryDisruptionNotices
 import se.blick.app.scheduling.DISRUPTIONS_FETCH_TIMEOUT_MS
 import java.time.Clock
 import java.time.Instant
@@ -65,10 +64,10 @@ class OneTimeEventsViewModel @Inject constructor(
 sealed interface PlannedJourneyPreviewState {
     data object WaitingForEntitlement : PlannedJourneyPreviewState
     data object Loading : PlannedJourneyPreviewState
-    data class Ready(
-        val primary: JourneyPlan,
-        val result: PlannedJourneyResult,
-    ) : PlannedJourneyPreviewState
+    data class Ready(val result: PlannedJourneyResult) : PlannedJourneyPreviewState {
+        val recommended: JourneyPlan
+            get() = checkNotNull(result.choices.firstOrNull { it.role == PlannedJourneyRole.RECOMMENDED }?.journey)
+    }
     data object NoJourney : PlannedJourneyPreviewState
     data object Error : PlannedJourneyPreviewState
     data object Expired : PlannedJourneyPreviewState
@@ -224,8 +223,10 @@ class OneTimeEventDetailsViewModel @Inject constructor(
                     if (_uiState.value.event != event || !entitlement.hasPremiumAccess) return@launch
                     result.fold(
                         onSuccess = { planned ->
-                            val primary = planned.journeys.firstOrNull { it.role == JourneyRole.PRIMARY }
-                            if (primary == null) {
+                            val recommended = planned.choices
+                                .firstOrNull { it.role == PlannedJourneyRole.RECOMMENDED }
+                                ?.journey
+                            if (recommended == null) {
                                 _uiState.value = _uiState.value.copy(
                                     preview = PlannedJourneyPreviewState.NoJourney,
                                     isRefreshing = false,
@@ -234,13 +235,13 @@ class OneTimeEventDetailsViewModel @Inject constructor(
                                 )
                             } else {
                                 _uiState.value = _uiState.value.copy(
-                                    preview = PlannedJourneyPreviewState.Ready(primary, planned),
+                                    preview = PlannedJourneyPreviewState.Ready(planned),
                                     isRefreshing = false,
                                     refreshFailed = false,
                                     disruptionState = EventPlanDisruptionState.NotRequested,
                                 )
                                 if (presentation == EventPlanPresentation.TODAY) {
-                                    loadDisruptions(event, planned, primary)
+                                    loadDisruptions(event, planned, recommended)
                                 }
                             }
                         },
@@ -262,7 +263,7 @@ class OneTimeEventDetailsViewModel @Inject constructor(
         }
     }
 
-    private fun loadDisruptions(event: OneTimeEvent, planned: PlannedJourneyResult, primary: JourneyPlan) {
+    private fun loadDisruptions(event: OneTimeEvent, planned: PlannedJourneyResult, recommended: JourneyPlan) {
         disruptionJob?.cancel()
         _uiState.value = _uiState.value.copy(disruptionState = EventPlanDisruptionState.Loading)
         disruptionJob = viewModelScope.launch {
@@ -270,12 +271,12 @@ class OneTimeEventDetailsViewModel @Inject constructor(
                 try {
                     Result.success(
                         getJourneyDisruptionRelevance(
-                            primary.legs,
+                            recommended.legs,
                             null,
-                            planned.journeys.primaryDisruptionNotices(),
-                            primary.disruptionContext,
-                            primary.departureTime,
-                            primary.arrivalTime,
+                            recommended.disruptionNotices,
+                            recommended.disruptionContext,
+                            recommended.departureTime,
+                            recommended.arrivalTime,
                             event.originId,
                             event.destinationId,
                         ),

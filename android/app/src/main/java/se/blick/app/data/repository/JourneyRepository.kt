@@ -9,6 +9,7 @@ import se.blick.app.data.remote.dto.JourneyDisruptionRelevanceRequestDto
 import se.blick.app.data.remote.dto.JourneyLegDto
 import se.blick.app.data.remote.dto.JourneyContextDto
 import se.blick.app.data.remote.dto.JourneySearchModeDto
+import se.blick.app.data.remote.dto.JourneyPlanDto
 import se.blick.app.data.remote.dto.JourneysResponseDto
 import se.blick.app.data.remote.dto.ResolvedJourneyDisruptionDto
 import se.blick.app.domain.model.DisruptionRelevance
@@ -20,13 +21,16 @@ import se.blick.app.domain.model.JourneyDisruptionNotice
 import se.blick.app.domain.model.JourneyLeg
 import se.blick.app.domain.model.JourneyLocation
 import se.blick.app.domain.model.JourneyPlan
+import se.blick.app.domain.model.JourneyRole
 import se.blick.app.domain.model.JourneySearchMode
 import se.blick.app.domain.model.JOURNEY_TRANSPORT_MODE_OPTIONS
 import se.blick.app.domain.model.PlannedJourneyResult
+import se.blick.app.domain.model.PlannedJourneyChoice
 import se.blick.app.domain.model.ResolvedJourneyDisruption
 import se.blick.app.domain.model.TransportMode
 import se.blick.app.domain.model.toDisruptionEffect
 import se.blick.app.domain.model.toJourneyRole
+import se.blick.app.domain.model.toPlannedJourneyRole
 import se.blick.app.domain.model.toTransportMode
 import java.time.Instant
 import java.time.ZonedDateTime
@@ -159,7 +163,7 @@ class RemoteJourneyRepository @Inject constructor(private val apiClient: BlickAp
             fetchedAt = Instant.parse(response.fetchedAt),
             searchMode = searchMode,
             requestedDateTime = responseRequestedInstant,
-            journeys = response.toDomainJourneys(),
+            choices = response.toDomainPlannedChoices(),
         )
     }
 
@@ -169,14 +173,23 @@ class RemoteJourneyRepository @Inject constructor(private val apiClient: BlickAp
             // remaining, validly-roled journeys are still genuinely useful to show, and
             // dropping one entry from a list never corrupts the relative order of the rest.
             val role = dto.role.toJourneyRole() ?: return@mapNotNull null
-            JourneyPlan(
-                dto.journeyId, dto.originName, dto.destinationName,
-                Instant.parse(dto.departureTime), Instant.parse(dto.arrivalTime), dto.transferCount,
-                dto.firstLeg.toDomain(), dto.legs.map(JourneyLegDto::toDomain), dto.disruptions,
-                role, dto.disruptionNotices.map(JourneyDisruptionNoticeDto::toDomain),
-                dto.disruptionContext?.toDomain(),
-            )
+            dto.toDomain(role)
         }
+
+    /** Planned roles are parsed independently from live roles. The wrapper is authoritative
+     * for Event UI; the contained [JourneyPlan] is reused solely for its route/timeline data. */
+    private fun JourneysResponseDto.toDomainPlannedChoices() = journeys.mapNotNull { dto ->
+        val role = dto.role.toPlannedJourneyRole() ?: return@mapNotNull null
+        PlannedJourneyChoice(role = role, journey = dto.toDomain(JourneyRole.PRIMARY))
+    }
+
+    private fun JourneyPlanDto.toDomain(role: JourneyRole) = JourneyPlan(
+        journeyId, originName, destinationName,
+        Instant.parse(departureTime), Instant.parse(arrivalTime), transferCount,
+        firstLeg.toDomain(), legs.map(JourneyLegDto::toDomain), disruptions,
+        role, disruptionNotices.map(JourneyDisruptionNoticeDto::toDomain),
+        disruptionContext?.toDomain(),
+    )
 
     override suspend fun getRelevantDeviationNotices(
         legs: List<JourneyLeg>,

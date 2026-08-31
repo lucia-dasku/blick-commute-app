@@ -61,8 +61,8 @@ data class JourneyPlanDto(
     val legs: List<JourneyLegDto>,
     val disruptions: List<String> = emptyList(),
     // Default covers a response from a stale cached/proxied deployment predating this field --
-    // JourneyRepository's own toJourneyRole() mapping fails closed (drops the journey) for a
-    // null, unrecognized, or otherwise malformed value, rather than inventing a role for it.
+    // JourneyRepository's context-specific live/planned mapping fails closed (drops the
+    // journey) for a null, unrecognized, or malformed value rather than inventing a role.
     val role: String? = null,
     // Default covers the same stale-deployment case as `disruptions` always has -- see
     // JourneyDisruptionNotice's own doc.

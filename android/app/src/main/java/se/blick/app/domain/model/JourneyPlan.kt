@@ -8,8 +8,22 @@ data class PlannedJourneyResult(
     val fetchedAt: Instant,
     val searchMode: JourneySearchMode,
     val requestedDateTime: Instant,
-    val journeys: List<JourneyPlan>,
+    val choices: List<PlannedJourneyChoice>,
 )
+
+/** A one-time Event's planned chooser role. These roles are intentionally separate from
+ * [JourneyRole]: EARLIER/LATER are chronological neighbors around the backend-selected
+ * [RECOMMENDED] journey and may use unrelated route families. */
+enum class PlannedJourneyRole { EARLIER, RECOMMENDED, LATER }
+
+data class PlannedJourneyChoice(
+    val role: PlannedJourneyRole,
+    val journey: JourneyPlan,
+)
+
+/** Fail-closed counterpart to [toJourneyRole] for the planned Event contract. */
+fun String?.toPlannedJourneyRole(): PlannedJourneyRole? =
+    this?.let { runCatching { PlannedJourneyRole.valueOf(it) }.getOrNull() }
 
 data class JourneyLocation(val id: String, val name: String)
 

@@ -61,8 +61,8 @@ defaults to all regular modes for backward compatibility and rejects empty or un
 selections. For live requests, `searchUntil` (an ISO-8601 instant) bounds how far forward the
 backend's targeted acquisition may search for NEXT/ALTERNATIVE; a malformed value is a validation
 error, but an absent one is not — it means "answer from the initial live acquisition alone", never
-an invented search horizon. Planned NEXT acquisition is independently capped at one targeted
-request and does not use a horizon. `changesPreference` (`DIRECT_ONLY` | `BOTH` |
+an invented search horizon. Planned chooser acquisition is independently capped at two targeted
+requests and does not use a horizon. `changesPreference` (`DIRECT_ONLY` | `BOTH` |
 `WITH_CHANGES_ONLY`, defaulting to `BOTH`)
 narrows the whole eligible candidate pool BEFORE PRIMARY/NEXT/ALTERNATIVE selection — see
 `backend/src/services/candidateCollector.ts`'s own `JourneyChangesPreference` doc — so a
@@ -78,25 +78,29 @@ upstream traffic.
 timestamp with an explicit offset (for example `2026-09-17T18:30:00+02:00`); timezone-less,
 malformed, past, and sub-minute values are rejected. Planned requests also reject `searchUntil`,
 which remains a live routine-window boundary. `LEAVE_AT` maps the requested instant to SL's
-departure search; `ARRIVE_BY` maps it to SL's native arrival search. If that initial planned batch
-establishes PRIMARY but not NEXT, the backend may make one targeted departure search from
-PRIMARY's own minute, narrowed to its actual transport modes and transfer count. The merged pool
-is re-derived under the original planned bounds. A planned lookup therefore makes one SL request
-when NEXT is already known and at most two otherwise; it never enters the live forward-acquisition
-loop.
+departure search; `ARRIVE_BY` maps it to SL's native arrival search. Planned requests never enter
+the live PRIMARY/NEXT/ALTERNATIVE selectors or acquisition loop. If the initial best-match batch
+does not cover both sides of the planned recommendation, the backend can complement it with a
+`leastinterchange` search at the original planned instant and a departure search from the current
+recommendation's minute. A complete initial chooser spends no follow-up request; no planned lookup
+spends more than two.
 
 Every response identifies its meaning directly with `journeyContext` (`LIVE` or `PLANNED`),
 `searchMode`, and canonical `requestedDateTime` (`null` for `NOW`, otherwise an explicit UTC ISO
 instant). `fetchedAt` remains the time the backend performed the lookup, never the future planning
-anchor. The existing journey shape and `PRIMARY`/`NEXT`/`ALTERNATIVE` roles are reused within that
-context. For `ARRIVE_BY`, candidates whose normalized final arrival is after the requested
-deadline are rejected defensively even though the upstream request already uses arrival mode.
-Its PRIMARY preference is also deadline-specific: fewer changes, then less known walking, then
-the latest useful departure, then the arrival closest to the deadline. Thus equal-quality regular
-proposals choose the latest one that still arrives on time, while a later multi-change detour does
-not displace a simpler sensible route merely for leaving slightly later. NEXT, when present, is
-still route-compatible and is selected only from that same deadline-safe pool; a journey arriving
-after the deadline can never receive any role.
+anchor. Live responses use `PRIMARY`/`NEXT`/`ALTERNATIVE`; planned responses use the separate
+`EARLIER`/`RECOMMENDED`/`LATER` vocabulary and return those choices in chronological departure
+order. For `ARRIVE_BY`, every planned choice must arrive by the requested deadline. For `LEAVE_AT`,
+every choice must depart at or after the requested instant. `RECOMMENDED` is selected by a
+deterministic, planned-specific lexicographic quality order using arrival/departure, transfers,
+known walking, and total duration rather than simply taking the first or absolute latest trip.
+Within an otherwise equal-comfort ARRIVE_BY tier, an interior candidate is preferred when it
+preserves both an earlier and a later deadline-safe choice; this is a structural robustness rule,
+not a fixed-minute threshold.
+`EARLIER` and `LATER` are the closest distinct useful departures on either side; unlike live NEXT,
+they may use completely different route families. Exact duplicate departure/arrival opportunities
+are collapsed, while the same line at genuinely different times remains distinct. If a useful
+neighbor does not exist, one or two choices are valid.
 Because planning mode and requested time are query parameters at whole-minute precision, CDN
 cache identity separates live, departure-planned, arrival-planned, and different planned minutes.
 
@@ -105,8 +109,9 @@ legs: [{ transportMode, lineDesignation, boardingPatternPointGid?, alightingPatt
 stopPatternPointGids, stopSequenceComplete }] }`) — purely structural metadata extracted from the
 SAME Journey Planner response already being normalized (no extra upstream call, no
 `StopPointDirectory` lookup — see "Resolving Journey Planner notices + matched SL Deviations"
-below for what actually reads it). Android does not interpret this: it retains PRIMARY's own copy
-unchanged and sends it back verbatim as part of `POST /api/v1/journeys/disruptions`.
+below for what actually reads it). Android does not interpret this: it retains the live PRIMARY's
+or planned RECOMMENDED's copy unchanged and sends it back verbatim as part of
+`POST /api/v1/journeys/disruptions`.
 
 ### `POST /api/v1/journeys/disruptions`
 
@@ -121,7 +126,7 @@ disruption tagged `CONFIRMED` or `LINE_RELEVANT`, never a plain relevant/unrelat
 "Resolving Journey Planner notices + matched SL Deviations" below for the full request/response
 shape, the relevance model, and matching rules.
 
-Each returned journey carries a `role` of `PRIMARY`, `NEXT`, or `ALTERNATIVE` — Android renders
+Each returned LIVE journey carries a `role` of `PRIMARY`, `NEXT`, or `ALTERNATIVE` — Android renders
 off this field and never infers a role from list position (see `backend/src/routes/journeys.ts`'s
 own doc for the full model):
 

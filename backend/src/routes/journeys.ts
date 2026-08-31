@@ -2,7 +2,12 @@ import { Hono } from "hono";
 import { AppError } from "../lib/errors.js";
 import { successEnvelope } from "../models/common.js";
 import { buildRoutePattern, type RoutePattern } from "../domain/routePattern.js";
-import { selectAlternative, selectArriveByPrimary, selectNext, selectPrimary } from "../domain/journeyRoles.js";
+import { selectAlternative, selectNext, selectPrimary } from "../domain/journeyRoles.js";
+import {
+  selectPlannedJourneyChoices,
+  type PlannedJourneyRole,
+  type PlannedJourneySelection,
+} from "../domain/plannedJourneyChoices.js";
 import {
   CandidateCollector,
   MAX_CHANGES,
@@ -10,7 +15,7 @@ import {
   type JourneyChangesPreference,
   type NormalizedJourney,
 } from "../services/candidateCollector.js";
-import { floorToStockholmRequestMinute } from "../lib/stockholmTime.js";
+import { floorToStockholmRequestMinute, nextStockholmRequestMinute } from "../lib/stockholmTime.js";
 import {
   journeyTransportModes,
   type JourneyTransportMode,
@@ -139,7 +144,8 @@ function parseJourneySearch(
   return { searchMode, journeyContext: "PLANNED", fetchedAt, requestedDateTime };
 }
 
-export type JourneyRole = "PRIMARY" | "NEXT" | "ALTERNATIVE";
+export type LiveJourneyRole = "PRIMARY" | "NEXT" | "ALTERNATIVE";
+export type JourneyRole = LiveJourneyRole | PlannedJourneyRole;
 
 /** A full normalized journey plus its RoutePattern — structurally satisfies
  * [RankableJourney] (see backend/src/domain/journeyRoles.ts), so it can be passed
@@ -159,8 +165,8 @@ interface Selection {
 
 /**
  * Re-derives the full PRIMARY/NEXT selection from the collector's own current candidate
- * pool: selects PRIMARY (using the live/LEAVE_AT preference or the explicit ARRIVE_BY
- * preference), then (if PRIMARY exists) NEXT (see backend/src/domain/journeyRoles.ts),
+ * pool: selects live PRIMARY, then (if PRIMARY exists) live NEXT (see
+ * backend/src/domain/journeyRoles.ts),
  * directly from the full eligible pool — deliberately
  * WITHOUT a global Pareto-dominance pass first. Called after every acquisition batch, never
  * only once, so a newly-discovered OR newly-UPDATED candidate can always reclassify an
@@ -180,28 +186,11 @@ interface Selection {
  * inside `selectAlternative` itself, once PRIMARY and NEXT are already fixed — see that
  * function's own doc.
  */
-function deriveSelection(pool: NormalizedJourney[], primaryMode: "LIVE_OR_LEAVE_AT" | "ARRIVE_BY" = "LIVE_OR_LEAVE_AT"): Selection {
+function deriveSelection(pool: NormalizedJourney[]): Selection {
   const rankablePool = toRankable(pool);
-  const primary = primaryMode === "ARRIVE_BY" ? selectArriveByPrimary(rankablePool) : selectPrimary(rankablePool);
+  const primary = selectPrimary(rankablePool);
   const next = primary == null ? undefined : selectNext(rankablePool, primary);
   return { rankablePool, primary, next };
-}
-
-/** Keeps the explicit planned-time bounds at the pool boundary, so both the initial batch
- * and any targeted batch are evaluated under the same Event intent. LEAVE_AT's lower bound
- * is already enforced by CandidateCollector's request-scoped eligibility instant; ARRIVE_BY
- * additionally needs its upper arrival bound because the targeted lookup is a forward
- * departure search from PRIMARY. */
-function derivePlannedSelection(
-  pool: NormalizedJourney[],
-  searchMode: Exclude<JourneySearchMode, "NOW">,
-  requestedDateTime: Date,
-): Selection {
-  const eligiblePool =
-    searchMode === "ARRIVE_BY"
-      ? pool.filter((journey) => Date.parse(journey.arrivalTime) <= requestedDateTime.getTime())
-      : pool;
-  return deriveSelection(eligiblePool, searchMode === "ARRIVE_BY" ? "ARRIVE_BY" : "LIVE_OR_LEAVE_AT");
 }
 
 /**
@@ -274,34 +263,69 @@ function sameTarget(a: PrimaryTarget, b: PrimaryTarget): boolean {
   );
 }
 
-/** Resolves a planned timetable selection with one optional targeted NEXT acquisition.
- * Unlike live resolution, this never searches a horizon or loops: when the initial planned
- * batch has PRIMARY but no NEXT, one departure-mode request is anchored at PRIMARY's own
- * request minute and narrowed to its actual modes and transfer count. The full merged pool
- * is then re-filtered under the Event's LEAVE_AT/ARRIVE_BY bounds and re-derived, so a newly
- * discovered candidate may legitimately change PRIMARY and NEXT is always selected relative
- * to that resulting PRIMARY by the existing selector. */
+/**
+ * Resolves the separate Event chooser without entering the live PRIMARY/NEXT acquisition
+ * state machine. The initial SL best-match batch may contain only one side of the eventual
+ * recommendation, especially for ARRIVE_BY. Two complementary, bounded profiles can fill
+ * those blind spots:
+ *
+ * 1. A `leastinterchange` request at the original planned instant can reveal a useful
+ *    earlier/simple candidate hidden behind SL's default `leasttime` top three.
+ * 2. A departure request from RECOMMENDED's minute can reveal the closest later
+ *    opportunity. If that is the exact initial LEAVE_AT probe, the next request minute is
+ *    used so CandidateCollector can still deduplicate identical upstream queries.
+ *
+ * Each profile is requested only while its side is missing, every result is re-evaluated
+ * under the original deadline/lower bound, and at most two real follow-up calls are spent.
+ * Modes and change preferences remain those of the Event request; neighbors may therefore
+ * use different routes, unlike live NEXT.
+ */
 async function resolvePlannedSelection(
   collector: CandidateCollector,
   transportModes: readonly JourneyTransportMode[],
+  changesPreference: JourneyChangesPreference,
   searchMode: Exclude<JourneySearchMode, "NOW">,
   requestedDateTime: Date,
-): Promise<{ selection: Selection; nextCalls: number }> {
-  let selection = derivePlannedSelection(collector.pool, searchMode, requestedDateTime);
-  if (selection.primary == null || selection.next != null || collector.budgetExhausted) {
-    return { selection, nextCalls: 0 };
+): Promise<{ selection: PlannedJourneySelection<RankableNormalizedJourney>; plannedCalls: number }> {
+  const derive = () => selectPlannedJourneyChoices(toRankable(collector.pool), searchMode, requestedDateTime);
+  let selection = derive();
+  let plannedCalls = 0;
+
+  if (selection.earlier == null && !collector.budgetExhausted) {
+    const callsBefore = collector.batchesUsedSoFar;
+    await collector.fetchBatch({
+      transportModes,
+      maxChanges: requestMaxChanges(changesPreference),
+      departureAt: requestedDateTime,
+      dateTimeMode: searchMode === "ARRIVE_BY" ? "ARRIVAL" : "DEPARTURE",
+      routeType: "leastinterchange",
+    });
+    plannedCalls += collector.batchesUsedSoFar - callsBefore;
+    selection = derive();
   }
 
-  const target = primaryTargetOf(selection.primary, transportModes);
-  const callsBefore = collector.batchesUsedSoFar;
-  await collector.fetchBatch({
-    transportModes: target.transportModes,
-    maxChanges: target.transferCount,
-    departureAt: floorToStockholmRequestMinute(new Date(selection.primary.departureTime)),
-    dateTimeMode: "DEPARTURE",
-  });
-  selection = derivePlannedSelection(collector.pool, searchMode, requestedDateTime);
-  return { selection, nextCalls: collector.batchesUsedSoFar - callsBefore };
+  if (selection.recommended != null && selection.later == null && plannedCalls < 2 && !collector.budgetExhausted) {
+    const callsBefore = collector.batchesUsedSoFar;
+    const recommendedMinute = floorToStockholmRequestMinute(new Date(selection.recommended.departureTime));
+    const result = await collector.fetchBatch({
+      transportModes,
+      maxChanges: requestMaxChanges(changesPreference),
+      departureAt: recommendedMinute,
+      dateTimeMode: "DEPARTURE",
+    });
+    if (result.skipped && !collector.budgetExhausted) {
+      await collector.fetchBatch({
+        transportModes,
+        maxChanges: requestMaxChanges(changesPreference),
+        departureAt: nextStockholmRequestMinute(recommendedMinute),
+        dateTimeMode: "DEPARTURE",
+      });
+    }
+    plannedCalls += collector.batchesUsedSoFar - callsBefore;
+    selection = derive();
+  }
+
+  return { selection, plannedCalls };
 }
 
 /**
@@ -466,12 +490,15 @@ export interface JourneyAcquisitionMetrics {
   event: "journey_acquisition_metrics";
   /** Total real SL requests this one `/journeys` request spent, across the initial batch
    * and every acquisition phase/retarget — always `initialCalls + nextCalls +
-   * alternativeCalls + primaryDiscoveryCalls`, kept as its own field so a consumer never has
-   * to re-derive it. */
+   * alternativeCalls + primaryDiscoveryCalls + plannedCalls`, kept as its own field so a
+   * consumer never has to re-derive it. */
   slCalls: number;
   initialCalls: number;
   nextCalls: number;
   alternativeCalls: number;
+  /** Real follow-up requests spent on the separate planned Event chooser. Always zero for
+   * LIVE requests and bounded to at most two for PLANNED requests. */
+  plannedCalls: number;
   /** See `resolveSelection`'s own PRIMARY_DISCOVERY doc — real SL requests spent on the
    * `WITH_CHANGES_ONLY`-only bounded forward search for an initial PRIMARY. Zero for every
    * other case, including a `WITH_CHANGES_ONLY` request whose initial batch already
@@ -500,9 +527,9 @@ function logJourneyAcquisitionMetrics(metrics: JourneyAcquisitionMetrics): void 
  * `walkingDurationSeconds`, each leg's own `stopIds`) — see the product spec's own "keep
  * route metadata internal unless UI needs it" requirement. Picking explicitly means a
  * FUTURE internal-only field added to the normalized shape can never leak into the
- * response merely because this function wasn't also updated to exclude it. Otherwise
- * unchanged from before this feature: the existing journey DTO plus this one additional
- * `role` field. */
+ * response merely because this function wasn't also updated to exclude it. `role` belongs
+ * to the request context: live responses use PRIMARY/NEXT/ALTERNATIVE, while planned Event
+ * responses use EARLIER/RECOMMENDED/LATER. */
 function toPublicJourney(journey: RankableNormalizedJourney, role: JourneyRole) {
   return {
     journeyId: journey.journeyId,
@@ -544,7 +571,7 @@ function toPublicJourney(journey: RankableNormalizedJourney, role: JourneyRole) 
  * so acquisition and eligibility can be asserted deterministically rather than racing the
  * real clock (see journeys.test.ts).
  *
- * ## The PRIMARY / NEXT / ALTERNATIVE model
+ * ## The live PRIMARY / NEXT / ALTERNATIVE model
  *
  * Replaces an earlier threshold-based design (a fixed "large gap" minute count, a fixed
  * minimum arrival-advantage minute count, and "transferCount === 0 means regular") with a
@@ -613,11 +640,14 @@ function toPublicJourney(journey: RankableNormalizedJourney, role: JourneyRole) 
  * NEXT still cannot be established, the response contains PRIMARY alone — never an
  * unrelated journey mislabelled NEXT merely to fill a second slot.
  *
- * A PLANNED request never enters that live loop. When its initial arrival/departure batch
- * establishes PRIMARY but not NEXT, it performs at most one targeted departure request from
- * PRIMARY's own minute, narrowed in the same structural way. The merged pool is then
- * re-evaluated under the original LEAVE_AT lower bound or ARRIVE_BY deadline. There is no
- * horizon, cursor loop, or planned ALTERNATIVE acquisition.
+ * A PLANNED request never enters that live model or loop. It uses the separate
+ * EARLIER/RECOMMENDED/LATER selector in `plannedJourneyChoices.ts`: ARRIVE_BY admits only
+ * journeys arriving by the deadline, LEAVE_AT admits only journeys departing at or after
+ * the requested time, RECOMMENDED uses deterministic planned-quality ordering, and the
+ * closest distinct departures on either side become EARLIER and LATER regardless of route
+ * family. Results are returned in chronological departure order. At most two follow-up SL
+ * requests complement the initial best-match batch (see `resolvePlannedSelection`), with no
+ * horizon or cursor loop.
  *
  * Only once PRIMARY and NEXT both exist does an ALTERNATIVE search run, using the full
  * allowed mode set (an alternative is, by definition, route-incompatible with PRIMARY, so it
@@ -718,9 +748,11 @@ export function createJourneyRoutes(
     });
     const initialCalls = collector.batchesUsedSoFar;
 
-    let selection: Selection;
-    let nextCalls: number;
+    let selection: Selection | undefined;
+    let plannedSelection: PlannedJourneySelection<RankableNormalizedJourney> | undefined;
+    let nextCalls = 0;
     let alternativeCalls = 0;
+    let plannedCalls = 0;
     let primaryDiscoveryCalls = 0;
     let primaryRetargets = 0;
 
@@ -744,23 +776,28 @@ export function createJourneyRoutes(
       const plannedResolution = await resolvePlannedSelection(
         collector,
         transportModes,
+        changesPreference,
         search.searchMode,
         search.requestedDateTime,
       );
-      selection = plannedResolution.selection;
-      nextCalls = plannedResolution.nextCalls;
+      plannedSelection = plannedResolution.selection;
+      plannedCalls = plannedResolution.plannedCalls;
     }
 
     const alternative =
-      selection.primary != null && selection.next != null
+      selection?.primary != null && selection.next != null
         ? selectAlternative(selection.rankablePool, selection.primary, selection.next)
         : undefined;
 
     const journeys: ReturnType<typeof toPublicJourney>[] = [];
-    if (selection.primary != null) {
+    if (selection?.primary != null) {
       journeys.push(toPublicJourney(selection.primary, "PRIMARY"));
       if (alternative != null) journeys.push(toPublicJourney(alternative, "ALTERNATIVE"));
       if (selection.next != null) journeys.push(toPublicJourney(selection.next, "NEXT"));
+    } else if (plannedSelection != null) {
+      for (const choice of plannedSelection.choices) {
+        journeys.push(toPublicJourney(choice.journey, choice.role));
+      }
     }
 
     emitMetrics({
@@ -769,6 +806,7 @@ export function createJourneyRoutes(
       initialCalls,
       nextCalls,
       alternativeCalls,
+      plannedCalls,
       primaryDiscoveryCalls,
       primaryChanged: primaryRetargets > 0,
       primaryRetargets,

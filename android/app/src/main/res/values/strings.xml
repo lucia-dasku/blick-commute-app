@@ -469,8 +469,8 @@
     <string name="one_time_event_preliminary_plan_title">Preliminary plan</string>
     <string name="one_time_event_today_plan_title">Today’s plan</string>
     <string name="one_time_event_plan_recommended">Recommended</string>
-    <string name="one_time_event_plan_next_option">Next option</string>
-    <string name="one_time_event_plan_alternative">Alternative</string>
+    <string name="one_time_event_plan_earlier_option">Earlier arrival</string>
+    <string name="one_time_event_plan_later_option">Later arrival</string>
     <string name="one_time_event_plan_updated">Updated %1$s</string>
     <string name="one_time_event_planned_refresh">Refresh</string>
     <string name="one_time_event_planned_retry">Retry</string>

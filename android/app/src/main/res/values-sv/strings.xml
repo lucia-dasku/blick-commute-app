@@ -350,8 +350,8 @@
     <string name="one_time_event_preliminary_plan_title">Preliminär plan</string>
     <string name="one_time_event_today_plan_title">Dagens plan</string>
     <string name="one_time_event_plan_recommended">Rekommenderad</string>
-    <string name="one_time_event_plan_next_option">Nästa alternativ</string>
-    <string name="one_time_event_plan_alternative">Alternativ</string>
+    <string name="one_time_event_plan_earlier_option">Tidigare ankomst</string>
+    <string name="one_time_event_plan_later_option">Senare ankomst</string>
     <string name="one_time_event_plan_updated">Uppdaterad %1$s</string>
     <string name="one_time_event_planned_refresh">Uppdatera</string>
     <string name="one_time_event_planned_retry">Försök igen</string>

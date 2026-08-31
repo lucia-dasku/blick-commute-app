@@ -1,8 +1,11 @@
 package se.blick.app.ui.screens.onetimeevent
 
 import androidx.activity.ComponentActivity
+import android.content.res.Configuration
+import androidx.compose.ui.test.assertCountEquals
 import androidx.compose.ui.test.assertIsDisplayed
 import androidx.compose.ui.test.junit4.v2.createAndroidComposeRule
+import androidx.compose.ui.test.onAllNodesWithText
 import androidx.compose.ui.test.onNodeWithTag
 import androidx.compose.ui.test.onNodeWithText
 import androidx.compose.ui.test.performClick
@@ -10,15 +13,17 @@ import androidx.test.ext.junit.runners.AndroidJUnit4
 import java.time.Instant
 import java.util.Locale
 import org.junit.Assert.assertTrue
+import org.junit.Assert.assertEquals
 import org.junit.Rule
 import org.junit.Test
 import org.junit.runner.RunWith
 import se.blick.app.R
 import se.blick.app.domain.model.JourneyLeg
 import se.blick.app.domain.model.JourneyPlan
-import se.blick.app.domain.model.JourneyRole
 import se.blick.app.domain.model.JourneySearchMode
+import se.blick.app.domain.model.PlannedJourneyChoice
 import se.blick.app.domain.model.PlannedJourneyResult
+import se.blick.app.domain.model.PlannedJourneyRole
 import se.blick.app.domain.model.TransportMode
 import se.blick.app.ui.theme.BlickTheme
 
@@ -28,7 +33,7 @@ class OneTimeEventPlannedJourneyScreenTest {
     val composeRule = createAndroidComposeRule<ComponentActivity>()
 
     @Test
-    fun preliminaryPrimaryShowsAbsoluteTimesLineDisclaimerAndNoLiveText() {
+    fun arriveByShowsPlannedLabelsAbsoluteTimesDisclaimerAndNoLiveRoleText() {
         composeRule.setContent {
             BlickTheme {
                 PlannedJourneySection(
@@ -41,19 +46,23 @@ class OneTimeEventPlannedJourneyScreenTest {
 
         composeRule.onNodeWithText(composeRule.activity.getString(R.string.one_time_event_preliminary_plan_title)).assertIsDisplayed()
         composeRule.onNodeWithText(composeRule.activity.getString(R.string.one_time_event_plan_recommended)).assertIsDisplayed()
-        composeRule.onNodeWithText("17:36 → 18:18").assertIsDisplayed()
-        composeRule.onNodeWithText("19").assertIsDisplayed()
+        composeRule.onNodeWithText(composeRule.activity.getString(R.string.one_time_event_plan_earlier_option)).assertExists()
+        composeRule.onNodeWithText(composeRule.activity.getString(R.string.one_time_event_plan_later_option)).assertExists()
+        composeRule.onNodeWithText("17:46 → 18:28").assertIsDisplayed()
+        composeRule.onAllNodesWithText("19").assertCountEquals(3)
         composeRule.onNodeWithText(composeRule.activity.getString(R.string.one_time_event_preliminary_plan_disclaimer)).assertIsDisplayed()
         composeRule.onNodeWithTag("one-time-event-plan-info").assertIsDisplayed()
         composeRule.onNodeWithText("Live").assertDoesNotExist()
+        composeRule.onNodeWithText(composeRule.activity.getString(R.string.journey_next)).assertDoesNotExist()
+        composeRule.onNodeWithText(composeRule.activity.getString(R.string.journey_alternative)).assertDoesNotExist()
     }
 
     @Test
-    fun backendPrimaryAndNextRenderTheirOwnHeadingAndJourneyData() {
+    fun leaveAtUsesTheSameEarlierRecommendedLaterTerminology() {
         composeRule.setContent {
             BlickTheme {
                 PlannedJourneySection(
-                    preview = readyPreview(includeNext = true),
+                    preview = readyPreview(searchMode = JourneySearchMode.LEAVE_AT),
                     locale = Locale.ENGLISH,
                     onRefresh = {},
                 )
@@ -61,9 +70,41 @@ class OneTimeEventPlannedJourneyScreenTest {
         }
 
         composeRule.onNodeWithText(composeRule.activity.getString(R.string.one_time_event_plan_recommended)).assertExists()
-        composeRule.onNodeWithText(composeRule.activity.getString(R.string.one_time_event_plan_next_option)).assertExists()
-        composeRule.onNodeWithText("17:36 → 18:18").assertIsDisplayed()
-        composeRule.onNodeWithText("17:46 → 18:28").assertIsDisplayed()
+        composeRule.onNodeWithText(composeRule.activity.getString(R.string.one_time_event_plan_earlier_option)).assertExists()
+        composeRule.onNodeWithText(composeRule.activity.getString(R.string.one_time_event_plan_later_option)).assertExists()
+    }
+
+    @Test
+    fun choicesRenderChronologicallyWithRecommendedExpandedByDefault() {
+        composeRule.setContent {
+            BlickTheme {
+                PlannedJourneySection(preview = readyPreview(), locale = Locale.ENGLISH, onRefresh = {})
+            }
+        }
+
+        val earlierTop = composeRule.onNodeWithTag("planned-journey-card-earlier").fetchSemanticsNode().boundsInRoot.top
+        val recommendedTop = composeRule.onNodeWithTag("planned-journey-card-recommended").fetchSemanticsNode().boundsInRoot.top
+        val laterTop = composeRule.onNodeWithTag("planned-journey-card-later").fetchSemanticsNode().boundsInRoot.top
+        assertTrue(earlierTop < recommendedTop && recommendedTop < laterTop)
+        composeRule.onNodeWithText("Recommended interchange", substring = true).assertIsDisplayed()
+        composeRule.onNodeWithText("Earlier interchange", substring = true).assertDoesNotExist()
+        composeRule.onNodeWithText("Later interchange", substring = true).assertDoesNotExist()
+    }
+
+    @Test
+    fun expandingAnotherChoiceCollapsesThePreviouslyExpandedCard() {
+        composeRule.setContent {
+            BlickTheme {
+                PlannedJourneySection(preview = readyPreview(), locale = Locale.ENGLISH, onRefresh = {})
+            }
+        }
+
+        composeRule.onNodeWithTag("planned-journey-card-earlier").performClick()
+        composeRule.onNodeWithText("Earlier interchange", substring = true).assertIsDisplayed()
+        composeRule.onNodeWithText("Recommended interchange", substring = true).assertDoesNotExist()
+        composeRule.onNodeWithTag("planned-journey-card-later").performClick()
+        composeRule.onNodeWithText("Later interchange", substring = true).assertIsDisplayed()
+        composeRule.onNodeWithText("Earlier interchange", substring = true).assertDoesNotExist()
     }
 
     @Test
@@ -90,15 +131,27 @@ class OneTimeEventPlannedJourneyScreenTest {
     }
 
     @Test
-    fun missingNextAndAlternativeCreateNoEmptyHeadings() {
+    fun aSingleRecommendedChoiceCreatesNoEmptyNeighborHeadings() {
         composeRule.setContent {
             BlickTheme {
-                PlannedJourneySection(preview = readyPreview(), locale = Locale.ENGLISH, onRefresh = {})
+                PlannedJourneySection(preview = readyPreview(onlyRecommended = true), locale = Locale.ENGLISH, onRefresh = {})
             }
         }
 
-        composeRule.onNodeWithText(composeRule.activity.getString(R.string.one_time_event_plan_next_option)).assertDoesNotExist()
-        composeRule.onNodeWithText(composeRule.activity.getString(R.string.one_time_event_plan_alternative)).assertDoesNotExist()
+        composeRule.onNodeWithText(composeRule.activity.getString(R.string.one_time_event_plan_earlier_option)).assertDoesNotExist()
+        composeRule.onNodeWithText(composeRule.activity.getString(R.string.one_time_event_plan_later_option)).assertDoesNotExist()
+    }
+
+    @Test
+    fun swedishPlannedChoiceLabelsAreLocalized() {
+        val configuration = Configuration(composeRule.activity.resources.configuration).apply {
+            setLocale(Locale.forLanguageTag("sv"))
+        }
+        val swedish = composeRule.activity.createConfigurationContext(configuration)
+
+        assertEquals("Tidigare ankomst", swedish.getString(R.string.one_time_event_plan_earlier_option))
+        assertEquals("Rekommenderad", swedish.getString(R.string.one_time_event_plan_recommended))
+        assertEquals("Senare ankomst", swedish.getString(R.string.one_time_event_plan_later_option))
     }
 
     @Test
@@ -120,71 +173,64 @@ class OneTimeEventPlannedJourneyScreenTest {
     }
 
     private fun readyPreview(
-        includeNext: Boolean = false,
-        includeAlternative: Boolean = false,
+        searchMode: JourneySearchMode = JourneySearchMode.ARRIVE_BY,
+        onlyRecommended: Boolean = false,
     ): PlannedJourneyPreviewState.Ready {
-        val firstLeg = JourneyLeg(
-            transportMode = TransportMode.METRO,
-            lineDesignation = "19",
-            direction = "Hagsätra",
-            originName = "Home",
-            destinationName = "T-Centralen",
-            departureTime = Instant.parse("2026-09-17T15:36:00Z"),
-            arrivalTime = Instant.parse("2026-09-17T15:51:00Z"),
-            isRealtime = false,
-            disruptions = emptyList(),
-        )
-        val secondLeg = JourneyLeg(
-            transportMode = TransportMode.METRO,
-            lineDesignation = "19",
-            direction = "Hagsätra",
-            originName = "T-Centralen",
-            destinationName = "Globen",
-            departureTime = Instant.parse("2026-09-17T16:00:00Z"),
-            arrivalTime = Instant.parse("2026-09-17T16:18:00Z"),
-            isRealtime = false,
-            disruptions = emptyList(),
-        )
-        val journey = JourneyPlan(
-            journeyId = "primary",
-            originName = "Home",
-            destinationName = "Globen",
-            departureTime = requireNotNull(firstLeg.departureTime),
-            arrivalTime = requireNotNull(secondLeg.arrivalTime),
-            transferCount = 1,
-            firstLeg = firstLeg,
-            legs = listOf(firstLeg, secondLeg),
-            disruptions = emptyList(),
-            role = JourneyRole.PRIMARY,
-        )
-        val nextFirstLeg = firstLeg.copy(
-            departureTime = Instant.parse("2026-09-17T15:46:00Z"),
-            arrivalTime = Instant.parse("2026-09-17T16:01:00Z"),
-        )
-        val nextSecondLeg = secondLeg.copy(
-            departureTime = Instant.parse("2026-09-17T16:10:00Z"),
-            arrivalTime = Instant.parse("2026-09-17T16:28:00Z"),
-        )
-        val nextJourney = journey.copy(
-            journeyId = "next",
-            departureTime = requireNotNull(nextFirstLeg.departureTime),
-            arrivalTime = requireNotNull(nextSecondLeg.arrivalTime),
-            firstLeg = nextFirstLeg,
-            legs = listOf(nextFirstLeg, nextSecondLeg),
-            role = JourneyRole.NEXT,
-        )
-        val journeys = buildList {
-            add(journey)
-            if (includeNext) add(nextJourney)
-            if (includeAlternative) add(journey.copy(journeyId = "alternative", role = JourneyRole.ALTERNATIVE))
+        fun journey(id: String, departure: String, arrival: String, interchange: String): JourneyPlan {
+            val firstLeg = JourneyLeg(
+                transportMode = TransportMode.METRO,
+                lineDesignation = "19",
+                direction = "Hagsätra",
+                originName = "Home",
+                destinationName = interchange,
+                departureTime = Instant.parse(departure),
+                arrivalTime = Instant.parse(departure).plusSeconds(15 * 60L),
+                isRealtime = false,
+                disruptions = emptyList(),
+            )
+            val secondLeg = JourneyLeg(
+                transportMode = TransportMode.METRO,
+                lineDesignation = "19",
+                direction = "Hagsätra",
+                originName = interchange,
+                destinationName = "Globen",
+                departureTime = requireNotNull(firstLeg.arrivalTime).plusSeconds(9 * 60L),
+                arrivalTime = Instant.parse(arrival),
+                isRealtime = false,
+                disruptions = emptyList(),
+            )
+            return JourneyPlan(
+                journeyId = id,
+                originName = "Home",
+                destinationName = "Globen",
+                departureTime = requireNotNull(firstLeg.departureTime),
+                arrivalTime = requireNotNull(secondLeg.arrivalTime),
+                transferCount = 1,
+                firstLeg = firstLeg,
+                legs = listOf(firstLeg, secondLeg),
+                disruptions = emptyList(),
+            )
+        }
+
+        val earlier = journey("earlier", "2026-09-17T15:36:00Z", "2026-09-17T16:18:00Z", "Earlier interchange")
+        val recommended = journey("recommended", "2026-09-17T15:46:00Z", "2026-09-17T16:28:00Z", "Recommended interchange")
+        val later = journey("later", "2026-09-17T15:56:00Z", "2026-09-17T16:38:00Z", "Later interchange")
+        val choices = if (onlyRecommended) {
+            listOf(PlannedJourneyChoice(PlannedJourneyRole.RECOMMENDED, recommended))
+        } else {
+            // Deliberately non-chronological: the Event UI must follow departure time.
+            listOf(
+                PlannedJourneyChoice(PlannedJourneyRole.LATER, later),
+                PlannedJourneyChoice(PlannedJourneyRole.EARLIER, earlier),
+                PlannedJourneyChoice(PlannedJourneyRole.RECOMMENDED, recommended),
+            )
         }
         return PlannedJourneyPreviewState.Ready(
-            primary = journey,
             result = PlannedJourneyResult(
                 fetchedAt = Instant.parse("2026-09-01T10:00:00Z"),
-                searchMode = JourneySearchMode.ARRIVE_BY,
+                searchMode = searchMode,
                 requestedDateTime = Instant.parse("2026-09-17T16:30:00Z"),
-                journeys = journeys,
+                choices = choices,
             ),
         )
     }
