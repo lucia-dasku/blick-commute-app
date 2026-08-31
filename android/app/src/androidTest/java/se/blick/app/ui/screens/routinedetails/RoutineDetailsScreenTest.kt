@@ -1124,7 +1124,7 @@ class RoutineDetailsScreenTest {
         composeRule.onNodeWithText(composeRule.activity.getString(R.string.journey_fastest)).assertExists()
         composeRule.onNodeWithText(composeRule.activity.getString(R.string.journey_alternative)).assertExists()
         composeRule.onNodeWithText(composeRule.activity.getString(R.string.journey_next)).assertExists()
-        composeRule.onAllNodesWithText(composeRule.activity.getString(R.string.journey_later_departure)).assertCountEquals(2)
+        composeRule.onNodeWithText("Later departure").assertDoesNotExist()
         composeRule.onNodeWithText("L1").assertExists()
         composeRule.onNodeWithText("L2").assertExists()
         composeRule.onNodeWithText("L3").assertDoesNotExist()
@@ -1147,7 +1147,8 @@ class RoutineDetailsScreenTest {
         )
 
         composeRule.onNodeWithText(composeRule.activity.getString(R.string.journey_upcoming_departure)).assertExists()
-        composeRule.onNodeWithText(composeRule.activity.getString(R.string.journey_later_departure)).assertExists()
+        composeRule.onNodeWithText("R").assertExists()
+        composeRule.onNodeWithText("Later departure").assertDoesNotExist()
         composeRule.onNodeWithText(composeRule.activity.getString(R.string.journey_fastest)).assertDoesNotExist()
         composeRule.onNodeWithText(composeRule.activity.getString(R.string.journey_alternative)).assertDoesNotExist()
         composeRule.onNodeWithText("A").assertDoesNotExist()
@@ -1584,7 +1585,6 @@ class RoutineDetailsScreenTest {
         assertEquals("Earliest departure", english.getString(R.string.journey_fastest))
         assertEquals("Next departure", english.getString(R.string.journey_next))
         assertEquals("Upcoming departure", english.getString(R.string.journey_upcoming_departure))
-        assertEquals("Later departure", english.getString(R.string.journey_later_departure))
         assertEquals("More options", english.getString(R.string.routine_details_more_journey_options))
         assertEquals("Show fewer", english.getString(R.string.routine_details_show_fewer_journey_options))
 
@@ -1592,7 +1592,6 @@ class RoutineDetailsScreenTest {
         assertEquals("Tidigaste avgång", swedish.getString(R.string.journey_fastest))
         assertEquals("Nästa avgång", swedish.getString(R.string.journey_next))
         assertEquals("Kommande avgång", swedish.getString(R.string.journey_upcoming_departure))
-        assertEquals("Senare avgång", swedish.getString(R.string.journey_later_departure))
         assertEquals("Fler alternativ", swedish.getString(R.string.routine_details_more_journey_options))
         assertEquals("Visa färre", swedish.getString(R.string.routine_details_show_fewer_journey_options))
     }

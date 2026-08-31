@@ -72,7 +72,6 @@
     <string name="journey_next">Nästa avgång</string>
     <string name="journey_alternative">Alternativ</string>
     <string name="journey_upcoming_departure">Kommande avgång</string>
-    <string name="journey_later_departure">Senare avgång</string>
     <string name="routine_details_more_journey_options">Fler alternativ</string>
     <string name="routine_details_show_fewer_journey_options">Visa färre</string>
     <string name="routine_details_loading_more_journeys">Laddar fler alternativ…</string>
