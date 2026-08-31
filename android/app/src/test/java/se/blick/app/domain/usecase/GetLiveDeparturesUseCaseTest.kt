@@ -117,6 +117,35 @@ class GetLiveDeparturesUseCaseTest {
     }
 
     @Test
+    fun `the default use case contract still returns only two departures`() = runTest {
+        val departures = (1..5).map { index ->
+            upcomingDeparture("dep-$index").copy(scheduledTime = now.plusSeconds(index * 60L))
+        }
+        val repository = FakeDepartureRepository(resultOf(*departures.toTypedArray()))
+
+        val live = useCase(repository).invoke(routine).toList().last() as LiveDeparturesState.Live
+
+        assertEquals(listOf("dep-1", "dep-2"), live.snapshot.departures.map { it.departureId })
+        assertEquals(1, repository.callCount)
+    }
+
+    @Test
+    fun `an explicit five departure limit retains five from one repository fetch`() = runTest {
+        val departures = (1..6).map { index ->
+            upcomingDeparture("dep-$index").copy(scheduledTime = now.plusSeconds(index * 60L))
+        }
+        val repository = FakeDepartureRepository(resultOf(*departures.reversed().toTypedArray()))
+
+        val live = useCase(repository).invoke(
+            routine = routine,
+            maxDepartures = 5,
+        ).toList().last() as LiveDeparturesState.Live
+
+        assertEquals((1..5).map { "dep-$it" }, live.snapshot.departures.map { it.departureId })
+        assertEquals(1, repository.callCount)
+    }
+
+    @Test
     fun `an empty matching result produces NoUpcomingDepartures, not a failure`() = runTest {
         // A real response with departures, but none matching this routine's transport mode.
         val nonMatching = upcomingDeparture().copy(

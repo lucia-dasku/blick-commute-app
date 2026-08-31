@@ -30,16 +30,24 @@ class GetLiveDeparturesUseCase @Inject constructor(
     suspend operator fun invoke(
         routine: CommuteRoutine,
         previous: LiveDeparturesSnapshot? = null,
-    ): Flow<LiveDeparturesState> = flow {
-        emit(LiveDeparturesState.Loading)
-        emit(fetch(routine, previous))
+        maxDepartures: Int = DEFAULT_MAX_DEPARTURES,
+    ): Flow<LiveDeparturesState> {
+        require(maxDepartures > 0) { "maxDepartures must be positive" }
+        return flow {
+            emit(LiveDeparturesState.Loading)
+            emit(fetch(routine, previous, maxDepartures))
+        }
     }
 
-    private suspend fun fetch(routine: CommuteRoutine, previous: LiveDeparturesSnapshot?): LiveDeparturesState {
+    private suspend fun fetch(
+        routine: CommuteRoutine,
+        previous: LiveDeparturesSnapshot?,
+        maxDepartures: Int,
+    ): LiveDeparturesState {
         val now = clock.instant()
         return try {
             val result = departureRepository.getDepartures(routine.siteId)
-            val prepared = LiveDeparturesProcessor.prepare(result, routine, now)
+            val prepared = LiveDeparturesProcessor.prepare(result, routine, now, maxDepartures)
             if (prepared.isEmpty()) {
                 LiveDeparturesState.NoUpcomingDepartures(fetchedAt = result.fetchedAt)
             } else {

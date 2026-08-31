@@ -3,6 +3,7 @@ package se.blick.app.domain.usecase
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
 import org.junit.Assert.assertTrue
+import org.junit.Assert.assertThrows
 import org.junit.Test
 import se.blick.app.domain.model.CommuteRoutine
 import se.blick.app.domain.model.Departure
@@ -202,6 +203,85 @@ class LiveDeparturesProcessorTest {
         val departures = (1..5).map { i -> departure(departureId = "dep-$i", scheduledTime = now.plusSeconds(i * 60L)) }
         val prepared = LiveDeparturesProcessor.prepare(result(*departures.toTypedArray()), routine(), now)
         assertEquals(listOf("dep-1", "dep-2"), prepared.map { it.departureId })
+    }
+
+    @Test
+    fun `an explicit five departure limit returns the next five`() {
+        val departures = (1..6).map { i ->
+            departure(departureId = "dep-$i", scheduledTime = now.plusSeconds(i * 60L))
+        }
+
+        val prepared = LiveDeparturesProcessor.prepare(
+            result(*departures.reversed().toTypedArray()),
+            routine(),
+            now,
+            maxDepartures = 5,
+        )
+
+        assertEquals((1..5).map { "dep-$it" }, prepared.map { it.departureId })
+    }
+
+    @Test
+    fun `filtering and sorting happen before an explicit five departure limit`() {
+        val relevant = (1..6).map { i ->
+            departure(
+                departureId = "valid-$i",
+                line = line(id = 705),
+                directionCode = 1,
+                scheduledTime = now.plusSeconds(i * 60L),
+            )
+        }
+        val wrongMode = departure(
+            departureId = "wrong-mode",
+            line = line(id = 705, transportMode = TransportMode.METRO),
+            scheduledTime = now.plusSeconds(1),
+        )
+        val wrongLine = departure(
+            departureId = "wrong-line",
+            line = line(id = 999),
+            scheduledTime = now.plusSeconds(2),
+        )
+        val wrongDirection = departure(
+            departureId = "wrong-direction",
+            directionCode = 2,
+            scheduledTime = now.plusSeconds(3),
+        )
+        val expired = departure(
+            departureId = "expired",
+            scheduledTime = now.minusSeconds(1),
+        )
+
+        val prepared = LiveDeparturesProcessor.prepare(
+            result(
+                wrongMode,
+                relevant[5],
+                wrongLine,
+                relevant[2],
+                expired,
+                relevant[0],
+                wrongDirection,
+                relevant[4],
+                relevant[1],
+                relevant[3],
+            ),
+            routine(transportMode = TransportMode.BUS, lineId = 705, directionCode = 1),
+            now,
+            maxDepartures = 5,
+        )
+
+        assertEquals((1..5).map { "valid-$it" }, prepared.map { it.departureId })
+    }
+
+    @Test
+    fun `departure limit must be positive`() {
+        val source = result(departure())
+
+        assertThrows(IllegalArgumentException::class.java) {
+            LiveDeparturesProcessor.prepare(source, routine(), now, maxDepartures = 0)
+        }
+        assertThrows(IllegalArgumentException::class.java) {
+            LiveDeparturesProcessor.prepare(source, routine(), now, maxDepartures = -1)
+        }
     }
 
     @Test
