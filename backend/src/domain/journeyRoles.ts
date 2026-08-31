@@ -144,6 +144,34 @@ export function selectNext<T extends RankableJourney>(pool: T[], primary: T): T 
   return [...candidates].sort(compareByDeparture)[0];
 }
 
+/** Selects role-free, later departures for the same structural route family as the final
+ * PRIMARY/NEXT pair. These are supplemental foreground options, never authoritative roles:
+ * they must depart strictly after NEXT, cannot duplicate PRIMARY/NEXT/the selected
+ * ALTERNATIVE, and retain NEXT's departure-first deterministic ordering. Eligibility is
+ * already enforced by CandidateCollector before a journey reaches [pool]. */
+export function selectLaterJourneys<T extends RankableJourney>(
+  pool: T[],
+  primary: T,
+  next: T,
+  limit: number,
+  alternative?: T,
+): T[] {
+  if (limit <= 0) return [];
+  const excludedIds = new Set(
+    [primary.journeyId, next.journeyId, alternative?.journeyId].filter((id): id is string => id != null),
+  );
+  const nextDepartureMs = Date.parse(next.departureTime);
+  return pool
+    .filter(
+      (journey) =>
+        !excludedIds.has(journey.journeyId) &&
+        Date.parse(journey.departureTime) > nextDepartureMs &&
+        isRouteCompatible(primary.pattern, journey.pattern),
+    )
+    .sort(compareByDeparture)
+    .slice(0, limit);
+}
+
 /**
  * ALTERNATIVE means a useful journey from a route-INCOMPATIBLE family that can replace
  * waiting for NEXT — see backend/src/routes/journeys.ts's own doc for the full product

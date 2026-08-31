@@ -31,5 +31,6 @@ class JourneyResponseDtoTest {
         assertEquals(JourneyContextDto.LIVE, response.journeyContext)
         assertEquals(JourneySearchModeDto.NOW, response.searchMode)
         assertNull(response.requestedDateTime)
+        assertEquals(emptyList<Any>(), response.laterJourneys)
     }
 }

@@ -2,6 +2,7 @@ import { describe, expect, it } from "vitest";
 import {
   selectAlternative,
   selectArriveByPrimary,
+  selectLaterJourneys,
   selectNext,
   selectPrimary,
   type RankableJourney,
@@ -192,6 +193,38 @@ describe("selectNext", () => {
       const a = journey({ journeyId: "a-journey", departureTime: "2026-08-10T18:39:00Z", arrivalTime: "2026-08-10T18:45:00Z", pattern: METRO_PATTERN });
       expect(selectNext([primary, b, a], primary)?.journeyId).toBe("a-journey");
     });
+  });
+});
+
+describe("selectLaterJourneys", () => {
+  it("returns same-family departures strictly after NEXT in departure-first order", () => {
+    const primary = journey({ journeyId: "primary", departureTime: "2026-08-10T18:00:00Z" });
+    const next = journey({ journeyId: "next", departureTime: "2026-08-10T18:10:00Z" });
+    const later2 = journey({ journeyId: "later-2", departureTime: "2026-08-10T18:30:00Z", arrivalTime: "2026-08-10T18:40:00Z" });
+    const later1 = journey({ journeyId: "later-1", departureTime: "2026-08-10T18:20:00Z", arrivalTime: "2026-08-10T18:50:00Z" });
+
+    expect(selectLaterJourneys([later2, next, later1, primary], primary, next, 3).map((it) => it.journeyId))
+      .toEqual(["later-1", "later-2"]);
+  });
+
+  it("excludes the authoritative pair, selected alternative and incompatible routes", () => {
+    const primary = journey({ journeyId: "primary", departureTime: "2026-08-10T18:00:00Z" });
+    const next = journey({ journeyId: "next", departureTime: "2026-08-10T18:10:00Z" });
+    const alternative = journey({ journeyId: "alternative", departureTime: "2026-08-10T18:05:00Z", pattern: BUS_PATTERN });
+    const incompatible = journey({ journeyId: "other", departureTime: "2026-08-10T18:20:00Z", pattern: BUS_PATTERN });
+    const valid = journey({ journeyId: "valid", departureTime: "2026-08-10T18:30:00Z" });
+
+    expect(selectLaterJourneys([primary, next, alternative, incompatible, valid], primary, next, 3, alternative))
+      .toEqual([valid]);
+  });
+
+  it("uses the same deterministic tie-breaks as NEXT and honors the requested limit", () => {
+    const primary = journey({ journeyId: "primary", departureTime: "2026-08-10T18:00:00Z" });
+    const next = journey({ journeyId: "next", departureTime: "2026-08-10T18:10:00Z" });
+    const slower = journey({ journeyId: "a-slower", departureTime: "2026-08-10T18:20:00Z", arrivalTime: "2026-08-10T18:50:00Z" });
+    const faster = journey({ journeyId: "b-faster", departureTime: "2026-08-10T18:20:00Z", arrivalTime: "2026-08-10T18:40:00Z" });
+
+    expect(selectLaterJourneys([primary, next, slower, faster], primary, next, 1)).toEqual([faster]);
   });
 });
 

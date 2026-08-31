@@ -77,8 +77,11 @@ import se.blick.app.domain.usecase.DisruptionsState
 import se.blick.app.domain.usecase.LiveDeparturesState
 import se.blick.app.domain.usecase.PreparedDeparture
 import se.blick.app.domain.usecase.filterCurrentJourneys
+import se.blick.app.domain.usecase.isCurrentJourney
 import se.blick.app.domain.model.TransportMode
 import se.blick.app.domain.model.JourneyPlan
+import se.blick.app.domain.model.JourneyRole
+import se.blick.app.domain.model.LaterJourneyOption
 import se.blick.app.domain.model.JOURNEY_TRANSPORT_MODE_OPTIONS
 import se.blick.app.domain.model.RoutineType
 import se.blick.app.ui.theme.RoutineDestructiveRed
@@ -95,6 +98,7 @@ import se.blick.app.ui.notification.rememberNotificationPermissionGate
 import se.blick.app.widget.LINE_BADGE_GREEN
 
 internal const val ROUTINE_DETAILS_DEPARTURES_TOGGLE_TAG = "routine-details-departures-toggle"
+internal const val ROUTINE_DETAILS_JOURNEYS_TOGGLE_TAG = "routine-details-journeys-toggle"
 internal const val ROUTINE_DETAILS_COLLAPSED_DEPARTURE_COUNT = 2
 internal const val ROUTINE_DETAILS_EXPANDED_DEPARTURE_COUNT = 5
 
@@ -176,7 +180,15 @@ fun RoutineDetailsScreen(
                 isRefreshing = uiState.isRefreshingDepartures,
                 disruptionsState = uiState.disruptions,
                 journeys = uiState.journeys,
+                laterJourneys = uiState.laterJourneys,
                 journeysUnavailable = uiState.journeysUnavailable,
+                journeyOptionsExpanded = uiState.journeyOptionsExpanded,
+                isLoadingMoreJourneys = uiState.isLoadingMoreJourneys,
+                moreJourneysLoadFailed = uiState.moreJourneysLoadFailed,
+                hasLoadedExpandedJourneys = uiState.hasLoadedExpandedJourneys,
+                onExpandJourneyOptions = viewModel::expandJourneyOptions,
+                onCollapseJourneyOptions = viewModel::collapseJourneyOptions,
+                onRetryMoreJourneyOptions = viewModel::retryMoreJourneyOptions,
                 exactDestinationDeviationNotices = uiState.exactDestinationDeviationNotices,
                 // The ViewModel's own journeysEvaluatedAt, not the default Instant.now() --
                 // see that field's own doc, and RoutineDetailsContent's now parameter doc, for
@@ -253,6 +265,7 @@ fun RoutineDetailsScreen(
 @Composable
 private fun JourneyComparisonSection(
     journeys: List<JourneyPlan>,
+    laterJourneys: List<LaterJourneyOption>,
     unavailable: Boolean,
     now: Instant,
     locale: java.util.Locale,
@@ -260,6 +273,13 @@ private fun JourneyComparisonSection(
     isUpdatingChangesPreference: Boolean,
     changesPreferenceUpdateFailed: Boolean,
     onChangesPreferenceChange: (ExactDestinationChangesPreference) -> Unit,
+    expanded: Boolean,
+    isLoadingMore: Boolean,
+    moreLoadFailed: Boolean,
+    hasLoadedExpanded: Boolean,
+    onExpand: () -> Unit,
+    onCollapse: () -> Unit,
+    onRetryMore: () -> Unit,
 ) {
     // Render-time eligibility filter: a journey that was still current when fetched can have
     // since departed by the time this composable actually renders (a fresh 30-second fetch, or
@@ -282,6 +302,44 @@ private fun JourneyComparisonSection(
     val filteredJourneys = currentJourneys.filter { journey ->
         (showDirect && journey.transferCount == 0) || (showWithChanges && journey.transferCount > 0)
     }
+    val filteredLaterJourneys = laterJourneys
+        .filter { it.journey.isCurrentJourney(now) }
+        .filter { option ->
+            (showDirect && option.journey.transferCount == 0) ||
+                (showWithChanges && option.journey.transferCount > 0)
+        }
+
+    data class DisplayedJourney(val journey: JourneyPlan, val kind: RoutineJourneyCardKind)
+
+    val primary = filteredJourneys.firstOrNull { it.role == JourneyRole.PRIMARY }
+    val next = filteredJourneys.firstOrNull { it.role == JourneyRole.NEXT }
+    val alternative = filteredJourneys.firstOrNull { it.role == JourneyRole.ALTERNATIVE }
+    val collapsedCards = buildList {
+        if (primary != null) {
+            add(DisplayedJourney(primary, RoutineJourneyCardKind.PRIMARY))
+            if (next != null) add(DisplayedJourney(next, RoutineJourneyCardKind.NEXT))
+        } else {
+            if (next != null) {
+                add(DisplayedJourney(next, RoutineJourneyCardKind.UPCOMING))
+                filteredLaterJourneys.firstOrNull()?.let {
+                    add(DisplayedJourney(it.journey, RoutineJourneyCardKind.LATER))
+                }
+            }
+        }
+    }.distinctBy { it.journey.journeyId }.take(2)
+    val expandedCards = buildList {
+        if (primary != null) {
+            add(DisplayedJourney(primary, RoutineJourneyCardKind.PRIMARY))
+            if (alternative != null) add(DisplayedJourney(alternative, RoutineJourneyCardKind.ALTERNATIVE))
+            if (next != null) add(DisplayedJourney(next, RoutineJourneyCardKind.NEXT))
+        } else if (next != null) {
+            add(DisplayedJourney(next, RoutineJourneyCardKind.UPCOMING))
+        }
+        if (next != null) {
+            filteredLaterJourneys.forEach { add(DisplayedJourney(it.journey, RoutineJourneyCardKind.LATER)) }
+        }
+    }.distinctBy { it.journey.journeyId }.take(5)
+    val displayedCards = if (expanded) expandedCards else collapsedCards
 
     Column(verticalArrangement = Arrangement.spacedBy(12.dp)) {
         JourneyFilterRow(
@@ -323,25 +381,67 @@ private fun JourneyComparisonSection(
             unavailable -> Text(stringResource(R.string.routine_details_journeys_unavailable), color = MaterialTheme.colorScheme.error)
             directOnlyEmpty -> Text(stringResource(R.string.journey_no_direct_available))
             currentJourneys.isEmpty() -> Text(stringResource(R.string.routine_details_no_journeys))
-            filteredJourneys.isEmpty() -> Text(stringResource(R.string.routine_details_no_journeys))
+            displayedCards.isEmpty() -> Text(stringResource(R.string.routine_details_no_journeys))
             else -> Column(verticalArrangement = Arrangement.spacedBy(12.dp)) {
-                val fastestArrival = filteredJourneys.first().arrivalTime
-                // Up to three cards: the backend already caps a routine's own journeys at
-                // PRIMARY + ALTERNATIVE? + NEXT? (see backend/src/routes/journeys.ts's own doc),
-                // so this cap is a defensive backstop, not a UI-driven truncation -- unlike the
-                // old two-card limit, a genuine gap-filling ALTERNATIVE must never push the
-                // regular NEXT departure off screen here (the widget/notification are the
-                // surfaces that only ever want two rows, not this screen -- see their own code).
-                filteredJourneys.take(3).forEachIndexed { index, journey ->
-                    var expanded by remember(journey.journeyId) { mutableStateOf(false) }
+                val referenceArrival = (primary ?: displayedCards.first().journey).arrivalTime
+                displayedCards.forEachIndexed { index, displayed ->
+                    var cardExpanded by remember(displayed.journey.journeyId) { mutableStateOf(false) }
                     JourneyTimelineCard(
-                        journey = journey,
+                        journey = displayed.journey,
+                        cardKind = displayed.kind,
                         now = now,
-                        fastestArrival = fastestArrival,
+                        fastestArrival = referenceArrival,
                         locale = locale,
                         emphasized = index == 0,
-                        expanded = expanded,
-                        onExpandedChange = { expanded = it },
+                        expanded = cardExpanded,
+                        onExpandedChange = { cardExpanded = it },
+                    )
+                }
+                if (expanded && isLoadingMore) {
+                    Row(
+                        modifier = Modifier.fillMaxWidth(),
+                        horizontalArrangement = Arrangement.Center,
+                        verticalAlignment = Alignment.CenterVertically,
+                    ) {
+                        CircularProgressIndicator(Modifier.size(18.dp), strokeWidth = 2.dp)
+                        Spacer(Modifier.width(8.dp))
+                        Text(stringResource(R.string.routine_details_loading_more_journeys))
+                    }
+                }
+                if (expanded && moreLoadFailed) {
+                    Column(horizontalAlignment = Alignment.CenterHorizontally, modifier = Modifier.fillMaxWidth()) {
+                        Text(
+                            stringResource(R.string.routine_details_more_journeys_failed),
+                            color = MaterialTheme.colorScheme.error,
+                            style = MaterialTheme.typography.bodySmall,
+                        )
+                        TextButton(onClick = onRetryMore) { Text(stringResource(R.string.action_retry)) }
+                    }
+                } else if (
+                    expanded && hasLoadedExpanded && !isLoadingMore &&
+                    expandedCards.map { it.journey.journeyId } == collapsedCards.map { it.journey.journeyId }
+                ) {
+                    Text(
+                        stringResource(R.string.routine_details_no_more_journeys),
+                        style = MaterialTheme.typography.bodySmall,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                        modifier = Modifier.align(Alignment.CenterHorizontally),
+                    )
+                }
+                TextButton(
+                    onClick = if (expanded) onCollapse else onExpand,
+                    modifier = Modifier.fillMaxWidth().testTag(ROUTINE_DETAILS_JOURNEYS_TOGGLE_TAG),
+                ) {
+                    Text(
+                        stringResource(
+                            if (expanded) R.string.routine_details_show_fewer_journey_options
+                            else R.string.routine_details_more_journey_options,
+                        ),
+                    )
+                    Spacer(Modifier.width(4.dp))
+                    Icon(
+                        if (expanded) Icons.Filled.KeyboardArrowUp else Icons.Filled.KeyboardArrowDown,
+                        contentDescription = null,
                     )
                 }
             }
@@ -428,7 +528,15 @@ internal fun RoutineDetailsContent(
     isRefreshing: Boolean,
     disruptionsState: DisruptionsState,
     journeys: List<JourneyPlan> = emptyList(),
+    laterJourneys: List<LaterJourneyOption> = emptyList(),
     journeysUnavailable: Boolean = false,
+    journeyOptionsExpanded: Boolean = false,
+    isLoadingMoreJourneys: Boolean = false,
+    moreJourneysLoadFailed: Boolean = false,
+    hasLoadedExpandedJourneys: Boolean = false,
+    onExpandJourneyOptions: () -> Unit = {},
+    onCollapseJourneyOptions: () -> Unit = {},
+    onRetryMoreJourneyOptions: () -> Unit = {},
     /** The backend's own fully resolved, deduplicated exact-destination disruption list for the
      * current PRIMARY journey -- see [RoutineDetailsViewModel.loadJourneyDisruptionRelevance]'s
      * own doc. Already combines [journeys]' own Journey Planner notices with structurally-matched
@@ -552,6 +660,7 @@ internal fun RoutineDetailsContent(
         if (routine.type == RoutineType.EXACT_DESTINATION) {
             JourneyComparisonSection(
                 journeys = journeys,
+                laterJourneys = laterJourneys,
                 unavailable = journeysUnavailable,
                 now = now,
                 locale = locale,
@@ -559,6 +668,13 @@ internal fun RoutineDetailsContent(
                 isUpdatingChangesPreference = isUpdatingChangesPreference,
                 changesPreferenceUpdateFailed = changesPreferenceUpdateFailed,
                 onChangesPreferenceChange = onUpdateChangesPreference,
+                expanded = journeyOptionsExpanded,
+                isLoadingMore = isLoadingMoreJourneys,
+                moreLoadFailed = moreJourneysLoadFailed,
+                hasLoadedExpanded = hasLoadedExpandedJourneys,
+                onExpand = onExpandJourneyOptions,
+                onCollapse = onCollapseJourneyOptions,
+                onRetryMore = onRetryMoreJourneyOptions,
             )
         } else {
             var departuresExpanded by rememberSaveable(routine.id) { mutableStateOf(false) }

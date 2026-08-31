@@ -3,6 +3,7 @@ package se.blick.app.widget
 import se.blick.app.domain.model.CommuteRoutine
 import se.blick.app.domain.model.DisruptionPresentation
 import se.blick.app.domain.model.JourneyPlan
+import se.blick.app.domain.model.JourneyRole
 import se.blick.app.domain.model.routeLabels
 import se.blick.app.domain.usecase.effectiveFirstDeparture
 import se.blick.app.domain.usecase.filterCurrentJourneys
@@ -51,7 +52,14 @@ internal fun decideJourneysWidgetState(
     disruption: DisruptionPresentation? = null,
 ): RoutineWidgetUiState {
     val routeLabels = routine.routeLabels()
-    val rows = journeys.filterCurrentJourneys(now).take(2).map { journey ->
+    val currentJourneys = journeys.filterCurrentJourneys(now)
+    val primaryJourney = currentJourneys.firstOrNull { it.role == JourneyRole.PRIMARY }
+    val authoritativeJourneys = if (primaryJourney == null) {
+        emptyList()
+    } else {
+        listOfNotNull(primaryJourney, currentJourneys.firstOrNull { it.role == JourneyRole.NEXT })
+    }
+    val rows = authoritativeJourneys.map { journey ->
         WidgetJourneyRow(
             journey.firstLeg.lineDesignation,
             journey.firstLeg.transportMode,

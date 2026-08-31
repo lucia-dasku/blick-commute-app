@@ -383,8 +383,9 @@ export class CandidateCollector {
    * risk discarding real information merely because SL happened to answer identically
    * twice in a row.
    *
-   * [until] may be a fixed instant, or a function re-read before every batch so a caller
-   * can shrink (or grow) the remaining search window as it learns more — e.g. ALTERNATIVE
+   * [until] may be a fixed instant, a function re-read before every batch, or null when
+   * [maxRealCalls] alone is the operational bound. A caller can use the function form to
+   * shrink (or grow) the remaining search window as it learns more — e.g. ALTERNATIVE
    * acquisition in journeys.ts narrowing to a newly-discovered, earlier NEXT departure
    * without needing its own separate acquisition loop.
    *
@@ -392,7 +393,9 @@ export class CandidateCollector {
    * (including before the very first fetch) — so a caller that closes over its own domain
    * recomputation (e.g. re-deriving PRIMARY/NEXT from the growing pool) always sees
    * newly-discovered AND newly-updated candidates before this decides whether to fetch
-   * another batch. This method itself has no opinion on what "satisfied" means — a caller
+   * another batch. [maxRealCalls] counts only requests actually sent; deduplicated probes
+   * cost no call and continue through the shared cursor rules. This method itself has no
+   * opinion on what "satisfied" means — a caller
    * is free to have [isSatisfied] always return `false` so acquisition runs its full
    * natural course (bounded only by [until], the shared budget, or a lack of forward
    * progress) rather than stopping the instant some candidate merely exists; see
@@ -403,14 +406,20 @@ export class CandidateCollector {
   async acquireUntil(
     options: AcquisitionOptions,
     from: Date,
-    until: Date | (() => Date),
+    until: Date | (() => Date) | null,
     isSatisfied: (pool: NormalizedJourney[]) => boolean,
+    maxRealCalls = Number.POSITIVE_INFINITY,
   ): Promise<NormalizedJourney[]> {
     const currentUntil = typeof until === "function" ? until : () => until;
     if (isSatisfied(this.pool)) return this.pool;
 
+    const callsBefore = this.batchesUsed;
     let cursor = from;
-    while (cursor.getTime() <= currentUntil().getTime() && !this.budgetExhausted) {
+    while (
+      (currentUntil() == null || cursor.getTime() <= currentUntil()!.getTime()) &&
+      !this.budgetExhausted &&
+      this.batchesUsed - callsBefore < maxRealCalls
+    ) {
       const batch = await this.fetchBatch({ ...options, departureAt: cursor });
       if (isSatisfied(this.pool)) return this.pool;
       // A skipped duplicate (see `CandidateBatchResult.skipped`) also reports an empty

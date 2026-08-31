@@ -75,6 +75,7 @@ class JourneyRepositoryTest {
             transportModes: String,
             searchUntil: String?,
             changesPreference: String,
+            laterJourneyCount: Int?,
         ) = response
     }
 
@@ -137,6 +138,8 @@ class JourneyRepositoryTest {
     private class CapturingApiClient(private val response: JourneysResponseDto) : BlickApiClient {
         var receivedChangesPreference: String? = null
             private set
+        var receivedLaterJourneyCount: Int? = null
+            private set
         override suspend fun searchStops(query: String): StopSearchResponseDto = throw NotImplementedError("unused")
         override suspend fun getDepartures(siteId: Long, forecastMinutes: Int?): DeparturesResponseDto = throw NotImplementedError("unused")
         override suspend fun getDisruptions(siteId: Long, lineId: Long?, transportMode: String?): DisruptionsResponseDto =
@@ -147,8 +150,10 @@ class JourneyRepositoryTest {
             transportModes: String,
             searchUntil: String?,
             changesPreference: String,
+            laterJourneyCount: Int?,
         ): JourneysResponseDto {
             receivedChangesPreference = changesPreference
+            receivedLaterJourneyCount = laterJourneyCount
             return response
         }
     }
@@ -171,6 +176,31 @@ class JourneyRepositoryTest {
         RemoteJourneyRepository(client).getJourneys("origin", "destination", DEFAULT_JOURNEY_TRANSPORT_MODES)
 
         assertEquals("BOTH", client.receivedChangesPreference)
+        assertNull(client.receivedLaterJourneyCount)
+    }
+
+    @Test
+    fun `foreground options send requested count and map role-free deduplicated supplemental rows`() = runTest {
+        val client = CapturingApiClient(
+            JourneysResponseDto(
+                fetchedAt = "2026-08-10T07:00:00Z",
+                journeys = listOf(dto("primary", "PRIMARY"), dto("malformed", "UNKNOWN")),
+                laterJourneys = listOf(dto("later", null), dto("primary", null), dto("later", null)),
+            ),
+        )
+
+        val result = RemoteJourneyRepository(client).getJourneyOptions(
+            "origin",
+            "destination",
+            DEFAULT_JOURNEY_TRANSPORT_MODES,
+            null,
+            ExactDestinationChangesPreference.BOTH,
+            3,
+        )
+
+        assertEquals(3, client.receivedLaterJourneyCount)
+        assertEquals(listOf("primary"), result.journeys.map { it.journeyId })
+        assertEquals(listOf("later"), result.laterJourneys.map { it.journey.journeyId })
     }
 
     private class CapturingPlannedApiClient : BlickApiClient {

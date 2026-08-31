@@ -47,6 +47,8 @@ import se.blick.app.domain.model.JourneyLeg
 import se.blick.app.domain.model.JourneyLocation
 import se.blick.app.domain.model.JourneyPlan
 import se.blick.app.domain.model.JourneyRole
+import se.blick.app.domain.model.LaterJourneyOption
+import se.blick.app.domain.model.LiveJourneyOptions
 import se.blick.app.domain.model.LineRef
 import se.blick.app.domain.model.ResolvedJourneyDisruption
 import se.blick.app.domain.model.RoutineType
@@ -83,6 +85,9 @@ import java.time.LocalTime
 import java.time.ZoneId
 import java.time.ZoneOffset
 import java.util.UUID
+import kotlin.coroutines.Continuation
+import kotlin.coroutines.resume
+import kotlin.coroutines.suspendCoroutine
 
 @OptIn(ExperimentalCoroutinesApi::class)
 class RoutineDetailsViewModelTest {
@@ -2891,6 +2896,73 @@ class RoutineDetailsViewModelTest {
         ): List<ResolvedJourneyDisruption> = emptyList()
     }
 
+    /** Foreground-options fake that records the requested reserve shape on every call. */
+    private class OptionsJourneyRepository(
+        private val responseForCall: suspend (callIndex: Int, laterJourneyCount: Int) -> LiveJourneyOptions,
+    ) : JourneyRepository {
+        val requestedLaterCounts = mutableListOf<Int>()
+
+        override suspend fun searchLocations(query: String): List<JourneyLocation> = emptyList()
+        override suspend fun getJourneys(
+            originId: String,
+            destinationId: String,
+            allowedTransportModes: Set<TransportMode>,
+            searchUntil: Instant?,
+            changesPreference: ExactDestinationChangesPreference,
+        ): List<JourneyPlan> = error("foreground options method expected")
+
+        override suspend fun getJourneyOptions(
+            originId: String,
+            destinationId: String,
+            allowedTransportModes: Set<TransportMode>,
+            searchUntil: Instant?,
+            changesPreference: ExactDestinationChangesPreference,
+            laterJourneyCount: Int,
+        ): LiveJourneyOptions {
+            val callIndex = requestedLaterCounts.size
+            requestedLaterCounts += laterJourneyCount
+            return responseForCall(callIndex, laterJourneyCount)
+        }
+    }
+
+    /** Deliberately non-cancellable suspension so generation-token tests can deliver a stale
+     * response after the request job has already been superseded. */
+    private class ControllableOptionsJourneyRepository : JourneyRepository {
+        data class Request(
+            val laterJourneyCount: Int,
+            val transportModes: Set<TransportMode>,
+            val changesPreference: ExactDestinationChangesPreference,
+        )
+
+        val requests = mutableListOf<Request>()
+        private val continuations = mutableListOf<Continuation<LiveJourneyOptions>>()
+
+        override suspend fun searchLocations(query: String): List<JourneyLocation> = emptyList()
+        override suspend fun getJourneys(
+            originId: String,
+            destinationId: String,
+            allowedTransportModes: Set<TransportMode>,
+            searchUntil: Instant?,
+            changesPreference: ExactDestinationChangesPreference,
+        ): List<JourneyPlan> = error("foreground options method expected")
+
+        override suspend fun getJourneyOptions(
+            originId: String,
+            destinationId: String,
+            allowedTransportModes: Set<TransportMode>,
+            searchUntil: Instant?,
+            changesPreference: ExactDestinationChangesPreference,
+            laterJourneyCount: Int,
+        ): LiveJourneyOptions = suspendCoroutine { continuation ->
+            requests += Request(laterJourneyCount, allowedTransportModes, changesPreference)
+            continuations += continuation
+        }
+
+        fun complete(index: Int, options: LiveJourneyOptions) {
+            continuations[index].resume(options)
+        }
+    }
+
     private fun exactDestinationRoutine(id: String = "r1") = sampleRoutine(id = id).copy(
         type = RoutineType.EXACT_DESTINATION,
         transportMode = TransportMode.UNKNOWN,
@@ -2910,6 +2982,236 @@ class RoutineDetailsViewModelTest {
             departure, departure.plusSeconds(600), true, emptyList(),
         )
         JourneyPlan(id, "Fruängen", "Arlanda", departure, departure.plusSeconds(600), 0, leg, listOf(leg), emptyList())
+    }
+
+    @Test
+    fun `initial exact load requests one hidden reserve`() = runTest(dispatcher) {
+        val primary = journeyPlan("primary", clock.instant().plusSeconds(60))
+        val next = journeyPlan("next", clock.instant().plusSeconds(120)).copy(role = JourneyRole.NEXT)
+        val reserve = LaterJourneyOption(journeyPlan("reserve", clock.instant().plusSeconds(180)))
+        val repository = OptionsJourneyRepository { _, _ -> LiveJourneyOptions(listOf(primary, next), listOf(reserve)) }
+        val routine = exactDestinationRoutine()
+
+        val vm = viewModel(
+            routine = routine,
+            routines = FakeRoutineRepository(routine),
+            getRankedJourneys = GetRankedJourneysUseCase(repository, clock),
+        )
+        dispatcher.scheduler.advanceUntilIdle()
+
+        assertEquals(listOf(1), repository.requestedLaterCounts)
+        assertEquals(listOf("primary", "next"), vm.uiState.value.journeys.map { it.journeyId })
+        assertEquals(listOf("reserve"), vm.uiState.value.laterJourneys.map { it.journey.journeyId })
+        assertFalse(vm.uiState.value.journeyOptionsExpanded)
+    }
+
+    @Test
+    fun `More expands immediately preserves current data and requests three options`() = runTest(dispatcher) {
+        val primary = journeyPlan("primary", clock.instant().plusSeconds(60))
+        val next = journeyPlan("next", clock.instant().plusSeconds(120)).copy(role = JourneyRole.NEXT)
+        val reserve = LaterJourneyOption(journeyPlan("reserve", clock.instant().plusSeconds(180)))
+        val expandedResponse = CompletableDeferred<LiveJourneyOptions>()
+        val repository = OptionsJourneyRepository { call, _ ->
+            if (call == 0) LiveJourneyOptions(listOf(primary, next), listOf(reserve)) else expandedResponse.await()
+        }
+        val routine = exactDestinationRoutine()
+        val vm = viewModel(
+            routine = routine,
+            routines = FakeRoutineRepository(routine),
+            getRankedJourneys = GetRankedJourneysUseCase(repository, clock),
+        )
+        dispatcher.scheduler.runCurrent()
+
+        vm.expandJourneyOptions()
+        dispatcher.scheduler.runCurrent()
+
+        assertTrue(vm.uiState.value.journeyOptionsExpanded)
+        assertTrue(vm.uiState.value.isLoadingMoreJourneys)
+        assertEquals(listOf("primary", "next"), vm.uiState.value.journeys.map { it.journeyId })
+        assertEquals(listOf("reserve"), vm.uiState.value.laterJourneys.map { it.journey.journeyId })
+        assertEquals(listOf(1, 3), repository.requestedLaterCounts)
+
+        val later = LaterJourneyOption(journeyPlan("later", clock.instant().plusSeconds(240)))
+        expandedResponse.complete(LiveJourneyOptions(listOf(primary, next), listOf(reserve, later)))
+        dispatcher.scheduler.runCurrent()
+
+        assertFalse(vm.uiState.value.isLoadingMoreJourneys)
+        assertTrue(vm.uiState.value.hasLoadedExpandedJourneys)
+        assertEquals(listOf("reserve", "later"), vm.uiState.value.laterJourneys.map { it.journey.journeyId })
+    }
+
+    @Test
+    fun `More failure preserves cards exposes retry and retry uses the extended request`() = runTest(dispatcher) {
+        val primary = journeyPlan("primary", clock.instant().plusSeconds(60))
+        val next = journeyPlan("next", clock.instant().plusSeconds(120)).copy(role = JourneyRole.NEXT)
+        val reserve = LaterJourneyOption(journeyPlan("reserve", clock.instant().plusSeconds(180)))
+        val repository = OptionsJourneyRepository { call, _ ->
+            if (call == 1) error("more failed") else LiveJourneyOptions(listOf(primary, next), listOf(reserve))
+        }
+        val routine = exactDestinationRoutine()
+        val vm = viewModel(
+            routine = routine,
+            routines = FakeRoutineRepository(routine),
+            getRankedJourneys = GetRankedJourneysUseCase(repository, clock),
+        )
+        dispatcher.scheduler.advanceUntilIdle()
+
+        vm.expandJourneyOptions()
+        dispatcher.scheduler.advanceUntilIdle()
+
+        assertTrue(vm.uiState.value.moreJourneysLoadFailed)
+        assertFalse(vm.uiState.value.journeysUnavailable)
+        assertEquals(listOf("primary", "next"), vm.uiState.value.journeys.map { it.journeyId })
+        assertEquals(listOf("reserve"), vm.uiState.value.laterJourneys.map { it.journey.journeyId })
+
+        vm.retryMoreJourneyOptions()
+        dispatcher.scheduler.advanceUntilIdle()
+
+        assertEquals(listOf(1, 3, 3), repository.requestedLaterCounts)
+        assertFalse(vm.uiState.value.moreJourneysLoadFailed)
+        assertTrue(vm.uiState.value.hasLoadedExpandedJourneys)
+    }
+
+    @Test
+    fun `Show fewer performs no request and the next manual refresh requests one reserve`() = runTest(dispatcher) {
+        val primary = journeyPlan("primary", clock.instant().plusSeconds(60))
+        val repository = OptionsJourneyRepository { _, _ -> LiveJourneyOptions(listOf(primary), emptyList()) }
+        val routine = exactDestinationRoutine()
+        val vm = viewModel(
+            routine = routine,
+            routines = FakeRoutineRepository(routine),
+            getRankedJourneys = GetRankedJourneysUseCase(repository, clock),
+        )
+        dispatcher.scheduler.advanceUntilIdle()
+        vm.expandJourneyOptions()
+        dispatcher.scheduler.advanceUntilIdle()
+        assertEquals(listOf(1, 3), repository.requestedLaterCounts)
+
+        vm.collapseJourneyOptions()
+        dispatcher.scheduler.advanceUntilIdle()
+        assertEquals(listOf(1, 3), repository.requestedLaterCounts)
+
+        vm.refresh()
+        dispatcher.scheduler.advanceUntilIdle()
+        assertEquals(listOf(1, 3, 1), repository.requestedLaterCounts)
+    }
+
+    @Test
+    fun `automatic refresh requests three while expanded and one after collapse`() = runTest(dispatcher) {
+        val primary = journeyPlan("primary", clock.instant().plusSeconds(600))
+        val repository = OptionsJourneyRepository { _, _ -> LiveJourneyOptions(listOf(primary), emptyList()) }
+        val routine = exactDestinationRoutine()
+        val vm = viewModel(
+            routine = routine,
+            routines = FakeRoutineRepository(routine),
+            getRankedJourneys = GetRankedJourneysUseCase(repository, clock),
+        )
+        dispatcher.scheduler.advanceUntilIdle()
+        vm.expandJourneyOptions()
+        dispatcher.scheduler.advanceUntilIdle()
+
+        val refreshLoop = launch { vm.runAutoRefresh() }
+        dispatcher.scheduler.runCurrent()
+        dispatcher.scheduler.advanceTimeBy(RoutineDetailsViewModel.AUTO_REFRESH_INTERVAL_MS + 1)
+        dispatcher.scheduler.runCurrent()
+        assertEquals(listOf(1, 3, 3), repository.requestedLaterCounts)
+
+        vm.collapseJourneyOptions()
+        dispatcher.scheduler.advanceTimeBy(RoutineDetailsViewModel.AUTO_REFRESH_INTERVAL_MS + 1)
+        dispatcher.scheduler.runCurrent()
+        assertEquals(listOf(1, 3, 3, 1), repository.requestedLaterCounts)
+        refreshLoop.cancel()
+    }
+
+    @Test
+    fun `a superseded collapsed response cannot overwrite expanded data`() = runTest(dispatcher) {
+        val repository = ControllableOptionsJourneyRepository()
+        val routine = exactDestinationRoutine()
+        val vm = viewModel(
+            routine = routine,
+            routines = FakeRoutineRepository(routine),
+            getRankedJourneys = GetRankedJourneysUseCase(repository, clock),
+        )
+        dispatcher.scheduler.runCurrent()
+        assertEquals(listOf(1), repository.requests.map { it.laterJourneyCount })
+
+        vm.expandJourneyOptions()
+        dispatcher.scheduler.runCurrent()
+        assertEquals(listOf(1, 3), repository.requests.map { it.laterJourneyCount })
+
+        val expanded = journeyPlan("expanded", clock.instant().plusSeconds(300))
+        repository.complete(1, LiveJourneyOptions(listOf(expanded), emptyList()))
+        dispatcher.scheduler.runCurrent()
+        assertEquals(listOf("expanded"), vm.uiState.value.journeys.map { it.journeyId })
+
+        val stale = journeyPlan("stale-collapsed", clock.instant().plusSeconds(200))
+        repository.complete(0, LiveJourneyOptions(listOf(stale), emptyList()))
+        dispatcher.scheduler.runCurrent()
+        assertEquals(listOf("expanded"), vm.uiState.value.journeys.map { it.journeyId })
+        assertFalse(vm.uiState.value.isLoadingMoreJourneys)
+    }
+
+    @Test
+    fun `a superseded More response cannot overwrite a newer preference response`() = runTest(dispatcher) {
+        val repository = ControllableOptionsJourneyRepository()
+        val routine = exactDestinationRoutine()
+        val routines = FakeRoutineRepository(routine)
+        val vm = viewModel(
+            routine = routine,
+            routines = routines,
+            getRankedJourneys = GetRankedJourneysUseCase(repository, clock),
+        )
+        dispatcher.scheduler.runCurrent()
+        val initial = journeyPlan("initial", clock.instant().plusSeconds(120))
+        repository.complete(0, LiveJourneyOptions(listOf(initial), emptyList()))
+        dispatcher.scheduler.runCurrent()
+
+        vm.expandJourneyOptions()
+        dispatcher.scheduler.runCurrent()
+        vm.updateChangesPreference(ExactDestinationChangesPreference.DIRECT_ONLY)
+        dispatcher.scheduler.runCurrent()
+        assertEquals(listOf(1, 3, 3), repository.requests.map { it.laterJourneyCount })
+        assertEquals(ExactDestinationChangesPreference.DIRECT_ONLY, repository.requests[2].changesPreference)
+
+        val preferred = journeyPlan("preferred", clock.instant().plusSeconds(300))
+        repository.complete(2, LiveJourneyOptions(listOf(preferred), emptyList()))
+        dispatcher.scheduler.runCurrent()
+        val staleMore = journeyPlan("stale-more", clock.instant().plusSeconds(240))
+        repository.complete(1, LiveJourneyOptions(listOf(staleMore), emptyList()))
+        dispatcher.scheduler.runCurrent()
+
+        assertEquals(listOf("preferred"), vm.uiState.value.journeys.map { it.journeyId })
+        assertFalse(vm.uiState.value.isLoadingMoreJourneys)
+        assertFalse(vm.uiState.value.moreJourneysLoadFailed)
+    }
+
+    @Test
+    fun `primary expiry removes PRIMARY and stale ALTERNATIVE before the refresh response arrives`() = runTest(dispatcher) {
+        val testClock = SettableClock(Instant.parse("2026-07-28T08:00:00Z"))
+        val primary = journeyPlan("primary", testClock.instant.plusSeconds(10))
+        val alternative = journeyPlan("alternative", testClock.instant.plusSeconds(20)).copy(role = JourneyRole.ALTERNATIVE)
+        val next = journeyPlan("next", testClock.instant.plusSeconds(30)).copy(role = JourneyRole.NEXT)
+        val reserve = LaterJourneyOption(journeyPlan("reserve", testClock.instant.plusSeconds(60)))
+        val pending = CompletableDeferred<LiveJourneyOptions>()
+        val repository = OptionsJourneyRepository { call, _ ->
+            if (call == 0) LiveJourneyOptions(listOf(primary, alternative, next), listOf(reserve)) else pending.await()
+        }
+        val routine = exactDestinationRoutine()
+        val vm = viewModel(
+            routine = routine,
+            routines = FakeRoutineRepository(routine),
+            clock = testClock,
+            getRankedJourneys = GetRankedJourneysUseCase(repository, testClock),
+        )
+        dispatcher.scheduler.runCurrent()
+
+        testClock.instant = primary.departureTime.plusMillis(1)
+        vm.refresh()
+        dispatcher.scheduler.runCurrent()
+
+        assertEquals(listOf("next"), vm.uiState.value.journeys.map { it.journeyId })
+        assertEquals(listOf("reserve"), vm.uiState.value.laterJourneys.map { it.journey.journeyId })
+        assertTrue(vm.uiState.value.exactDestinationDeviationNotices.isEmpty())
     }
 
     @Test

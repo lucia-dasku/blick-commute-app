@@ -2,6 +2,7 @@ package se.blick.app.domain.usecase
 
 import kotlinx.coroutines.test.runTest
 import org.junit.Assert.assertEquals
+import org.junit.Assert.assertTrue
 import org.junit.Test
 import se.blick.app.data.repository.JourneyRepository
 import se.blick.app.domain.model.ExactDestinationChangesPreference
@@ -9,6 +10,8 @@ import se.blick.app.domain.model.JourneyLeg
 import se.blick.app.domain.model.JourneyLocation
 import se.blick.app.domain.model.JourneyPlan
 import se.blick.app.domain.model.JourneyRole
+import se.blick.app.domain.model.LaterJourneyOption
+import se.blick.app.domain.model.LiveJourneyOptions
 import se.blick.app.domain.model.TransportMode
 import java.time.Clock
 import java.time.Instant
@@ -363,5 +366,60 @@ class GetRankedJourneysUseCaseTest {
 
             assertEquals("changes=$changes", listOf("candidate"), result.map { it.journeyId })
         }
+    }
+
+    @Test fun `foreground options forward the count and filter both lists after the response`() = runTest {
+        val clock = AdvancingClock(Instant.parse("2026-08-10T07:00:00Z"))
+        var receivedCount: Int? = null
+        val currentPrimary = journey("primary", "2026-08-10T08:00:00Z", "2026-08-10T08:20:00Z")
+        val expiredLater = journey("expired", "2026-08-10T07:05:00Z", "2026-08-10T07:25:00Z")
+        val tooManyChanges = journey("three", "2026-08-10T08:10:00Z", "2026-08-10T08:30:00Z", transfers = 3)
+        val later2 = journey("later-2", "2026-08-10T08:20:00Z", "2026-08-10T08:40:00Z")
+        val later1 = journey("later-1", "2026-08-10T08:10:00Z", "2026-08-10T08:30:00Z")
+        val repository = object : JourneyRepository {
+            override suspend fun searchLocations(query: String): List<JourneyLocation> = emptyList()
+            override suspend fun getJourneys(
+                originId: String,
+                destinationId: String,
+                allowedTransportModes: Set<TransportMode>,
+                searchUntil: Instant?,
+                changesPreference: ExactDestinationChangesPreference,
+            ): List<JourneyPlan> = error("foreground method expected")
+
+            override suspend fun getJourneyOptions(
+                originId: String,
+                destinationId: String,
+                allowedTransportModes: Set<TransportMode>,
+                searchUntil: Instant?,
+                changesPreference: ExactDestinationChangesPreference,
+                laterJourneyCount: Int,
+            ): LiveJourneyOptions {
+                receivedCount = laterJourneyCount
+                clock.instant = Instant.parse("2026-08-10T07:30:00Z")
+                return LiveJourneyOptions(
+                    listOf(currentPrimary),
+                    listOf(expiredLater, tooManyChanges, later2, currentPrimary, later1, later2)
+                        .map(::LaterJourneyOption),
+                )
+            }
+        }
+
+        val result = GetRankedJourneysUseCase(repository, clock).getOptions(
+            "origin", "destination", setOf(TransportMode.BUS), laterJourneyCount = 3,
+        )
+
+        assertEquals(3, receivedCount)
+        assertEquals(listOf("primary"), result.journeys.map { it.journeyId })
+        assertEquals(listOf("later-2", "later-1"), result.laterJourneys.map { it.journey.journeyId })
+    }
+
+    @Test fun `foreground options reject an invalid supplemental count`() = runTest {
+        val error = runCatching {
+            GetRankedJourneysUseCase(repositoryOf(), fixedClock("2026-08-10T07:00:00Z")).getOptions(
+                "origin", "destination", setOf(TransportMode.BUS), laterJourneyCount = 4,
+            )
+        }.exceptionOrNull()
+
+        assertTrue(error is IllegalArgumentException)
     }
 }

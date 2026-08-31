@@ -48,6 +48,7 @@ import se.blick.app.domain.model.JourneyDisruptionNotice
 import se.blick.app.domain.model.JourneyLeg
 import se.blick.app.domain.model.JourneyPlan
 import se.blick.app.domain.model.JourneyRole
+import se.blick.app.domain.model.LaterJourneyOption
 import se.blick.app.domain.model.ResolvedJourneyDisruption
 import se.blick.app.domain.model.RoutineType
 import se.blick.app.domain.model.TransportMode
@@ -165,6 +166,14 @@ class RoutineDetailsScreenTest {
         routine: CommuteRoutine = sampleRoutine(),
         isPausedToday: Boolean = false,
         journeys: List<JourneyPlan> = emptyList(),
+        laterJourneys: List<LaterJourneyOption> = emptyList(),
+        journeyOptionsExpanded: Boolean = false,
+        isLoadingMoreJourneys: Boolean = false,
+        moreJourneysLoadFailed: Boolean = false,
+        hasLoadedExpandedJourneys: Boolean = false,
+        onExpandJourneyOptions: () -> Unit = {},
+        onCollapseJourneyOptions: () -> Unit = {},
+        onRetryMoreJourneyOptions: () -> Unit = {},
         exactDestinationDeviationNotices: List<ResolvedJourneyDisruption> = emptyList(),
         now: Instant = Instant.now(),
         onUpdateJourneyTransportModes: (Set<TransportMode>) -> Unit = {},
@@ -179,6 +188,14 @@ class RoutineDetailsScreenTest {
                 routine = routine,
                 isPausedToday = isPausedToday,
                 journeys = journeys,
+                laterJourneys = laterJourneys,
+                journeyOptionsExpanded = journeyOptionsExpanded,
+                isLoadingMoreJourneys = isLoadingMoreJourneys,
+                moreJourneysLoadFailed = moreJourneysLoadFailed,
+                hasLoadedExpandedJourneys = hasLoadedExpandedJourneys,
+                onExpandJourneyOptions = onExpandJourneyOptions,
+                onCollapseJourneyOptions = onCollapseJourneyOptions,
+                onRetryMoreJourneyOptions = onRetryMoreJourneyOptions,
                 exactDestinationDeviationNotices = exactDestinationDeviationNotices,
                 now = now,
                 onUpdateJourneyTransportModes = onUpdateJourneyTransportModes,
@@ -196,6 +213,14 @@ class RoutineDetailsScreenTest {
         routine: CommuteRoutine = sampleRoutine(),
         isPausedToday: Boolean = false,
         journeys: List<JourneyPlan> = emptyList(),
+        laterJourneys: List<LaterJourneyOption> = emptyList(),
+        journeyOptionsExpanded: Boolean = false,
+        isLoadingMoreJourneys: Boolean = false,
+        moreJourneysLoadFailed: Boolean = false,
+        hasLoadedExpandedJourneys: Boolean = false,
+        onExpandJourneyOptions: () -> Unit = {},
+        onCollapseJourneyOptions: () -> Unit = {},
+        onRetryMoreJourneyOptions: () -> Unit = {},
         exactDestinationDeviationNotices: List<ResolvedJourneyDisruption> = emptyList(),
         now: Instant = Instant.now(),
         onUpdateJourneyTransportModes: (Set<TransportMode>) -> Unit = {},
@@ -215,6 +240,14 @@ class RoutineDetailsScreenTest {
             isRefreshing = false,
             disruptionsState = disruptionsState,
             journeys = journeys,
+            laterJourneys = laterJourneys,
+            journeyOptionsExpanded = journeyOptionsExpanded,
+            isLoadingMoreJourneys = isLoadingMoreJourneys,
+            moreJourneysLoadFailed = moreJourneysLoadFailed,
+            hasLoadedExpandedJourneys = hasLoadedExpandedJourneys,
+            onExpandJourneyOptions = onExpandJourneyOptions,
+            onCollapseJourneyOptions = onCollapseJourneyOptions,
+            onRetryMoreJourneyOptions = onRetryMoreJourneyOptions,
             exactDestinationDeviationNotices = exactDestinationDeviationNotices,
             now = now,
             onUpdateJourneyTransportModes = onUpdateJourneyTransportModes,
@@ -624,7 +657,7 @@ class RoutineDetailsScreenTest {
     fun bothFiltersAreSelectedByDefault_showingBothDirectAndWithChangesJourneys() {
         val now = Instant.parse("2026-08-13T08:00:00Z")
         val direct = journeyWithTransfers("direct", "14", transferCount = 0, departure = now.plusSeconds(300), durationMinutes = 20)
-        val withChanges = journeyWithTransfers("changes", "40", transferCount = 1, departure = now.plusSeconds(600), durationMinutes = 30)
+        val withChanges = journeyWithTransfers("changes", "40", transferCount = 1, departure = now.plusSeconds(600), durationMinutes = 30, role = JourneyRole.NEXT)
 
         setContent(
             disruptionsState = DisruptionsState.NoDisruptions,
@@ -641,7 +674,7 @@ class RoutineDetailsScreenTest {
     fun deselectingWithChanges_leavesOnlyDirectJourneysVisible() {
         val now = Instant.parse("2026-08-13T08:00:00Z")
         val direct = journeyWithTransfers("direct", "14", transferCount = 0, departure = now.plusSeconds(300), durationMinutes = 20)
-        val withChanges = journeyWithTransfers("changes", "40", transferCount = 1, departure = now.plusSeconds(600), durationMinutes = 30)
+        val withChanges = journeyWithTransfers("changes", "40", transferCount = 1, departure = now.plusSeconds(600), durationMinutes = 30, role = JourneyRole.NEXT)
 
         setContent(
             disruptionsState = DisruptionsState.NoDisruptions,
@@ -678,7 +711,7 @@ class RoutineDetailsScreenTest {
     fun deselectingDirect_leavesOnlyWithChangesJourneysVisible() {
         val now = Instant.parse("2026-08-13T08:00:00Z")
         val direct = journeyWithTransfers("direct", "14", transferCount = 0, departure = now.plusSeconds(300), durationMinutes = 20)
-        val withChanges = journeyWithTransfers("changes", "40", transferCount = 1, departure = now.plusSeconds(600), durationMinutes = 30)
+        val withChanges = journeyWithTransfers("changes", "40", transferCount = 1, departure = now.plusSeconds(600), durationMinutes = 30, role = JourneyRole.NEXT)
 
         setContent(
             disruptionsState = DisruptionsState.NoDisruptions,
@@ -798,7 +831,7 @@ class RoutineDetailsScreenTest {
     fun aRoutinePersistedAsDirectOnly_startsWithOnlyDirectJourneysVisible_noTapNeeded() {
         val now = Instant.parse("2026-08-13T08:00:00Z")
         val direct = journeyWithTransfers("direct", "14", transferCount = 0, departure = now.plusSeconds(300), durationMinutes = 20)
-        val withChanges = journeyWithTransfers("changes", "40", transferCount = 1, departure = now.plusSeconds(600), durationMinutes = 30)
+        val withChanges = journeyWithTransfers("changes", "40", transferCount = 1, departure = now.plusSeconds(600), durationMinutes = 30, role = JourneyRole.NEXT)
 
         setContent(
             disruptionsState = DisruptionsState.NoDisruptions,
@@ -834,7 +867,7 @@ class RoutineDetailsScreenTest {
     fun aRoutinePersistedAsWithChangesOnly_startsWithOnlyWithChangesJourneysVisible_noTapNeeded() {
         val now = Instant.parse("2026-08-13T08:00:00Z")
         val direct = journeyWithTransfers("direct", "14", transferCount = 0, departure = now.plusSeconds(300), durationMinutes = 20)
-        val withChanges = journeyWithTransfers("changes", "40", transferCount = 1, departure = now.plusSeconds(600), durationMinutes = 30)
+        val withChanges = journeyWithTransfers("changes", "40", transferCount = 1, departure = now.plusSeconds(600), durationMinutes = 30, role = JourneyRole.NEXT)
 
         setContent(
             disruptionsState = DisruptionsState.NoDisruptions,
@@ -959,26 +992,216 @@ class RoutineDetailsScreenTest {
     }
 
     @Test
-    fun aGenuineGapFillingAlternative_showsAllThreeCardsWithTheirOwnLabels() {
+    fun aGenuineGapFillingAlternative_isHiddenCollapsedAndNeverDisplacesNext() {
         val now = Instant.parse("2026-08-13T08:00:00Z")
         val primary = journeyWithTransfers("primary", "14", transferCount = 0, departure = now.plusSeconds(300), durationMinutes = 20, role = JourneyRole.PRIMARY)
         val alternative = journeyWithTransfers("alt", "40", transferCount = 1, departure = now.plusSeconds(900), durationMinutes = 25, role = JourneyRole.ALTERNATIVE)
         val next = journeyWithTransfers("next", "14", transferCount = 0, departure = now.plusSeconds(3600), durationMinutes = 20, role = JourneyRole.NEXT)
+        val reserve = journeyWithTransfers("reserve", "R", transferCount = 0, departure = now.plusSeconds(4200), durationMinutes = 20)
 
         setContent(
             disruptionsState = DisruptionsState.NoDisruptions,
             routine = exactDestinationRoutine(),
             journeys = listOf(primary, alternative, next),
+            laterJourneys = listOf(LaterJourneyOption(reserve)),
+            now = now,
+        )
+
+        composeRule.onNodeWithText(composeRule.activity.getString(R.string.journey_fastest)).assertExists()
+        composeRule.onNodeWithText(composeRule.activity.getString(R.string.journey_alternative)).assertDoesNotExist()
+        composeRule.onNodeWithText(composeRule.activity.getString(R.string.journey_next)).assertExists()
+        composeRule.onNodeWithText("R").assertDoesNotExist()
+        composeRule.onNodeWithText(composeRule.activity.getString(R.string.routine_details_more_journey_options)).assertExists()
+    }
+
+    @Test
+    fun MoreOptions_hasItsOwnAccessibleTouchTargetAndInvokesExpandOnce() {
+        val now = Instant.parse("2026-08-13T08:00:00Z")
+        val primary = journeyWithTransfers("primary", "14", 0, now.plusSeconds(300), 20)
+        val next = journeyWithTransfers("next", "14", 0, now.plusSeconds(900), 20, JourneyRole.NEXT)
+        var calls = 0
+
+        setContent(
+            disruptionsState = DisruptionsState.NoDisruptions,
+            routine = exactDestinationRoutine(),
+            journeys = listOf(primary, next),
+            now = now,
+            onExpandJourneyOptions = { calls++ },
+        )
+
+        val toggle = composeRule.onNodeWithTag(ROUTINE_DETAILS_JOURNEYS_TOGGLE_TAG)
+            .assertHasClickAction()
+            .performScrollTo()
+        val height = toggle.fetchSemanticsNode().touchBoundsInRoot.height
+        val minimumTouchHeight = 48f * composeRule.activity.resources.displayMetrics.density
+        assertTrue("expected at least a 48dp touch target, was $height px", height >= minimumTouchHeight - 0.5f)
+        toggle.performClick()
+        composeRule.runOnIdle { assertEquals(1, calls) }
+    }
+
+    @Test
+    fun ShowFewer_hasItsOwnAccessibleTouchTargetAndInvokesCollapseOnce() {
+        val now = Instant.parse("2026-08-13T08:00:00Z")
+        val primary = journeyWithTransfers("primary", "14", 0, now.plusSeconds(300), 20)
+        val next = journeyWithTransfers("next", "15", 0, now.plusSeconds(900), 20, JourneyRole.NEXT)
+        var calls = 0
+
+        setContent(
+            disruptionsState = DisruptionsState.NoDisruptions,
+            routine = exactDestinationRoutine(),
+            journeys = listOf(primary, next),
+            journeyOptionsExpanded = true,
+            now = now,
+            onCollapseJourneyOptions = { calls++ },
+        )
+
+        composeRule.onNodeWithText(composeRule.activity.getString(R.string.routine_details_show_fewer_journey_options)).assertExists()
+        composeRule.onNodeWithTag(ROUTINE_DETAILS_JOURNEYS_TOGGLE_TAG)
+            .assertHasClickAction()
+            .performScrollTo()
+            .performClick()
+        composeRule.runOnIdle { assertEquals(1, calls) }
+    }
+
+    @Test
+    fun expandedLoading_keepsCurrentCardsAndShowFewerVisible() {
+        val now = Instant.parse("2026-08-13T08:00:00Z")
+        val primary = journeyWithTransfers("primary", "14", 0, now.plusSeconds(300), 20)
+        val next = journeyWithTransfers("next", "15", 0, now.plusSeconds(900), 20, JourneyRole.NEXT)
+
+        setContent(
+            disruptionsState = DisruptionsState.NoDisruptions,
+            routine = exactDestinationRoutine(),
+            journeys = listOf(primary, next),
+            journeyOptionsExpanded = true,
+            isLoadingMoreJourneys = true,
+            now = now,
+        )
+
+        composeRule.onNodeWithText("14").assertExists()
+        composeRule.onNodeWithText("15").assertExists()
+        composeRule.onNodeWithText(composeRule.activity.getString(R.string.routine_details_loading_more_journeys)).assertExists()
+        composeRule.onNodeWithText(composeRule.activity.getString(R.string.routine_details_show_fewer_journey_options)).assertExists()
+    }
+
+    @Test
+    fun successfulExpandedRequestWithNoHiddenRows_showsNoAdditionalOptions() {
+        val now = Instant.parse("2026-08-13T08:00:00Z")
+        val primary = journeyWithTransfers("primary", "14", 0, now.plusSeconds(300), 20)
+        val next = journeyWithTransfers("next", "15", 0, now.plusSeconds(900), 20, JourneyRole.NEXT)
+
+        setContent(
+            disruptionsState = DisruptionsState.NoDisruptions,
+            routine = exactDestinationRoutine(),
+            journeys = listOf(primary, next),
+            journeyOptionsExpanded = true,
+            hasLoadedExpandedJourneys = true,
+            now = now,
+        )
+
+        composeRule.onNodeWithText(composeRule.activity.getString(R.string.routine_details_no_more_journeys)).assertExists()
+    }
+
+    @Test
+    fun expandedOptions_showSemanticOrderDeduplicateAndCapTheWholeListAtFive() {
+        val now = Instant.parse("2026-08-13T08:00:00Z")
+        val primary = journeyWithTransfers("primary", "P", 0, now.plusSeconds(300), 20)
+        val alternative = journeyWithTransfers("alternative", "A", 1, now.plusSeconds(600), 20, JourneyRole.ALTERNATIVE)
+        val next = journeyWithTransfers("next", "N", 0, now.plusSeconds(900), 20, JourneyRole.NEXT)
+        val later1 = journeyWithTransfers("later-1", "L1", 0, now.plusSeconds(1200), 20)
+        val later2 = journeyWithTransfers("later-2", "L2", 0, now.plusSeconds(1500), 20)
+        val later3 = journeyWithTransfers("later-3", "L3", 0, now.plusSeconds(1800), 20)
+
+        setContent(
+            disruptionsState = DisruptionsState.NoDisruptions,
+            routine = exactDestinationRoutine(),
+            journeys = listOf(primary, alternative, next),
+            laterJourneys = listOf(later1, later2, later2, later3).map(::LaterJourneyOption),
+            journeyOptionsExpanded = true,
             now = now,
         )
 
         composeRule.onNodeWithText(composeRule.activity.getString(R.string.journey_fastest)).assertExists()
         composeRule.onNodeWithText(composeRule.activity.getString(R.string.journey_alternative)).assertExists()
         composeRule.onNodeWithText(composeRule.activity.getString(R.string.journey_next)).assertExists()
+        composeRule.onAllNodesWithText(composeRule.activity.getString(R.string.journey_later_departure)).assertCountEquals(2)
+        composeRule.onNodeWithText("L1").assertExists()
+        composeRule.onNodeWithText("L2").assertExists()
+        composeRule.onNodeWithText("L3").assertDoesNotExist()
     }
 
     @Test
-    fun filteringToWithChangesOnly_leavesTheAlternativeCardCorrectlyLabelled_notFastest() {
+    fun expiredPrimaryTransition_showsUpcomingNextAndReserveButNoStaleAlternative() {
+        val now = Instant.parse("2026-08-13T08:00:00Z")
+        val expiredPrimary = journeyWithTransfers("primary", "P", 0, now.minusSeconds(1), 20)
+        val alternative = journeyWithTransfers("alternative", "A", 1, now.plusSeconds(300), 20, JourneyRole.ALTERNATIVE)
+        val next = journeyWithTransfers("next", "N", 0, now.plusSeconds(600), 20, JourneyRole.NEXT)
+        val reserve = journeyWithTransfers("reserve", "R", 0, now.plusSeconds(900), 20)
+
+        setContent(
+            disruptionsState = DisruptionsState.NoDisruptions,
+            routine = exactDestinationRoutine(),
+            journeys = listOf(expiredPrimary, alternative, next),
+            laterJourneys = listOf(LaterJourneyOption(reserve)),
+            now = now,
+        )
+
+        composeRule.onNodeWithText(composeRule.activity.getString(R.string.journey_upcoming_departure)).assertExists()
+        composeRule.onNodeWithText(composeRule.activity.getString(R.string.journey_later_departure)).assertExists()
+        composeRule.onNodeWithText(composeRule.activity.getString(R.string.journey_fastest)).assertDoesNotExist()
+        composeRule.onNodeWithText(composeRule.activity.getString(R.string.journey_alternative)).assertDoesNotExist()
+        composeRule.onNodeWithText("A").assertDoesNotExist()
+    }
+
+    @Test
+    fun expandedLoadingAndFailure_keepCardsVisibleAndRetryable() {
+        val now = Instant.parse("2026-08-13T08:00:00Z")
+        val primary = journeyWithTransfers("primary", "14", 0, now.plusSeconds(300), 20)
+        val next = journeyWithTransfers("next", "15", 0, now.plusSeconds(900), 20, JourneyRole.NEXT)
+        var retryCalls = 0
+
+        setContent(
+            disruptionsState = DisruptionsState.NoDisruptions,
+            routine = exactDestinationRoutine(),
+            journeys = listOf(primary, next),
+            journeyOptionsExpanded = true,
+            moreJourneysLoadFailed = true,
+            onRetryMoreJourneyOptions = { retryCalls++ },
+            now = now,
+        )
+
+        composeRule.onNodeWithText("14").assertExists()
+        composeRule.onNodeWithText("15").assertExists()
+        composeRule.onNodeWithText(composeRule.activity.getString(R.string.routine_details_more_journeys_failed)).assertExists()
+        composeRule.onNodeWithText(composeRule.activity.getString(R.string.action_retry)).performClick()
+        composeRule.runOnIdle { assertEquals(1, retryCalls) }
+    }
+
+    @Test
+    fun supplementalExpressArrival_neverShowsNegativeLaterMetadata() {
+        val now = Instant.parse("2026-08-13T08:00:00Z")
+        val primary = journeyWithTransfers("primary", "14", 0, now.plusSeconds(300), 60)
+        val next = journeyWithTransfers("next", "14", 0, now.plusSeconds(600), 50, JourneyRole.NEXT)
+        val express = journeyWithTransfers("express", "E", 0, now.plusSeconds(900), 10)
+
+        setContent(
+            disruptionsState = DisruptionsState.NoDisruptions,
+            routine = exactDestinationRoutine(),
+            journeys = listOf(primary, next),
+            laterJourneys = listOf(LaterJourneyOption(express)),
+            journeyOptionsExpanded = true,
+            now = now,
+        )
+
+        val misleading = composeRule.activity.getString(
+            R.string.journey_later,
+            composeRule.activity.getString(R.string.journey_duration_minutes, -40),
+        )
+        composeRule.onNodeWithText(misleading, substring = true).assertDoesNotExist()
+    }
+
+    @Test
+    fun filteringOutPrimary_doesNotPromoteTheStaleAlternative() {
         // Regression test for "filtering cannot cause misleading role labels": a direct PRIMARY
         // plus a transfer ALTERNATIVE, filtered down to With-changes-only, leaves the
         // ALTERNATIVE as the sole (and therefore first-shown) card -- it must still say
@@ -996,7 +1219,7 @@ class RoutineDetailsScreenTest {
 
         composeRule.onNodeWithText(composeRule.activity.getString(R.string.journey_direct)).performClick()
 
-        composeRule.onNodeWithText(composeRule.activity.getString(R.string.journey_alternative)).assertExists()
+        composeRule.onNodeWithText(composeRule.activity.getString(R.string.journey_alternative)).assertDoesNotExist()
         composeRule.onNodeWithText(composeRule.activity.getString(R.string.journey_fastest)).assertDoesNotExist()
     }
 
@@ -1348,6 +1571,30 @@ class RoutineDetailsScreenTest {
         val swedish = localizedContext(Locale.forLanguageTag("sv"))
         assertEquals("Fler avgångar", swedish.getString(R.string.routine_details_more_departures))
         assertEquals("Visa färre", swedish.getString(R.string.routine_details_show_fewer_departures))
+    }
+
+    @Test
+    fun exactJourneyOptionStrings_areExactInEnglishAndSwedish() {
+        val baseContext = InstrumentationRegistry.getInstrumentation().targetContext
+        fun localizedContext(locale: Locale) = baseContext.createConfigurationContext(
+            Configuration(baseContext.resources.configuration).apply { setLocale(locale) },
+        )
+
+        val english = localizedContext(Locale.ENGLISH)
+        assertEquals("Earliest departure", english.getString(R.string.journey_fastest))
+        assertEquals("Next departure", english.getString(R.string.journey_next))
+        assertEquals("Upcoming departure", english.getString(R.string.journey_upcoming_departure))
+        assertEquals("Later departure", english.getString(R.string.journey_later_departure))
+        assertEquals("More options", english.getString(R.string.routine_details_more_journey_options))
+        assertEquals("Show fewer", english.getString(R.string.routine_details_show_fewer_journey_options))
+
+        val swedish = localizedContext(Locale.forLanguageTag("sv"))
+        assertEquals("Tidigaste avgång", swedish.getString(R.string.journey_fastest))
+        assertEquals("Nästa avgång", swedish.getString(R.string.journey_next))
+        assertEquals("Kommande avgång", swedish.getString(R.string.journey_upcoming_departure))
+        assertEquals("Senare avgång", swedish.getString(R.string.journey_later_departure))
+        assertEquals("Fler alternativ", swedish.getString(R.string.routine_details_more_journey_options))
+        assertEquals("Visa färre", swedish.getString(R.string.routine_details_show_fewer_journey_options))
     }
 
     // ---- Pause/resume today -- now placed directly under the departures list, independent of

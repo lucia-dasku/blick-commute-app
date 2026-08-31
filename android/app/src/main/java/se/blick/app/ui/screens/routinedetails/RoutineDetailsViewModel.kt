@@ -29,6 +29,7 @@ import se.blick.app.domain.model.DisruptionPresentation
 import se.blick.app.domain.model.ExactDestinationChangesPreference
 import se.blick.app.domain.model.JourneyPlan
 import se.blick.app.domain.model.JourneyRole
+import se.blick.app.domain.model.LaterJourneyOption
 import se.blick.app.domain.model.JOURNEY_TRANSPORT_MODE_OPTIONS
 import se.blick.app.domain.model.ResolvedJourneyDisruption
 import se.blick.app.domain.model.RoutineType
@@ -44,8 +45,10 @@ import se.blick.app.domain.usecase.LiveDeparturesState
 import se.blick.app.domain.usecase.PrimaryJourneyExpiryBoundary
 import se.blick.app.domain.usecase.compactPresentation
 import se.blick.app.domain.usecase.departureIdentity
+import se.blick.app.domain.usecase.filterCurrentJourneys
 import se.blick.app.domain.usecase.primaryJourneyExpiryBoundary
 import se.blick.app.domain.usecase.primaryDisruptionNotices
+import se.blick.app.domain.usecase.isCurrentJourney
 import se.blick.app.notification.NotificationAvailability
 import se.blick.app.notification.NotificationAvailabilityChecker
 import se.blick.app.notification.NotificationPostResult
@@ -71,6 +74,8 @@ import javax.inject.Inject
 
 private const val LOG_TAG = "RoutineDetailsViewModel"
 private const val ROUTINE_DETAILS_LINE_DEPARTURE_LIMIT = 5
+private const val COLLAPSED_LATER_JOURNEY_COUNT = 1
+private const val EXPANDED_LATER_JOURNEY_COUNT = 3
 
 /**
  * Foreground, manually-refreshable UI state for the routine details/live-preview screen.
@@ -131,6 +136,11 @@ data class RoutineDetailsUiState(
      * purely as a harmless initial value until the first real check runs in `init`. */
     val notificationAvailability: NotificationAvailability = NotificationAvailability.Available,
     val journeys: List<JourneyPlan> = emptyList(),
+    val laterJourneys: List<LaterJourneyOption> = emptyList(),
+    val journeyOptionsExpanded: Boolean = false,
+    val isLoadingMoreJourneys: Boolean = false,
+    val moreJourneysLoadFailed: Boolean = false,
+    val hasLoadedExpandedJourneys: Boolean = false,
     val journeysUnavailable: Boolean = false,
     /**
      * When [journeys] was last successfully evaluated — captured from [Clock.instant] AFTER
@@ -256,6 +266,9 @@ class RoutineDetailsViewModel @Inject constructor(
      * [se.blick.app.ui.screens.routinecreate.RoutineCreateViewModel]'s direction-race fix. */
     private var departuresJob: Job? = null
     private var departuresRequestId = 0
+    /** Exact-destination requests have two shapes (collapsed reserve and expanded options), so
+     * they use an independent generation from ordinary departure collection. */
+    private var exactJourneyRequestId = 0
 
     /** Guards against an overlapping/superseded disruptions fetch overwriting a newer one —
      * same job + request-generation-token pattern as [departuresJob]/[departuresRequestId],
@@ -553,6 +566,47 @@ class RoutineDetailsViewModel @Inject constructor(
         val routine = _uiState.value.routine ?: return
         loadDepartures(routine, RefreshTrigger.MANUAL)
         if (routine.type == RoutineType.LINE_DIRECTION) loadDisruptions(routine, isInitial = false)
+    }
+
+    /** Expands exact-destination options immediately, retaining current cards while one
+     * foreground extended request runs through the existing journey job. */
+    fun expandJourneyOptions() {
+        val state = _uiState.value
+        val routine = state.routine ?: return
+        if (routine.type != RoutineType.EXACT_DESTINATION || state.journeyOptionsExpanded) return
+        _uiState.update {
+            it.copy(
+                journeyOptionsExpanded = true,
+                isLoadingMoreJourneys = true,
+                moreJourneysLoadFailed = false,
+            )
+        }
+        loadJourneys(routine, RefreshTrigger.AUTOMATIC, JourneyRequestKind.MORE)
+    }
+
+    fun retryMoreJourneyOptions() {
+        val state = _uiState.value
+        val routine = state.routine ?: return
+        if (
+            routine.type != RoutineType.EXACT_DESTINATION || !state.journeyOptionsExpanded ||
+            state.isLoadingMoreJourneys
+        ) return
+        _uiState.update { it.copy(isLoadingMoreJourneys = true, moreJourneysLoadFailed = false) }
+        loadJourneys(routine, RefreshTrigger.AUTOMATIC, JourneyRequestKind.MORE)
+    }
+
+    /** Purely local collapse: no fetch, scheduling, widget or disruption work. */
+    fun collapseJourneyOptions() {
+        if (!_uiState.value.journeyOptionsExpanded) return
+        departuresJob?.cancel()
+        exactJourneyRequestId++
+        _uiState.update {
+            it.copy(
+                journeyOptionsExpanded = false,
+                isLoadingMoreJourneys = false,
+                moreJourneysLoadFailed = false,
+            )
+        }
     }
 
     /** Persists the exact-destination routine's Journey Planner mode allow-list, then refreshes
@@ -1088,20 +1142,63 @@ class RoutineDetailsViewModel @Inject constructor(
         }
     }
 
-    private fun loadJourneys(routine: CommuteRoutine, trigger: RefreshTrigger) {
+    private fun loadJourneys(
+        routine: CommuteRoutine,
+        trigger: RefreshTrigger,
+        requestKind: JourneyRequestKind = JourneyRequestKind.STANDARD,
+    ) {
         departuresJob?.cancel()
+        val requestId = ++exactJourneyRequestId
         val useCase = getRankedJourneys
         val originId = routine.journeyOriginId
         val destinationId = routine.journeyDestinationId
         if (useCase == null || originId == null || destinationId == null) {
-            _uiState.update { it.copy(journeysUnavailable = true, isRefreshingDepartures = false) }
+            _uiState.update {
+                if (requestKind == JourneyRequestKind.MORE) {
+                    it.copy(isLoadingMoreJourneys = false, moreJourneysLoadFailed = true)
+                } else {
+                    it.copy(journeysUnavailable = true, isRefreshingDepartures = false)
+                }
+            }
             return
         }
-        if (trigger == RefreshTrigger.MANUAL) _uiState.update { it.copy(isRefreshingDepartures = true) }
+        val requestStartedAt = clock.instant()
+        _uiState.update { state ->
+            val currentAuthoritative = state.journeys.filterCurrentJourneys(requestStartedAt)
+            val currentPrimary = currentAuthoritative.any { it.role == JourneyRole.PRIMARY }
+            val safeAuthoritative = if (currentPrimary) {
+                currentAuthoritative
+            } else {
+                // ALTERNATIVE was defined relative to the expired PRIMARY/NEXT pair. During the
+                // response gap only the still-authoritative NEXT remains safe to present.
+                currentAuthoritative.filter { it.role == JourneyRole.NEXT }
+            }
+            state.copy(
+                journeys = safeAuthoritative,
+                laterJourneys = state.laterJourneys.filter { it.journey.isCurrentJourney(requestStartedAt) },
+                journeysEvaluatedAt = requestStartedAt,
+                isRefreshingDepartures = trigger == RefreshTrigger.MANUAL && requestKind == JourneyRequestKind.STANDARD,
+                isLoadingMoreJourneys = requestKind == JourneyRequestKind.MORE,
+                moreJourneysLoadFailed = false,
+            )
+        }
+        val laterJourneyCount = if (_uiState.value.journeyOptionsExpanded) {
+            EXPANDED_LATER_JOURNEY_COUNT
+        } else {
+            COLLAPSED_LATER_JOURNEY_COUNT
+        }
         val searchUntil = currentSearchUntil(routine)
         departuresJob = viewModelScope.launch {
             try {
-                val journeys = useCase(originId, destinationId, routine.allowedJourneyTransportModes, searchUntil, routine.changesPreference)
+                val options = useCase.getOptions(
+                    originId,
+                    destinationId,
+                    routine.allowedJourneyTransportModes,
+                    searchUntil,
+                    routine.changesPreference,
+                    laterJourneyCount,
+                )
+                if (requestId != exactJourneyRequestId) return@launch
                 // Captured AFTER the use case returns, never before -- see
                 // RoutineDetailsUiState.journeysEvaluatedAt's own doc. Stored in the SAME update as
                 // `journeys` so both land in a single StateFlow emission: this timestamp changing is
@@ -1109,12 +1206,28 @@ class RoutineDetailsViewModel @Inject constructor(
                 // identical to what was already displayed.
                 val evaluatedAt = clock.instant()
                 _uiState.update {
-                    it.copy(journeys = journeys, journeysUnavailable = false, isRefreshingDepartures = false, journeysEvaluatedAt = evaluatedAt)
+                    it.copy(
+                        journeys = options.journeys,
+                        laterJourneys = options.laterJourneys,
+                        journeysUnavailable = false,
+                        isRefreshingDepartures = false,
+                        journeysEvaluatedAt = evaluatedAt,
+                        isLoadingMoreJourneys = false,
+                        moreJourneysLoadFailed = false,
+                        hasLoadedExpandedJourneys = it.hasLoadedExpandedJourneys || laterJourneyCount == EXPANDED_LATER_JOURNEY_COUNT,
+                    )
                 }
-                loadJourneyDisruptionRelevance(routine, journeys)
+                loadJourneyDisruptionRelevance(routine, options.journeys)
             } catch (e: CancellationException) { throw e }
             catch (_: Exception) {
-                _uiState.update { it.copy(journeysUnavailable = true, isRefreshingDepartures = false) }
+                if (requestId != exactJourneyRequestId) return@launch
+                _uiState.update {
+                    if (requestKind == JourneyRequestKind.MORE) {
+                        it.copy(isLoadingMoreJourneys = false, moreJourneysLoadFailed = true)
+                    } else {
+                        it.copy(journeysUnavailable = true, isRefreshingDepartures = false, isLoadingMoreJourneys = false)
+                    }
+                }
             }
         }
     }
@@ -1240,3 +1353,4 @@ class RoutineDetailsViewModel @Inject constructor(
 
 /** Distinguishes why a departures fetch was triggered — see [RoutineDetailsViewModel.loadDepartures]. */
 private enum class RefreshTrigger { INITIAL, MANUAL, AUTOMATIC }
+private enum class JourneyRequestKind { STANDARD, MORE }

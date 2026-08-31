@@ -83,6 +83,7 @@ data class JourneysResponseDto(
     val journeyContext: JourneyContextDto = JourneyContextDto.LIVE,
     val searchMode: JourneySearchModeDto = JourneySearchModeDto.NOW,
     val requestedDateTime: String? = null,
+    val laterJourneys: List<JourneyPlanDto> = emptyList(),
 )
 
 /** One PRIMARY transit leg's own transport mode + line designation — a WALK leg or one with no
