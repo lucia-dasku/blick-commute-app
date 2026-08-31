@@ -53,8 +53,7 @@ import se.blick.app.ui.theme.StockholmNightSurfaces
 import se.blick.app.domain.model.OneTimeEvent
 import se.blick.app.domain.model.OneTimeEventLabel
 import se.blick.app.domain.model.OneTimeEventTimeType
-import se.blick.app.domain.model.JourneyPlan
-import se.blick.app.domain.model.JourneyRole
+import se.blick.app.domain.model.PlannedJourneyRole
 import se.blick.app.domain.model.toPresentation
 import se.blick.app.domain.model.STOCKHOLM_ZONE
 import se.blick.app.locale.currentBlickLocale
@@ -451,30 +450,31 @@ internal fun PlannedJourneySection(
                 CircularProgressIndicator()
             }
             is PlannedJourneyPreviewState.Ready -> {
-                val next = preview.result.journeys.firstOrNull { it.role == JourneyRole.NEXT }
-                val alternative = preview.result.journeys.firstOrNull { it.role == JourneyRole.ALTERNATIVE }
-                PlannedJourneyOption(
-                    title = stringResource(R.string.one_time_event_plan_recommended),
-                    journey = preview.primary,
-                    locale = locale,
-                    primary = true,
-                )
+                val choices = preview.result.choices.sortedBy { it.journey.departureTime }
+                var expandedRole by remember(preview.result.fetchedAt, choices.map { it.journey.journeyId }) {
+                    mutableStateOf<PlannedJourneyRole?>(PlannedJourneyRole.RECOMMENDED)
+                }
+                choices.forEach { choice ->
+                    PlannedJourneyTimelineCard(
+                        journey = choice.journey,
+                        optionLabel = stringResource(
+                            when (choice.role) {
+                                PlannedJourneyRole.EARLIER -> R.string.one_time_event_plan_earlier_option
+                                PlannedJourneyRole.RECOMMENDED -> R.string.one_time_event_plan_recommended
+                                PlannedJourneyRole.LATER -> R.string.one_time_event_plan_later_option
+                            },
+                        ),
+                        locale = locale,
+                        emphasized = choice.role == PlannedJourneyRole.RECOMMENDED,
+                        expanded = expandedRole == choice.role,
+                        onExpandedChange = { expand ->
+                            expandedRole = if (expand) choice.role else null
+                        },
+                        modifier = Modifier.testTag("planned-journey-card-${choice.role.name.lowercase()}"),
+                    )
+                }
                 if (presentation == EventPlanPresentation.TODAY) {
                     EventPlanDisruptions(disruptionState)
-                }
-                next?.let {
-                    PlannedJourneyOption(
-                        title = stringResource(R.string.one_time_event_plan_next_option),
-                        journey = it,
-                        locale = locale,
-                    )
-                }
-                alternative?.let {
-                    PlannedJourneyOption(
-                        title = stringResource(R.string.one_time_event_plan_alternative),
-                        journey = it,
-                        locale = locale,
-                    )
                 }
                 if (refreshFailed) {
                     Text(
@@ -531,24 +531,6 @@ private fun PlannedJourneyInfoSurface(text: String) {
             style = MaterialTheme.typography.bodySmall,
             color = MaterialTheme.colorScheme.onSurfaceVariant,
         )
-    }
-}
-
-@Composable
-private fun PlannedJourneyOption(
-    title: String,
-    journey: JourneyPlan,
-    locale: java.util.Locale,
-    primary: Boolean = false,
-) {
-    Column(verticalArrangement = Arrangement.spacedBy(6.dp)) {
-        Text(
-            title,
-            style = if (primary) MaterialTheme.typography.titleSmall else MaterialTheme.typography.labelLarge,
-            fontWeight = if (primary) FontWeight.SemiBold else FontWeight.Medium,
-            color = if (primary) MaterialTheme.colorScheme.onSurface else MaterialTheme.colorScheme.onSurfaceVariant,
-        )
-        PlannedJourneyTimelineCard(journey, locale)
     }
 }
 

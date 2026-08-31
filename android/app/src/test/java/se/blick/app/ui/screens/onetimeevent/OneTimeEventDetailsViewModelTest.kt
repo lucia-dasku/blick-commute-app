@@ -30,6 +30,7 @@ import se.blick.app.data.repository.JourneyRepository
 import se.blick.app.data.repository.OneTimeEventRepository
 import se.blick.app.data.repository.UnexpectedJourneyContextException
 import se.blick.app.domain.model.ExactDestinationChangesPreference
+import se.blick.app.domain.model.DisruptionEffect
 import se.blick.app.domain.model.JourneyLeg
 import se.blick.app.domain.model.JourneyLocation
 import se.blick.app.domain.model.JourneyPlan
@@ -39,6 +40,8 @@ import se.blick.app.domain.model.OneTimeEvent
 import se.blick.app.domain.model.OneTimeEventLabel
 import se.blick.app.domain.model.OneTimeEventTimeType
 import se.blick.app.domain.model.PlannedJourneyResult
+import se.blick.app.domain.model.PlannedJourneyChoice
+import se.blick.app.domain.model.PlannedJourneyRole
 import se.blick.app.domain.model.TransportMode
 import se.blick.app.domain.model.JourneyDisruptionContext
 import se.blick.app.domain.model.JourneyDisruptionNotice
@@ -57,10 +60,16 @@ class OneTimeEventDetailsViewModelTest {
     fun tearDown() = Dispatchers.resetMain()
 
     @Test
-    fun `future ARRIVE_BY requests planned journey and uses backend PRIMARY without re-ranking`() = runTest(dispatcher.scheduler) {
+    fun `future ARRIVE_BY requests planned journey and uses backend RECOMMENDED without re-ranking`() = runTest(dispatcher.scheduler) {
         val event = event(timeType = OneTimeEventTimeType.ARRIVE_BY)
         val journeyRepository = FakeJourneyRepository().apply {
-            handler = { request -> plannedResult(request.mode, event, listOf(journey("next", JourneyRole.NEXT), journey("primary", JourneyRole.PRIMARY))) }
+            handler = { request ->
+                plannedResult(
+                    request.mode,
+                    event,
+                    listOf(choice("earlier", PlannedJourneyRole.EARLIER), choice("recommended", PlannedJourneyRole.RECOMMENDED)),
+                )
+            }
         }
         val viewModel = viewModel(event, journeyRepository)
 
@@ -68,7 +77,7 @@ class OneTimeEventDetailsViewModelTest {
 
         assertEquals(JourneySearchMode.ARRIVE_BY, journeyRepository.requests.single().mode)
         val ready = viewModel.uiState.value.preview as PlannedJourneyPreviewState.Ready
-        assertEquals("primary", ready.primary.journeyId)
+        assertEquals("recommended", ready.recommended.journeyId)
         assertEquals(EventPlanPresentation.PRELIMINARY, viewModel.uiState.value.presentation)
         assertTrue(journeyRepository.disruptionRequests == 0)
     }
@@ -87,6 +96,36 @@ class OneTimeEventDetailsViewModelTest {
         assertTrue(viewModel.uiState.value.preview is PlannedJourneyPreviewState.Ready)
         assertEquals(1, journeyRepository.disruptionRequests)
         assertTrue(viewModel.uiState.value.disruptionState is EventPlanDisruptionState.Ready)
+    }
+
+    @Test
+    fun `event day resolves disruptions from the planned RECOMMENDED choice only`() = runTest(dispatcher.scheduler) {
+        val event = event(date = LocalDate.of(2026, 8, 10), time = LocalTime.of(18, 30))
+        val earlierNotice = JourneyDisruptionNotice("Earlier notice", DisruptionEffect.DELAYS)
+        val recommendedNotice = JourneyDisruptionNotice("Recommended notice", DisruptionEffect.ROUTE_CHANGE)
+        val journeyRepository = FakeJourneyRepository().apply {
+            handler = { request ->
+                plannedResult(
+                    request.mode,
+                    event,
+                    choices = listOf(
+                        PlannedJourneyChoice(
+                            PlannedJourneyRole.EARLIER,
+                            journey("earlier").copy(disruptionNotices = listOf(earlierNotice)),
+                        ),
+                        PlannedJourneyChoice(
+                            PlannedJourneyRole.RECOMMENDED,
+                            journey("recommended").copy(disruptionNotices = listOf(recommendedNotice)),
+                        ),
+                    ),
+                )
+            }
+        }
+
+        viewModel(event, journeyRepository)
+        advanceUntilIdle()
+
+        assertEquals(listOf(recommendedNotice), journeyRepository.lastJourneyPlannerNotices)
     }
 
     @Test
@@ -114,7 +153,7 @@ class OneTimeEventDetailsViewModelTest {
                 plannedResult(
                     request.mode,
                     event,
-                    journeys = listOf(journey("primary-$planNumber")),
+                    choices = listOf(choice("recommended-$planNumber")),
                 )
             }
         }
@@ -125,7 +164,7 @@ class OneTimeEventDetailsViewModelTest {
         advanceUntilIdle()
 
         val ready = viewModel.uiState.value.preview as PlannedJourneyPreviewState.Ready
-        assertEquals("primary-2", ready.primary.journeyId)
+        assertEquals("recommended-2", ready.recommended.journeyId)
         assertEquals(2, journeyRepository.requests.size)
         assertEquals(2, journeyRepository.disruptionRequests)
         assertTrue(viewModel.uiState.value.disruptionState is EventPlanDisruptionState.Ready)
@@ -327,13 +366,18 @@ class OneTimeEventDetailsViewModelTest {
     private fun plannedResult(
         mode: JourneySearchMode,
         event: OneTimeEvent,
-        journeys: List<JourneyPlan> = listOf(journey()),
+        choices: List<PlannedJourneyChoice> = listOf(choice()),
     ) = PlannedJourneyResult(
         fetchedAt = now,
         searchMode = mode,
         requestedDateTime = event.targetInstant(),
-        journeys = journeys,
+        choices = choices,
     )
+
+    private fun choice(
+        id: String = "recommended",
+        role: PlannedJourneyRole = PlannedJourneyRole.RECOMMENDED,
+    ) = PlannedJourneyChoice(role, journey(id))
 
     private class FakeEventRepository(initial: OneTimeEvent?) : OneTimeEventRepository {
         var current = initial
@@ -353,6 +397,7 @@ class OneTimeEventDetailsViewModelTest {
     private class FakeJourneyRepository : JourneyRepository {
         val requests = mutableListOf<PlannedRequest>()
         var disruptionRequests = 0
+        var lastJourneyPlannerNotices: List<JourneyDisruptionNotice> = emptyList()
         var handler: suspend (PlannedRequest) -> PlannedJourneyResult = { throw AssertionError("Unexpected request") }
         var disruptionHandler: suspend () -> List<ResolvedJourneyDisruption> = { emptyList() }
 
@@ -388,6 +433,7 @@ class OneTimeEventDetailsViewModelTest {
             journeyDestinationId: String?,
         ): List<ResolvedJourneyDisruption> {
             disruptionRequests++
+            lastJourneyPlannerNotices = journeyPlannerNotices
             return disruptionHandler()
         }
     }

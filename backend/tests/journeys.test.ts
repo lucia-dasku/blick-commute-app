@@ -75,33 +75,6 @@ function rawJourney(
   } as unknown as RawJourneyPlannerJourney;
 }
 
-/** Adds a known final walking leg while keeping the public-transport RoutePattern identical
- * to rawJourney's. This lets planned ARRIVE_BY tests distinguish otherwise compatible route
- * opportunities using the existing walking-ranking dimension. */
-function rawJourneyWithFinalWalk(
-  id: string,
-  departure: string,
-  transitArrival: string,
-  finalArrival: string,
-  walkingDurationSeconds: number,
-  mode: "metro" | "bus" = "metro",
-): RawJourneyPlannerJourney {
-  const transit = rawJourney(id, departure, transitArrival, 0, mode);
-  return {
-    ...transit,
-    legs: [
-      ...transit.legs,
-      {
-        origin: { id: "destination-stop", name: "Mariatorget", departureTimeEstimated: transitArrival },
-        destination: { id: "destination-stop", name: "Mariatorget", arrivalTimeEstimated: finalArrival },
-        transportation: { product: { class: 99, name: "Footpath" } },
-        duration: walkingDurationSeconds,
-        infos: [],
-      },
-    ],
-  } as RawJourneyPlannerJourney;
-}
-
 /** Serves an exact, hand-scripted sequence of raw-journey batches, one per call — used only
  * where a test needs precise control over what EACH numbered acquisition call returns (see
  * the "reclassification" test below); a call past the end of the script returns an empty
@@ -184,15 +157,15 @@ describe("journey routes", () => {
       expect(requests[0]!.departureAt.toISOString()).toBe(FIXED_NOW().toISOString());
     });
 
-    it("issues one future departure search for LEAVE_AT and preserves planned role selection", async () => {
-      const { client, requests } = worldClient([
-        { id: "too-early", departure: "2026-08-10T09:59:00Z", arrival: "2026-08-10T10:15:00Z", mode: "metro" },
-        { id: "primary", departure: "2026-08-10T10:00:00Z", arrival: "2026-08-10T10:20:00Z", mode: "metro" },
-        { id: "alternative", departure: "2026-08-10T10:05:00Z", arrival: "2026-08-10T10:25:00Z", mode: "bus" },
-        { id: "next", departure: "2026-08-10T10:10:00Z", arrival: "2026-08-10T10:30:00Z", mode: "metro" },
-      ]);
+    it("returns a complete LEAVE_AT chooser from one sufficient initial request", async () => {
+      const metrics = metricsSpy();
+      const { client, requests } = scriptedClient([[
+        rawJourney("earlier", "2026-08-10T10:02:00Z", "2026-08-10T10:29:00Z", 0, "bus"),
+        rawJourney("recommended", "2026-08-10T10:07:00Z", "2026-08-10T10:25:00Z", 0, "metro"),
+        rawJourney("later", "2026-08-10T10:12:00Z", "2026-08-10T10:28:00Z", 0, "bus"),
+      ]]);
 
-      const response = await createJourneyRoutes(client, FIXED_NOW).request(
+      const response = await createJourneyRoutes(client, FIXED_NOW, metrics.emit).request(
         "/?originId=origin&destinationId=destination&searchMode=LEAVE_AT&requestedDateTime=2026-08-10T12:00:00%2B02:00",
       );
       const body = (await response.json()) as SuccessEnvelope<JourneyResponse>;
@@ -202,60 +175,45 @@ describe("journey routes", () => {
       expect(body.data.searchMode).toBe("LEAVE_AT");
       expect(body.data.requestedDateTime).toBe("2026-08-10T10:00:00.000Z");
       expect(requests).toHaveLength(1);
-      expect(requests[0]!.dateTimeMode).toBe("DEPARTURE");
-      expect(requests[0]!.departureAt.toISOString()).toBe("2026-08-10T10:00:00.000Z");
-      expect(body.data.journeys.map((journey) => journey.journeyId)).toEqual(["primary", "alternative", "next"]);
-      expect(body.data.journeys.map((journey) => journey.role)).toEqual(["PRIMARY", "ALTERNATIVE", "NEXT"]);
+      expect(requests[0]).toMatchObject({ dateTimeMode: "DEPARTURE", routeType: undefined });
+      expect(body.data.journeys.map((journey) => [journey.journeyId, journey.role])).toEqual([
+        ["earlier", "EARLIER"],
+        ["recommended", "RECOMMENDED"],
+        ["later", "LATER"],
+      ]);
+      expect(metrics.events[0]).toMatchObject({ slCalls: 1, initialCalls: 1, plannedCalls: 0, nextCalls: 0 });
     });
 
-    it("keeps a planned ARRIVE_BY NEXT already established by the initial result to one SL request", async () => {
-      const { client, requests } = scriptedClient([
-        [
-          rawJourney("arrive-1816", "2026-08-10T16:05:42Z", "2026-08-10T16:16:06Z", 0, "metro"),
-          rawJourney("arrive-1823", "2026-08-10T16:13:12Z", "2026-08-10T16:23:36Z", 0, "metro"),
-          rawJourneyWithFinalWalk(
-            "next-1829",
-            "2026-08-10T16:18:00Z",
-            "2026-08-10T16:28:00Z",
-            "2026-08-10T16:29:00Z",
-            60,
-          ),
-        ],
-      ]);
+    it("returns a complete ARRIVE_BY chooser from one sufficient initial request", async () => {
+      const { client, requests } = scriptedClient([[
+        rawJourney("earlier", "2026-08-10T16:05:00Z", "2026-08-10T16:18:00Z", 0, "bus"),
+        rawJourney("recommended", "2026-08-10T16:13:00Z", "2026-08-10T16:23:00Z", 0, "metro"),
+        rawJourney("later", "2026-08-10T16:18:00Z", "2026-08-10T16:29:00Z", 0, "bus"),
+      ]]);
 
       const response = await createJourneyRoutes(client, FIXED_NOW).request(
         "/?originId=origin&destinationId=destination&searchMode=ARRIVE_BY&requestedDateTime=2026-08-10T18:30:00%2B02:00",
       );
       const body = (await response.json()) as SuccessEnvelope<JourneyResponse>;
 
-      expect(response.status).toBe(200);
-      expect(body.data.journeyContext).toBe("PLANNED");
-      expect(body.data.searchMode).toBe("ARRIVE_BY");
       expect(requests).toHaveLength(1);
       expect(requests[0]!.dateTimeMode).toBe("ARRIVAL");
       expect(requests[0]!.departureAt.toISOString()).toBe("2026-08-10T16:30:00.000Z");
-      expect(body.data.journeys.map((journey) => journey.journeyId)).toEqual(["arrive-1823", "next-1829"]);
-      expect(body.data.journeys.map((journey) => journey.role)).toEqual(["PRIMARY", "NEXT"]);
-      expect(body.data.journeys[0]).toMatchObject({
-        role: "PRIMARY",
-        departureTime: "2026-08-10T16:13:12Z",
-        arrivalTime: "2026-08-10T16:23:36Z",
-      });
+      expect(body.data.journeys.map((journey) => [journey.journeyId, journey.role])).toEqual([
+        ["earlier", "EARLIER"],
+        ["recommended", "RECOMMENDED"],
+        ["later", "LATER"],
+      ]);
     });
 
-    it("discovers a deadline-safe same-route ARRIVE_BY NEXT with one targeted request", async () => {
+    it("discovers an ARRIVE_BY earlier option with the complementary planned profile", async () => {
       const metrics = metricsSpy();
       const { client, requests } = scriptedClient([
-        [rawJourney("primary", "2026-08-10T16:03:00Z", "2026-08-10T16:13:00Z", 0, "metro")],
         [
-          rawJourneyWithFinalWalk(
-            "next",
-            "2026-08-10T16:13:00Z",
-            "2026-08-10T16:22:00Z",
-            "2026-08-10T16:23:00Z",
-            60,
-          ),
+          rawJourney("recommended", "2026-08-10T16:13:00Z", "2026-08-10T16:23:00Z", 0, "metro"),
+          rawJourney("later", "2026-08-10T16:18:00Z", "2026-08-10T16:29:00Z", 0, "bus"),
         ],
+        [rawJourney("earlier", "2026-08-10T16:03:00Z", "2026-08-10T16:20:00Z", 0, "bus")],
       ]);
 
       const response = await createJourneyRoutes(client, FIXED_NOW, metrics.emit).request(
@@ -263,32 +221,23 @@ describe("journey routes", () => {
       );
       const body = (await response.json()) as SuccessEnvelope<JourneyResponse>;
 
-      expect(body.data.journeys.map((journey) => [journey.journeyId, journey.role])).toEqual([
-        ["primary", "PRIMARY"],
-        ["next", "NEXT"],
-      ]);
       expect(requests).toHaveLength(2);
-      expect(requests[1]).toMatchObject({
-        transportModes: ["METRO"],
-        maxChanges: 0,
-        dateTimeMode: "DEPARTURE",
-      });
-      expect(requests[1]!.departureAt.toISOString()).toBe("2026-08-10T16:03:00.000Z");
-      expect(metrics.events[0]).toMatchObject({ slCalls: 2, initialCalls: 1, nextCalls: 1 });
+      expect(requests[1]).toMatchObject({ dateTimeMode: "ARRIVAL", routeType: "leastinterchange", maxChanges: 2 });
+      expect(body.data.journeys.map((journey) => [journey.journeyId, journey.role])).toEqual([
+        ["earlier", "EARLIER"],
+        ["recommended", "RECOMMENDED"],
+        ["later", "LATER"],
+      ]);
+      expect(metrics.events[0]).toMatchObject({ slCalls: 2, plannedCalls: 1, nextCalls: 0, alternativeCalls: 0 });
     });
 
-    it("rejects a targeted ARRIVE_BY candidate that arrives after the deadline", async () => {
+    it("returns ARRIVE_BY Recommended and Later when no sensible earlier journey is discovered", async () => {
       const { client, requests } = scriptedClient([
-        [rawJourney("primary", "2026-08-10T16:13:00Z", "2026-08-10T16:23:00Z", 0, "metro")],
         [
-          rawJourneyWithFinalWalk(
-            "after-deadline",
-            "2026-08-10T16:23:00Z",
-            "2026-08-10T16:32:00Z",
-            "2026-08-10T16:33:00Z",
-            60,
-          ),
+          rawJourney("recommended", "2026-08-10T16:13:00Z", "2026-08-10T16:23:00Z", 0, "metro"),
+          rawJourney("later", "2026-08-10T16:18:00Z", "2026-08-10T16:29:00Z", 0, "bus"),
         ],
+        [],
       ]);
 
       const response = await createJourneyRoutes(client, FIXED_NOW).request(
@@ -298,22 +247,39 @@ describe("journey routes", () => {
 
       expect(requests).toHaveLength(2);
       expect(body.data.journeys.map((journey) => [journey.journeyId, journey.role])).toEqual([
-        ["primary", "PRIMARY"],
+        ["recommended", "RECOMMENDED"],
+        ["later", "LATER"],
       ]);
     });
 
-    it("does not label a route-incompatible targeted ARRIVE_BY journey as NEXT", async () => {
-      const incompatible = rawJourneyWithFinalWalk(
-        "different-route",
-        "2026-08-10T16:13:00Z",
-        "2026-08-10T16:22:00Z",
-        "2026-08-10T16:23:00Z",
-        60,
-      );
-      incompatible.legs[0]!.origin.id = "different-origin-stop";
+    it("discovers an ARRIVE_BY deadline-safe later option with a targeted departure request", async () => {
       const { client, requests } = scriptedClient([
-        [rawJourney("primary", "2026-08-10T16:03:00Z", "2026-08-10T16:13:00Z", 0, "metro")],
-        [incompatible],
+        [
+          rawJourney("earlier", "2026-08-10T16:03:00Z", "2026-08-10T16:20:00Z", 0, "bus"),
+          rawJourney("recommended", "2026-08-10T16:13:00Z", "2026-08-10T16:23:00Z", 0, "metro"),
+        ],
+        [rawJourney("later", "2026-08-10T16:18:00Z", "2026-08-10T16:29:00Z", 0, "bus")],
+      ]);
+
+      const response = await createJourneyRoutes(client, FIXED_NOW).request(
+        "/?originId=origin&destinationId=destination&searchMode=ARRIVE_BY&requestedDateTime=2026-08-10T18:30:00%2B02:00",
+      );
+      const body = (await response.json()) as SuccessEnvelope<JourneyResponse>;
+
+      expect(requests).toHaveLength(2);
+      expect(requests[1]).toMatchObject({ dateTimeMode: "DEPARTURE", routeType: undefined });
+      expect(requests[1]!.departureAt.toISOString()).toBe("2026-08-10T16:13:00.000Z");
+      expect(body.data.journeys.map((journey) => journey.role)).toEqual(["EARLIER", "RECOMMENDED", "LATER"]);
+      expect(body.data.journeys.every((journey) => Date.parse(journey.arrivalTime) <= Date.parse("2026-08-10T16:30:00Z"))).toBe(true);
+    });
+
+    it("returns ARRIVE_BY Earlier and Recommended when every later candidate misses the deadline", async () => {
+      const { client, requests } = scriptedClient([
+        [
+          rawJourney("earlier", "2026-08-10T16:03:00Z", "2026-08-10T16:20:00Z", 0, "bus"),
+          rawJourney("recommended", "2026-08-10T16:13:00Z", "2026-08-10T16:23:00Z", 0, "metro"),
+        ],
+        [rawJourney("too-late", "2026-08-10T16:18:00Z", "2026-08-10T16:31:00Z", 0, "bus")],
       ]);
 
       const response = await createJourneyRoutes(client, FIXED_NOW).request(
@@ -323,17 +289,18 @@ describe("journey routes", () => {
 
       expect(requests).toHaveLength(2);
       expect(body.data.journeys.map((journey) => [journey.journeyId, journey.role])).toEqual([
-        ["primary", "PRIMARY"],
+        ["earlier", "EARLIER"],
+        ["recommended", "RECOMMENDED"],
       ]);
     });
 
-    it("discovers LEAVE_AT NEXT without admitting a departure before the requested time", async () => {
+    it("discovers a LEAVE_AT later option from RECOMMENDED's departure minute", async () => {
       const { client, requests } = scriptedClient([
-        [rawJourney("primary", "2026-08-10T10:03:00Z", "2026-08-10T10:13:00Z", 0, "metro")],
         [
-          rawJourney("too-early", "2026-08-10T09:59:00Z", "2026-08-10T10:09:00Z", 0, "metro"),
-          rawJourney("next", "2026-08-10T10:13:00Z", "2026-08-10T10:23:00Z", 0, "metro"),
+          rawJourney("earlier", "2026-08-10T10:02:00Z", "2026-08-10T10:29:00Z", 0, "bus"),
+          rawJourney("recommended", "2026-08-10T10:07:00Z", "2026-08-10T10:25:00Z", 0, "metro"),
         ],
+        [rawJourney("later", "2026-08-10T10:12:00Z", "2026-08-10T10:28:00Z", 0, "bus")],
       ]);
 
       const response = await createJourneyRoutes(client, FIXED_NOW).request(
@@ -342,21 +309,52 @@ describe("journey routes", () => {
       const body = (await response.json()) as SuccessEnvelope<JourneyResponse>;
 
       expect(requests).toHaveLength(2);
-      expect(requests[1]!.dateTimeMode).toBe("DEPARTURE");
-      expect(requests[1]!.departureAt.toISOString()).toBe("2026-08-10T10:03:00.000Z");
+      expect(requests[1]).toMatchObject({ dateTimeMode: "DEPARTURE", routeType: undefined });
+      expect(requests[1]!.departureAt.toISOString()).toBe("2026-08-10T10:07:00.000Z");
+      expect(body.data.journeys.map((journey) => journey.role)).toEqual(["EARLIER", "RECOMMENDED", "LATER"]);
+    });
+
+    it("uses no more than two planned follow-up requests when both sides are missing", async () => {
+      const metrics = metricsSpy();
+      const { client, requests } = scriptedClient([
+        [rawJourney("recommended", "2026-08-10T10:07:00Z", "2026-08-10T10:25:00Z", 0, "metro")],
+        [rawJourney("earlier", "2026-08-10T10:02:00Z", "2026-08-10T10:29:00Z", 0, "bus")],
+        [rawJourney("later", "2026-08-10T10:12:00Z", "2026-08-10T10:28:00Z", 0, "bus")],
+      ]);
+
+      const response = await createJourneyRoutes(client, FIXED_NOW, metrics.emit).request(
+        "/?originId=origin&destinationId=destination&searchMode=LEAVE_AT&requestedDateTime=2026-08-10T12:00:00%2B02:00",
+      );
+      const body = (await response.json()) as SuccessEnvelope<JourneyResponse>;
+
+      expect(requests).toHaveLength(3);
+      expect(body.data.journeys.map((journey) => journey.role)).toEqual(["EARLIER", "RECOMMENDED", "LATER"]);
+      expect(metrics.events[0]).toMatchObject({ slCalls: 3, plannedCalls: 2 });
+    });
+
+    it("rejects acquired ARRIVE_BY candidates after the deadline", async () => {
+      const { client, requests } = scriptedClient([
+        [rawJourney("recommended", "2026-08-10T16:13:00Z", "2026-08-10T16:23:00Z", 0, "metro")],
+        [rawJourney("after-deadline", "2026-08-10T16:23:00Z", "2026-08-10T16:33:00Z", 0, "bus")],
+        [],
+      ]);
+
+      const response = await createJourneyRoutes(client, FIXED_NOW).request(
+        "/?originId=origin&destinationId=destination&searchMode=ARRIVE_BY&requestedDateTime=2026-08-10T18:30:00%2B02:00",
+      );
+      const body = (await response.json()) as SuccessEnvelope<JourneyResponse>;
+
+      expect(requests).toHaveLength(3);
       expect(body.data.journeys.map((journey) => [journey.journeyId, journey.role])).toEqual([
-        ["primary", "PRIMARY"],
-        ["next", "NEXT"],
+        ["recommended", "RECOMMENDED"],
       ]);
     });
 
-    it("re-derives planned PRIMARY and NEXT over the targeted merged pool", async () => {
+    it("rejects acquired LEAVE_AT candidates before the requested time", async () => {
       const { client, requests } = scriptedClient([
-        [rawJourney("initial-primary", "2026-08-10T10:00:00Z", "2026-08-10T10:25:00Z", 0, "metro")],
-        [
-          rawJourney("better-primary", "2026-08-10T10:05:00Z", "2026-08-10T10:15:00Z", 0, "metro"),
-          rawJourney("next-for-new-primary", "2026-08-10T10:10:00Z", "2026-08-10T10:20:00Z", 0, "metro"),
-        ],
+        [rawJourney("recommended", "2026-08-10T10:07:00Z", "2026-08-10T10:25:00Z", 0, "metro")],
+        [rawJourney("too-early", "2026-08-10T09:59:00Z", "2026-08-10T10:09:00Z", 0, "bus")],
+        [rawJourney("later", "2026-08-10T10:12:00Z", "2026-08-10T10:28:00Z", 0, "bus")],
       ]);
 
       const response = await createJourneyRoutes(client, FIXED_NOW).request(
@@ -364,11 +362,9 @@ describe("journey routes", () => {
       );
       const body = (await response.json()) as SuccessEnvelope<JourneyResponse>;
 
-      expect(requests).toHaveLength(2);
-      expect(body.data.journeys.map((journey) => [journey.journeyId, journey.role])).toEqual([
-        ["better-primary", "PRIMARY"],
-        ["next-for-new-primary", "NEXT"],
-      ]);
+      expect(requests).toHaveLength(3);
+      expect(body.data.journeys.map((journey) => journey.journeyId)).toEqual(["recommended", "later"]);
+      expect(body.data.journeys.map((journey) => journey.role)).toEqual(["RECOMMENDED", "LATER"]);
     });
 
     it("same-day ARRIVE_BY excludes a proposal that has already departed at fetchedAt", async () => {
@@ -389,7 +385,7 @@ describe("journey routes", () => {
       expect(body.data.journeyContext).toBe("PLANNED");
       expect(body.data.journeys.map((journey) => journey.journeyId)).toEqual(["catchable"]);
       expect(body.data.journeys[0]).toMatchObject({
-        role: "PRIMARY",
+        role: "RECOMMENDED",
         departureTime: "2026-08-10T16:20:00Z",
         arrivalTime: "2026-08-10T16:29:00Z",
       });
@@ -419,7 +415,7 @@ describe("journey routes", () => {
     });
 
     it("keeps planned mode and minute in distinct request identities", async () => {
-      const { client, requests } = scriptedClient([[], [], []]);
+      const { client, requests } = scriptedClient([[], [], [], [], [], []]);
       const routes = createJourneyRoutes(client, FIXED_NOW);
       await routes.request(
         "/?originId=origin&destinationId=destination&searchMode=LEAVE_AT&requestedDateTime=2026-08-10T10:00:00Z",
@@ -431,10 +427,13 @@ describe("journey routes", () => {
         "/?originId=origin&destinationId=destination&searchMode=ARRIVE_BY&requestedDateTime=2026-08-10T11:00:00Z",
       );
 
-      expect(requests.map((request) => [request.dateTimeMode, request.departureAt.toISOString()])).toEqual([
-        ["DEPARTURE", "2026-08-10T10:00:00.000Z"],
-        ["ARRIVAL", "2026-08-10T10:00:00.000Z"],
-        ["ARRIVAL", "2026-08-10T11:00:00.000Z"],
+      expect(requests.map((request) => [request.dateTimeMode, request.departureAt.toISOString(), request.routeType ?? "leasttime"])).toEqual([
+        ["DEPARTURE", "2026-08-10T10:00:00.000Z", "leasttime"],
+        ["DEPARTURE", "2026-08-10T10:00:00.000Z", "leastinterchange"],
+        ["ARRIVAL", "2026-08-10T10:00:00.000Z", "leasttime"],
+        ["ARRIVAL", "2026-08-10T10:00:00.000Z", "leastinterchange"],
+        ["ARRIVAL", "2026-08-10T11:00:00.000Z", "leasttime"],
+        ["ARRIVAL", "2026-08-10T11:00:00.000Z", "leastinterchange"],
       ]);
     });
   });
@@ -1633,6 +1632,7 @@ describe("journey routes", () => {
       expect(metrics.initialCalls).toBe(1);
       expect(metrics.nextCalls).toBe(1);
       expect(metrics.alternativeCalls).toBe(1);
+      expect(metrics.plannedCalls).toBe(0);
       expect(metrics.slCalls).toBe(3);
       expect(metrics.primaryRetargets).toBe(0);
       expect(metrics.primaryChanged).toBe(false);
@@ -1662,6 +1662,7 @@ describe("journey routes", () => {
           "event",
           "initialCalls",
           "nextCalls",
+          "plannedCalls",
           "primaryChanged",
           "primaryDiscoveryCalls",
           "primaryRetargets",

@@ -34,7 +34,7 @@ class BlickHomeHeaderTest {
         val title = composeRule.onNodeWithTag(BLICK_HOME_TITLE_TAG).fetchSemanticsNode().boundsInRoot
         val subtitle = composeRule.onNodeWithTag(BLICK_HOME_SUBTITLE_TAG).fetchSemanticsNode().boundsInRoot
         val settingsCircle = composeRule
-            .onNodeWithTag(BLICK_HOME_SETTINGS_CIRCLE_TAG)
+            .onNodeWithTag(BLICK_HOME_SETTINGS_CIRCLE_TAG, useUnmergedTree = true)
             .fetchSemanticsNode().boundsInRoot
 
         fun pixelsToDp(pixels: Float): Float = pixels / density

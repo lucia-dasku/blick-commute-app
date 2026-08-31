@@ -1062,7 +1062,15 @@ class RoutineDetailsScreenTest {
 
     @Test
     fun refreshAndPauseTodayButtons_shareAnEqualWidthRow() {
-        setContent(DisruptionsState.NoDisruptions, isPausedToday = false)
+        val snapshot = LiveDeparturesSnapshot(
+            departures = listOf(sampleDeparture()),
+            fetchedAt = Instant.parse("2026-08-02T07:00:00Z"),
+        )
+        setContent(
+            disruptionsState = DisruptionsState.NoDisruptions,
+            departuresState = LiveDeparturesState.Live(snapshot),
+            isPausedToday = false,
+        )
 
         val refresh = composeRule.onNodeWithText(
             composeRule.activity.getString(R.string.routine_details_refresh_action),
@@ -1212,11 +1220,9 @@ class RoutineDetailsScreenTest {
 
         val routeLabel = composeRule.activity.getString(R.string.routine_details_route_label)
         composeRule.onNodeWithText(routeLabel).performScrollTo().assertExists()
-        // Appears twice on screen for an exact-destination routine -- once here in this Route
-        // detail row, once more as the journeys section's own heading further up (see
-        // JourneyComparisonSection's call site) -- assert on the count rather than a single
-        // node, which would otherwise fail on the ambiguous match.
-        composeRule.onAllNodesWithText("Fruängen → Mariatorget").assertCountEquals(2)
+        // The route is shown once in this expanded detail row. RoutineDetailsContent excludes
+        // the top app bar, and the journeys section intentionally does not repeat that title.
+        composeRule.onNodeWithText("Fruängen → Mariatorget").assertExists()
 
         val directionLabel = composeRule.activity.getString(R.string.routine_details_direction_label)
         composeRule.onNodeWithText(directionLabel).assertDoesNotExist()

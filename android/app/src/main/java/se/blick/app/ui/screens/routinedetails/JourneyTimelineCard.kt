@@ -147,12 +147,16 @@ internal fun JourneyTimelineCard(
 }
 
 /** Planned-event presentation reuses the exact-destination timeline, transport glyphs and line
- * badges, but deliberately uses absolute Stockholm times and has no live countdown or role-based
- * re-ranking UI. */
+ * badges, but deliberately uses absolute Stockholm times and planned-only labels. Its collapsed
+ * summary keeps the chooser compact; expanding reveals the same timeline used by Routine Details. */
 @Composable
 internal fun PlannedJourneyTimelineCard(
     journey: JourneyPlan,
+    optionLabel: String,
     locale: Locale,
+    emphasized: Boolean,
+    expanded: Boolean,
+    onExpandedChange: (Boolean) -> Unit,
     modifier: Modifier = Modifier,
 ) {
     val useStockholmNightSurface = LocalStockholmNightTheme.current
@@ -169,12 +173,18 @@ internal fun PlannedJourneyTimelineCard(
 
     Surface(
         color = if (useStockholmNightSurface) StockholmNightSurfaces.Card else MaterialTheme.colorScheme.surface,
-        border = if (useStockholmNightSurface) BorderStroke(1.dp, StockholmNightSurfaces.CardBorder) else null,
-        tonalElevation = if (useStockholmNightSurface) 0.dp else 1.dp,
+        border = when {
+            emphasized -> BorderStroke(1.dp, MaterialTheme.colorScheme.primary.copy(alpha = 0.55f))
+            useStockholmNightSurface -> BorderStroke(1.dp, StockholmNightSurfaces.CardBorder)
+            else -> null
+        },
+        tonalElevation = if (useStockholmNightSurface) 0.dp else if (emphasized) 3.dp else 1.dp,
         shape = MaterialTheme.shapes.medium,
-        modifier = modifier.fillMaxWidth(),
+        modifier = modifier.fillMaxWidth().clickable { onExpandedChange(!expanded) },
     ) {
         Column(Modifier.padding(16.dp)) {
+            PlannedJourneyCardHeader(optionLabel, expanded, emphasized)
+            Spacer(Modifier.height(10.dp))
             Text(
                 stringResource(R.string.one_time_event_planned_time_range, departure, arrival),
                 style = MaterialTheme.typography.headlineSmall,
@@ -203,9 +213,13 @@ internal fun PlannedJourneyTimelineCard(
                 style = MaterialTheme.typography.bodyMedium,
                 color = MaterialTheme.colorScheme.onSurfaceVariant,
             )
-            Spacer(Modifier.height(18.dp))
-            JourneyTimeline(timeline.items, locale, STOCKHOLM_ZONE)
-            Spacer(Modifier.height(14.dp))
+            if (expanded) {
+                Spacer(Modifier.height(18.dp))
+                JourneyTimeline(timeline.items, locale, STOCKHOLM_ZONE)
+                Spacer(Modifier.height(14.dp))
+            } else {
+                Spacer(Modifier.height(12.dp))
+            }
             HorizontalDivider(color = MaterialTheme.colorScheme.outlineVariant)
             Spacer(Modifier.height(8.dp))
             JourneyDurationFooter(timeline.totalDurationMinutes)
@@ -229,6 +243,26 @@ private fun JourneyCardHeader(role: JourneyRole, expanded: Boolean) {
                 },
             ),
             style = MaterialTheme.typography.labelLarge,
+        )
+        Icon(
+            imageVector = if (expanded) Icons.Filled.KeyboardArrowUp else Icons.Filled.KeyboardArrowDown,
+            contentDescription = stringResource(if (expanded) R.string.journey_collapse else R.string.journey_expand),
+        )
+    }
+}
+
+@Composable
+private fun PlannedJourneyCardHeader(label: String, expanded: Boolean, emphasized: Boolean) {
+    Row(
+        modifier = Modifier.fillMaxWidth(),
+        horizontalArrangement = Arrangement.SpaceBetween,
+        verticalAlignment = Alignment.CenterVertically,
+    ) {
+        Text(
+            label,
+            style = MaterialTheme.typography.labelLarge,
+            fontWeight = if (emphasized) FontWeight.SemiBold else FontWeight.Medium,
+            color = if (emphasized) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.onSurface,
         )
         Icon(
             imageVector = if (expanded) Icons.Filled.KeyboardArrowUp else Icons.Filled.KeyboardArrowDown,

@@ -25,6 +25,7 @@ import se.blick.app.domain.model.JourneyDisruptionContextLeg
 import se.blick.app.domain.model.JourneyLeg
 import se.blick.app.domain.model.JourneyRole
 import se.blick.app.domain.model.JourneySearchMode
+import se.blick.app.domain.model.PlannedJourneyRole
 import se.blick.app.domain.model.TransportMode
 import java.time.Instant
 import java.time.LocalDate
@@ -177,6 +178,7 @@ class JourneyRepositoryTest {
         var receivedDateTime: String? = null
         var responseContext = JourneyContextDto.PLANNED
         var responseMode: JourneySearchModeDto? = null
+        var responseJourneys: List<JourneyPlanDto> = emptyList()
 
         override suspend fun searchStops(query: String): StopSearchResponseDto = throw NotImplementedError("unused")
         override suspend fun getDepartures(siteId: Long, forecastMinutes: Int?): DeparturesResponseDto = throw NotImplementedError("unused")
@@ -195,7 +197,7 @@ class JourneyRepositoryTest {
             receivedDateTime = requestedDateTime
             return JourneysResponseDto(
                 fetchedAt = "2026-01-01T00:00:00Z",
-                journeys = emptyList(),
+                journeys = responseJourneys,
                 journeyContext = responseContext,
                 searchMode = responseMode ?: searchMode,
                 requestedDateTime = java.time.OffsetDateTime.parse(requestedDateTime).toInstant().toString(),
@@ -235,6 +237,50 @@ class JourneyRepositoryTest {
 
         assertEquals(JourneySearchModeDto.LEAVE_AT, client.receivedMode)
         assertEquals("2026-12-10T08:15+01:00", client.receivedDateTime)
+    }
+
+    @Test
+    fun `planned roles map independently from live roles and preserve backend order`() = runTest {
+        val client = CapturingPlannedApiClient().apply {
+            responseJourneys = listOf(
+                dto("earlier", "EARLIER"),
+                dto("recommended", "RECOMMENDED"),
+                dto("later", "LATER"),
+            )
+        }
+
+        val result = RemoteJourneyRepository(client).getPlannedJourneys(
+            originId = "origin",
+            destinationId = "destination",
+            allowedTransportModes = DEFAULT_JOURNEY_TRANSPORT_MODES,
+            searchMode = JourneySearchMode.ARRIVE_BY,
+            requestedDateTime = LocalDate.of(2026, 8, 10).atTime(18, 30)
+                .atZone(ZoneId.of("Europe/Stockholm")),
+        )
+
+        assertEquals(
+            listOf(PlannedJourneyRole.EARLIER, PlannedJourneyRole.RECOMMENDED, PlannedJourneyRole.LATER),
+            result.choices.map { it.role },
+        )
+        assertEquals(listOf("earlier", "recommended", "later"), result.choices.map { it.journey.journeyId })
+    }
+
+    @Test
+    fun `planned mapping drops live and malformed roles rather than reinterpreting them`() = runTest {
+        val client = CapturingPlannedApiClient().apply {
+            responseJourneys = listOf(dto("live-primary", "PRIMARY"), dto("bad", null), dto("recommended", "RECOMMENDED"))
+        }
+
+        val result = RemoteJourneyRepository(client).getPlannedJourneys(
+            originId = "origin",
+            destinationId = "destination",
+            allowedTransportModes = DEFAULT_JOURNEY_TRANSPORT_MODES,
+            searchMode = JourneySearchMode.LEAVE_AT,
+            requestedDateTime = LocalDate.of(2026, 8, 10).atTime(18, 30)
+                .atZone(ZoneId.of("Europe/Stockholm")),
+        )
+
+        assertEquals(listOf("recommended"), result.choices.map { it.journey.journeyId })
     }
 
     @Test
