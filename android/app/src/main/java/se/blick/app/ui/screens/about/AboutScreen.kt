@@ -64,6 +64,7 @@ import se.blick.app.ui.theme.AppearanceMode
 private const val SUPPORT_EMAIL = "contactblicklabs@gmail.com"
 internal const val LANGUAGE_OPTION_EN_TAG = "settings-language-en"
 internal const val LANGUAGE_OPTION_SV_TAG = "settings-language-sv"
+internal const val PRIVACY_CHOICES_TAG = "settings-privacy-choices"
 
 @Composable
 fun AboutScreen(
@@ -72,6 +73,8 @@ fun AboutScreen(
     onOpenPrivacyPolicy: () -> Unit,
     onOpenDataAttribution: () -> Unit,
     onOpenOpenSourceLicences: () -> Unit,
+    privacyOptionsRequired: Boolean,
+    onOpenPrivacyOptions: () -> Unit,
     viewModel: AboutViewModel = hiltViewModel(),
 ) {
     val state by viewModel.uiState.collectAsStateWithLifecycle()
@@ -99,6 +102,8 @@ fun AboutScreen(
         onOpenPrivacyPolicy = onOpenPrivacyPolicy,
         onOpenDataAttribution = onOpenDataAttribution,
         onOpenOpenSourceLicences = onOpenOpenSourceLicences,
+        privacyOptionsRequired = privacyOptionsRequired,
+        onOpenPrivacyOptions = onOpenPrivacyOptions,
     )
 }
 
@@ -121,6 +126,8 @@ internal fun AboutContent(
     onOpenPrivacyPolicy: () -> Unit = {},
     onOpenDataAttribution: () -> Unit = {},
     onOpenOpenSourceLicences: () -> Unit = {},
+    privacyOptionsRequired: Boolean = false,
+    onOpenPrivacyOptions: () -> Unit = {},
 ) {
     var showLanguageDialog by remember { mutableStateOf(false) }
     var showAppearanceDialog by remember { mutableStateOf(false) }
@@ -178,6 +185,13 @@ internal fun AboutContent(
             )
 
             SettingsSectionTitle(R.string.settings_section_about)
+            if (privacyOptionsRequired) {
+                SettingsRow(
+                    label = stringResource(R.string.settings_privacy_choices_label),
+                    onClick = onOpenPrivacyOptions,
+                    modifier = Modifier.testTag(PRIVACY_CHOICES_TAG),
+                )
+            }
             SettingsRow(
                 label = stringResource(R.string.about_section_privacy_policy),
                 onClick = onOpenPrivacyPolicy,
@@ -250,10 +264,15 @@ private fun SettingsSectionTitle(@StringRes titleRes: Int) {
 }
 
 @Composable
-private fun SettingsRow(label: String, value: String? = null, onClick: () -> Unit) {
+private fun SettingsRow(
+    label: String,
+    value: String? = null,
+    onClick: () -> Unit,
+    modifier: Modifier = Modifier,
+) {
     Column {
         Row(
-            modifier = Modifier
+            modifier = modifier
                 .fillMaxWidth()
                 .heightIn(min = 56.dp)
                 .clickable(role = Role.Button, onClick = onClick)

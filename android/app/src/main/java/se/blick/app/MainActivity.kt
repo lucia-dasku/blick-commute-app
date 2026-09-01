@@ -11,8 +11,16 @@ import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.setValue
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
+import androidx.navigation.compose.currentBackStackEntryAsState
 import androidx.navigation.compose.rememberNavController
 import dagger.hilt.android.AndroidEntryPoint
+import se.blick.app.ads.AdBanner
+import se.blick.app.ads.AdConsentManager
+import se.blick.app.ads.AdMobInitializer
+import se.blick.app.ads.BannerAwareContent
+import se.blick.app.ads.isBannerEntitlementEligible
+import se.blick.app.ads.shouldRequestBanner
+import se.blick.app.ads.shouldShowBannerForRoute
 import se.blick.app.billing.PremiumEntitlementRepository
 import se.blick.app.billing.hasPremiumAccess
 import se.blick.app.data.local.datastore.AppSettings
@@ -97,6 +105,8 @@ class MainActivity : AppCompatActivity() {
 
     @Inject lateinit var appSettingsDataStore: AppSettingsDataStore
     @Inject lateinit var premiumEntitlementRepository: PremiumEntitlementRepository
+    @Inject lateinit var adConsentManager: AdConsentManager
+    @Inject lateinit var adMobInitializer: AdMobInitializer
 
     private var pendingRoutineId by mutableStateOf<String?>(null)
     private var pendingOneTimeEventId by mutableStateOf<String?>(null)
@@ -109,11 +119,15 @@ class MainActivity : AppCompatActivity() {
         super.onCreate(savedInstanceState)
         enableEdgeToEdge()
         consumeNotificationNavigation(intent)
+        // Refresh UMP information on launch, but the manager presents a required form only when
+        // the current destination and entitlement make foreground advertising relevant.
+        adConsentManager.requestConsentInfoUpdate(this)
         setContent {
             val appSettings by appSettingsDataStore.settings.collectAsStateWithLifecycle(
                 initialValue = AppSettings(),
             )
             val entitlement by premiumEntitlementRepository.entitlement.collectAsStateWithLifecycle()
+            val consentState by adConsentManager.state.collectAsStateWithLifecycle()
             BlickTheme(
                 useDarkTheme = appSettings.useDarkTheme,
                 useStockholmNightTheme = shouldUseStockholmNightTheme(
@@ -122,6 +136,17 @@ class MainActivity : AppCompatActivity() {
                 ),
             ) {
                 val navController = rememberNavController()
+                val currentBackStackEntry by navController.currentBackStackEntryAsState()
+                val currentRoute = currentBackStackEntry?.destination?.route
+                val advertisingRelevant = isBannerEntitlementEligible(entitlement) &&
+                    shouldShowBannerForRoute(currentRoute)
+
+                LaunchedEffect(advertisingRelevant) {
+                    adConsentManager.setAdvertisingRelevant(
+                        activity = this@MainActivity,
+                        relevant = advertisingRelevant,
+                    )
+                }
                 LaunchedEffect(pendingRoutineId) {
                     val routineId = pendingRoutineId ?: return@LaunchedEffect
                     navController.navigate(Routes.RoutineDetails.routeFor(routineId)) {
@@ -138,7 +163,29 @@ class MainActivity : AppCompatActivity() {
                     }
                     pendingOneTimeEventId = null
                 }
-                BlickNavHost(navController = navController)
+                BannerAwareContent(
+                    bannerEligible = shouldRequestBanner(
+                        entitlement = entitlement,
+                        route = currentRoute,
+                        canRequestAds = consentState.canRequestAds,
+                    ),
+                    content = {
+                        BlickNavHost(
+                            navController = navController,
+                            privacyOptionsRequired = consentState.privacyOptionsRequired,
+                            onOpenPrivacyOptions = {
+                                adConsentManager.showPrivacyOptions(this@MainActivity)
+                            },
+                        )
+                    },
+                    banner = {
+                        AdBanner(
+                            adUnitId = BuildConfig.ADMOB_BANNER_AD_UNIT_ID,
+                            consentRevision = consentState.revision,
+                            initializer = adMobInitializer,
+                        )
+                    },
+                )
             }
         }
     }

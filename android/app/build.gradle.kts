@@ -14,6 +14,8 @@ android {
     val productionBackendBaseUrl = "https://blick-backend.vercel.app/"
     val debugBackendBaseUrl = (project.findProperty("BLICK_BACKEND_BASE_URL") as String?)
         ?: productionBackendBaseUrl
+    val debugBannerAdUnitId = "ca-app-pub-3940256099942544/9214589741"
+    val productionBannerAdUnitId = "ca-app-pub-2107592277107216/3654434815"
 
     // Pinned to concrete current-stable numbers verified during scaffolding
     // (2026-07-27) — see android/README.md for sources. Not left as "latest stable".
@@ -37,10 +39,13 @@ android {
             // Local/staging endpoint overrides are intentionally debug-only. The release
             // variant below is pinned to the production verification backend.
             buildConfigField("String", "BACKEND_BASE_URL", "\"$debugBackendBaseUrl\"")
+            // Google's dedicated test unit is mandatory for every debug request.
+            buildConfigField("String", "ADMOB_BANNER_AD_UNIT_ID", "\"$debugBannerAdUnitId\"")
         }
         release {
             isMinifyEnabled = false
             buildConfigField("String", "BACKEND_BASE_URL", "\"$productionBackendBaseUrl\"")
+            buildConfigField("String", "ADMOB_BANNER_AD_UNIT_ID", "\"$productionBannerAdUnitId\"")
             proguardFiles(getDefaultProguardFile("proguard-android-optimize.txt"), "proguard-rules.pro")
         }
     }
@@ -148,6 +153,8 @@ dependencies {
 
     implementation(libs.androidx.datastore.preferences)
     implementation(libs.google.play.billing)
+    implementation(libs.google.mobile.ads.next.gen)
+    implementation(libs.google.user.messaging.platform)
 
     implementation(libs.hilt.android)
     ksp(libs.hilt.compiler)

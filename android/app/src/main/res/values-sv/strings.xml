@@ -238,6 +238,7 @@
     <string name="settings_premium_status_free">Gratis</string>
     <string name="settings_premium_status_premium">Premium</string>
     <string name="settings_contact_support_label">Kontakta Blick Labs</string>
+    <string name="settings_privacy_choices_label">Sekretessval</string>
     <string name="settings_support_email_subject">Blick-support</string>
     <string name="about_tagline">Blick visar kommande avgångar och trafikstörningar för din sparade pendling.</string>
     <string name="about_version_label">Version %1$s (byggnummer %2$d)</string>
@@ -245,12 +246,13 @@
     <string name="about_trafiklab_link">Trafiklab.se</string>
     <string name="about_disclaimer">Blick är en oberoende app och är inte ansluten till, driven av eller godkänd av SL eller Trafiklab.</string>
     <string name="about_section_privacy_policy">Integritetspolicy</string>
-    <string name="about_privacy_last_updated">Senast uppdaterad: 18 augusti 2026</string>
+    <string name="about_privacy_last_updated">Senast uppdaterad: 31 augusti 2026</string>
     <string name="about_privacy_operator">Blick drivs av Blick Labs.</string>
-    <string name="about_privacy_no_account">Blick kräver inget konto och samlar inte in ditt namn, din e-postadress, exakt plats, kontakter eller annons-id. Blick innehåller ingen reklam eller analys.</string>
+    <string name="about_privacy_no_account">Blick kräver inget konto och ber inte om ditt namn, din e-postadress, exakta plats eller dina kontakter.</string>
     <string name="about_privacy_local_storage">Dina rutiner, inställningar och cachad avgångsinformation lagras lokalt på din enhet och säkerhetskopieras inte. Du kan ta bort denna information genom att ta bort din rutin, rensa Blicks appdata eller avinstallera appen.</string>
     <string name="about_privacy_backend">För att tillhandahålla information om avgångar, resor och trafikstörningar skickar Blick stationssökningar och valda ruttidentifierare till sin backend. Om du köper eller återställer Premium skickar Blick Google Play-produktens id och köptoken till sin backend så att Google Play kan verifiera och bekräfta köpet. Den råa köptoken används för den begäran men sparas inte. Blick lagrar ett SHA-256-fingeravtryck av token, produkt- och order-id, köp- och bekräftelsestatus, köp- och verifieringstid, antal samt återbetalnings- eller återkallelsestatus i sin PostgreSQL-databas. Uppgifterna används endast för att hantera Premium-behörighet, återställa köp, behandla livscykelnotiser från Google Play och förhindra dubbel behandling. Google Play behandlar köpverifieringen; Blicks hosting- och databasleverantörer behandlar den lagrade posten. Inaktiva köpposter raderas efter 24 månader och behandlade notisposter efter 90 dagar. Du kan också begära radering via kontaktuppgifterna nedan, med undantag för uppgifter som Blick måste behålla av rättsliga skäl eller för att förebygga bedrägerier. Notiser om återbetalning och återkallelse markerar behörigheten som inaktiv. Blick tar inte emot dina betalkortsuppgifter. Vår hostingleverantör kan automatiskt behandla begränsad teknisk information, till exempel din IP-adress och förfrågningsloggar, för att leverera och skydda tjänsten. Kollektivtrafikinformation hämtas från Trafiklabs och SL:s tjänster.</string>
-    <string name="about_privacy_usage">Vi använder denna information endast för att driva, skydda och förbättra Blick. Vi säljer inte personuppgifter och använder dem inte för reklam.</string>
+    <string name="about_privacy_advertising">Blick Basic visar bannerannonser från Google Mobile Ads. Google kan behandla och dela IP-adresser, enhets- eller kontoidentifierare, annonsinteraktioner och diagnostisk information för att leverera och mäta annonser samt förhindra bedrägerier. En IP-adress kan användas för att uppskatta en ungefärlig plats. Google UMP hanterar tillämpliga sekretessval. Blick Premium är reklamfritt, och inga annonser begärs eller visas medan verifierad Premium-behörighet är aktiv.</string>
+    <string name="about_privacy_usage">Blick Labs säljer inte personuppgifter. Utöver den annonsbehandling som beskrivs ovan använder Blick informationen som beskrivs här endast för att driva, skydda och förbättra tjänsten.</string>
     <string name="about_privacy_contact">Vid frågor om integritet eller begäran om radering, kontakta: contactblicklabs@gmail.com</string>
     <string name="about_privacy_updates">Vi kan uppdatera denna policy om Blicks funktioner eller datahantering ändras.</string>
     <string name="about_privacy_read_more">Läs mer:</string>
