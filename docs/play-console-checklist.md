@@ -73,6 +73,26 @@ same Google account/device access.
 
 Official reference: [Real-time Developer Notifications](https://developer.android.com/google/play/billing/rtdn-reference).
 
+## AdMob and privacy messaging
+
+Repository-verified:
+
+- GMA Next-Gen and UMP are integrated with a test-only debug banner unit and the production
+  banner unit confined to release configuration.
+- The publisher reports that Blick Commute's European regulations message is published in
+  English and Swedish. Recheck this external AdMob console state during release sign-off.
+
+Pending external release work:
+
+- Review and update Play Data Safety answers for Google Mobile Ads and its merged permissions.
+- Review the public privacy policy's advertising disclosure; the in-app summary has been updated,
+  but the externally hosted policy requires its own publication and legal review.
+- Deploy `app-ads.txt` through the website associated with Blick's Play developer listing, then
+  verify that AdMob crawls and accepts it.
+- Verify the AdMob app review/readiness and payment status in the AdMob console.
+- Recheck the published European regulations message and both languages in the production AdMob
+  app before release.
+
 ## Release sign-off
 
 - Run Android unit tests, lint, assemble, migration tests on an emulator/device, and a real

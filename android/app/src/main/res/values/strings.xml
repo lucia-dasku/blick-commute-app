@@ -289,6 +289,7 @@
     <string name="settings_premium_status_free">Free</string>
     <string name="settings_premium_status_premium">Premium</string>
     <string name="settings_contact_support_label">Contact Blick Labs</string>
+    <string name="settings_privacy_choices_label">Privacy choices</string>
     <string name="settings_support_email_subject">Blick support</string>
     <string name="about_tagline">Blick shows upcoming departures and disruptions for your saved commute.</string>
     <string name="about_version_label">Version %1$s (build %2$d)</string>
@@ -296,12 +297,13 @@
     <string name="about_trafiklab_link">Trafiklab.se</string>
     <string name="about_disclaimer">Blick is an independent app and is not affiliated with, operated by or endorsed by SL or Trafiklab.</string>
     <string name="about_section_privacy_policy">Privacy Policy</string>
-    <string name="about_privacy_last_updated">Last updated: 18 August 2026</string>
+    <string name="about_privacy_last_updated">Last updated: 31 August 2026</string>
     <string name="about_privacy_operator">Blick is operated by Blick Labs.</string>
-    <string name="about_privacy_no_account">Blick does not require an account and does not collect your name, email address, precise location, contacts or advertising ID. Blick contains no advertising or analytics.</string>
+    <string name="about_privacy_no_account">Blick does not require an account and does not ask for your name, email address, precise location or contacts.</string>
     <string name="about_privacy_local_storage">Your routines, preferences and cached departure information are stored locally on your device and are not backed up. You can remove this information by deleting your routine, clearing Blick\'s app data or uninstalling the app.</string>
     <string name="about_privacy_backend">To provide departure, journey and disruption information, Blick sends station searches and selected route identifiers to its backend. If you buy or restore Premium, Blick sends the Google Play product ID and purchase token to its backend so Google Play can validate and acknowledge the purchase. The raw purchase token is used for that request but is not retained. Blick stores a SHA-256 fingerprint of the token, product and order identifiers, purchase and acknowledgement state, purchase and verification times, quantity, and refund or revocation state in its PostgreSQL database. This information is used only to manage Premium entitlement, restore purchases, process Google Play lifecycle notifications and prevent duplicate processing. Google Play processes purchase verification; Blick\'s hosting and database providers process the stored record. Inactive purchase records are deleted after 24 months and processed notification records after 90 days; you may also request deletion using the contact below, subject to records Blick must retain for legal or fraud-prevention purposes. Refund and revocation notifications mark entitlement inactive. Blick does not receive your payment-card details. Our hosting provider may automatically process limited technical information, such as your IP address and request logs, to deliver and secure the service. Public transport information is obtained from Trafiklab and SL services.</string>
-    <string name="about_privacy_usage">We use this information only to operate, secure and improve Blick. We do not sell personal data or use it for advertising.</string>
+    <string name="about_privacy_advertising">Blick Basic displays banner advertising provided by Google Mobile Ads. Google may process and share IP addresses, device or account identifiers, ad interactions and diagnostic information to deliver and measure ads and prevent fraud. An IP address may be used to estimate a general location. Google UMP manages applicable privacy choices. Blick Premium is ad-free, and no ads are requested or displayed while verified Premium access is active.</string>
+    <string name="about_privacy_usage">Blick Labs does not sell personal data. Apart from the advertising processing described above, Blick uses the information described here only to operate, secure and improve the service.</string>
     <string name="about_privacy_contact">For privacy questions or deletion requests, contact: contactblicklabs@gmail.com</string>
     <string name="about_privacy_updates">We may update this policy if Blick\'s features or data practices change.</string>
     <string name="about_privacy_read_more">Read more:</string>

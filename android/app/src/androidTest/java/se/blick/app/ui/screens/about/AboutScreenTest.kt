@@ -223,6 +223,39 @@ class AboutScreenTest {
     }
 
     @Test
+    fun privacyChoicesRowIsVisibleAndInvokesCallbackWhenRequired() {
+        var opened = false
+        composeRule.setContent {
+            AboutContent(
+                onBack = {},
+                onLanguageSelected = {},
+                privacyOptionsRequired = true,
+                onOpenPrivacyOptions = { opened = true },
+            )
+        }
+
+        composeRule.onNodeWithTag(PRIVACY_CHOICES_TAG)
+            .performScrollTo()
+            .assertHasClickAction()
+            .performClick()
+
+        assertEquals(true, opened)
+    }
+
+    @Test
+    fun privacyChoicesRowIsAbsentWhenNotRequired() {
+        composeRule.setContent {
+            AboutContent(
+                onBack = {},
+                onLanguageSelected = {},
+                privacyOptionsRequired = false,
+            )
+        }
+
+        composeRule.onNodeWithTag(PRIVACY_CHOICES_TAG).assertDoesNotExist()
+    }
+
+    @Test
     fun dataAttributionDestinationStillShowsRequiredAttributionAndDisclaimer() {
         composeRule.setContent { DataAttributionScreen(onBack = {}) }
 
@@ -236,6 +269,8 @@ class AboutScreenTest {
 
         composeRule.onNodeWithText(composeRule.activity.getString(R.string.about_privacy_last_updated)).assertExists()
         composeRule.onNodeWithText(composeRule.activity.getString(R.string.about_privacy_no_account)).assertExists()
+        composeRule.onNodeWithText(composeRule.activity.getString(R.string.about_privacy_advertising))
+            .performScrollTo().assertExists()
         composeRule.onNodeWithText(composeRule.activity.getString(R.string.about_privacy_contact)).performScrollTo().assertExists()
         composeRule.onNodeWithText(composeRule.activity.getString(R.string.about_privacy_read_more))
             .performScrollTo().assertExists()

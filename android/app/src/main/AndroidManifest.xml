@@ -5,7 +5,9 @@
     <!--
         Deliberately minimal permission set for the MVP (see docs/api-contract.md §16
         of the project documentation and the "Privacy and security" principle):
-        no GPS/location, no accounts, no advertising ID.
+        no GPS/location or accounts. Google Mobile Ads may contribute advertising-related
+        permissions through manifest merging for the Basic banner; inspect the generated merged
+        manifests rather than treating this source manifest as the complete permission set.
         POST_NOTIFICATIONS is required on API 33+ to show the commute notification; the
         production runtime-permission flow (see ui/notification/NotificationPermissionFlow.kt)
         requests it at routine-enable/save time, gated behind
@@ -14,13 +16,12 @@
         required for RoutineActiveWindowWorker's active-window foreground execution (see
         scheduling/RoutineActiveWindowWorker.kt and its `dataSync` service-type declaration
         below) — no other foreground-service type applies to "sync fresh departure data from
-        the Blick backend while a routine's active window is open." No explicit
-        RECEIVE_BOOT_COMPLETED declaration is needed here — WorkManager's own library manifest
-        already contributes it (merged automatically) for its own bundled boot receiver, which
-        re-establishes its persisted work's system-level scheduling after a reboot on its own;
-        see scheduling/NotificationRecoveryCoordinator.kt's own `onAppStart` doc for why a
-        separate Blick-specific boot receiver was removed as redundant with, and unsafe
-        alongside, that path. POST_PROMOTED_NOTIFICATIONS (Android 16+) is a normal, non-runtime
+        the Blick backend while a routine's active window is open." RECEIVE_BOOT_COMPLETED
+        remains required for WorkManager's bundled receiver to re-establish persisted work after
+        reboot. It is now explicit because GMA Next-Gen 1.4.0's library manifest contains a
+        removal marker that would otherwise strip WorkManager's transitive declaration; this
+        does not add a separate Blick boot receiver (see NotificationRecoveryCoordinator.kt).
+        POST_PROMOTED_NOTIFICATIONS (Android 16+) is a normal, non-runtime
         permission that
         requests the ongoing routine notification be promoted to a prominent lock-screen Live
         Update / Now Bar surface (see RoutineNotificationBuilder.kt) — declaring it does not
@@ -33,6 +34,7 @@
     <uses-permission android:name="android.permission.FOREGROUND_SERVICE" />
     <uses-permission android:name="android.permission.FOREGROUND_SERVICE_DATA_SYNC" />
     <uses-permission android:name="android.permission.POST_PROMOTED_NOTIFICATIONS" />
+    <uses-permission android:name="android.permission.RECEIVE_BOOT_COMPLETED" />
 
     <application
         android:name=".BlickApplication"
@@ -44,6 +46,12 @@
         android:roundIcon="@mipmap/ic_launcher_round"
         android:supportsRtl="true"
         android:theme="@style/Theme.Blick">
+
+        <!-- Required by Google UMP to select Blick's published privacy message. GMA Next-Gen
+             receives the same non-secret app ID through its explicit initialization config. -->
+        <meta-data
+            android:name="com.google.android.gms.ads.APPLICATION_ID"
+            android:value="ca-app-pub-2107592277107216~9098333187" />
 
         <activity
             android:name=".MainActivity"

@@ -32,7 +32,11 @@ private const val ROUTE_RESULT_ROUTINE_EDITED = "routineEdited"
 private const val ROUTE_RESULT_EVENT_EDITED = "oneTimeEventEdited"
 
 @Composable
-fun BlickNavHost(navController: NavHostController = rememberNavController()) {
+fun BlickNavHost(
+    navController: NavHostController = rememberNavController(),
+    privacyOptionsRequired: Boolean = false,
+    onOpenPrivacyOptions: () -> Unit = {},
+) {
     NavHost(navController = navController, startDestination = Routes.RoutineList.route) {
         composable(Routes.RoutineList.route) {
             RoutineListScreen(
@@ -52,6 +56,8 @@ fun BlickNavHost(navController: NavHostController = rememberNavController()) {
                 onOpenPrivacyPolicy = { navController.navigate(Routes.PrivacyPolicy.route) },
                 onOpenDataAttribution = { navController.navigate(Routes.DataAttribution.route) },
                 onOpenOpenSourceLicences = { navController.navigate(Routes.OpenSourceLicences.route) },
+                privacyOptionsRequired = privacyOptionsRequired,
+                onOpenPrivacyOptions = onOpenPrivacyOptions,
             )
         }
         composable(Routes.PrivacyPolicy.route) {
