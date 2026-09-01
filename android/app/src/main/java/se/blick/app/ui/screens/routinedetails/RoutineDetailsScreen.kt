@@ -87,6 +87,7 @@ import se.blick.app.domain.model.RoutineType
 import se.blick.app.ui.theme.RoutineDestructiveRed
 import se.blick.app.ui.theme.LocalStockholmNightTheme
 import se.blick.app.ui.theme.StockholmNightSurfaces
+import se.blick.app.ui.theme.themedScreenContainerColor
 import java.time.Instant
 import se.blick.app.locale.currentBlickLocale
 import se.blick.app.notification.NotificationAvailability
@@ -155,6 +156,7 @@ fun RoutineDetailsScreen(
 
     val routine = uiState.routine
     Scaffold(
+        containerColor = themedScreenContainerColor(),
         topBar = {
             // The saved routine name sits beside Back instead of consuming a separate heading
             // row in the scrollable content. Loading/not-found states have no routine to name.

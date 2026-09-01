@@ -74,6 +74,8 @@ import se.blick.app.ui.theme.LocalStockholmNightTheme
 import se.blick.app.ui.theme.Neutral40
 import se.blick.app.ui.theme.Neutral80
 import se.blick.app.ui.theme.StockholmNightSurfaces
+import se.blick.app.ui.theme.themedScreenContainerColor
+import se.blick.app.ui.theme.themedStickyActionVisuals
 import java.time.Instant
 import java.time.LocalDate
 import java.time.LocalTime
@@ -128,7 +130,9 @@ internal fun OneTimeEventEditorContent(
     var showTimePicker by remember { mutableStateOf(false) }
     val locale = currentBlickLocale()
     val focusManager = LocalFocusManager.current
+    val stickyActionVisuals = themedStickyActionVisuals()
     Scaffold(
+        containerColor = themedScreenContainerColor(),
         topBar = {
             BlickTopBar(
                 title = stringResource(
@@ -279,8 +283,8 @@ internal fun OneTimeEventEditorContent(
                 }
 
                 Surface(
-                    color = MaterialTheme.colorScheme.surface,
-                    shadowElevation = 8.dp,
+                    color = stickyActionVisuals.containerColor,
+                    shadowElevation = stickyActionVisuals.shadowElevation,
                     modifier = Modifier
                         .align(Alignment.BottomCenter)
                         .fillMaxWidth()

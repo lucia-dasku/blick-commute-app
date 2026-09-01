@@ -48,8 +48,11 @@ import androidx.hilt.navigation.compose.hiltViewModel
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import se.blick.app.R
 import se.blick.app.ui.theme.LocalStockholmNightTheme
+import se.blick.app.ui.theme.LocalLightCityTheme
+import se.blick.app.ui.theme.LightOneTimeEventCardSurface
 import se.blick.app.ui.theme.RoutineDestructiveRed
 import se.blick.app.ui.theme.StockholmNightSurfaces
+import se.blick.app.ui.theme.themedScreenContainerColor
 import se.blick.app.domain.model.OneTimeEvent
 import se.blick.app.domain.model.OneTimeEventLabel
 import se.blick.app.domain.model.OneTimeEventTimeType
@@ -88,7 +91,10 @@ internal fun OneTimeEventsContent(
     val eventsByDate = state.events.groupBy(OneTimeEvent::date)
     val visibleEvents = selectedDate?.let { eventsByDate[it].orEmpty() } ?: state.events
     val locale = currentBlickLocale()
-    Scaffold(topBar = { BlickTopBar(stringResource(R.string.one_time_event_calendar_title), onBack) }) { padding ->
+    Scaffold(
+        containerColor = themedScreenContainerColor(),
+        topBar = { BlickTopBar(stringResource(R.string.one_time_event_calendar_title), onBack) },
+    ) { padding ->
         LazyColumn(
             modifier = Modifier.fillMaxSize().padding(padding),
             contentPadding = androidx.compose.foundation.layout.PaddingValues(16.dp),
@@ -286,7 +292,10 @@ internal fun OneTimeEventDetailsContent(
     onRefresh: () -> Unit,
 ) {
     var confirmDelete by remember { mutableStateOf(false) }
-    Scaffold(topBar = { BlickTopBar(state.event?.name, onBack) }) { padding ->
+    Scaffold(
+        containerColor = themedScreenContainerColor(),
+        topBar = { BlickTopBar(state.event?.name, onBack) },
+    ) { padding ->
         val event = state.event
         if (state.isLoading) {
             Box(Modifier.fillMaxSize().padding(padding), contentAlignment = Alignment.Center) { CircularProgressIndicator() }
@@ -358,9 +367,14 @@ internal fun OneTimeEventDetailsContent(
 @Composable
 private fun OneTimeEventSummary(event: OneTimeEvent, locale: java.util.Locale) {
     val useStockholmNightSurface = LocalStockholmNightTheme.current
+    val useLightEventSurface = LocalLightCityTheme.current
     Surface(
         shape = MaterialTheme.shapes.medium,
-        color = if (useStockholmNightSurface) StockholmNightSurfaces.Card else MaterialTheme.colorScheme.surface,
+        color = when {
+            useStockholmNightSurface -> StockholmNightSurfaces.Card
+            useLightEventSurface -> LightOneTimeEventCardSurface
+            else -> MaterialTheme.colorScheme.surface
+        },
         border = if (useStockholmNightSurface) BorderStroke(1.dp, StockholmNightSurfaces.CardBorder) else null,
         tonalElevation = if (useStockholmNightSurface) 0.dp else 1.dp,
         modifier = Modifier.fillMaxWidth().testTag("one-time-event-summary"),
@@ -514,12 +528,13 @@ internal fun PlannedJourneySection(
 @Composable
 private fun PlannedJourneyInfoSurface(text: String) {
     val useStockholmNightSurface = LocalStockholmNightTheme.current
+    val useLightEventSurface = LocalLightCityTheme.current
     Surface(
         shape = MaterialTheme.shapes.medium,
-        color = if (useStockholmNightSurface) {
-            StockholmNightSurfaces.Control
-        } else {
-            MaterialTheme.colorScheme.surfaceContainerLow
+        color = when {
+            useStockholmNightSurface -> StockholmNightSurfaces.Control
+            useLightEventSurface -> LightOneTimeEventCardSurface
+            else -> MaterialTheme.colorScheme.surfaceContainerLow
         },
         border = if (useStockholmNightSurface) BorderStroke(1.dp, StockholmNightSurfaces.CardBorder) else null,
         tonalElevation = 0.dp,

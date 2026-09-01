@@ -462,6 +462,38 @@ class RoutineListScreenTest {
     }
 
     @Test
+    fun lightThemeUnlabeledRoutineUsesTheSameCardMarginsAsLabeledRoutine() {
+        composeRule.setContent {
+            BlickTheme(useDarkTheme = false) {
+                RoutineListContent(
+                    uiState = RoutineListUiState(
+                        routines = listOf(
+                            sampleRoutine(id = "labeled").copy(label = RoutineLabel.WORK),
+                            sampleRoutine(id = "unlabeled", name = "Slussen → Liljeholmen"),
+                        ),
+                        isLoading = false,
+                    ),
+                    onAddRoutine = {},
+                    onOpenRoutine = {},
+                )
+            }
+        }
+
+        val labeledCard = composeRule.onNodeWithTag(
+            "labeled_routine_card_work",
+            useUnmergedTree = true,
+        ).fetchSemanticsNode().boundsInRoot
+        val unlabeledCard = composeRule.onNodeWithTag(
+            "unlabeled_routine_card_unlabeled",
+            useUnmergedTree = true,
+        ).fetchSemanticsNode().boundsInRoot
+
+        assertEquals(labeledCard.left, unlabeledCard.left, 1f)
+        assertEquals(labeledCard.right, unlabeledCard.right, 1f)
+        composeRule.onNodeWithText("Slussen → Liljeholmen").assertIsDisplayed()
+    }
+
+    @Test
     fun labeledRoutineCardStillOpensTheExistingRoutineDestination() {
         var openedRoutineId: String? = null
         composeRule.setContent {

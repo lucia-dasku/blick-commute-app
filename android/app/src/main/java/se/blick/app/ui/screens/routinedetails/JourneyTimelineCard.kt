@@ -48,6 +48,9 @@ import se.blick.app.domain.usecase.countdownMinutes
 import se.blick.app.domain.usecase.effectiveFirstDeparture
 import se.blick.app.ui.components.LineBadge
 import se.blick.app.ui.theme.LocalStockholmNightTheme
+import se.blick.app.ui.theme.LocalLightCityTheme
+import se.blick.app.ui.theme.LightOneTimeEventCardDivider
+import se.blick.app.ui.theme.LightOneTimeEventCardSurface
 import se.blick.app.ui.theme.StockholmNightSurfaces
 import se.blick.app.widget.LineBadgeColorMapping
 import se.blick.app.widget.toBadgeColor
@@ -75,6 +78,7 @@ internal fun JourneyTimelineCard(
     onExpandedChange: (Boolean) -> Unit,
 ) {
     val useStockholmNightSurface = LocalStockholmNightTheme.current
+    val useLightRoutineCardSurface = LocalLightCityTheme.current
     val timeline = journey.toTimelinePresentation()
     val firstLeg = journey.firstLeg
     val modeLabel = stringResource(firstLeg.transportMode.journeyLabelResId())
@@ -101,7 +105,11 @@ internal fun JourneyTimelineCard(
     Surface(
         color = if (useStockholmNightSurface) StockholmNightSurfaces.Card else MaterialTheme.colorScheme.surface,
         border = if (useStockholmNightSurface) BorderStroke(1.dp, StockholmNightSurfaces.CardBorder) else null,
-        tonalElevation = if (useStockholmNightSurface) 0.dp else if (emphasized) 3.dp else 1.dp,
+        tonalElevation = when {
+            useStockholmNightSurface || useLightRoutineCardSurface -> 0.dp
+            emphasized -> 3.dp
+            else -> 1.dp
+        },
         shape = MaterialTheme.shapes.medium,
         modifier = Modifier.fillMaxWidth().clickable { onExpandedChange(!expanded) },
     ) {
@@ -162,6 +170,7 @@ internal fun PlannedJourneyTimelineCard(
     modifier: Modifier = Modifier,
 ) {
     val useStockholmNightSurface = LocalStockholmNightTheme.current
+    val useLightEventSurface = LocalLightCityTheme.current
     val timeline = journey.toTimelinePresentation()
     val firstLeg = journey.firstLeg
     val departure = formatDepartureTime(journey.effectiveFirstDeparture(), locale, STOCKHOLM_ZONE)
@@ -174,7 +183,11 @@ internal fun PlannedJourneyTimelineCard(
     }
 
     Surface(
-        color = if (useStockholmNightSurface) StockholmNightSurfaces.Card else MaterialTheme.colorScheme.surface,
+        color = when {
+            useStockholmNightSurface -> StockholmNightSurfaces.Card
+            useLightEventSurface -> LightOneTimeEventCardSurface
+            else -> MaterialTheme.colorScheme.surface
+        },
         border = when {
             emphasized -> BorderStroke(1.dp, MaterialTheme.colorScheme.primary.copy(alpha = 0.55f))
             useStockholmNightSurface -> BorderStroke(1.dp, StockholmNightSurfaces.CardBorder)
@@ -222,7 +235,13 @@ internal fun PlannedJourneyTimelineCard(
             } else {
                 Spacer(Modifier.height(12.dp))
             }
-            HorizontalDivider(color = MaterialTheme.colorScheme.outlineVariant)
+            HorizontalDivider(
+                color = if (useLightEventSurface) {
+                    LightOneTimeEventCardDivider
+                } else {
+                    MaterialTheme.colorScheme.outlineVariant
+                },
+            )
             Spacer(Modifier.height(8.dp))
             JourneyDurationFooter(timeline.totalDurationMinutes)
         }

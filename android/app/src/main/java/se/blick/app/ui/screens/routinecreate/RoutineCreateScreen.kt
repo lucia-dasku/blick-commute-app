@@ -88,6 +88,8 @@ import se.blick.app.ui.theme.Neutral40
 import se.blick.app.ui.theme.Neutral80
 import se.blick.app.ui.theme.LocalStockholmNightTheme
 import se.blick.app.ui.theme.StockholmNightSurfaces
+import se.blick.app.ui.theme.themedScreenContainerColor
+import se.blick.app.ui.theme.themedStickyActionVisuals
 import java.time.DayOfWeek
 import java.time.LocalTime
 import java.time.format.DateTimeFormatter
@@ -127,6 +129,7 @@ fun RoutineCreateScreen(
         (uiState.oneRoutineLimitReached && !uiState.isEditMode)
 
     Scaffold(
+        containerColor = themedScreenContainerColor(),
         topBar = {
             if (isBlocked) {
                 BlickTopBar(title = stringResource(R.string.routine_create_title), onBack = handleBack)
@@ -477,6 +480,7 @@ internal fun ScheduleStep(
     // presentation locale -- see that function's own doc.
     val locale = currentBlickLocale()
     val focusManager = LocalFocusManager.current
+    val stickyActionVisuals = themedStickyActionVisuals()
 
     Box(modifier.fillMaxSize()) {
         LazyColumn(
@@ -607,8 +611,8 @@ internal fun ScheduleStep(
         }
 
         Surface(
-            color = MaterialTheme.colorScheme.surface,
-            shadowElevation = 8.dp,
+            color = stickyActionVisuals.containerColor,
+            shadowElevation = stickyActionVisuals.shadowElevation,
             modifier = Modifier
                 .align(Alignment.BottomCenter)
                 .fillMaxWidth()

@@ -1,5 +1,6 @@
 package se.blick.app.ui.screens.routinelist
 
+import androidx.compose.ui.graphics.Color
 import org.junit.Assert.assertEquals
 import org.junit.Test
 import se.blick.app.domain.model.CommuteRoutine
@@ -42,6 +43,17 @@ class RoutineListFormattingTest {
         assertEquals(
             "Vardagar · 07:00–09:30",
             formatRoutineCardSchedule(routine, Locale.forLanguageTag("sv"), "Varje dag", "Vardagar"),
+        )
+    }
+
+    @Test
+    fun `light city canvas keeps routine section labels dark`() {
+        assertEquals(
+            Color.Black,
+            routineListSectionLabelColor(
+                useStockholmNightHeader = false,
+                backgroundColor = Color(0xFFFAF4F3),
+            ),
         )
     }
 }

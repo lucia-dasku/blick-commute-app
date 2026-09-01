@@ -60,6 +60,7 @@ import se.blick.app.ui.components.BlickTopBar
 import se.blick.app.ui.notification.launchLiveUpdateSettings
 import se.blick.app.ui.notification.notificationSettingsIntent
 import se.blick.app.ui.theme.AppearanceMode
+import se.blick.app.ui.theme.themedScreenContainerColor
 
 private const val SUPPORT_EMAIL = "contactblicklabs@gmail.com"
 internal const val LANGUAGE_OPTION_EN_TAG = "settings-language-en"
@@ -133,7 +134,10 @@ internal fun AboutContent(
     var showAppearanceDialog by remember { mutableStateOf(false) }
     val currentLanguage = currentBlickLocale().language
 
-    Scaffold(topBar = { BlickTopBar(title = stringResource(R.string.about_title), onBack = onBack) }) { padding ->
+    Scaffold(
+        containerColor = themedScreenContainerColor(),
+        topBar = { BlickTopBar(title = stringResource(R.string.about_title), onBack = onBack) },
+    ) { padding ->
         Column(
             Modifier
                 .fillMaxSize()

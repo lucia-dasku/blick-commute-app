@@ -17,6 +17,7 @@ import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.text.style.TextOverflow
 import se.blick.app.R
+import se.blick.app.ui.theme.LocalLightCityTheme
 import se.blick.app.ui.theme.LocalStockholmNightTheme
 
 /**
@@ -37,7 +38,7 @@ fun BlickTopBar(
     onBack: (() -> Unit)? = null,
     actions: @Composable RowScope.() -> Unit = {},
 ) {
-    val useTransparentContainer = LocalStockholmNightTheme.current
+    val useTransparentContainer = LocalStockholmNightTheme.current || LocalLightCityTheme.current
     TopAppBar(
         title = {
             if (title != null) {

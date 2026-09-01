@@ -4,7 +4,9 @@ import android.content.res.Configuration
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.unit.DpSize
 import androidx.compose.ui.unit.dp
+import androidx.glance.AndroidResourceImageProvider
 import androidx.glance.BackgroundModifier
+import androidx.glance.EmittableImage
 import androidx.glance.appwidget.testing.unit.runGlanceAppWidgetUnitTest
 import androidx.glance.testing.GlanceNodeMatcher
 import androidx.glance.testing.unit.MappedNode
@@ -24,6 +26,7 @@ import se.blick.app.domain.model.JourneyRole
 import se.blick.app.domain.model.RoutineLabel
 import se.blick.app.domain.model.TransportMode
 import se.blick.app.notification.disruptionEffectLabelRes
+import se.blick.app.ui.theme.StockholmNightSurfaces
 import java.time.Instant
 import java.time.ZoneId
 import java.time.format.DateTimeFormatter
@@ -127,6 +130,30 @@ class BlickRoutineWidgetRenderTest {
         }
     }
 
+    private fun hasResolvedBackgroundColor(color: Color, colorContext: android.content.Context) =
+        GlanceNodeMatcher<MappedNode>("has resolved background color $color") { node ->
+            node.value.emittable.modifier.any { modifier ->
+                modifier is BackgroundModifier.Color && modifier.colorProvider.getColor(colorContext) == color
+            }
+        }
+
+    private fun hasImageResource(resourceId: Int) = GlanceNodeMatcher<MappedNode>(
+        "has image resource $resourceId",
+    ) { node ->
+        val image = node.value.emittable as? EmittableImage
+        (image?.provider as? AndroidResourceImageProvider)?.resId == resourceId
+    }
+
+    private fun contextWithNightMode(isNightMode: Boolean) = context.createConfigurationContext(
+        Configuration(context.resources.configuration).apply {
+            uiMode = (uiMode and Configuration.UI_MODE_NIGHT_MASK.inv()) or if (isNightMode) {
+                Configuration.UI_MODE_NIGHT_YES
+            } else {
+                Configuration.UI_MODE_NIGHT_NO
+            }
+        },
+    )
+
     @Test
     fun `widget countdown changes from minutes to localized hours at sixty minutes`() {
         assertEquals("59 min", formatWidgetCountdown(context, 59))
@@ -147,35 +174,134 @@ class BlickRoutineWidgetRenderTest {
         assertEquals("2 tim 2 min", formatWidgetCountdown(swedishContext, 122))
     }
 
+    @Test
+    fun `normal active widget uses Blick off-white background in system light mode`() =
+        runGlanceAppWidgetUnitTest {
+            val lightContext = contextWithNightMode(isNightMode = false)
+            setContext(lightContext)
+            setAppWidgetSize(DpSize(260.dp, 150.dp))
+            val primary = journeyRow(now.plusSeconds(300), lineDesignation = "14")
+
+            provideComposable { BlickWidgetContent(activeRoutineState(primary, null), now) }
+
+            onNode(hasBackgroundColor(Color(0xFFF3F5F4))).assertExists()
+            onNode(hasImageResource(R.drawable.widget_inactive_light_background)).assertDoesNotExist()
+            onNode(hasImageResource(R.drawable.widget_stockholm_night_background)).assertDoesNotExist()
+        }
+
+    @Test
+    fun `normal active widget keeps Glance widget background in system dark mode`() =
+        runGlanceAppWidgetUnitTest {
+            val darkContext = contextWithNightMode(isNightMode = true)
+            val existingDarkBackground = Color(
+                darkContext.getColor(androidx.glance.R.color.glance_colorWidgetBackground),
+            )
+            setContext(darkContext)
+            setAppWidgetSize(DpSize(260.dp, 150.dp))
+            val primary = journeyRow(now.plusSeconds(300), lineDesignation = "14")
+
+            provideComposable { BlickWidgetContent(activeRoutineState(primary, null), now) }
+
+            onNode(hasResolvedBackgroundColor(existingDarkBackground, darkContext)).assertExists()
+            onNode(hasBackgroundColor(Color(0xFFF3F5F4))).assertDoesNotExist()
+            onNode(hasImageResource(R.drawable.widget_inactive_light_background)).assertDoesNotExist()
+            onNode(hasImageResource(R.drawable.widget_stockholm_night_background)).assertDoesNotExist()
+        }
+
+    @Test
+    fun `Stockholm Night active widget keeps its card and border surfaces without skyline artwork`() =
+        runGlanceAppWidgetUnitTest {
+            val lightContext = contextWithNightMode(isNightMode = false)
+            setContext(lightContext)
+            setAppWidgetSize(DpSize(260.dp, 150.dp))
+            val primary = journeyRow(now.plusSeconds(300), lineDesignation = "14")
+
+            provideComposable {
+                BlickWidgetContent(
+                    activeRoutineState(primary, null),
+                    now,
+                    useStockholmNightTheme = true,
+                )
+            }
+
+            onNode(hasBackgroundColor(StockholmNightSurfaces.CardBorder)).assertExists()
+            onNode(hasBackgroundColor(StockholmNightSurfaces.Card)).assertExists()
+            onNode(hasBackgroundColor(Color(0xFFF3F5F4))).assertDoesNotExist()
+            onNode(hasImageResource(R.drawable.widget_inactive_light_background)).assertDoesNotExist()
+            onNode(hasImageResource(R.drawable.widget_stockholm_night_background)).assertDoesNotExist()
+        }
+
     // ---- Branded inactive state: real Glance composition at each responsive shape. ----
 
     @Test
-    fun `compact inactive widget renders its logo and status without a brand title`() =
+    fun `compact light inactive widget renders its logo without status or brand title`() =
         runGlanceAppWidgetUnitTest {
-            setContext(context)
+            val lightContext = contextWithNightMode(isNightMode = false)
+            setContext(lightContext)
             setAppWidgetSize(DpSize(110.dp, 80.dp))
             provideComposable { BlickWidgetContent(RoutineWidgetUiState.NoActiveCommute, now) }
 
             onNode(hasTextEqualTo(context.getString(R.string.app_name))).assertDoesNotExist()
-            onNode(hasTextEqualTo(context.getString(R.string.widget_no_active_commute))).assertExists()
+            onNode(hasTextEqualTo(context.getString(R.string.widget_no_active_commute))).assertDoesNotExist()
         }
 
     @Test
-    fun `standard inactive widget renders its logo and status without a brand title`() =
+    fun `standard inactive widget uses supplied artwork in system light mode`() =
         runGlanceAppWidgetUnitTest {
-            setContext(context)
+            val lightContext = contextWithNightMode(isNightMode = false)
+            setContext(lightContext)
+            setAppWidgetSize(DpSize(260.dp, 150.dp))
+            provideComposable { BlickWidgetContent(RoutineWidgetUiState.NoActiveCommute, now) }
+
+            onNode(hasBackgroundColor(Color(0xFFFAF4F3))).assertExists()
+            onNode(hasImageResource(R.drawable.widget_inactive_light_background)).assertExists()
+            onNode(hasImageResource(R.drawable.widget_inactive_skyline_approved)).assertDoesNotExist()
+            onNode(hasImageResource(R.drawable.widget_stockholm_night_background)).assertDoesNotExist()
+            onNode(hasTextEqualTo(context.getString(R.string.app_name))).assertDoesNotExist()
+            onNode(hasTextEqualTo(context.getString(R.string.widget_no_active_commute))).assertDoesNotExist()
+        }
+
+    @Test
+    fun `standard inactive widget retains branded navy treatment in system dark mode`() =
+        runGlanceAppWidgetUnitTest {
+            val darkContext = contextWithNightMode(isNightMode = true)
+            setContext(darkContext)
             setAppWidgetSize(DpSize(260.dp, 150.dp))
             provideComposable { BlickWidgetContent(RoutineWidgetUiState.NoActiveCommute, now) }
 
             onNode(hasBackgroundColor(Color(0xFF010C2F))).assertExists()
-            onNode(hasTextEqualTo(context.getString(R.string.app_name))).assertDoesNotExist()
+            onNode(hasImageResource(R.drawable.widget_inactive_skyline_approved)).assertExists()
+            onNode(hasImageResource(R.drawable.widget_inactive_light_background)).assertDoesNotExist()
+            onNode(hasImageResource(R.drawable.widget_stockholm_night_background)).assertDoesNotExist()
             onNode(hasTextEqualTo(context.getString(R.string.widget_no_active_commute))).assertExists()
         }
 
     @Test
-    fun `large inactive widget renders its logo and status without a brand title`() =
+    fun `Stockholm Night inactive widget uses supplied background in system light mode`() =
         runGlanceAppWidgetUnitTest {
-            setContext(context)
+            val lightContext = contextWithNightMode(isNightMode = false)
+            setContext(lightContext)
+            setAppWidgetSize(DpSize(260.dp, 150.dp))
+            provideComposable {
+                BlickWidgetContent(
+                    RoutineWidgetUiState.NoActiveCommute,
+                    now,
+                    useStockholmNightTheme = true,
+                )
+            }
+
+            onNode(hasBackgroundColor(Color(0xFF010C2F))).assertExists()
+            onNode(hasImageResource(R.drawable.widget_inactive_skyline_approved)).assertDoesNotExist()
+            onNode(hasImageResource(R.drawable.widget_inactive_light_background)).assertDoesNotExist()
+            onNode(hasImageResource(R.drawable.widget_stockholm_night_background)).assertExists()
+            onNode(hasTextEqualTo(context.getString(R.string.widget_no_active_commute))).assertDoesNotExist()
+        }
+
+    @Test
+    fun `large dark inactive widget renders its logo and status without a brand title`() =
+        runGlanceAppWidgetUnitTest {
+            val darkContext = contextWithNightMode(isNightMode = true)
+            setContext(darkContext)
             setAppWidgetSize(DpSize(340.dp, 260.dp))
             provideComposable { BlickWidgetContent(RoutineWidgetUiState.NoActiveCommute, now) }
 

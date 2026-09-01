@@ -21,6 +21,7 @@ import androidx.compose.ui.unit.dp
 import androidx.core.net.toUri
 import se.blick.app.R
 import se.blick.app.ui.components.BlickTopBar
+import se.blick.app.ui.theme.themedScreenContainerColor
 
 private const val TRAFIKLAB_URL = "https://www.trafiklab.se/"
 internal const val PRIVACY_POLICY_URL = "https://blick-labs.vercel.app/blick-privacy"
@@ -90,7 +91,10 @@ private fun LegalContent(
     onBack: () -> Unit,
     content: @Composable () -> Unit,
 ) {
-    Scaffold(topBar = { BlickTopBar(title = title, onBack = onBack) }) { padding ->
+    Scaffold(
+        containerColor = themedScreenContainerColor(),
+        topBar = { BlickTopBar(title = title, onBack = onBack) },
+    ) { padding ->
         Column(
             Modifier
                 .fillMaxSize()

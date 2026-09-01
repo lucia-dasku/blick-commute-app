@@ -16,13 +16,16 @@ import androidx.compose.material3.LinearProgressIndicator
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Text
 import androidx.compose.material3.TopAppBar
+import androidx.compose.material3.TopAppBarDefaults
 import androidx.compose.runtime.Composable
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.StrokeCap
 import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import se.blick.app.R
+import se.blick.app.ui.theme.LocalLightCityTheme
 import se.blick.app.widget.LINE_BADGE_GREEN
 
 /**
@@ -50,7 +53,12 @@ fun BlickWizardHeader(
     progress: Float,
     onBack: () -> Unit,
 ) {
-    Column(Modifier.background(MaterialTheme.colorScheme.surface)) {
+    val useLightCityCanvas = LocalLightCityTheme.current
+    Column(
+        Modifier.background(
+            if (useLightCityCanvas) Color.Transparent else MaterialTheme.colorScheme.surface,
+        ),
+    ) {
         TopAppBar(
             title = {
                 Column {
@@ -71,6 +79,14 @@ fun BlickWizardHeader(
                 IconButton(onClick = onBack) {
                     Icon(Icons.AutoMirrored.Filled.ArrowBack, contentDescription = stringResource(R.string.action_back))
                 }
+            },
+            colors = if (useLightCityCanvas) {
+                TopAppBarDefaults.topAppBarColors(
+                    containerColor = Color.Transparent,
+                    scrolledContainerColor = Color.Transparent,
+                )
+            } else {
+                TopAppBarDefaults.topAppBarColors()
             },
         )
         LinearProgressIndicator(

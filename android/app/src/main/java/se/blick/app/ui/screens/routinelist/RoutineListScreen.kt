@@ -79,9 +79,11 @@ import se.blick.app.ui.components.LineBadge
 import se.blick.app.ui.components.RoutineLabelIconContainer
 import se.blick.app.ui.components.RoutineLabelPill
 import se.blick.app.ui.components.visuals
+import se.blick.app.ui.theme.LocalLightCityTheme
 import se.blick.app.ui.theme.LocalStockholmNightTheme
 import se.blick.app.ui.theme.RoutineDestructiveRed
 import se.blick.app.ui.theme.StockholmNightSurfaces
+import se.blick.app.ui.theme.themedScreenContainerColor
 import se.blick.app.ui.screens.onetimeevent.OneTimeEventCard
 import se.blick.app.billing.RoutineTierPolicy
 import se.blick.app.domain.model.RoutineType
@@ -163,13 +165,13 @@ fun RoutineListContent(
     var draggedRoutineId by remember { mutableStateOf<String?>(null) }
     val hapticFeedback = LocalHapticFeedback.current
     val useStockholmNightHeader = LocalStockholmNightTheme.current
-    val sectionLabelColor = when {
-        useStockholmNightHeader -> Color(0xFF8393AA)
-        MaterialTheme.colorScheme.background.luminance() < 0.5f -> Color.White
-        else -> Color.Black
-    }
+    val sectionLabelColor = routineListSectionLabelColor(
+        useStockholmNightHeader = useStockholmNightHeader,
+        backgroundColor = MaterialTheme.colorScheme.background,
+    )
 
     Scaffold(
+        containerColor = themedScreenContainerColor(),
         topBar = {
             Column {
                 BlickHomeHeader(
@@ -433,6 +435,15 @@ fun RoutineListContent(
 
 }
 
+internal fun routineListSectionLabelColor(
+    useStockholmNightHeader: Boolean,
+    backgroundColor: Color,
+): Color = when {
+    useStockholmNightHeader -> Color(0xFF8393AA)
+    backgroundColor.luminance() < 0.5f -> Color.White
+    else -> Color.Black
+}
+
 /** Keeps the home-only pause label current across local midnight without adding polling,
  * scheduling work, or another commute refresh loop. The coroutine sleeps until the next local
  * date boundary and exists only while this composable is on screen. */
@@ -459,7 +470,9 @@ private fun UnlabeledRoutineCard(
     onOpenRoutine: (String) -> Unit,
     onSelectFreeRoutine: (String) -> Unit,
 ) {
-    if (LocalStockholmNightTheme.current) {
+    val useStockholmNightSurface = LocalStockholmNightTheme.current
+    val useRoundedCard = useStockholmNightSurface || LocalLightCityTheme.current
+    if (useRoundedCard) {
         Box(
             modifier = Modifier
                 .fillMaxWidth()
@@ -469,9 +482,17 @@ private fun UnlabeledRoutineCard(
                 onClick = { onOpenRoutine(routine.id) },
                 shape = RoundedCornerShape(16.dp),
                 colors = CardDefaults.cardColors(
-                    containerColor = if (isDragging) MaterialTheme.colorScheme.surfaceContainerHigh else StockholmNightSurfaces.Card,
+                    containerColor = when {
+                        isDragging -> MaterialTheme.colorScheme.surfaceContainerHigh
+                        useStockholmNightSurface -> StockholmNightSurfaces.Card
+                        else -> MaterialTheme.colorScheme.surface
+                    },
                 ),
-                border = BorderStroke(1.dp, StockholmNightSurfaces.CardBorder),
+                border = if (useStockholmNightSurface) {
+                    BorderStroke(1.dp, StockholmNightSurfaces.CardBorder)
+                } else {
+                    null
+                },
                 elevation = CardDefaults.cardElevation(defaultElevation = if (isDragging) 5.dp else 2.dp),
                 modifier = Modifier
                     .fillMaxWidth()

@@ -31,6 +31,8 @@ import com.google.android.libraries.ads.mobile.sdk.common.AdLoadCallback
 import com.google.android.libraries.ads.mobile.sdk.common.LoadAdError
 
 internal const val BANNER_CONTAINER_TEST_TAG = "ad-banner-container"
+internal const val BANNER_AWARE_LAYOUT_TEST_TAG = "banner-aware-layout"
+internal const val BANNER_CONTENT_TEST_TAG = "banner-content-region"
 
 /** Keeps navigation content above the banner rather than overlaying it. */
 @Composable
@@ -39,11 +41,12 @@ fun BannerAwareContent(
     content: @Composable () -> Unit,
     banner: @Composable () -> Unit,
 ) {
-    Column(Modifier.fillMaxSize()) {
+    Column(Modifier.fillMaxSize().testTag(BANNER_AWARE_LAYOUT_TEST_TAG)) {
         Box(
             modifier = Modifier
                 .fillMaxWidth()
-                .weight(1f),
+                .weight(1f)
+                .testTag(BANNER_CONTENT_TEST_TAG),
         ) {
             content()
         }

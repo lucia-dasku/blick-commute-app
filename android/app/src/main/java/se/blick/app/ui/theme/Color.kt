@@ -11,3 +11,8 @@ val Neutral80 = Color(0xFFC5C8CF)
 val AttentionAmber40 = Color(0xFF8A5A00) // reserved for genuine disruptions only
 val RoutineDestructiveRed = Color(0xFFCE3134)
 val BlickBrandMint = Color(0xFF33E4A1)
+
+// Dedicated normal-Light layers for One-time Event details. These deliberately do not alter the
+// Material surface palette used by the rest of the application.
+internal val LightOneTimeEventCardSurface = Color(0xFFFCF8F7)
+internal val LightOneTimeEventCardDivider = Color(0xFFE7DEDC)

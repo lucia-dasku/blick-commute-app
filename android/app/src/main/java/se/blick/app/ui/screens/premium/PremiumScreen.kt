@@ -25,12 +25,16 @@ import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import se.blick.app.R
 import se.blick.app.billing.EntitlementState
 import se.blick.app.ui.components.BlickTopBar
+import se.blick.app.ui.theme.themedScreenContainerColor
 
 @Composable
 fun PremiumScreen(onBack: () -> Unit, viewModel: PremiumViewModel = hiltViewModel()) {
     val state by viewModel.uiState.collectAsStateWithLifecycle()
     val activity = LocalContext.current.findActivity()
-    Scaffold(topBar = { BlickTopBar(title = stringResource(R.string.premium_title), onBack = onBack) }) { padding ->
+    Scaffold(
+        containerColor = themedScreenContainerColor(),
+        topBar = { BlickTopBar(title = stringResource(R.string.premium_title), onBack = onBack) },
+    ) { padding ->
         Column(
             modifier = Modifier.fillMaxSize().padding(padding).padding(24.dp),
             verticalArrangement = Arrangement.spacedBy(14.dp),

@@ -2,6 +2,7 @@ package se.blick.app.widget
 
 import android.appwidget.AppWidgetManager
 import android.content.Context
+import android.content.res.Configuration
 import androidx.compose.runtime.Composable
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.unit.Dp
@@ -268,6 +269,8 @@ private fun sizeTierFor(layoutTier: WidgetLayoutTier): WidgetSizeTier = when (la
 // source of truth rather than duplicating these literals. Only this Glance-specific white-text
 // ColorProvider stays here, since androidx.glance.unit.ColorProvider has no standard-Compose use.
 private val BADGE_TEXT_WHITE = ColorProvider(Color.White)
+private val LIGHT_WIDGET_BACKGROUND = ColorProvider(Color(0xFFF3F5F4))
+private val LIGHT_INACTIVE_WIDGET_BACKGROUND = ColorProvider(Color(0xFFFAF4F3))
 private val INACTIVE_WIDGET_BACKGROUND = ColorProvider(Color(0xFF010C2F))
 private val INACTIVE_WIDGET_SECONDARY = ColorProvider(Color(0xFFC5C8CF))
 private val INACTIVE_WIDGET_MINT = ColorProvider(Color(0xFF33E4A1))
@@ -416,12 +419,15 @@ internal fun BlickWidgetContent(
     // (station/destination/line/disruption headline) is untouched either way -- it was never a
     // string resource to begin with.
     val context = LocalContext.current.withAppLocale()
+    val useLightInactiveBackground = !useStockholmNightTheme && !isSystemNightMode(context)
+    val showInactiveStatus = !useLightInactiveBackground && !useStockholmNightTheme
     GlanceTheme(colors = if (useStockholmNightTheme) STOCKHOLM_NIGHT_WIDGET_COLORS else GlanceTheme.colors) {
         when (state) {
-            RoutineWidgetUiState.NoActiveCommute -> Scaffold(
-                backgroundColor = INACTIVE_WIDGET_BACKGROUND,
-                horizontalPadding = 0.dp,
-            ) { NoActiveCommuteContent() }
+            RoutineWidgetUiState.NoActiveCommute -> NoActiveCommuteWidget(
+                useLightBackground = useLightInactiveBackground,
+                useStockholmNightBackground = useStockholmNightTheme,
+                showStatus = showInactiveStatus,
+            )
             is RoutineWidgetUiState.ActiveRoutine ->
                 ActiveRoutineContent(context, state.model, now, useStockholmNightTheme)
         }
@@ -429,7 +435,45 @@ internal fun BlickWidgetContent(
 }
 
 @Composable
-private fun NoActiveCommuteContent() {
+private fun NoActiveCommuteWidget(
+    useLightBackground: Boolean,
+    useStockholmNightBackground: Boolean,
+    showStatus: Boolean,
+) {
+    if (useLightBackground) {
+        Box(
+            modifier = GlanceModifier
+                .fillMaxSize()
+                .appWidgetBackground()
+                .background(LIGHT_INACTIVE_WIDGET_BACKGROUND)
+                .cornerRadius(WIDGET_CORNER_RADIUS),
+        ) {
+            NoActiveCommuteContent(
+                useLightBackground = true,
+                useStockholmNightBackground = false,
+                showStatus = showStatus,
+            )
+        }
+    } else {
+        Scaffold(
+            backgroundColor = INACTIVE_WIDGET_BACKGROUND,
+            horizontalPadding = 0.dp,
+        ) {
+            NoActiveCommuteContent(
+                useLightBackground = false,
+                useStockholmNightBackground = useStockholmNightBackground,
+                showStatus = showStatus,
+            )
+        }
+    }
+}
+
+@Composable
+private fun NoActiveCommuteContent(
+    useLightBackground: Boolean,
+    useStockholmNightBackground: Boolean,
+    showStatus: Boolean,
+) {
     val context = LocalContext.current.withAppLocale()
     val size = LocalSize.current
     val layout = inactiveWidgetLayoutFor(size.width, size.height)
@@ -438,7 +482,11 @@ private fun NoActiveCommuteContent() {
         modifier = GlanceModifier.fillMaxSize(),
         contentAlignment = Alignment.BottomCenter,
     ) {
-        if (layout.skylineResourceId != null && skylineHeight != null) {
+        if (useLightBackground) {
+            LightWidgetBackgroundImage()
+        } else if (useStockholmNightBackground) {
+            StockholmNightWidgetBackgroundImage(GlanceModifier.fillMaxSize())
+        } else if (layout.skylineResourceId != null && skylineHeight != null) {
             Column(horizontalAlignment = Alignment.CenterHorizontally) {
                 Image(
                     provider = ImageProvider(layout.skylineResourceId),
@@ -467,14 +515,38 @@ private fun NoActiveCommuteContent() {
             Column(
                 horizontalAlignment = Alignment.CenterHorizontally,
             ) {
-                InactiveBrandingContent(context, layout)
+                InactiveBrandingContent(context, layout, showStatus)
             }
         }
     }
 }
 
+/** The supplied Light-theme artwork fills the complete rounded widget shell without stretching.
+ * Crop removes only the overflow outside the current launcher bounds. */
 @Composable
-private fun InactiveBrandingContent(context: Context, layout: InactiveWidgetLayout) {
+private fun LightWidgetBackgroundImage() {
+    Image(
+        provider = ImageProvider(R.drawable.widget_inactive_light_background),
+        contentDescription = null,
+        modifier = GlanceModifier
+            .fillMaxSize()
+            .cornerRadius(WIDGET_CORNER_RADIUS),
+        contentScale = ContentScale.Crop,
+    )
+}
+
+@Composable
+private fun StockholmNightWidgetBackgroundImage(modifier: GlanceModifier) {
+    Image(
+        provider = ImageProvider(R.drawable.widget_stockholm_night_background),
+        contentDescription = null,
+        modifier = modifier,
+        contentScale = ContentScale.Crop,
+    )
+}
+
+@Composable
+private fun InactiveBrandingContent(context: Context, layout: InactiveWidgetLayout, showStatus: Boolean) {
     // The authoritative adaptive-icon foreground has intentional launcher-mask padding. A
     // centered oversized image inside this clipped viewport removes only that transparent
     // padding, just like BlickWordmark does in standard Compose; the logo itself is unchanged.
@@ -492,17 +564,19 @@ private fun InactiveBrandingContent(context: Context, layout: InactiveWidgetLayo
             colorFilter = ColorFilter.tint(INACTIVE_WIDGET_MINT),
         )
     }
-    Spacer(modifier = GlanceModifier.height(layout.logoStatusGap))
-    Text(
-        text = context.getString(R.string.widget_no_active_commute),
-        maxLines = 2,
-        modifier = GlanceModifier.fillMaxWidth(),
-        style = TextStyle(
-            color = INACTIVE_WIDGET_SECONDARY,
-            fontSize = layout.statusSize,
-            textAlign = TextAlign.Center,
-        ),
-    )
+    if (showStatus) {
+        Spacer(modifier = GlanceModifier.height(layout.logoStatusGap))
+        Text(
+            text = context.getString(R.string.widget_no_active_commute),
+            maxLines = 2,
+            modifier = GlanceModifier.fillMaxWidth(),
+            style = TextStyle(
+                color = INACTIVE_WIDGET_SECONDARY,
+                fontSize = layout.statusSize,
+                textAlign = TextAlign.Center,
+            ),
+        )
+    }
 }
 
 /** Corner radius for [ActiveRoutineContent]'s own hand-built chrome — matches [Scaffold]'s own
@@ -527,6 +601,18 @@ internal fun largeJourneyConnectorDotsFor(stageCount: Int): String =
 /** Default horizontal inset for the main content column — matches [Scaffold]'s own default.
  * The approved Large exact-destination card uses its own 20dp inset. */
 private val WIDGET_HORIZONTAL_PADDING = 16.dp
+
+private fun isSystemNightMode(context: Context): Boolean =
+    (context.resources.configuration.uiMode and Configuration.UI_MODE_NIGHT_MASK) ==
+        Configuration.UI_MODE_NIGHT_YES
+
+@Composable
+private fun normalWidgetBackground(context: Context): ColorProvider =
+    if (isSystemNightMode(context)) {
+        GlanceTheme.colors.widgetBackground
+    } else {
+        LIGHT_WIDGET_BACKGROUND
+    }
 
 /**
  * A clean, left-aligned vertical stack: a line badge + "{station} → {destination}" route
@@ -571,6 +657,11 @@ private fun ActiveRoutineContent(
     val layout = widgetLayoutRulesFor(size.width, size.height)
     val tier = sizeTierFor(layout.tier)
     val isLargeJourney = layout.tier == WidgetLayoutTier.LARGE && model.content is RoutineWidgetContent.Journeys
+    val widgetBackground = if (useStockholmNightTheme) {
+        STOCKHOLM_NIGHT_WIDGET_BORDER
+    } else {
+        normalWidgetBackground(context)
+    }
     // "{station} → {destination}" -- matches the same pattern the ongoing notification's own
     // title and a routine's own default name both use (see RoutineNotificationBuilder.title,
     // RoutineCreateViewModel.selectDirection); falls back to the station alone when the
@@ -590,7 +681,7 @@ private fun ActiveRoutineContent(
         modifier = GlanceModifier
             .fillMaxSize()
             .appWidgetBackground()
-            .background(if (useStockholmNightTheme) STOCKHOLM_NIGHT_WIDGET_BORDER else GlanceTheme.colors.widgetBackground)
+            .background(widgetBackground)
             .cornerRadius(if (isLargeJourney) LARGE_JOURNEY_CORNER_RADIUS else WIDGET_CORNER_RADIUS)
             .clickable(clickAction),
     ) {

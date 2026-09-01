@@ -32,6 +32,7 @@ import se.blick.app.domain.model.ActiveCommuteSource
 import se.blick.app.ui.navigation.BlickNavHost
 import se.blick.app.ui.navigation.Routes
 import se.blick.app.ui.theme.BlickTheme
+import se.blick.app.ui.theme.BlickLightBackground
 import se.blick.app.ui.theme.shouldUseStockholmNightTheme
 import se.blick.app.scheduling.OneTimeEventReminderNavigation
 import javax.inject.Inject
@@ -170,13 +171,15 @@ class MainActivity : AppCompatActivity() {
                         canRequestAds = consentState.canRequestAds,
                     ),
                     content = {
-                        BlickNavHost(
-                            navController = navController,
-                            privacyOptionsRequired = consentState.privacyOptionsRequired,
-                            onOpenPrivacyOptions = {
-                                adConsentManager.showPrivacyOptions(this@MainActivity)
-                            },
-                        )
+                        BlickLightBackground {
+                            BlickNavHost(
+                                navController = navController,
+                                privacyOptionsRequired = consentState.privacyOptionsRequired,
+                                onOpenPrivacyOptions = {
+                                    adConsentManager.showPrivacyOptions(this@MainActivity)
+                                },
+                            )
+                        }
                     },
                     banner = {
                         AdBanner(
