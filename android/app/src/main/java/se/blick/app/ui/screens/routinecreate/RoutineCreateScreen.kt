@@ -39,6 +39,7 @@ import androidx.compose.material3.Icon
 import androidx.compose.material3.ListItem
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.OutlinedTextField
+import androidx.compose.material3.OutlinedTextFieldDefaults
 import androidx.compose.material3.Scaffold
 import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
@@ -84,6 +85,9 @@ import se.blick.app.ui.components.scheduleFormOutlinedTextFieldColors
 import se.blick.app.ui.notification.rememberNotificationPermissionGate
 import se.blick.app.ui.theme.CalmBlue40
 import se.blick.app.ui.theme.CalmBlue80
+import se.blick.app.ui.theme.LightPremiumUpsellCardBorder
+import se.blick.app.ui.theme.LightPremiumUpsellCardSurface
+import se.blick.app.ui.theme.LocalLightCityTheme
 import se.blick.app.ui.theme.Neutral40
 import se.blick.app.ui.theme.Neutral80
 import se.blick.app.ui.theme.LocalStockholmNightTheme
@@ -266,12 +270,24 @@ internal fun OriginDestinationStep(
     // care about this control.
     onOpenPremium: () -> Unit = {},
 ) {
+    val stopFieldColors = if (LocalLightCityTheme.current) {
+        val containerColor = MaterialTheme.colorScheme.surface
+        OutlinedTextFieldDefaults.colors(
+            focusedContainerColor = containerColor,
+            unfocusedContainerColor = containerColor,
+            disabledContainerColor = containerColor,
+            errorContainerColor = containerColor,
+        )
+    } else {
+        OutlinedTextFieldDefaults.colors()
+    }
     Column(Modifier.fillMaxSize().verticalScroll(rememberScrollState())) {
         OutlinedTextField(
             value = uiState.siteQuery,
             onValueChange = onQueryChanged,
             label = { Text(stringResource(R.string.routine_create_origin_label)) },
             singleLine = true,
+            colors = stopFieldColors,
             modifier = Modifier.fillMaxWidth(),
         )
         Spacer(Modifier.height(12.dp))
@@ -350,6 +366,7 @@ internal fun OriginDestinationStep(
                 )
             },
             singleLine = true,
+            colors = stopFieldColors,
             modifier = Modifier.fillMaxWidth().testTag("destination-field"),
         )
         when {
@@ -402,8 +419,19 @@ internal fun OriginDestinationStep(
  * dialog existed. */
 @Composable
 private fun PremiumUpsellCard(onOpenPremium: () -> Unit) {
+    val useWarmLightSurface = LocalLightCityTheme.current
     Surface(
-        tonalElevation = 1.dp,
+        color = if (useWarmLightSurface) {
+            LightPremiumUpsellCardSurface
+        } else {
+            MaterialTheme.colorScheme.surface
+        },
+        border = if (useWarmLightSurface) {
+            BorderStroke(1.dp, LightPremiumUpsellCardBorder)
+        } else {
+            null
+        },
+        tonalElevation = if (useWarmLightSurface) 0.dp else 1.dp,
         shape = MaterialTheme.shapes.medium,
         modifier = Modifier.fillMaxWidth(),
     ) {
@@ -558,7 +586,7 @@ internal fun ScheduleStep(
                         value = uiState.name,
                         onValueChange = onNameChanged,
                         singleLine = true,
-                        colors = scheduleFormOutlinedTextFieldColors(),
+                        colors = scheduleFormOutlinedTextFieldColors(useLightSurface = true),
                         keyboardOptions = KeyboardOptions(imeAction = ImeAction.Done),
                         keyboardActions = KeyboardActions(onDone = { focusManager.clearFocus() }),
                         modifier = Modifier

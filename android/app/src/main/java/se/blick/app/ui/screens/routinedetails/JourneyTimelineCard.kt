@@ -50,7 +50,6 @@ import se.blick.app.ui.components.LineBadge
 import se.blick.app.ui.theme.LocalStockholmNightTheme
 import se.blick.app.ui.theme.LocalLightCityTheme
 import se.blick.app.ui.theme.LightOneTimeEventCardDivider
-import se.blick.app.ui.theme.LightOneTimeEventCardSurface
 import se.blick.app.ui.theme.StockholmNightSurfaces
 import se.blick.app.widget.LineBadgeColorMapping
 import se.blick.app.widget.toBadgeColor
@@ -183,17 +182,17 @@ internal fun PlannedJourneyTimelineCard(
     }
 
     Surface(
-        color = when {
-            useStockholmNightSurface -> StockholmNightSurfaces.Card
-            useLightEventSurface -> LightOneTimeEventCardSurface
-            else -> MaterialTheme.colorScheme.surface
-        },
+        color = if (useStockholmNightSurface) StockholmNightSurfaces.Card else MaterialTheme.colorScheme.surface,
         border = when {
             emphasized -> BorderStroke(1.dp, MaterialTheme.colorScheme.primary.copy(alpha = 0.55f))
             useStockholmNightSurface -> BorderStroke(1.dp, StockholmNightSurfaces.CardBorder)
             else -> null
         },
-        tonalElevation = if (useStockholmNightSurface) 0.dp else if (emphasized) 3.dp else 1.dp,
+        tonalElevation = when {
+            useStockholmNightSurface || useLightEventSurface -> 0.dp
+            emphasized -> 3.dp
+            else -> 1.dp
+        },
         shape = MaterialTheme.shapes.medium,
         modifier = modifier.fillMaxWidth().clickable { onExpandedChange(!expanded) },
     ) {

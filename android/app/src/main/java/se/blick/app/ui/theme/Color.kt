@@ -16,3 +16,7 @@ val BlickBrandMint = Color(0xFF33E4A1)
 // Material surface palette used by the rest of the application.
 internal val LightOneTimeEventCardSurface = Color(0xFFFCF8F7)
 internal val LightOneTimeEventCardDivider = Color(0xFFE7DEDC)
+
+// Dedicated normal-Light treatment for the Premium offer in routine creation.
+internal val LightPremiumUpsellCardSurface = Color(0xFFFCF8F7)
+internal val LightPremiumUpsellCardBorder = Color(0xFFE7DEDC)

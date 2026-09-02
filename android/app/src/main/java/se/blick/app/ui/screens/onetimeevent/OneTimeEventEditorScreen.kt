@@ -184,7 +184,7 @@ internal fun OneTimeEventEditorContent(
                                 onValueChange = onName,
                                 placeholder = { Text(stringResource(R.string.one_time_event_name_hint)) },
                                 singleLine = true,
-                                colors = scheduleFormOutlinedTextFieldColors(),
+                                colors = scheduleFormOutlinedTextFieldColors(useLightSurface = true),
                                 keyboardOptions = KeyboardOptions(imeAction = ImeAction.Done),
                                 keyboardActions = KeyboardActions(onDone = { focusManager.clearFocus() }),
                                 modifier = Modifier
@@ -464,6 +464,7 @@ private fun LocationField(
             onValueChange = onValueChange,
             label = { Text(label) },
             singleLine = true,
+            colors = scheduleFormOutlinedTextFieldColors(useLightSurface = true),
             trailingIcon = if (searching) ({ CircularProgressIndicator(modifier = Modifier.height(20.dp)) }) else null,
             modifier = Modifier.fillMaxWidth(),
         )

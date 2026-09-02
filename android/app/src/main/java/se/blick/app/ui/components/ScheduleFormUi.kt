@@ -25,6 +25,7 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.semantics.contentDescription
 import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.unit.dp
+import se.blick.app.ui.theme.LocalLightCityTheme
 import se.blick.app.ui.theme.LocalStockholmNightTheme
 import se.blick.app.ui.theme.StockholmNightSurfaces
 
@@ -88,16 +89,26 @@ fun ScheduleValueControl(
 }
 
 @Composable
-fun scheduleFormOutlinedTextFieldColors(): TextFieldColors =
-    if (LocalStockholmNightTheme.current) {
-        OutlinedTextFieldDefaults.colors(
-            focusedContainerColor = StockholmNightSurfaces.Control,
-            unfocusedContainerColor = StockholmNightSurfaces.Control,
-            disabledContainerColor = StockholmNightSurfaces.Control,
-            errorContainerColor = StockholmNightSurfaces.Control,
-            unfocusedBorderColor = StockholmNightSurfaces.Border,
-            disabledBorderColor = StockholmNightSurfaces.Border,
-        )
-    } else {
-        OutlinedTextFieldDefaults.colors()
+fun scheduleFormOutlinedTextFieldColors(useLightSurface: Boolean = false): TextFieldColors =
+    when {
+        LocalStockholmNightTheme.current -> {
+            OutlinedTextFieldDefaults.colors(
+                focusedContainerColor = StockholmNightSurfaces.Control,
+                unfocusedContainerColor = StockholmNightSurfaces.Control,
+                disabledContainerColor = StockholmNightSurfaces.Control,
+                errorContainerColor = StockholmNightSurfaces.Control,
+                unfocusedBorderColor = StockholmNightSurfaces.Border,
+                disabledBorderColor = StockholmNightSurfaces.Border,
+            )
+        }
+        useLightSurface && LocalLightCityTheme.current -> {
+            val containerColor = MaterialTheme.colorScheme.surface
+            OutlinedTextFieldDefaults.colors(
+                focusedContainerColor = containerColor,
+                unfocusedContainerColor = containerColor,
+                disabledContainerColor = containerColor,
+                errorContainerColor = containerColor,
+            )
+        }
+        else -> OutlinedTextFieldDefaults.colors()
     }
