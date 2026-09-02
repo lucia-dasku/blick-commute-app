@@ -47,7 +47,15 @@ import androidx.glance.text.Text
 import androidx.glance.text.TextAlign
 import androidx.glance.text.TextStyle
 import androidx.glance.unit.ColorProvider
+import dagger.hilt.EntryPoint
+import dagger.hilt.InstallIn
+import dagger.hilt.android.EntryPointAccessors
+import dagger.hilt.components.SingletonComponent
+import kotlinx.coroutines.flow.first
 import se.blick.app.R
+import se.blick.app.billing.PremiumEntitlementRepository
+import se.blick.app.billing.hasPremiumAccess
+import se.blick.app.data.local.datastore.AppSettingsDataStore
 import se.blick.app.domain.model.DisruptionEffect
 import se.blick.app.domain.model.ExactDestinationChangesPreference
 import se.blick.app.domain.model.JourneyRole
@@ -72,9 +80,10 @@ import java.time.format.DateTimeFormatter
  * see `res/xml/blick_routine_widget_info.xml`.
  *
  * `stateDefinition = PreferencesGlanceStateDefinition` (Glance's built-in DataStore-backed
- * implementation) is the ONLY state this widget reads or writes — see
- * `RoutineWidgetPreferences.kt` for the exact keys, and [RoutineWidgetUpdater] for the only
- * writer.
+ * implementation) owns the widget's routine/content state — see `RoutineWidgetPreferences.kt`
+ * for the exact keys, and [RoutineWidgetUpdater] for the only writer. Presentation is resolved
+ * directly from Blick's current app settings before every render. This is essential for a newly
+ * placed widget, whose per-instance preferences are still empty when its first frame is composed.
  *
  * Because every update above is entirely push-driven, and is only ever pushed from
  * [se.blick.app.scheduling.RoutineActiveWindowWorker]'s loop (never in response to the widget
@@ -94,15 +103,38 @@ class BlickRoutineWidget : GlanceAppWidget() {
     override val sizeMode = SizeMode.Exact
 
     override suspend fun provideGlance(context: Context, id: GlanceId) {
+        val theme = currentEffectiveWidgetTheme(context)
         provideContent {
             val prefs = currentState<Preferences>()
             BlickWidgetContent(
                 state = prefs.toWidgetUiState(),
-                useStockholmNightTheme = prefs.usesStockholmNightWidgetTheme(),
-                useDarkTheme = prefs.darkWidgetThemeOrNull(),
+                useStockholmNightTheme = theme.useStockholmNightTheme,
+                useDarkTheme = theme.useDarkTheme,
             )
         }
     }
+}
+
+@EntryPoint
+@InstallIn(SingletonComponent::class)
+internal interface WidgetThemeEntryPoint {
+    fun appSettingsDataStore(): AppSettingsDataStore
+    fun premiumEntitlementRepository(): PremiumEntitlementRepository
+}
+
+/** Reads the authoritative app appearance for the frame that is about to be rendered. Widget
+ * preferences intentionally do not participate: they can be missing on first placement or stale
+ * until a queued reconciliation runs, while Blick's selected appearance is already available. */
+private suspend fun currentEffectiveWidgetTheme(context: Context): EffectiveWidgetTheme {
+    val dependencies = EntryPointAccessors.fromApplication(
+        context.applicationContext,
+        WidgetThemeEntryPoint::class.java,
+    )
+    return resolveEffectiveWidgetTheme(
+        settings = dependencies.appSettingsDataStore().settings.first(),
+        hasPremiumAccess = dependencies.premiumEntitlementRepository().entitlement.value.hasPremiumAccess,
+        isSystemNightMode = isSystemNightMode(context),
+    )
 }
 
 /** [BlickRoutineWidgetReceiver.glanceAppWidget]'s counterpart in `AndroidManifest.xml` — see
