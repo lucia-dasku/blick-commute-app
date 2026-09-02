@@ -10,8 +10,9 @@ import org.junit.runner.RunWith
 import org.robolectric.RobolectricTestRunner
 import org.robolectric.RuntimeEnvironment
 import org.robolectric.annotation.Config
-import se.blick.app.data.repository.RoutineRepository
+import se.blick.app.data.local.datastore.AppSettings
 import se.blick.app.data.local.datastore.AppSettingsDataStore
+import se.blick.app.data.repository.RoutineRepository
 import se.blick.app.domain.model.CommuteRoutine
 import se.blick.app.domain.model.Disruption
 import se.blick.app.domain.model.DisruptionMessage
@@ -90,6 +91,53 @@ class RoutineWidgetUpdaterTest {
 
             assertEquals(routine, fake.lastRoutine)
         }
+}
+
+class EffectiveWidgetThemeTest {
+
+    @Test
+    fun `explicit Light overrides a dark Samsung-style system configuration`() {
+        val theme = resolveEffectiveWidgetTheme(
+            settings = AppSettings(useDarkTheme = false),
+            hasPremiumAccess = false,
+            isSystemNightMode = true,
+        )
+
+        assertEquals(EffectiveWidgetTheme(useStockholmNightTheme = false, useDarkTheme = false), theme)
+    }
+
+    @Test
+    fun `explicit Dark overrides a light Lenovo-style system configuration`() {
+        val theme = resolveEffectiveWidgetTheme(
+            settings = AppSettings(useDarkTheme = true),
+            hasPremiumAccess = false,
+            isSystemNightMode = false,
+        )
+
+        assertEquals(EffectiveWidgetTheme(useStockholmNightTheme = false, useDarkTheme = true), theme)
+    }
+
+    @Test
+    fun `System remains the only mode that follows device night configuration`() {
+        val settings = AppSettings(useDarkTheme = null)
+
+        assertEquals(false, resolveEffectiveWidgetTheme(settings, false, isSystemNightMode = false).useDarkTheme)
+        assertEquals(true, resolveEffectiveWidgetTheme(settings, false, isSystemNightMode = true).useDarkTheme)
+    }
+
+    @Test
+    fun `Stockholm Night remains Premium-only and always dark`() {
+        val settings = AppSettings(useDarkTheme = false, useStockholmNightTheme = true)
+
+        assertEquals(
+            EffectiveWidgetTheme(useStockholmNightTheme = true, useDarkTheme = true),
+            resolveEffectiveWidgetTheme(settings, hasPremiumAccess = true, isSystemNightMode = false),
+        )
+        assertEquals(
+            EffectiveWidgetTheme(useStockholmNightTheme = false, useDarkTheme = false),
+            resolveEffectiveWidgetTheme(settings, hasPremiumAccess = false, isSystemNightMode = true),
+        )
+    }
 }
 
 /**

@@ -1,6 +1,6 @@
 <?xml version="1.0" encoding="utf-8"?>
 <resources>
-    <color name="widget_preview_background">#2B2B30</color>
+    <color name="widget_preview_background">#010C2F</color>
     <color name="widget_preview_on_background">#E4E2E6</color>
     <color name="widget_preview_on_surface_variant">#C5C8CF</color>
     <color name="widget_preview_line_badge_red">#DB2925</color>

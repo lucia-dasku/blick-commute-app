@@ -14,6 +14,7 @@ import se.blick.app.billing.FreeRoutineSelectionStore
 import se.blick.app.billing.PremiumEntitlementRepository
 import se.blick.app.billing.RoutineTierPolicy
 import se.blick.app.billing.hasPremiumAccess
+import se.blick.app.data.local.datastore.AppSettings
 import se.blick.app.data.local.datastore.AppSettingsDataStore
 import se.blick.app.data.repository.RoutineRepository
 import se.blick.app.domain.model.CommuteRoutine
@@ -146,6 +147,29 @@ interface RoutineWidgetUpdater {
 
 private const val WIDGET_UPDATE_LOG_TAG = "RoutineWidgetUpdater"
 
+/** The exact presentation written to every widget instance. Basic Light/Dark follows Blick's
+ * selected appearance, not the device independently; System is the only selection that delegates
+ * to [isSystemNightMode]. Stockholm Night remains a separate Premium presentation. */
+internal data class EffectiveWidgetTheme(
+    val useStockholmNightTheme: Boolean,
+    val useDarkTheme: Boolean,
+)
+
+internal fun resolveEffectiveWidgetTheme(
+    settings: AppSettings,
+    hasPremiumAccess: Boolean,
+    isSystemNightMode: Boolean,
+): EffectiveWidgetTheme {
+    val useStockholmNightTheme = shouldUseStockholmNightTheme(
+        requested = settings.useStockholmNightTheme,
+        hasPremiumAccess = hasPremiumAccess,
+    )
+    return EffectiveWidgetTheme(
+        useStockholmNightTheme = useStockholmNightTheme,
+        useDarkTheme = useStockholmNightTheme || (settings.useDarkTheme ?: isSystemNightMode),
+    )
+}
+
 /**
  * Runs [block] — expected to be exactly one [RoutineWidgetUpdater] call — swallowing any
  * ordinary exception it throws (logged, not silently dropped) but always rethrowing a genuine
@@ -255,11 +279,11 @@ class GlanceRoutineWidgetUpdater @Inject constructor(
         val manager = GlanceAppWidgetManager(context)
         val ids = manager.getGlanceIds(BlickRoutineWidget::class.java)
         if (ids.isEmpty()) return
-        val useStockholmNightTheme = effectiveStockholmNightTheme()
+        val theme = effectiveWidgetTheme(isSystemNightMode)
         ids.forEach { id ->
             updateAppWidgetState(context, id) { prefs ->
-                prefs.setStockholmNightWidgetTheme(useStockholmNightTheme)
-                prefs.setSystemNightWidgetTheme(isSystemNightMode)
+                prefs.setStockholmNightWidgetTheme(theme.useStockholmNightTheme)
+                prefs.setDarkWidgetTheme(theme.useDarkTheme)
             }
         }
         BlickRoutineWidget().updateAll(context)
@@ -269,21 +293,23 @@ class GlanceRoutineWidgetUpdater @Inject constructor(
         val manager = GlanceAppWidgetManager(context)
         val ids = manager.getGlanceIds(BlickRoutineWidget::class.java)
         if (ids.isEmpty()) return
-        val useStockholmNightTheme = effectiveStockholmNightTheme()
+        val theme = effectiveWidgetTheme(systemNightModeForWidgets)
         ids.forEach { id ->
             updateAppWidgetState(context, id) { prefs ->
                 state.writeInto(prefs)
-                prefs.setStockholmNightWidgetTheme(useStockholmNightTheme)
-                prefs.setSystemNightWidgetTheme(systemNightModeForWidgets)
+                prefs.setStockholmNightWidgetTheme(theme.useStockholmNightTheme)
+                prefs.setDarkWidgetTheme(theme.useDarkTheme)
             }
         }
         BlickRoutineWidget().updateAll(context)
     }
 
-    private suspend fun effectiveStockholmNightTheme(): Boolean = shouldUseStockholmNightTheme(
-        requested = appSettingsDataStore.settings.first().useStockholmNightTheme,
-        hasPremiumAccess = entitlementRepository.entitlement.value.hasPremiumAccess,
-    )
+    private suspend fun effectiveWidgetTheme(isSystemNightMode: Boolean): EffectiveWidgetTheme =
+        resolveEffectiveWidgetTheme(
+            settings = appSettingsDataStore.settings.first(),
+            hasPremiumAccess = entitlementRepository.entitlement.value.hasPremiumAccess,
+            isSystemNightMode = isSystemNightMode,
+        )
 }
 
 private fun android.content.res.Configuration.isNightModeEnabled(): Boolean =

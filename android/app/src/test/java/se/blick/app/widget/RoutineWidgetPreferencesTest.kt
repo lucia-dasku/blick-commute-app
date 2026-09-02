@@ -676,15 +676,15 @@ class RoutineWidgetPreferencesTest {
     }
 
     @Test
-    fun `system night widget theme is absent by default and survives content rewrites`() {
+    fun `effective dark widget theme is absent by default and survives content rewrites`() {
         val prefs = mutablePreferencesOf()
-        assertEquals(null, prefs.toPreferences().systemNightWidgetThemeOrNull())
+        assertEquals(null, prefs.toPreferences().darkWidgetThemeOrNull())
 
-        prefs.setSystemNightWidgetTheme(true)
+        prefs.setDarkWidgetTheme(true)
         RoutineWidgetUiState.NoActiveCommute.writeInto(prefs)
 
-        assertEquals(true, prefs.toPreferences().systemNightWidgetThemeOrNull())
-        prefs.setSystemNightWidgetTheme(false)
-        assertEquals(false, prefs.toPreferences().systemNightWidgetThemeOrNull())
+        assertEquals(true, prefs.toPreferences().darkWidgetThemeOrNull())
+        prefs.setDarkWidgetTheme(false)
+        assertEquals(false, prefs.toPreferences().darkWidgetThemeOrNull())
     }
 }

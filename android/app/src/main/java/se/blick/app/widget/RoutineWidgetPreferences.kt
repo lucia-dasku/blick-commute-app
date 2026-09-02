@@ -32,7 +32,11 @@ private object WidgetKeys {
      * independent of the routine/content keys below so an appearance change can redraw an
      * already-active widget without replacing its current departures or journeys. */
     val USE_STOCKHOLM_NIGHT_THEME = booleanPreferencesKey("useStockholmNightTheme")
-    val USE_SYSTEM_NIGHT_THEME = booleanPreferencesKey("useSystemNightTheme")
+    /** Effective Basic Light/Dark choice. The persisted string deliberately keeps the key name
+     * introduced by the previous release so every already-placed widget retains its presentation
+     * state across this fix; only its meaning is corrected from raw system mode to Blick's
+     * effective app mode (`explicit Light/Dark ?: system`). */
+    val USE_DARK_THEME = booleanPreferencesKey("useSystemNightTheme")
     val CONTENT_TYPE = stringPreferencesKey("contentType")
     val ROUTINE_ID = stringPreferencesKey("routineId")
     val ROUTINE_NAME = stringPreferencesKey("routineName")
@@ -144,10 +148,10 @@ private enum class ContentType { NO_ACTIVE_COMMUTE, LOADING, LIVE, STALE, NO_UPC
  * The independent appearance flag is preserved because it is not content state. */
 internal fun RoutineWidgetUiState.writeInto(prefs: MutablePreferences) {
     val existingStockholmNightTheme = prefs[WidgetKeys.USE_STOCKHOLM_NIGHT_THEME]
-    val existingSystemNightTheme = prefs[WidgetKeys.USE_SYSTEM_NIGHT_THEME]
+    val existingDarkTheme = prefs[WidgetKeys.USE_DARK_THEME]
     prefs.clear()
     existingStockholmNightTheme?.let { prefs[WidgetKeys.USE_STOCKHOLM_NIGHT_THEME] = it }
-    existingSystemNightTheme?.let { prefs[WidgetKeys.USE_SYSTEM_NIGHT_THEME] = it }
+    existingDarkTheme?.let { prefs[WidgetKeys.USE_DARK_THEME] = it }
     when (this) {
         RoutineWidgetUiState.NoActiveCommute -> prefs[WidgetKeys.CONTENT_TYPE] = ContentType.NO_ACTIVE_COMMUTE.name
         is RoutineWidgetUiState.ActiveRoutine -> {
@@ -202,11 +206,11 @@ internal fun MutablePreferences.setStockholmNightWidgetTheme(enabled: Boolean) {
     this[WidgetKeys.USE_STOCKHOLM_NIGHT_THEME] = enabled
 }
 
-internal fun Preferences.systemNightWidgetThemeOrNull(): Boolean? =
-    this[WidgetKeys.USE_SYSTEM_NIGHT_THEME]
+internal fun Preferences.darkWidgetThemeOrNull(): Boolean? =
+    this[WidgetKeys.USE_DARK_THEME]
 
-internal fun MutablePreferences.setSystemNightWidgetTheme(enabled: Boolean) {
-    this[WidgetKeys.USE_SYSTEM_NIGHT_THEME] = enabled
+internal fun MutablePreferences.setDarkWidgetTheme(enabled: Boolean) {
+    this[WidgetKeys.USE_DARK_THEME] = enabled
 }
 
 private fun MutablePreferences.writeJourney(row: WidgetJourneyRow, isSecondary: Boolean) {

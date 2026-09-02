@@ -1,12 +1,9 @@
 <?xml version="1.0" encoding="utf-8"?>
 <resources>
-    <!-- Static widget-picker preview only (res/layout/widget_preview_*.xml) — NOT the live
-         widget's own theme, whose normal light surface is Blick's soft off-white while its dark
-         surface follows androidx.glance.GlanceTheme's dynamic/system colors at runtime (see
-         BlickRoutineWidget.kt). These give the picker's static preview a
-         reasonable light/dark look without depending on that runtime-only color source; see
+    <!-- Static widget-picker preview only (res/layout/widget_preview_*.xml). Its Light and Dark
+         colors mirror the explicit Basic widget palettes in BlickRoutineWidget.kt; see
          values-night/colors.xml for the dark counterpart. -->
-    <color name="widget_preview_background">#F3F5F4</color>
+    <color name="widget_preview_background">#FAF4F3</color>
     <color name="widget_preview_on_background">#1B1B1F</color>
     <color name="widget_preview_on_surface_variant">#5C6068</color>
     <color name="widget_preview_line_badge_red">#DB2925</color>

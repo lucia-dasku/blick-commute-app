@@ -24,7 +24,6 @@ import androidx.glance.appwidget.GlanceAppWidgetReceiver
 import androidx.glance.appwidget.SizeMode
 import androidx.glance.appwidget.action.actionStartActivity
 import androidx.glance.appwidget.appWidgetBackground
-import androidx.glance.appwidget.components.Scaffold
 import androidx.glance.appwidget.cornerRadius
 import androidx.glance.appwidget.provideContent
 import androidx.glance.background
@@ -100,7 +99,7 @@ class BlickRoutineWidget : GlanceAppWidget() {
             BlickWidgetContent(
                 state = prefs.toWidgetUiState(),
                 useStockholmNightTheme = prefs.usesStockholmNightWidgetTheme(),
-                useSystemNightTheme = prefs.systemNightWidgetThemeOrNull(),
+                useDarkTheme = prefs.darkWidgetThemeOrNull(),
             )
         }
     }
@@ -270,10 +269,64 @@ private fun sizeTierFor(layoutTier: WidgetLayoutTier): WidgetSizeTier = when (la
 // source of truth rather than duplicating these literals. Only this Glance-specific white-text
 // ColorProvider stays here, since androidx.glance.unit.ColorProvider has no standard-Compose use.
 private val BADGE_TEXT_WHITE = ColorProvider(Color.White)
-private val LIGHT_WIDGET_BACKGROUND = ColorProvider(Color(0xFFF3F5F4))
-private val LIGHT_INACTIVE_WIDGET_BACKGROUND = ColorProvider(Color(0xFFFAF4F3))
-private val INACTIVE_WIDGET_BACKGROUND = ColorProvider(Color(0xFF010C2F))
-private val INACTIVE_WIDGET_SECONDARY = ColorProvider(Color(0xFFC5C8CF))
+private val BASIC_LIGHT_WIDGET_COLORS = colorProviders(
+    primary = ColorProvider(Color(0xFF3A5A78)),
+    onPrimary = ColorProvider(Color.White),
+    primaryContainer = ColorProvider(Color(0xFFDCE7F1)),
+    onPrimaryContainer = ColorProvider(Color(0xFF10213B)),
+    secondary = ColorProvider(Color(0xFF5C6068)),
+    onSecondary = ColorProvider(Color.White),
+    secondaryContainer = ColorProvider(Color(0xFFE7E3E3)),
+    onSecondaryContainer = ColorProvider(Color(0xFF1B1B1F)),
+    tertiary = ColorProvider(Color(0xFF8A5A00)),
+    onTertiary = ColorProvider(Color.White),
+    tertiaryContainer = ColorProvider(Color(0xFFF6E6BF)),
+    onTertiaryContainer = ColorProvider(Color(0xFF3A2A0D)),
+    error = ColorProvider(Color(0xFFBA1A1A)),
+    errorContainer = ColorProvider(Color(0xFFF6DEDC)),
+    onError = ColorProvider(Color.White),
+    onErrorContainer = ColorProvider(Color(0xFF8A2A22)),
+    background = ColorProvider(Color(0xFFFAF4F3)),
+    onBackground = ColorProvider(Color(0xFF1B1B1F)),
+    surface = ColorProvider(Color(0xFFFAF4F3)),
+    onSurface = ColorProvider(Color(0xFF1B1B1F)),
+    surfaceVariant = ColorProvider(Color(0xFFE7DEDC)),
+    onSurfaceVariant = ColorProvider(Color(0xFF5C6068)),
+    outline = ColorProvider(Color(0xFF74777F)),
+    inverseOnSurface = ColorProvider(Color(0xFFF4F0EF)),
+    inverseSurface = ColorProvider(Color(0xFF303033)),
+    inversePrimary = ColorProvider(Color(0xFFA9C7E0)),
+    widgetBackground = ColorProvider(Color(0xFFFAF4F3)),
+)
+private val BASIC_DARK_WIDGET_COLORS = colorProviders(
+    primary = ColorProvider(Color(0xFFA9C7E0)),
+    onPrimary = ColorProvider(Color(0xFF10213B)),
+    primaryContainer = ColorProvider(Color(0xFF253852)),
+    onPrimaryContainer = ColorProvider(Color(0xFFF4F6FB)),
+    secondary = ColorProvider(Color(0xFFC5C8CF)),
+    onSecondary = ColorProvider(Color(0xFF202124)),
+    secondaryContainer = ColorProvider(Color(0xFF263B58)),
+    onSecondaryContainer = ColorProvider(Color(0xFFF4F6FB)),
+    tertiary = ColorProvider(Color(0xFFF4C47A)),
+    onTertiary = ColorProvider(Color(0xFF3A2A0D)),
+    tertiaryContainer = ColorProvider(Color(0xFF4A3A20)),
+    onTertiaryContainer = ColorProvider(Color(0xFFF7D9A0)),
+    error = ColorProvider(Color(0xFFF2B8B5)),
+    errorContainer = ColorProvider(Color(0xFF4A2A27)),
+    onError = ColorProvider(Color(0xFF601410)),
+    onErrorContainer = ColorProvider(Color(0xFFF0B8B2)),
+    background = ColorProvider(Color(0xFF010C2F)),
+    onBackground = ColorProvider(Color(0xFFF4F6FB)),
+    surface = ColorProvider(Color(0xFF010C2F)),
+    onSurface = ColorProvider(Color(0xFFF4F6FB)),
+    surfaceVariant = ColorProvider(Color(0xFF14243B)),
+    onSurfaceVariant = ColorProvider(Color(0xFFC5C8CF)),
+    outline = ColorProvider(Color(0xFF62738A)),
+    inverseOnSurface = ColorProvider(Color(0xFF07142B)),
+    inverseSurface = ColorProvider(Color(0xFFF4F6FB)),
+    inversePrimary = ColorProvider(Color(0xFF3A5A78)),
+    widgetBackground = ColorProvider(Color(0xFF010C2F)),
+)
 private val INACTIVE_WIDGET_MINT = ColorProvider(Color(0xFF33E4A1))
 private val STOCKHOLM_NIGHT_WIDGET_BORDER = ColorProvider(StockholmNightSurfaces.CardBorder)
 private val STOCKHOLM_NIGHT_WIDGET_COLORS = colorProviders(
@@ -305,33 +358,15 @@ private val STOCKHOLM_NIGHT_WIDGET_COLORS = colorProviders(
     inversePrimary = ColorProvider(Color(0xFF3A5A78)),
     widgetBackground = ColorProvider(StockholmNightSurfaces.Card),
 )
-private val INACTIVE_WIDGET_WATER_HEIGHT = 12.dp
-// The skyline makes geometric centering read slightly low. This extra space below the centered
-// branding content shifts its visual center upward by 14dp -- approximately one status-text
-// line -- without introducing a fixed top position, so it still adapts to launcher bounds.
-private val INACTIVE_WIDGET_BRANDING_OPTICAL_PADDING = 28.dp
-private const val INACTIVE_WIDGET_SKYLINE_DISPLAY_ASPECT_RATIO = 2.75f
-
-/** Responsive presentation values for the branded inactive state. All canonical sizes use the
- * approved skyline; exceptionally small or unusually short bounds drop it so the logo and
- * localized status can never be crowded. */
+/** Responsive logo sizes for the branded inactive state. Artwork is selected by theme rather
+ * than by widget size: Light and Stockholm Night fill the shell with their supplied city view,
+ * while Basic Dark deliberately remains plain navy. */
 internal data class InactiveWidgetLayout(
     val logoViewportWidth: Dp,
     val logoViewportHeight: Dp,
     val logoAssetSize: Dp,
-    val statusSize: TextUnit,
-    val logoStatusGap: Dp,
     val horizontalPadding: Dp,
-    val skylineResourceId: Int?,
-    val skylineAspectRatio: Float?,
 )
-
-/** Preserves each skyline asset's natural aspect ratio instead of stretching it to an arbitrary
- * fixed height. The result spans the usable width and lands exactly on the widget's bottom edge. */
-internal fun inactiveSkylineHeightFor(width: Dp, layout: InactiveWidgetLayout): Dp? {
-    val aspectRatio = layout.skylineAspectRatio ?: return null
-    return width / aspectRatio
-}
 
 internal fun inactiveWidgetLayoutFor(width: Dp, height: Dp): InactiveWidgetLayout {
     val tier = widgetLayoutRulesFor(width, height).tier
@@ -340,60 +375,37 @@ internal fun inactiveWidgetLayoutFor(width: Dp, height: Dp): InactiveWidgetLayou
             logoViewportWidth = 66.dp,
             logoViewportHeight = 80.dp,
             logoAssetSize = 156.dp,
-            statusSize = 14.sp,
-            logoStatusGap = 8.dp,
             horizontalPadding = 12.dp,
-            skylineResourceId = R.drawable.widget_inactive_skyline_approved,
-            skylineAspectRatio = INACTIVE_WIDGET_SKYLINE_DISPLAY_ASPECT_RATIO,
         )
         tier == WidgetLayoutTier.STANDARD && height >= 140.dp -> InactiveWidgetLayout(
             logoViewportWidth = 52.dp,
             logoViewportHeight = 62.dp,
             logoAssetSize = 122.dp,
-            statusSize = 13.sp,
-            logoStatusGap = 6.dp,
             horizontalPadding = 8.dp,
-            skylineResourceId = R.drawable.widget_inactive_skyline_approved,
-            skylineAspectRatio = INACTIVE_WIDGET_SKYLINE_DISPLAY_ASPECT_RATIO,
         )
         tier == WidgetLayoutTier.STANDARD -> InactiveWidgetLayout(
             logoViewportWidth = 40.dp,
             logoViewportHeight = 46.dp,
             logoAssetSize = 90.dp,
-            statusSize = 11.sp,
-            logoStatusGap = 4.dp,
             horizontalPadding = 8.dp,
-            skylineResourceId = null,
-            skylineAspectRatio = null,
         )
         width < 140.dp || height < 96.dp -> InactiveWidgetLayout(
             logoViewportWidth = 26.dp,
             logoViewportHeight = 32.dp,
             logoAssetSize = 62.dp,
-            statusSize = 9.sp,
-            logoStatusGap = 2.dp,
             horizontalPadding = 6.dp,
-            skylineResourceId = null,
-            skylineAspectRatio = null,
         )
         else -> InactiveWidgetLayout(
             logoViewportWidth = 40.dp,
             logoViewportHeight = 48.dp,
             logoAssetSize = 94.dp,
-            statusSize = 11.sp,
-            logoStatusGap = 4.dp,
             horizontalPadding = 8.dp,
-            skylineResourceId = R.drawable.widget_inactive_skyline_approved,
-            skylineAspectRatio = INACTIVE_WIDGET_SKYLINE_DISPLAY_ASPECT_RATIO,
         )
     }
 }
 
-/** [ActiveRoutineContent] builds its own chrome (background/corner radius) instead of using the
- * shared [Scaffold] — see that function's own doc for why: a present disruption needs its own
- * full-bleed strip along the very bottom edge, which [Scaffold]'s single uniformly-padded
- * `content` slot cannot represent. [NoActiveCommuteContent] has no such need, so it keeps using
- * [Scaffold] exactly as before.
+/** [ActiveRoutineContent] builds its own chrome (background/corner radius) so a present
+ * disruption can keep its full-bleed strip along the very bottom edge.
  *
  * `internal`, not `private` — this is the exact composable [BlickRoutineWidget.provideGlance]
  * calls (through [currentState]/[toWidgetUiState]), so it's also the one [BlickRoutineWidgetRenderTest]
@@ -412,7 +424,7 @@ internal fun BlickWidgetContent(
     state: RoutineWidgetUiState,
     now: java.time.Instant = java.time.Instant.now(),
     useStockholmNightTheme: Boolean = false,
-    useSystemNightTheme: Boolean? = null,
+    useDarkTheme: Boolean? = null,
 ) {
     // .withAppLocale() -- this Context flows down into every Blick-owned string lookup below
     // (ActiveRoutineContent and everything under it already take context as a plain parameter,
@@ -421,53 +433,40 @@ internal fun BlickWidgetContent(
     // (station/destination/line/disruption headline) is untouched either way -- it was never a
     // string resource to begin with.
     val context = LocalContext.current.withAppLocale()
-    val systemNightMode = useSystemNightTheme ?: isSystemNightMode(context)
-    val useLightInactiveBackground = !useStockholmNightTheme && !systemNightMode
-    val showInactiveStatus = !useLightInactiveBackground && !useStockholmNightTheme
-    GlanceTheme(colors = if (useStockholmNightTheme) STOCKHOLM_NIGHT_WIDGET_COLORS else GlanceTheme.colors) {
+    val effectiveDarkTheme = useStockholmNightTheme || (useDarkTheme ?: isSystemNightMode(context))
+    val colors = when {
+        useStockholmNightTheme -> STOCKHOLM_NIGHT_WIDGET_COLORS
+        effectiveDarkTheme -> BASIC_DARK_WIDGET_COLORS
+        else -> BASIC_LIGHT_WIDGET_COLORS
+    }
+    GlanceTheme(colors = colors) {
         when (state) {
             RoutineWidgetUiState.NoActiveCommute -> NoActiveCommuteWidget(
-                useLightBackground = useLightInactiveBackground,
-                useStockholmNightBackground = useStockholmNightTheme,
-                showStatus = showInactiveStatus,
+                useDarkTheme = effectiveDarkTheme,
+                useStockholmNightTheme = useStockholmNightTheme,
             )
             is RoutineWidgetUiState.ActiveRoutine ->
-                ActiveRoutineContent(context, state.model, now, useStockholmNightTheme, systemNightMode)
+                ActiveRoutineContent(context, state.model, now, useStockholmNightTheme, effectiveDarkTheme)
         }
     }
 }
 
 @Composable
 private fun NoActiveCommuteWidget(
-    useLightBackground: Boolean,
-    useStockholmNightBackground: Boolean,
-    showStatus: Boolean,
+    useDarkTheme: Boolean,
+    useStockholmNightTheme: Boolean,
 ) {
-    if (useLightBackground) {
-        Box(
-            modifier = GlanceModifier
-                .fillMaxSize()
-                .appWidgetBackground()
-                .background(LIGHT_INACTIVE_WIDGET_BACKGROUND)
-                .cornerRadius(WIDGET_CORNER_RADIUS),
-        ) {
-            NoActiveCommuteContent(
-                useLightBackground = true,
-                useStockholmNightBackground = false,
-                showStatus = showStatus,
-            )
-        }
-    } else {
-        Scaffold(
-            backgroundColor = INACTIVE_WIDGET_BACKGROUND,
-            horizontalPadding = 0.dp,
-        ) {
-            NoActiveCommuteContent(
-                useLightBackground = false,
-                useStockholmNightBackground = useStockholmNightBackground,
-                showStatus = showStatus,
-            )
-        }
+    Box(
+        modifier = GlanceModifier
+            .fillMaxSize()
+            .appWidgetBackground()
+            .background(GlanceTheme.colors.widgetBackground)
+            .cornerRadius(WIDGET_CORNER_RADIUS),
+    ) {
+        NoActiveCommuteContent(
+            useLightBackground = !useDarkTheme,
+            useStockholmNightBackground = useStockholmNightTheme,
+        )
     }
 }
 
@@ -475,35 +474,16 @@ private fun NoActiveCommuteWidget(
 private fun NoActiveCommuteContent(
     useLightBackground: Boolean,
     useStockholmNightBackground: Boolean,
-    showStatus: Boolean,
 ) {
-    val context = LocalContext.current.withAppLocale()
     val size = LocalSize.current
     val layout = inactiveWidgetLayoutFor(size.width, size.height)
-    val skylineHeight = inactiveSkylineHeightFor(size.width, layout)
     Box(
         modifier = GlanceModifier.fillMaxSize(),
-        contentAlignment = Alignment.BottomCenter,
+        contentAlignment = Alignment.Center,
     ) {
-        if (useLightBackground) {
-            LightWidgetBackgroundImage()
-        } else if (useStockholmNightBackground) {
-            StockholmNightWidgetBackgroundImage(GlanceModifier.fillMaxSize())
-        } else if (layout.skylineResourceId != null && skylineHeight != null) {
-            Column(horizontalAlignment = Alignment.CenterHorizontally) {
-                Image(
-                    provider = ImageProvider(layout.skylineResourceId),
-                    contentDescription = null,
-                    modifier = GlanceModifier.fillMaxWidth().height(skylineHeight),
-                    contentScale = ContentScale.Crop,
-                )
-                Image(
-                    provider = ImageProvider(R.drawable.widget_inactive_water),
-                    contentDescription = null,
-                    modifier = GlanceModifier.fillMaxWidth().height(INACTIVE_WIDGET_WATER_HEIGHT),
-                    contentScale = ContentScale.FillBounds,
-                )
-            }
+        when {
+            useStockholmNightBackground -> StockholmNightWidgetBackgroundImage()
+            useLightBackground -> LightWidgetBackgroundImage()
         }
         Box(
             modifier = GlanceModifier
@@ -511,15 +491,10 @@ private fun NoActiveCommuteContent(
                 .padding(
                     start = layout.horizontalPadding,
                     end = layout.horizontalPadding,
-                    bottom = if (skylineHeight != null) INACTIVE_WIDGET_BRANDING_OPTICAL_PADDING else 0.dp,
                 ),
             contentAlignment = Alignment.Center,
         ) {
-            Column(
-                horizontalAlignment = Alignment.CenterHorizontally,
-            ) {
-                InactiveBrandingContent(context, layout, showStatus)
-            }
+            InactiveBrandingContent(layout)
         }
     }
 }
@@ -539,17 +514,19 @@ private fun LightWidgetBackgroundImage() {
 }
 
 @Composable
-private fun StockholmNightWidgetBackgroundImage(modifier: GlanceModifier) {
+private fun StockholmNightWidgetBackgroundImage() {
     Image(
         provider = ImageProvider(R.drawable.widget_stockholm_night_background),
         contentDescription = null,
-        modifier = modifier,
+        modifier = GlanceModifier
+            .fillMaxSize()
+            .cornerRadius(WIDGET_CORNER_RADIUS),
         contentScale = ContentScale.Crop,
     )
 }
 
 @Composable
-private fun InactiveBrandingContent(context: Context, layout: InactiveWidgetLayout, showStatus: Boolean) {
+private fun InactiveBrandingContent(layout: InactiveWidgetLayout) {
     // The authoritative adaptive-icon foreground has intentional launcher-mask padding. A
     // centered oversized image inside this clipped viewport removes only that transparent
     // padding, just like BlickWordmark does in standard Compose; the logo itself is unchanged.
@@ -567,24 +544,9 @@ private fun InactiveBrandingContent(context: Context, layout: InactiveWidgetLayo
             colorFilter = ColorFilter.tint(INACTIVE_WIDGET_MINT),
         )
     }
-    if (showStatus) {
-        Spacer(modifier = GlanceModifier.height(layout.logoStatusGap))
-        Text(
-            text = context.getString(R.string.widget_no_active_commute),
-            maxLines = 2,
-            modifier = GlanceModifier.fillMaxWidth(),
-            style = TextStyle(
-                color = INACTIVE_WIDGET_SECONDARY,
-                fontSize = layout.statusSize,
-                textAlign = TextAlign.Center,
-            ),
-        )
-    }
 }
 
-/** Corner radius for [ActiveRoutineContent]'s own hand-built chrome — matches [Scaffold]'s own
- * look closely enough that [NoActiveCommuteContent] (which still uses [Scaffold]) and this look
- * like the same widget shell. */
+/** Shared corner radius for the active and inactive widget shells. */
 private val WIDGET_CORNER_RADIUS = 16.dp
 private val WIDGET_INNER_CORNER_RADIUS = 15.dp
 private val LARGE_JOURNEY_CORNER_RADIUS = 24.dp
@@ -601,21 +563,13 @@ internal fun largeJourneyStationMaxLinesFor(widgetWidth: Dp): Int =
 internal fun largeJourneyConnectorDotsFor(stageCount: Int): String =
     "•".repeat(if (stageCount == 2) 24 else 16)
 
-/** Default horizontal inset for the main content column — matches [Scaffold]'s own default.
- * The approved Large exact-destination card uses its own 20dp inset. */
+/** Default horizontal inset for the main content column. The approved Large exact-destination
+ * card uses its own 20dp inset. */
 private val WIDGET_HORIZONTAL_PADDING = 16.dp
 
 private fun isSystemNightMode(context: Context): Boolean =
     (context.resources.configuration.uiMode and Configuration.UI_MODE_NIGHT_MASK) ==
         Configuration.UI_MODE_NIGHT_YES
-
-@Composable
-private fun normalWidgetBackground(useSystemNightTheme: Boolean): ColorProvider =
-    if (useSystemNightTheme) {
-        GlanceTheme.colors.widgetBackground
-    } else {
-        LIGHT_WIDGET_BACKGROUND
-    }
 
 /**
  * A clean, left-aligned vertical stack: a line badge + "{station} → {destination}" route
@@ -629,10 +583,8 @@ private fun normalWidgetBackground(useSystemNightTheme: Boolean): ColorProvider 
  * never in the Small tier, where there simply isn't room.
  *
  * Builds its own chrome (background + corner radius via [androidx.glance.appwidget.appWidgetBackground]/
- * [androidx.glance.appwidget.cornerRadius]) instead of delegating to the shared [Scaffold], which
- * only ever offers one uniformly-padded content slot — insufficient for [DisruptionStrip]'s own
- * full-bleed requirement. The main content column is still padded exactly like [Scaffold] would
- * (see [WIDGET_HORIZONTAL_PADDING]), so the common (no disruption) case looks unchanged.
+ * [androidx.glance.appwidget.cornerRadius]) so [DisruptionStrip] can remain full-bleed. The main
+ * content column keeps the established [WIDGET_HORIZONTAL_PADDING].
  */
 @Composable
 private fun ActiveRoutineContent(
@@ -640,7 +592,7 @@ private fun ActiveRoutineContent(
     model: RoutineWidgetModel,
     now: java.time.Instant,
     useStockholmNightTheme: Boolean,
-    useSystemNightTheme: Boolean,
+    useDarkTheme: Boolean,
 ) {
     // [now] is BlickWidgetContent's own single Instant for this whole render (see that
     // function's own doc) -- never read independently here. Threaded through render-time
@@ -664,7 +616,7 @@ private fun ActiveRoutineContent(
     val widgetBackground = if (useStockholmNightTheme) {
         STOCKHOLM_NIGHT_WIDGET_BORDER
     } else {
-        normalWidgetBackground(useSystemNightTheme)
+        GlanceTheme.colors.widgetBackground
     }
     // "{station} → {destination}" -- matches the same pattern the ongoing notification's own
     // title and a routine's own default name both use (see RoutineNotificationBuilder.title,
@@ -720,7 +672,7 @@ private fun ActiveRoutineContent(
             ) {
                 if (layout.showRoutineLabel) {
                     model.label?.let { label ->
-                        RoutineLabelChip(context, label, tier, useStockholmNightTheme)
+                        RoutineLabelChip(context, label, tier, useDarkTheme)
                         Spacer(
                             modifier = GlanceModifier.height(
                                 when (layout.tier) {
@@ -819,20 +771,13 @@ private fun RoutineLabelChip(
     context: Context,
     label: RoutineLabel,
     tier: WidgetSizeTier,
-    useStockholmNightTheme: Boolean,
+    useDarkTheme: Boolean,
 ) {
     val light = label.visuals(darkTheme = false)
     val dark = label.visuals(darkTheme = true)
-    val accent = if (useStockholmNightTheme) {
-        ColorProvider(dark.accent)
-    } else {
-        androidx.glance.color.ColorProvider(day = light.accent, night = dark.accent)
-    }
-    val container = if (useStockholmNightTheme) {
-        ColorProvider(dark.container)
-    } else {
-        androidx.glance.color.ColorProvider(day = light.container, night = dark.container)
-    }
+    val visuals = if (useDarkTheme) dark else light
+    val accent = ColorProvider(visuals.accent)
+    val container = ColorProvider(visuals.container)
     Box(
         modifier = GlanceModifier
             .background(container)
