@@ -100,6 +100,7 @@ class BlickRoutineWidget : GlanceAppWidget() {
             BlickWidgetContent(
                 state = prefs.toWidgetUiState(),
                 useStockholmNightTheme = prefs.usesStockholmNightWidgetTheme(),
+                useSystemNightTheme = prefs.systemNightWidgetThemeOrNull(),
             )
         }
     }
@@ -411,6 +412,7 @@ internal fun BlickWidgetContent(
     state: RoutineWidgetUiState,
     now: java.time.Instant = java.time.Instant.now(),
     useStockholmNightTheme: Boolean = false,
+    useSystemNightTheme: Boolean? = null,
 ) {
     // .withAppLocale() -- this Context flows down into every Blick-owned string lookup below
     // (ActiveRoutineContent and everything under it already take context as a plain parameter,
@@ -419,7 +421,8 @@ internal fun BlickWidgetContent(
     // (station/destination/line/disruption headline) is untouched either way -- it was never a
     // string resource to begin with.
     val context = LocalContext.current.withAppLocale()
-    val useLightInactiveBackground = !useStockholmNightTheme && !isSystemNightMode(context)
+    val systemNightMode = useSystemNightTheme ?: isSystemNightMode(context)
+    val useLightInactiveBackground = !useStockholmNightTheme && !systemNightMode
     val showInactiveStatus = !useLightInactiveBackground && !useStockholmNightTheme
     GlanceTheme(colors = if (useStockholmNightTheme) STOCKHOLM_NIGHT_WIDGET_COLORS else GlanceTheme.colors) {
         when (state) {
@@ -429,7 +432,7 @@ internal fun BlickWidgetContent(
                 showStatus = showInactiveStatus,
             )
             is RoutineWidgetUiState.ActiveRoutine ->
-                ActiveRoutineContent(context, state.model, now, useStockholmNightTheme)
+                ActiveRoutineContent(context, state.model, now, useStockholmNightTheme, systemNightMode)
         }
     }
 }
@@ -607,8 +610,8 @@ private fun isSystemNightMode(context: Context): Boolean =
         Configuration.UI_MODE_NIGHT_YES
 
 @Composable
-private fun normalWidgetBackground(context: Context): ColorProvider =
-    if (isSystemNightMode(context)) {
+private fun normalWidgetBackground(useSystemNightTheme: Boolean): ColorProvider =
+    if (useSystemNightTheme) {
         GlanceTheme.colors.widgetBackground
     } else {
         LIGHT_WIDGET_BACKGROUND
@@ -637,6 +640,7 @@ private fun ActiveRoutineContent(
     model: RoutineWidgetModel,
     now: java.time.Instant,
     useStockholmNightTheme: Boolean,
+    useSystemNightTheme: Boolean,
 ) {
     // [now] is BlickWidgetContent's own single Instant for this whole render (see that
     // function's own doc) -- never read independently here. Threaded through render-time
@@ -660,7 +664,7 @@ private fun ActiveRoutineContent(
     val widgetBackground = if (useStockholmNightTheme) {
         STOCKHOLM_NIGHT_WIDGET_BORDER
     } else {
-        normalWidgetBackground(context)
+        normalWidgetBackground(useSystemNightTheme)
     }
     // "{station} → {destination}" -- matches the same pattern the ongoing notification's own
     // title and a routine's own default name both use (see RoutineNotificationBuilder.title,

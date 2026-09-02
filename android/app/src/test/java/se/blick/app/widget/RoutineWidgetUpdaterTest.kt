@@ -123,7 +123,7 @@ class GlanceRoutineWidgetUpdaterRefreshPresentationTest {
 
     @Test
     fun `refreshPresentation never queries the routine repository or notification availability`() = runTest {
-        updater.refreshPresentation()
+        updater.refreshPresentation(isSystemNightMode = true)
 
         coVerify(exactly = 0) { routineRepository.observeAll() }
         coVerify(exactly = 0) { notificationAvailabilityChecker.check() }

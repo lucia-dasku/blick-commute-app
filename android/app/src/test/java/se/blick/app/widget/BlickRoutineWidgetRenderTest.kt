@@ -277,6 +277,44 @@ class BlickRoutineWidgetRenderTest {
         }
 
     @Test
+    fun `persisted dark presentation overrides a stale light Glance context`() =
+        runGlanceAppWidgetUnitTest {
+            val staleLightContext = contextWithNightMode(isNightMode = false)
+            setContext(staleLightContext)
+            setAppWidgetSize(DpSize(260.dp, 150.dp))
+            provideComposable {
+                BlickWidgetContent(
+                    RoutineWidgetUiState.NoActiveCommute,
+                    now,
+                    useSystemNightTheme = true,
+                )
+            }
+
+            onNode(hasBackgroundColor(Color(0xFF010C2F))).assertExists()
+            onNode(hasImageResource(R.drawable.widget_inactive_skyline_approved)).assertExists()
+            onNode(hasImageResource(R.drawable.widget_inactive_light_background)).assertDoesNotExist()
+        }
+
+    @Test
+    fun `persisted light presentation overrides a stale dark Glance context`() =
+        runGlanceAppWidgetUnitTest {
+            val staleDarkContext = contextWithNightMode(isNightMode = true)
+            setContext(staleDarkContext)
+            setAppWidgetSize(DpSize(260.dp, 150.dp))
+            provideComposable {
+                BlickWidgetContent(
+                    RoutineWidgetUiState.NoActiveCommute,
+                    now,
+                    useSystemNightTheme = false,
+                )
+            }
+
+            onNode(hasBackgroundColor(Color(0xFFFAF4F3))).assertExists()
+            onNode(hasImageResource(R.drawable.widget_inactive_light_background)).assertExists()
+            onNode(hasImageResource(R.drawable.widget_inactive_skyline_approved)).assertDoesNotExist()
+        }
+
+    @Test
     fun `Stockholm Night inactive widget uses supplied background in system light mode`() =
         runGlanceAppWidgetUnitTest {
             val lightContext = contextWithNightMode(isNightMode = false)
@@ -287,6 +325,7 @@ class BlickRoutineWidgetRenderTest {
                     RoutineWidgetUiState.NoActiveCommute,
                     now,
                     useStockholmNightTheme = true,
+                    useSystemNightTheme = true,
                 )
             }
 

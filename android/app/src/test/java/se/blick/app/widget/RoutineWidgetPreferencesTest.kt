@@ -674,4 +674,17 @@ class RoutineWidgetPreferencesTest {
         prefs.setStockholmNightWidgetTheme(false)
         assertEquals(false, prefs.toPreferences().usesStockholmNightWidgetTheme())
     }
+
+    @Test
+    fun `system night widget theme is absent by default and survives content rewrites`() {
+        val prefs = mutablePreferencesOf()
+        assertEquals(null, prefs.toPreferences().systemNightWidgetThemeOrNull())
+
+        prefs.setSystemNightWidgetTheme(true)
+        RoutineWidgetUiState.NoActiveCommute.writeInto(prefs)
+
+        assertEquals(true, prefs.toPreferences().systemNightWidgetThemeOrNull())
+        prefs.setSystemNightWidgetTheme(false)
+        assertEquals(false, prefs.toPreferences().systemNightWidgetThemeOrNull())
+    }
 }

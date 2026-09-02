@@ -5,6 +5,7 @@ import android.content.BroadcastReceiver
 import android.content.Context
 import android.content.Intent
 import android.content.IntentFilter
+import android.content.res.Configuration as AndroidConfiguration
 import androidx.core.content.ContextCompat
 import androidx.hilt.work.HiltWorkerFactory
 import androidx.lifecycle.DefaultLifecycleObserver
@@ -18,6 +19,8 @@ import kotlinx.coroutines.SupervisorJob
 import kotlinx.coroutines.launch
 import se.blick.app.scheduling.NotificationRecoveryCoordinator
 import se.blick.app.billing.PremiumEntitlementRepository
+import se.blick.app.widget.RoutineWidgetUpdater
+import se.blick.app.widget.runWidgetUpdateSafely
 import javax.inject.Inject
 
 /**
@@ -59,14 +62,17 @@ class BlickApplication : Application(), Configuration.Provider {
 
     @Inject lateinit var notificationRecoveryCoordinator: NotificationRecoveryCoordinator
     @Inject lateinit var premiumEntitlementRepository: PremiumEntitlementRepository
+    @Inject lateinit var routineWidgetUpdater: RoutineWidgetUpdater
 
     private val applicationScope = CoroutineScope(SupervisorJob() + Dispatchers.Default)
+    private lateinit var systemNightModeTransitionTracker: SystemNightModeTransitionTracker
 
     override val workManagerConfiguration: Configuration
         get() = Configuration.Builder().setWorkerFactory(hiltWorkerFactory).build()
 
     override fun onCreate() {
         super.onCreate()
+        systemNightModeTransitionTracker = SystemNightModeTransitionTracker(resources.configuration.uiMode)
         applicationScope.launch {
             refreshPremiumBeforeRecovery(premiumEntitlementRepository) {
                 notificationRecoveryCoordinator.onAppStart()
@@ -76,10 +82,18 @@ class BlickApplication : Application(), Configuration.Provider {
         registerForegroundRecovery()
     }
 
+    override fun onConfigurationChanged(newConfig: AndroidConfiguration) {
+        super.onConfigurationChanged(newConfig)
+        refreshWidgetPresentationIfSystemNightModeChanged(systemNightModeEnabled(newConfig.uiMode))
+    }
+
     private fun registerForegroundRecovery() {
         ProcessLifecycleOwner.get().lifecycle.addObserver(
             object : DefaultLifecycleObserver {
                 override fun onStart(owner: LifecycleOwner) {
+                    refreshWidgetPresentationIfSystemNightModeChanged(
+                        systemNightModeEnabled(resources.configuration.uiMode),
+                    )
                     applicationScope.launch {
                         refreshPremiumBeforeRecovery(premiumEntitlementRepository) {
                             notificationRecoveryCoordinator.onForeground()
@@ -88,6 +102,13 @@ class BlickApplication : Application(), Configuration.Provider {
                 }
             },
         )
+    }
+
+    private fun refreshWidgetPresentationIfSystemNightModeChanged(isNightMode: Boolean) {
+        if (!systemNightModeTransitionTracker.record(isNightMode)) return
+        applicationScope.launch {
+            refreshWidgetPresentationOnly(routineWidgetUpdater, isNightMode)
+        }
     }
 
     private fun registerTimeZoneChangeReceiver() {
@@ -103,6 +124,29 @@ class BlickApplication : Application(), Configuration.Provider {
             ContextCompat.RECEIVER_NOT_EXPORTED,
         )
     }
+}
+
+/** Tracks only the night-mode bits, ignoring unrelated configuration changes. */
+internal class SystemNightModeTransitionTracker(initialUiMode: Int) {
+    private var lastKnownNightMode = systemNightModeEnabled(initialUiMode)
+
+    @Synchronized
+    fun record(isNightMode: Boolean): Boolean {
+        if (isNightMode == lastKnownNightMode) return false
+        lastKnownNightMode = isNightMode
+        return true
+    }
+}
+
+internal fun systemNightModeEnabled(uiMode: Int): Boolean =
+    (uiMode and AndroidConfiguration.UI_MODE_NIGHT_MASK) == AndroidConfiguration.UI_MODE_NIGHT_YES
+
+/** Performs the presentation-only widget redraw without allowing a best-effort failure to escape. */
+internal suspend fun refreshWidgetPresentationOnly(
+    routineWidgetUpdater: RoutineWidgetUpdater,
+    isSystemNightMode: Boolean,
+) {
+    runWidgetUpdateSafely { routineWidgetUpdater.refreshPresentation(isSystemNightMode) }
 }
 
 /** Refreshes entitlement to a fresh or cache-aware fail-soft state before tier-sensitive recovery. */

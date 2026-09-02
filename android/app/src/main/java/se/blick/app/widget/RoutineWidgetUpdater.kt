@@ -1,6 +1,7 @@
 package se.blick.app.widget
 
 import android.content.Context
+import android.content.res.Configuration
 import android.util.Log
 import androidx.glance.appwidget.GlanceAppWidgetManager
 import androidx.glance.appwidget.state.updateAppWidgetState
@@ -134,6 +135,13 @@ interface RoutineWidgetUpdater {
      * [updateWithDepartures] overload's own default body) — only [GlanceRoutineWidgetUpdater]
      * overrides this meaningfully. */
     suspend fun refreshPresentation() {}
+
+    /** Presentation-only redraw with an authoritative system night-mode value from a freshly
+     * delivered configuration. The default forwards to [refreshPresentation] so existing
+     * implementations and test fakes remain source-compatible. */
+    suspend fun refreshPresentation(isSystemNightMode: Boolean) {
+        refreshPresentation()
+    }
 }
 
 private const val WIDGET_UPDATE_LOG_TAG = "RoutineWidgetUpdater"
@@ -189,6 +197,9 @@ class GlanceRoutineWidgetUpdater @Inject constructor(
     private val freeRoutineSelectionStore: FreeRoutineSelectionStore? = null,
 ) : RoutineWidgetUpdater {
 
+    @Volatile
+    private var systemNightModeForWidgets = context.resources.configuration.isNightModeEnabled()
+
     override suspend fun updateWithJourneys(routine: CommuteRoutine, journeys: List<JourneyPlan>, now: Instant, fetchFailed: Boolean) {
         applyToAllInstances(decideJourneysWidgetState(routine, journeys, now, fetchFailed))
     }
@@ -236,6 +247,11 @@ class GlanceRoutineWidgetUpdater @Inject constructor(
      * [RoutineWidgetUiState] remains untouched. This updates only the effective appearance flag,
      * then re-triggers [BlickRoutineWidget.provideGlance] for every already-placed instance. */
     override suspend fun refreshPresentation() {
+        refreshPresentation(systemNightModeForWidgets)
+    }
+
+    override suspend fun refreshPresentation(isSystemNightMode: Boolean) {
+        systemNightModeForWidgets = isSystemNightMode
         val manager = GlanceAppWidgetManager(context)
         val ids = manager.getGlanceIds(BlickRoutineWidget::class.java)
         if (ids.isEmpty()) return
@@ -243,6 +259,7 @@ class GlanceRoutineWidgetUpdater @Inject constructor(
         ids.forEach { id ->
             updateAppWidgetState(context, id) { prefs ->
                 prefs.setStockholmNightWidgetTheme(useStockholmNightTheme)
+                prefs.setSystemNightWidgetTheme(isSystemNightMode)
             }
         }
         BlickRoutineWidget().updateAll(context)
@@ -257,6 +274,7 @@ class GlanceRoutineWidgetUpdater @Inject constructor(
             updateAppWidgetState(context, id) { prefs ->
                 state.writeInto(prefs)
                 prefs.setStockholmNightWidgetTheme(useStockholmNightTheme)
+                prefs.setSystemNightWidgetTheme(systemNightModeForWidgets)
             }
         }
         BlickRoutineWidget().updateAll(context)
@@ -267,3 +285,6 @@ class GlanceRoutineWidgetUpdater @Inject constructor(
         hasPremiumAccess = entitlementRepository.entitlement.value.hasPremiumAccess,
     )
 }
+
+private fun android.content.res.Configuration.isNightModeEnabled(): Boolean =
+    (uiMode and Configuration.UI_MODE_NIGHT_MASK) == Configuration.UI_MODE_NIGHT_YES
