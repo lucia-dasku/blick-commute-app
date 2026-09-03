@@ -1,5 +1,6 @@
 package se.blick.app.widget
 
+import androidx.datastore.preferences.core.booleanPreferencesKey
 import androidx.datastore.preferences.core.mutablePreferencesOf
 import androidx.datastore.preferences.core.stringPreferencesKey
 import org.junit.Assert.assertEquals
@@ -663,28 +664,47 @@ class RoutineWidgetPreferencesTest {
     }
 
     @Test
-    fun `Stockholm night widget theme defaults off and survives content rewrites`() {
+    fun `fresh empty preferences use the current app appearance fallback`() {
         val prefs = mutablePreferencesOf()
-        assertEquals(false, prefs.toPreferences().usesStockholmNightWidgetTheme())
 
-        prefs.setStockholmNightWidgetTheme(true)
-        RoutineWidgetUiState.NoActiveCommute.writeInto(prefs)
-
-        assertEquals(true, prefs.toPreferences().usesStockholmNightWidgetTheme())
-        prefs.setStockholmNightWidgetTheme(false)
-        assertEquals(false, prefs.toPreferences().usesStockholmNightWidgetTheme())
+        assertNull(prefs.toPreferences().widgetAppearanceOrNull())
+        assertEquals(
+            WidgetAppearance.BASIC_DARK,
+            prefs.toPreferences().widgetAppearance(WidgetAppearance.BASIC_DARK),
+        )
     }
 
     @Test
-    fun `effective dark widget theme is absent by default and survives content rewrites`() {
+    fun `persisted widget appearance overrides the current app fallback`() {
         val prefs = mutablePreferencesOf()
-        assertEquals(null, prefs.toPreferences().darkWidgetThemeOrNull())
+        prefs.setWidgetAppearance(WidgetAppearance.BASIC_LIGHT)
 
-        prefs.setDarkWidgetTheme(true)
+        assertEquals(
+            WidgetAppearance.BASIC_LIGHT,
+            prefs.toPreferences().widgetAppearance(WidgetAppearance.BASIC_DARK),
+        )
+    }
+
+    @Test
+    fun `legacy device night boolean is ignored when appearance key is absent`() {
+        val prefs = mutablePreferencesOf(
+            booleanPreferencesKey("useSystemNightTheme") to true,
+        )
+
+        assertNull(prefs.toPreferences().widgetAppearanceOrNull())
+        assertEquals(
+            WidgetAppearance.BASIC_LIGHT,
+            prefs.toPreferences().widgetAppearance(WidgetAppearance.BASIC_LIGHT),
+        )
+    }
+
+    @Test
+    fun `content rewrite preserves widget appearance`() {
+        val prefs = mutablePreferencesOf()
+        prefs.setWidgetAppearance(WidgetAppearance.STOCKHOLM_NIGHT)
+
         RoutineWidgetUiState.NoActiveCommute.writeInto(prefs)
 
-        assertEquals(true, prefs.toPreferences().darkWidgetThemeOrNull())
-        prefs.setDarkWidgetTheme(false)
-        assertEquals(false, prefs.toPreferences().darkWidgetThemeOrNull())
+        assertEquals(WidgetAppearance.STOCKHOLM_NIGHT, prefs.toPreferences().widgetAppearanceOrNull())
     }
 }

@@ -4,6 +4,7 @@ import android.content.res.Configuration
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.unit.DpSize
 import androidx.compose.ui.unit.dp
+import androidx.datastore.preferences.core.mutablePreferencesOf
 import androidx.glance.AndroidResourceImageProvider
 import androidx.glance.BackgroundModifier
 import androidx.glance.EmittableImage
@@ -33,7 +34,7 @@ import java.time.format.DateTimeFormatter
 import java.util.Locale
 
 /**
- * Renders [BlickWidgetContent] — the exact composable [BlickRoutineWidget.provideGlance] calls —
+ * Renders [BlickWidgetContent] and the state-reading [BlickWidgetContentFromCurrentState]
  * through Glance's own real unit-test rendering pipeline ([runGlanceAppWidgetUnitTest]), so these
  * prove what the widget actually draws, not a re-implementation of [resolveEffectiveModel]'s own
  * selection rules or [JourneyMainContent]'s own layout-selection logic. [BlickRoutineWidgetTest]
@@ -146,6 +147,51 @@ class BlickRoutineWidgetRenderTest {
             }
         },
     )
+
+    /** Glance 1.1.1 only permits `setState` before `provideComposable` and throws if state is
+     * changed afterward. These tests therefore cover the production `currentState` read and
+     * selection at composition time, but the active-session recomposition after `updateAll`
+     * still requires connected Samsung and Lenovo verification. */
+    @Test
+    fun `currentState uses initial appearance when fresh widget preferences are empty`() =
+        runGlanceAppWidgetUnitTest {
+            setContext(contextWithNightMode(isNightMode = false))
+            setAppWidgetSize(DpSize(260.dp, 150.dp))
+            setState(mutablePreferencesOf().toPreferences())
+
+            provideComposable {
+                BlickWidgetContentFromCurrentState(
+                    initialAppearance = WidgetAppearance.BASIC_DARK,
+                    now = now,
+                )
+            }
+
+            onNode(hasBackgroundColor(Color(0xFF010C2F))).assertExists()
+            onNode(hasBackgroundColor(Color(0xFFFAF4F3))).assertDoesNotExist()
+            onNode(hasImageResource(R.drawable.widget_inactive_light_background)).assertDoesNotExist()
+        }
+
+    @Test
+    fun `currentState persisted appearance overrides initial appearance`() =
+        runGlanceAppWidgetUnitTest {
+            val prefs = mutablePreferencesOf().apply {
+                setWidgetAppearance(WidgetAppearance.BASIC_LIGHT)
+            }
+            setContext(contextWithNightMode(isNightMode = true))
+            setAppWidgetSize(DpSize(260.dp, 150.dp))
+            setState(prefs.toPreferences())
+
+            provideComposable {
+                BlickWidgetContentFromCurrentState(
+                    initialAppearance = WidgetAppearance.BASIC_DARK,
+                    now = now,
+                )
+            }
+
+            onNode(hasBackgroundColor(Color(0xFFFAF4F3))).assertExists()
+            onNode(hasBackgroundColor(Color(0xFF010C2F))).assertDoesNotExist()
+            onNode(hasImageResource(R.drawable.widget_inactive_light_background)).assertExists()
+        }
 
     @Test
     fun `widget countdown changes from minutes to localized hours at sixty minutes`() {

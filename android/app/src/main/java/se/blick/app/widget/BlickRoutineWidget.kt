@@ -80,10 +80,10 @@ import java.time.format.DateTimeFormatter
  * see `res/xml/blick_routine_widget_info.xml`.
  *
  * `stateDefinition = PreferencesGlanceStateDefinition` (Glance's built-in DataStore-backed
- * implementation) owns the widget's routine/content state — see `RoutineWidgetPreferences.kt`
- * for the exact keys, and [RoutineWidgetUpdater] for the only writer. Presentation is resolved
- * directly from Blick's current app settings before every render. This is essential for a newly
- * placed widget, whose per-instance preferences are still empty when its first frame is composed.
+ * implementation) owns both routine/content state and the observable [WidgetAppearance] — see
+ * `RoutineWidgetPreferences.kt` for the exact keys, and [RoutineWidgetUpdater] for the only
+ * writer. The current app appearance is resolved before composition only as the first-frame
+ * fallback for a newly placed widget whose per-instance preferences are still empty.
  *
  * Because every update above is entirely push-driven, and is only ever pushed from
  * [se.blick.app.scheduling.RoutineActiveWindowWorker]'s loop (never in response to the widget
@@ -103,16 +103,28 @@ class BlickRoutineWidget : GlanceAppWidget() {
     override val sizeMode = SizeMode.Exact
 
     override suspend fun provideGlance(context: Context, id: GlanceId) {
-        val theme = currentEffectiveWidgetTheme(context)
+        val initialAppearance = currentWidgetAppearance(context)
         provideContent {
-            val prefs = currentState<Preferences>()
-            BlickWidgetContent(
-                state = prefs.toWidgetUiState(),
-                useStockholmNightTheme = theme.useStockholmNightTheme,
-                useDarkTheme = theme.useDarkTheme,
-            )
+            BlickWidgetContentFromCurrentState(initialAppearance)
         }
     }
+}
+
+/** Reads the DataStore-backed Glance preferences inside the composition so an update to a
+ * still-active Glance session can recompose with the newly persisted appearance. */
+@Composable
+internal fun BlickWidgetContentFromCurrentState(
+    initialAppearance: WidgetAppearance,
+    now: java.time.Instant = java.time.Instant.now(),
+) {
+    val prefs = currentState<Preferences>()
+    val appearance = prefs.widgetAppearanceOrNull() ?: initialAppearance
+    BlickWidgetContent(
+        state = prefs.toWidgetUiState(),
+        now = now,
+        useStockholmNightTheme = appearance == WidgetAppearance.STOCKHOLM_NIGHT,
+        useDarkTheme = appearance != WidgetAppearance.BASIC_LIGHT,
+    )
 }
 
 @EntryPoint
@@ -122,15 +134,15 @@ internal interface WidgetThemeEntryPoint {
     fun premiumEntitlementRepository(): PremiumEntitlementRepository
 }
 
-/** Reads the authoritative app appearance for the frame that is about to be rendered. Widget
- * preferences intentionally do not participate: they can be missing on first placement or stale
- * until a queued reconciliation runs, while Blick's selected appearance is already available. */
-private suspend fun currentEffectiveWidgetTheme(context: Context): EffectiveWidgetTheme {
+/** Reads the authoritative app appearance only for a fresh widget's first-frame fallback. Once
+ * [WidgetAppearance] has been persisted, [currentState] inside [GlanceAppWidget.provideContent]
+ * observes it and recomposes the still-active Glance session after an update. */
+private suspend fun currentWidgetAppearance(context: Context): WidgetAppearance {
     val dependencies = EntryPointAccessors.fromApplication(
         context.applicationContext,
         WidgetThemeEntryPoint::class.java,
     )
-    return resolveEffectiveWidgetTheme(
+    return resolveWidgetAppearance(
         settings = dependencies.appSettingsDataStore().settings.first(),
         hasPremiumAccess = dependencies.premiumEntitlementRepository().entitlement.value.hasPremiumAccess,
         isSystemNightMode = isSystemNightMode(context),
@@ -439,11 +451,12 @@ internal fun inactiveWidgetLayoutFor(width: Dp, height: Dp): InactiveWidgetLayou
 /** [ActiveRoutineContent] builds its own chrome (background/corner radius) so a present
  * disruption can keep its full-bleed strip along the very bottom edge.
  *
- * `internal`, not `private` — this is the exact composable [BlickRoutineWidget.provideGlance]
- * calls (through [currentState]/[toWidgetUiState]), so it's also the one [BlickRoutineWidgetRenderTest]
- * renders through Glance's own real unit-test pipeline to prove [ActiveRoutineContent] truly
- * calls [resolveEffectiveModel] and that the [GlanceTheme] wrapper every color lookup below
- * depends on is present, rather than reproducing this tree's selection logic in the test.
+ * `internal`, not `private` — this is the rendering surface
+ * [BlickWidgetContentFromCurrentState] calls after reading Glance state, so it's also the one
+ * [BlickRoutineWidgetRenderTest] renders through Glance's own real unit-test pipeline to prove
+ * [ActiveRoutineContent] truly calls [resolveEffectiveModel] and that the [GlanceTheme] wrapper
+ * every color lookup below depends on is present, rather than reproducing this tree's selection
+ * logic in the test.
  *
  * [now] defaults to [java.time.Instant.now] for the one real production call site
  * ([BlickRoutineWidget.provideGlance]). It's an explicit parameter rather than a bare internal

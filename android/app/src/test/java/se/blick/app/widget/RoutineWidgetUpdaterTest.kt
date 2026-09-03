@@ -93,36 +93,36 @@ class RoutineWidgetUpdaterTest {
         }
 }
 
-class EffectiveWidgetThemeTest {
+class WidgetAppearanceTest {
 
     @Test
     fun `explicit Light overrides a dark Samsung-style system configuration`() {
-        val theme = resolveEffectiveWidgetTheme(
+        val appearance = resolveWidgetAppearance(
             settings = AppSettings(useDarkTheme = false),
             hasPremiumAccess = false,
             isSystemNightMode = true,
         )
 
-        assertEquals(EffectiveWidgetTheme(useStockholmNightTheme = false, useDarkTheme = false), theme)
+        assertEquals(WidgetAppearance.BASIC_LIGHT, appearance)
     }
 
     @Test
     fun `explicit Dark overrides a light Lenovo-style system configuration`() {
-        val theme = resolveEffectiveWidgetTheme(
+        val appearance = resolveWidgetAppearance(
             settings = AppSettings(useDarkTheme = true),
             hasPremiumAccess = false,
             isSystemNightMode = false,
         )
 
-        assertEquals(EffectiveWidgetTheme(useStockholmNightTheme = false, useDarkTheme = true), theme)
+        assertEquals(WidgetAppearance.BASIC_DARK, appearance)
     }
 
     @Test
     fun `System remains the only mode that follows device night configuration`() {
         val settings = AppSettings(useDarkTheme = null)
 
-        assertEquals(false, resolveEffectiveWidgetTheme(settings, false, isSystemNightMode = false).useDarkTheme)
-        assertEquals(true, resolveEffectiveWidgetTheme(settings, false, isSystemNightMode = true).useDarkTheme)
+        assertEquals(WidgetAppearance.BASIC_LIGHT, resolveWidgetAppearance(settings, false, isSystemNightMode = false))
+        assertEquals(WidgetAppearance.BASIC_DARK, resolveWidgetAppearance(settings, false, isSystemNightMode = true))
     }
 
     @Test
@@ -130,12 +130,12 @@ class EffectiveWidgetThemeTest {
         val settings = AppSettings(useDarkTheme = false, useStockholmNightTheme = true)
 
         assertEquals(
-            EffectiveWidgetTheme(useStockholmNightTheme = true, useDarkTheme = true),
-            resolveEffectiveWidgetTheme(settings, hasPremiumAccess = true, isSystemNightMode = false),
+            WidgetAppearance.STOCKHOLM_NIGHT,
+            resolveWidgetAppearance(settings, hasPremiumAccess = true, isSystemNightMode = false),
         )
         assertEquals(
-            EffectiveWidgetTheme(useStockholmNightTheme = false, useDarkTheme = false),
-            resolveEffectiveWidgetTheme(settings, hasPremiumAccess = false, isSystemNightMode = true),
+            WidgetAppearance.BASIC_LIGHT,
+            resolveWidgetAppearance(settings, hasPremiumAccess = false, isSystemNightMode = true),
         )
     }
 }

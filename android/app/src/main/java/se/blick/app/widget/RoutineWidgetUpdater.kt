@@ -150,24 +150,20 @@ private const val WIDGET_UPDATE_LOG_TAG = "RoutineWidgetUpdater"
 /** The exact presentation written to every widget instance. Basic Light/Dark follows Blick's
  * selected appearance, not the device independently; System is the only selection that delegates
  * to [isSystemNightMode]. Stockholm Night remains a separate Premium presentation. */
-internal data class EffectiveWidgetTheme(
-    val useStockholmNightTheme: Boolean,
-    val useDarkTheme: Boolean,
-)
-
-internal fun resolveEffectiveWidgetTheme(
+internal fun resolveWidgetAppearance(
     settings: AppSettings,
     hasPremiumAccess: Boolean,
     isSystemNightMode: Boolean,
-): EffectiveWidgetTheme {
+): WidgetAppearance {
     val useStockholmNightTheme = shouldUseStockholmNightTheme(
         requested = settings.useStockholmNightTheme,
         hasPremiumAccess = hasPremiumAccess,
     )
-    return EffectiveWidgetTheme(
-        useStockholmNightTheme = useStockholmNightTheme,
-        useDarkTheme = useStockholmNightTheme || (settings.useDarkTheme ?: isSystemNightMode),
-    )
+    return when {
+        useStockholmNightTheme -> WidgetAppearance.STOCKHOLM_NIGHT
+        settings.useDarkTheme ?: isSystemNightMode -> WidgetAppearance.BASIC_DARK
+        else -> WidgetAppearance.BASIC_LIGHT
+    }
 }
 
 /**
@@ -268,8 +264,9 @@ class GlanceRoutineWidgetUpdater @Inject constructor(
     }
 
     /** Deliberately does NOT go through [applyToAllInstances], so the current
-     * [RoutineWidgetUiState] remains untouched. This updates only the effective appearance flag,
-     * then re-triggers [BlickRoutineWidget.provideGlance] for every already-placed instance. */
+     * [RoutineWidgetUiState] remains untouched. This updates only the effective appearance and
+     * requests a redraw; an active Glance session observes the preference from `currentState`
+     * inside its existing composition rather than restarting [BlickRoutineWidget.provideGlance]. */
     override suspend fun refreshPresentation() {
         refreshPresentation(systemNightModeForWidgets)
     }
@@ -279,11 +276,10 @@ class GlanceRoutineWidgetUpdater @Inject constructor(
         val manager = GlanceAppWidgetManager(context)
         val ids = manager.getGlanceIds(BlickRoutineWidget::class.java)
         if (ids.isEmpty()) return
-        val theme = effectiveWidgetTheme(isSystemNightMode)
+        val appearance = effectiveWidgetAppearance(isSystemNightMode)
         ids.forEach { id ->
             updateAppWidgetState(context, id) { prefs ->
-                prefs.setStockholmNightWidgetTheme(theme.useStockholmNightTheme)
-                prefs.setDarkWidgetTheme(theme.useDarkTheme)
+                prefs.setWidgetAppearance(appearance)
             }
         }
         BlickRoutineWidget().updateAll(context)
@@ -293,19 +289,18 @@ class GlanceRoutineWidgetUpdater @Inject constructor(
         val manager = GlanceAppWidgetManager(context)
         val ids = manager.getGlanceIds(BlickRoutineWidget::class.java)
         if (ids.isEmpty()) return
-        val theme = effectiveWidgetTheme(systemNightModeForWidgets)
+        val appearance = effectiveWidgetAppearance(systemNightModeForWidgets)
         ids.forEach { id ->
             updateAppWidgetState(context, id) { prefs ->
                 state.writeInto(prefs)
-                prefs.setStockholmNightWidgetTheme(theme.useStockholmNightTheme)
-                prefs.setDarkWidgetTheme(theme.useDarkTheme)
+                prefs.setWidgetAppearance(appearance)
             }
         }
         BlickRoutineWidget().updateAll(context)
     }
 
-    private suspend fun effectiveWidgetTheme(isSystemNightMode: Boolean): EffectiveWidgetTheme =
-        resolveEffectiveWidgetTheme(
+    private suspend fun effectiveWidgetAppearance(isSystemNightMode: Boolean): WidgetAppearance =
+        resolveWidgetAppearance(
             settings = appSettingsDataStore.settings.first(),
             hasPremiumAccess = entitlementRepository.entitlement.value.hasPremiumAccess,
             isSystemNightMode = isSystemNightMode,

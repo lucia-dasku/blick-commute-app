@@ -27,16 +27,17 @@ import java.time.Instant
  * unit-testable on plain [Preferences]/[MutablePreferences] values without any widget instance,
  * [android.content.Context], or Robolectric involved.
  */
+internal enum class WidgetAppearance {
+    BASIC_LIGHT,
+    BASIC_DARK,
+    STOCKHOLM_NIGHT,
+}
+
 private object WidgetKeys {
-    /** Presentation-only flag maintained by [GlanceRoutineWidgetUpdater]. It is deliberately
-     * independent of the routine/content keys below so an appearance change can redraw an
-     * already-active widget without replacing its current departures or journeys. */
-    val USE_STOCKHOLM_NIGHT_THEME = booleanPreferencesKey("useStockholmNightTheme")
-    /** Effective Basic Light/Dark choice. The persisted string deliberately keeps the key name
-     * introduced by the previous release so every already-placed widget retains its presentation
-     * state across this fix; only its meaning is corrected from raw system mode to Blick's
-     * effective app mode (`explicit Light/Dark ?: system`). */
-    val USE_DARK_THEME = booleanPreferencesKey("useSystemNightTheme")
+    /** Presentation-only state maintained independently from routine content. This intentionally
+     * uses a new key instead of migrating `useSystemNightTheme`: that legacy boolean represented
+     * device night mode and may contradict Blick's explicit Light or Dark selection. */
+    val WIDGET_APPEARANCE = stringPreferencesKey("widgetAppearance")
     val CONTENT_TYPE = stringPreferencesKey("contentType")
     val ROUTINE_ID = stringPreferencesKey("routineId")
     val ROUTINE_NAME = stringPreferencesKey("routineName")
@@ -147,11 +148,9 @@ private enum class ContentType { NO_ACTIVE_COMMUTE, LOADING, LIVE, STALE, NO_UPC
  * `nextLine`/`nextMinutes` from a previous state lingering unread-but-present in the datastore.
  * The independent appearance flag is preserved because it is not content state. */
 internal fun RoutineWidgetUiState.writeInto(prefs: MutablePreferences) {
-    val existingStockholmNightTheme = prefs[WidgetKeys.USE_STOCKHOLM_NIGHT_THEME]
-    val existingDarkTheme = prefs[WidgetKeys.USE_DARK_THEME]
+    val existingAppearance = prefs[WidgetKeys.WIDGET_APPEARANCE]
     prefs.clear()
-    existingStockholmNightTheme?.let { prefs[WidgetKeys.USE_STOCKHOLM_NIGHT_THEME] = it }
-    existingDarkTheme?.let { prefs[WidgetKeys.USE_DARK_THEME] = it }
+    existingAppearance?.let { prefs[WidgetKeys.WIDGET_APPEARANCE] = it }
     when (this) {
         RoutineWidgetUiState.NoActiveCommute -> prefs[WidgetKeys.CONTENT_TYPE] = ContentType.NO_ACTIVE_COMMUTE.name
         is RoutineWidgetUiState.ActiveRoutine -> {
@@ -199,18 +198,16 @@ internal fun RoutineWidgetUiState.writeInto(prefs: MutablePreferences) {
     }
 }
 
-internal fun Preferences.usesStockholmNightWidgetTheme(): Boolean =
-    this[WidgetKeys.USE_STOCKHOLM_NIGHT_THEME] ?: false
+internal fun Preferences.widgetAppearanceOrNull(): WidgetAppearance? =
+    this[WidgetKeys.WIDGET_APPEARANCE]?.let { stored ->
+        runCatching { WidgetAppearance.valueOf(stored) }.getOrNull()
+    }
 
-internal fun MutablePreferences.setStockholmNightWidgetTheme(enabled: Boolean) {
-    this[WidgetKeys.USE_STOCKHOLM_NIGHT_THEME] = enabled
-}
+internal fun Preferences.widgetAppearance(initialAppearance: WidgetAppearance): WidgetAppearance =
+    widgetAppearanceOrNull() ?: initialAppearance
 
-internal fun Preferences.darkWidgetThemeOrNull(): Boolean? =
-    this[WidgetKeys.USE_DARK_THEME]
-
-internal fun MutablePreferences.setDarkWidgetTheme(enabled: Boolean) {
-    this[WidgetKeys.USE_DARK_THEME] = enabled
+internal fun MutablePreferences.setWidgetAppearance(appearance: WidgetAppearance) {
+    this[WidgetKeys.WIDGET_APPEARANCE] = appearance.name
 }
 
 private fun MutablePreferences.writeJourney(row: WidgetJourneyRow, isSecondary: Boolean) {
