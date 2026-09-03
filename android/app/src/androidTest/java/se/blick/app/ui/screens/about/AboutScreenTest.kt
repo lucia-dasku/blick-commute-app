@@ -1,17 +1,29 @@
 package se.blick.app.ui.screens.about
 
 import androidx.activity.ComponentActivity
+import androidx.compose.foundation.layout.Box
+import androidx.compose.foundation.layout.size
+import androidx.compose.ui.Modifier
+import androidx.compose.ui.graphics.toPixelMap
+import androidx.compose.ui.semantics.SemanticsActions
+import androidx.compose.ui.semantics.SemanticsProperties
 import androidx.compose.ui.test.assertHasClickAction
 import androidx.compose.ui.test.assertTextContains
+import androidx.compose.ui.test.captureToImage
+import androidx.compose.ui.test.hasScrollAction
 import androidx.compose.ui.test.junit4.v2.createAndroidComposeRule
 import androidx.compose.ui.test.onNodeWithContentDescription
 import androidx.compose.ui.test.onNodeWithText
 import androidx.compose.ui.test.onNodeWithTag
+import androidx.compose.ui.test.onRoot
 import androidx.compose.ui.test.performClick
 import androidx.compose.ui.test.performScrollTo
+import androidx.compose.ui.test.performSemanticsAction
+import androidx.compose.ui.unit.dp
 import androidx.test.ext.junit.runners.AndroidJUnit4
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertNotEquals
+import org.junit.Assert.assertTrue
 import org.junit.Rule
 import org.junit.Test
 import org.junit.runner.RunWith
@@ -19,12 +31,71 @@ import se.blick.app.R
 import se.blick.app.billing.EntitlementState
 import se.blick.app.notification.NotificationAvailability
 import se.blick.app.ui.theme.AppearanceMode
+import se.blick.app.ui.theme.BlickLightBackground
+import se.blick.app.ui.theme.BlickTheme
 
 @RunWith(AndroidJUnit4::class)
 class AboutScreenTest {
 
     @get:Rule
     val composeRule = createAndroidComposeRule<ComponentActivity>()
+
+    @Test
+    fun lightSettingsHeaderPixelsStayUnchangedWhileContentScrolls() {
+        assertSettingsHeaderDoesNotChangeDuringScroll(useDarkTheme = false)
+    }
+
+    @Test
+    fun stockholmNightSettingsHeaderPixelsStayUnchangedWhileContentScrolls() {
+        assertSettingsHeaderDoesNotChangeDuringScroll(useDarkTheme = true, useStockholmNightTheme = true)
+    }
+
+    @Test
+    fun darkSettingsHeaderKeepsItsExistingScrollBehavior() {
+        assertSettingsHeaderDoesNotChangeDuringScroll(useDarkTheme = true)
+    }
+
+    private fun assertSettingsHeaderDoesNotChangeDuringScroll(
+        useDarkTheme: Boolean,
+        useStockholmNightTheme: Boolean = false,
+    ) {
+        composeRule.setContent {
+            Box(Modifier.size(width = 360.dp, height = 480.dp)) {
+                BlickTheme(useDarkTheme = useDarkTheme, useStockholmNightTheme = useStockholmNightTheme) {
+                    BlickLightBackground {
+                        AboutContent(onBack = {}, onLanguageSelected = {})
+                    }
+                }
+            }
+        }
+
+        val title = composeRule.onNodeWithText(composeRule.activity.getString(R.string.about_title))
+        val back = composeRule.onNodeWithContentDescription(composeRule.activity.getString(R.string.action_back))
+        val titleBounds = title.fetchSemanticsNode().boundsInRoot
+        val backBounds = back.fetchSemanticsNode().boundsInRoot
+        val before = composeRule.onRoot().captureToImage().toPixelMap()
+        val headerBottom = maxOf(titleBounds.bottom, backBounds.bottom).toInt().coerceAtMost(before.height)
+        val content = composeRule.onNode(hasScrollAction())
+        var previousScroll = 0f
+
+        repeat(3) {
+            content.performSemanticsAction(SemanticsActions.ScrollBy) { scroll -> scroll(0f, 150f) }
+            val currentScroll = content.fetchSemanticsNode().config[SemanticsProperties.VerticalScrollAxisRange].value()
+            assertTrue("The Settings content must actually scroll", currentScroll > previousScroll)
+            previousScroll = currentScroll
+            assertEquals(titleBounds, title.fetchSemanticsNode().boundsInRoot)
+            assertEquals(backBounds, back.fetchSemanticsNode().boundsInRoot)
+
+            val after = composeRule.onRoot().captureToImage().toPixelMap()
+            var changedPixels = 0
+            for (y in 0 until headerBottom) {
+                for (x in 0 until before.width) {
+                    if (before[x, y] != after[x, y]) changedPixels++
+                }
+            }
+            assertEquals("Scrolling content must not change the header/status-inset pixels", 0, changedPixels)
+        }
+    }
 
     @Test
     fun backButtonInvokesOnBack() {

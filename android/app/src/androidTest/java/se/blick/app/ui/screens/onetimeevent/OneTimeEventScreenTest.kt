@@ -1,20 +1,33 @@
 package se.blick.app.ui.screens.onetimeevent
 
+import android.graphics.Rect
+import android.view.Gravity
+import android.view.WindowManager
 import androidx.activity.ComponentActivity
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
+import androidx.compose.ui.test.assert
 import androidx.compose.ui.test.assertIsDisplayed
+import androidx.compose.ui.test.assertIsNotDisplayed
 import androidx.compose.ui.test.assertIsEnabled
 import androidx.compose.ui.test.assertIsNotEnabled
+import androidx.compose.ui.test.assertIsNotSelected
 import androidx.compose.ui.test.assertIsSelected
+import androidx.compose.ui.test.hasAnyAncestor
+import androidx.compose.ui.test.hasTestTag
 import androidx.compose.ui.test.junit4.v2.createAndroidComposeRule
 import androidx.compose.ui.test.onNodeWithTag
 import androidx.compose.ui.test.onNodeWithText
 import androidx.compose.ui.test.performClick
+import androidx.compose.ui.test.performImeAction
 import androidx.compose.ui.test.performScrollTo
 import androidx.compose.ui.test.performScrollToIndex
+import androidx.compose.ui.test.performScrollToNode
+import androidx.compose.ui.test.performTextReplacement
+import androidx.core.view.ViewCompat
+import androidx.core.view.WindowInsetsCompat
 import androidx.test.ext.junit.runners.AndroidJUnit4
 import java.time.Instant
 import java.time.LocalDate
@@ -50,9 +63,15 @@ class OneTimeEventScreenTest {
         timeType = OneTimeEventTimeType.ARRIVE_BY,
     )
 
-    private fun setEditorContent(initialState: OneTimeEventEditorUiState = validEditorState()) {
+    private fun setEditorContent(
+        initialState: OneTimeEventEditorUiState = validEditorState(),
+        searchResults: List<JourneyLocation> = emptyList(),
+        useDarkTheme: Boolean = false,
+        useStockholmNightTheme: Boolean = false,
+        onSave: () -> Unit = {},
+    ) {
         composeRule.setContent {
-            BlickTheme {
+            BlickTheme(useDarkTheme = useDarkTheme, useStockholmNightTheme = useStockholmNightTheme) {
                 var state by remember { mutableStateOf(initialState) }
                 OneTimeEventEditorContent(
                     state = state,
@@ -60,27 +79,227 @@ class OneTimeEventScreenTest {
                     onOpenPremium = {},
                     onLabel = { state = state.copy(label = it) },
                     onName = { state = state.copy(name = it) },
-                    onOriginQuery = { state = state.copy(originQuery = it) },
-                    onDestinationQuery = { state = state.copy(destinationQuery = it) },
-                    onOrigin = { state = state.copy(selectedOrigin = it, originQuery = it.name) },
-                    onDestination = { state = state.copy(selectedDestination = it, destinationQuery = it.name) },
+                    onOriginQuery = {
+                        state = state.copy(originQuery = it, selectedOrigin = null, originResults = searchResults)
+                    },
+                    onDestinationQuery = {
+                        state = state.copy(destinationQuery = it, selectedDestination = null, destinationResults = searchResults)
+                    },
+                    onOrigin = { state = state.copy(selectedOrigin = it, originQuery = it.name, originResults = emptyList()) },
+                    onDestination = {
+                        state = state.copy(selectedDestination = it, destinationQuery = it.name, destinationResults = emptyList())
+                    },
                     onDate = { state = state.copy(date = it) },
                     onTimeType = { state = state.copy(timeType = it) },
                     onTime = { state = state.copy(time = it) },
-                    onSave = {},
+                    onSave = onSave,
                 )
             }
         }
     }
 
     @Test
-    fun saveActionStaysVisibleWhileTheSinglePageFormScrolls() {
-        setEditorContent()
+    fun fromSuggestionsCloseOnSelectionAndInFormSaveRemainsEnabled() {
+        setEditorContent(searchResults = stopResults())
+        assertSearchSelectionAllowsInFormSave("origin")
+    }
 
-        composeRule.onNodeWithTag("one-time-event-content").performScrollToIndex(4)
-        composeRule.onNodeWithText(composeRule.activity.getString(R.string.one_time_event_preview_future)).assertIsDisplayed()
-        composeRule.onNodeWithTag("one-time-event-sticky-action").assertIsDisplayed()
+    @Test
+    fun toSuggestionsCloseOnSelectionAndInFormSaveRemainsEnabledWhileEditing() {
+        setEditorContent(
+            initialState = validEditorState().copy(isEditing = true),
+            searchResults = stopResults(),
+            useDarkTheme = true,
+        )
+        assertSearchSelectionAllowsInFormSave("destination")
+    }
+
+    @Test
+    fun dismissingSearchLeavesInFormSaveDisabledForAnUnselectedStop() {
+        setEditorContent(searchResults = stopResults())
+        openStopSearch("origin")
+
+        composeRule.onNodeWithTag("one-time-event-sticky-action").assertDoesNotExist()
+        composeRule.onNodeWithTag("one-time-event-origin-field").performImeAction()
+
+        composeRule.onNodeWithTag("one-time-event-origin-suggestions").assertDoesNotExist()
+        scrollToSave()
+        composeRule.onNodeWithTag("save-event-button").assertIsNotEnabled()
+    }
+
+    @Test
+    fun longFromResultsScrollAboveImeInSmallWindow() {
+        assertLongResultsScrollWithKeyboard("origin", useStockholmNightTheme = false)
+    }
+
+    @Test
+    fun longToResultsScrollAboveImeInSmallStockholmNightWindow() {
+        assertLongResultsScrollWithKeyboard("destination", useStockholmNightTheme = true)
+    }
+
+    @Test
+    fun longToResultsScrollAboveImeInSmallLightWindow() {
+        assertLongResultsScrollWithKeyboard("destination", useStockholmNightTheme = false)
+    }
+
+    @Test
+    fun longFromResultsScrollAboveImeInSmallStockholmNightWindow() {
+        assertLongResultsScrollWithKeyboard("origin", useStockholmNightTheme = true)
+    }
+
+    @Test
+    fun longFromResultsScrollAboveImeInSmallDarkWindow() {
+        assertLongResultsScrollWithKeyboard("origin", useStockholmNightTheme = false, useDarkTheme = true)
+    }
+
+    @Test
+    fun longToResultsScrollAboveImeInSmallDarkWindow() {
+        assertLongResultsScrollWithKeyboard("destination", useStockholmNightTheme = false, useDarkTheme = true)
+    }
+
+    @Test
+    fun longFromResultsScrollAboveImeInFullScreenLightWindow() {
+        assertLongResultsScrollWithKeyboard("origin", useStockholmNightTheme = false, compactWindow = false)
+    }
+
+    @Test
+    fun longToResultsScrollAboveImeInFullScreenStockholmNightWindow() {
+        assertLongResultsScrollWithKeyboard("destination", useStockholmNightTheme = true, compactWindow = false)
+    }
+
+    private fun stopResults() = (1..30).map { JourneyLocation("stop-$it", "Stop $it") }
+
+    private fun openStopSearch(field: String) {
+        composeRule.onNodeWithTag("one-time-event-$field-field")
+            .performScrollTo()
+            .performClick()
+            .performTextReplacement("Stop")
+        composeRule.onNodeWithTag("one-time-event-$field-suggestions").assertIsDisplayed()
+    }
+
+    private fun assertSearchSelectionAllowsInFormSave(field: String) {
+        openStopSearch(field)
+        composeRule.onNodeWithTag("one-time-event-sticky-action").assertDoesNotExist()
+
+        composeRule.onNodeWithTag("one-time-event-$field-result-stop-1")
+            .performScrollTo()
+            .assertIsDisplayed()
+            .performClick()
+
+        composeRule.onNodeWithTag("one-time-event-$field-suggestions").assertDoesNotExist()
+        scrollToSave()
+        composeRule.onNodeWithTag("save-event-button").assertIsEnabled()
+    }
+
+    private fun assertLongResultsScrollWithKeyboard(
+        field: String,
+        useStockholmNightTheme: Boolean,
+        useDarkTheme: Boolean = false,
+        compactWindow: Boolean = true,
+    ) {
+        setEditorContent(
+            searchResults = stopResults(),
+            useDarkTheme = useDarkTheme,
+            useStockholmNightTheme = useStockholmNightTheme,
+        )
+        if (compactWindow) useSmallWindow()
+        openStopSearch(field)
+        composeRule.waitUntil(timeoutMillis = 10_000) { keyboardIsVisible() }
+        composeRule.onNodeWithTag("one-time-event-sticky-action").assertDoesNotExist()
+
+        val lastResult = composeRule.onNodeWithTag("one-time-event-$field-result-stop-30")
+        lastResult.performScrollTo().assertIsDisplayed()
+        val menu = composeRule.onNodeWithTag("one-time-event-$field-suggestions").fetchSemanticsNode()
+        val visibleFrame = Rect()
+        composeRule.runOnIdle {
+            composeRule.activity.window.decorView.getWindowVisibleDisplayFrame(visibleFrame)
+            assertTrue("The keyboard must remain open while scrolling results", keyboardIsVisible())
+        }
+        assertTrue("Menu must stay below the system top inset", menu.positionOnScreen.y >= visibleFrame.top - 1)
+        assertTrue(
+            "Menu must remain above the keyboard: position=${menu.positionOnScreen}, " +
+                "size=${menu.size}, visibleFrame=$visibleFrame",
+            menu.positionOnScreen.y + menu.size.height <= visibleFrame.bottom + 1,
+        )
+
+        lastResult.performClick()
+        composeRule.onNodeWithTag("one-time-event-$field-suggestions").assertDoesNotExist()
+        scrollToSave()
         composeRule.onNodeWithTag("save-event-button").assertIsDisplayed().assertIsEnabled()
+    }
+
+    private fun keyboardIsVisible(): Boolean =
+        ViewCompat.getRootWindowInsets(composeRule.activity.window.decorView)
+            ?.isVisible(WindowInsetsCompat.Type.ime()) == true
+
+    @Test
+    fun saveActionIsTheLastFormItemAndScrollsAwayWithTheForm() {
+        setEditorContent()
+        useSmallWindow()
+
+        scrollToSave()
+        composeRule.onNodeWithTag("one-time-event-sticky-action").assertDoesNotExist()
+        val saveButton = composeRule.onNodeWithTag("save-event-button")
+            .assertIsDisplayed()
+            .assertIsEnabled()
+            .assert(hasAnyAncestor(hasTestTag("one-time-event-content")))
+            .fetchSemanticsNode()
+        val preview = composeRule.onNodeWithText(composeRule.activity.getString(R.string.one_time_event_preview_future))
+            .fetchSemanticsNode()
+        assertTrue(saveButton.positionInRoot.y >= preview.positionInRoot.y + preview.size.height)
+
+        composeRule.onNodeWithTag("one-time-event-content").performScrollToIndex(0)
+        composeRule.onNodeWithTag("save-event-button").assertIsNotDisplayed()
+    }
+
+    @Test
+    fun createFormSaveCanBeReachedAndClickedInSmallWindowWithKeyboardOpen() {
+        assertSaveReachableWithKeyboard(isEditing = false)
+    }
+
+    @Test
+    fun editFormSaveCanBeReachedAndClickedInSmallWindowWithKeyboardOpen() {
+        assertSaveReachableWithKeyboard(isEditing = true)
+    }
+
+    private fun assertSaveReachableWithKeyboard(isEditing: Boolean) {
+        var saved = false
+        setEditorContent(validEditorState().copy(isEditing = isEditing), onSave = { saved = true })
+        useSmallWindow()
+        composeRule.onNodeWithTag("one-time-event-content")
+            .performScrollToNode(hasTestTag("one-time-event-name-field"))
+        composeRule.onNodeWithTag("one-time-event-name-field").performClick().performTextReplacement("Dinner")
+        composeRule.waitUntil(timeoutMillis = 10_000) { keyboardIsVisible() }
+
+        scrollToSave()
+        val button = composeRule.onNodeWithTag("save-event-button").assertIsDisplayed().assertIsEnabled()
+        val bounds = button.fetchSemanticsNode()
+        val visibleFrame = Rect()
+        composeRule.runOnIdle {
+            composeRule.activity.window.decorView.getWindowVisibleDisplayFrame(visibleFrame)
+            assertTrue("The form must scroll without dismissing the keyboard", keyboardIsVisible())
+        }
+        assertTrue("Save must remain above the keyboard", bounds.positionOnScreen.y + bounds.size.height <= visibleFrame.bottom)
+        button.performClick()
+        composeRule.runOnIdle { assertTrue(saved) }
+    }
+
+    private fun scrollToSave() {
+        composeRule.onNodeWithTag("one-time-event-content").performScrollToNode(hasTestTag("save-event-button"))
+    }
+
+    @Suppress("DEPRECATION")
+    private fun useSmallWindow() {
+        composeRule.runOnIdle {
+            val metrics = composeRule.activity.resources.displayMetrics
+            // Model a smaller app screen, not a centered floating window with a shifted origin.
+            composeRule.activity.window.setGravity(Gravity.TOP or Gravity.START)
+            composeRule.activity.window.setLayout(
+                (360 * metrics.density).toInt().coerceAtMost(metrics.widthPixels),
+                (640 * metrics.density).toInt().coerceAtMost(metrics.heightPixels),
+            )
+            composeRule.activity.window.setSoftInputMode(WindowManager.LayoutParams.SOFT_INPUT_ADJUST_RESIZE)
+        }
     }
 
     @Test
@@ -88,14 +307,78 @@ class OneTimeEventScreenTest {
         setEditorContent()
 
         composeRule.onNodeWithTag("one-time-event-label-travel").performClick().assertIsSelected()
+        composeRule.onNodeWithTag("one-time-event-label-event").assertIsNotSelected()
         composeRule.onNodeWithTag("one-time-event-time-type-leave_at").performScrollTo().performClick().assertIsSelected()
         composeRule.onNodeWithTag("one-time-event-label-travel").assertIsSelected()
+    }
+
+    @Test
+    fun allEventLabelsRenderAndSelectionMovesToExactlyOneLabel() {
+        setEditorContent()
+
+        OneTimeEventLabel.entries.forEach { selectedLabel ->
+            val selectedTag = "one-time-event-label-${selectedLabel.name.lowercase()}"
+            composeRule.onNodeWithTag(selectedTag).assertIsDisplayed().performClick().assertIsSelected()
+            OneTimeEventLabel.entries.filterNot { it == selectedLabel }.forEach { unselectedLabel ->
+                composeRule.onNodeWithTag("one-time-event-label-${unselectedLabel.name.lowercase()}")
+                    .assertIsNotSelected()
+            }
+        }
+    }
+
+    @Test
+    fun editingExistingEventShowsItsSavedLabelSelectedImmediately() {
+        setEditorContent(
+            validEditorState().copy(
+                isEditing = true,
+                label = OneTimeEventLabel.APPOINTMENT,
+            ),
+        )
+
+        composeRule.onNodeWithTag("one-time-event-label-appointment").assertIsSelected()
+        composeRule.onNodeWithTag("one-time-event-label-travel").assertIsNotSelected()
+        composeRule.onNodeWithTag("one-time-event-label-event").assertIsNotSelected()
+        composeRule.onNodeWithTag("one-time-event-label-other").assertIsNotSelected()
+    }
+
+    @Test
+    fun eventLabelSelectorRendersAcrossEffectiveLightDarkAndStockholmThemes() {
+        var useDarkTheme by mutableStateOf<Boolean?>(false)
+        var systemDarkTheme by mutableStateOf(false)
+        var useStockholmNightTheme by mutableStateOf(false)
+        composeRule.setContent {
+            BlickTheme(
+                useDarkTheme = useDarkTheme,
+                useStockholmNightTheme = useStockholmNightTheme,
+                systemDarkTheme = systemDarkTheme,
+            ) {
+                OneTimeEventLabelSelector(
+                    selectedLabel = OneTimeEventLabel.EVENT,
+                    onLabelSelected = {},
+                )
+            }
+        }
+
+        composeRule.onNodeWithTag("one-time-event-label-event").assertIsSelected()
+        composeRule.runOnIdle { useDarkTheme = true }
+        composeRule.onNodeWithTag("one-time-event-label-event").assertIsSelected()
+        composeRule.runOnIdle {
+            useDarkTheme = null
+            systemDarkTheme = true
+        }
+        composeRule.onNodeWithTag("one-time-event-label-event").assertIsSelected()
+        composeRule.runOnIdle { useStockholmNightTheme = true }
+        composeRule.onNodeWithTag("one-time-event-label-event").assertIsSelected()
+        OneTimeEventLabel.entries.filterNot { it == OneTimeEventLabel.EVENT }.forEach { label ->
+            composeRule.onNodeWithTag("one-time-event-label-${label.name.lowercase()}").assertIsNotSelected()
+        }
     }
 
     @Test
     fun saveActionUsesTheExistingCanSaveState() {
         setEditorContent(validEditorState().copy(selectedDestination = null))
 
+        scrollToSave()
         composeRule.onNodeWithTag("save-event-button").assertIsNotEnabled()
     }
 
@@ -122,6 +405,7 @@ class OneTimeEventScreenTest {
             }
         }
 
+        scrollToSave()
         composeRule.onNodeWithTag("save-event-button").assertIsEnabled().performClick()
         composeRule.runOnIdle { assertTrue(openedPremium) }
     }
