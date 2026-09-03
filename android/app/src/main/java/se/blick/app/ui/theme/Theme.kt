@@ -34,10 +34,15 @@ private val LightColors = lightColorScheme(
     background = Color(0xFFFAF4F3),
 )
 
+/** The normal Dark Material 3 `surfaceContainerHigh` used by default AlertDialog containers.
+ * Named here so non-Compose surfaces such as the Glance widget can match the dialog exactly. */
+internal val BasicDarkDialogSurface = Color(0xFF2B2930)
+
 private val DarkColors = darkColorScheme(
     primary = CalmBlue80,
     secondary = Neutral80,
     tertiary = AttentionAmber40,
+    surfaceContainerHigh = BasicDarkDialogSurface,
 )
 
 /** Opaque foreground layers used over the decorative Stockholm Night artwork. */

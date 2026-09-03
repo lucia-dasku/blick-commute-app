@@ -55,6 +55,19 @@ class BlickThemeTest {
     }
 
     @Test
+    fun basicDarkDialogSurfaceMatchesMaterialSurfaceContainerHigh() {
+        var dialogSurface = Color.Unspecified
+        composeRule.setContent {
+            BlickTheme(useDarkTheme = true, systemDarkTheme = false) {
+                val resolvedDialogSurface = MaterialTheme.colorScheme.surfaceContainerHigh
+                SideEffect { dialogSurface = resolvedDialogSurface }
+            }
+        }
+
+        composeRule.runOnIdle { assertEquals(BasicDarkDialogSurface, dialogSurface) }
+    }
+
+    @Test
     fun explicitDarkDisplaysNoDecorativeThemeBackground() {
         composeRule.setContent {
             BlickTheme(useDarkTheme = true, systemDarkTheme = false) {

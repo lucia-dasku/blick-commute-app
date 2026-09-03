@@ -21,12 +21,14 @@ import org.robolectric.RobolectricTestRunner
 import org.robolectric.RuntimeEnvironment
 import org.robolectric.annotation.Config
 import se.blick.app.R
+import se.blick.app.data.local.datastore.AppSettings
 import se.blick.app.domain.model.DisruptionEffect
 import se.blick.app.domain.model.ExactDestinationChangesPreference
 import se.blick.app.domain.model.JourneyRole
 import se.blick.app.domain.model.RoutineLabel
 import se.blick.app.domain.model.TransportMode
 import se.blick.app.notification.disruptionEffectLabelRes
+import se.blick.app.ui.theme.BasicDarkDialogSurface
 import se.blick.app.ui.theme.StockholmNightSurfaces
 import java.time.Instant
 import java.time.ZoneId
@@ -153,20 +155,27 @@ class BlickRoutineWidgetRenderTest {
      * selection at composition time, but the active-session recomposition after `updateAll`
      * still requires connected Samsung and Lenovo verification. */
     @Test
-    fun `currentState uses initial appearance when fresh widget preferences are empty`() =
+    fun `fresh widget in System dark uses the Basic Dark dialog surface`() =
         runGlanceAppWidgetUnitTest {
-            setContext(contextWithNightMode(isNightMode = false))
+            val systemDarkAppearance = resolveWidgetAppearance(
+                settings = AppSettings(useDarkTheme = null),
+                hasPremiumAccess = false,
+                isSystemNightMode = true,
+            )
+            assertEquals(WidgetAppearance.BASIC_DARK, systemDarkAppearance)
+            setContext(contextWithNightMode(isNightMode = true))
             setAppWidgetSize(DpSize(260.dp, 150.dp))
             setState(mutablePreferencesOf().toPreferences())
 
             provideComposable {
                 BlickWidgetContentFromCurrentState(
-                    initialAppearance = WidgetAppearance.BASIC_DARK,
+                    initialAppearance = systemDarkAppearance,
                     now = now,
                 )
             }
 
-            onNode(hasBackgroundColor(Color(0xFF010C2F))).assertExists()
+            onNode(hasBackgroundColor(BasicDarkDialogSurface)).assertExists()
+            onNode(hasBackgroundColor(Color(0xFF010C2F))).assertDoesNotExist()
             onNode(hasBackgroundColor(Color(0xFFFAF4F3))).assertDoesNotExist()
             onNode(hasImageResource(R.drawable.widget_inactive_light_background)).assertDoesNotExist()
         }
@@ -189,7 +198,7 @@ class BlickRoutineWidgetRenderTest {
             }
 
             onNode(hasBackgroundColor(Color(0xFFFAF4F3))).assertExists()
-            onNode(hasBackgroundColor(Color(0xFF010C2F))).assertDoesNotExist()
+            onNode(hasBackgroundColor(BasicDarkDialogSurface)).assertDoesNotExist()
             onNode(hasImageResource(R.drawable.widget_inactive_light_background)).assertExists()
         }
 
@@ -230,13 +239,13 @@ class BlickRoutineWidgetRenderTest {
             }
 
             onNode(hasBackgroundColor(Color(0xFFFAF4F3))).assertExists()
-            onNode(hasBackgroundColor(Color(0xFF010C2F))).assertDoesNotExist()
+            onNode(hasBackgroundColor(BasicDarkDialogSurface)).assertDoesNotExist()
             onNode(hasImageResource(R.drawable.widget_inactive_light_background)).assertDoesNotExist()
             onNode(hasImageResource(R.drawable.widget_stockholm_night_background)).assertDoesNotExist()
         }
 
     @Test
-    fun `Basic Dark active widget uses navy even when the system is light`() =
+    fun `Basic Dark active widget uses the dialog surface even when the system is light`() =
         runGlanceAppWidgetUnitTest {
             val lightContext = contextWithNightMode(isNightMode = false)
             setContext(lightContext)
@@ -251,7 +260,8 @@ class BlickRoutineWidgetRenderTest {
                 )
             }
 
-            onNode(hasBackgroundColor(Color(0xFF010C2F))).assertExists()
+            onNode(hasBackgroundColor(BasicDarkDialogSurface)).assertExists()
+            onNode(hasBackgroundColor(Color(0xFF010C2F))).assertDoesNotExist()
             onNode(hasBackgroundColor(Color(0xFFFAF4F3))).assertDoesNotExist()
             onNode(hasImageResource(R.drawable.widget_inactive_light_background)).assertDoesNotExist()
             onNode(hasImageResource(R.drawable.widget_stockholm_night_background)).assertDoesNotExist()
@@ -275,6 +285,7 @@ class BlickRoutineWidgetRenderTest {
 
             onNode(hasBackgroundColor(StockholmNightSurfaces.CardBorder)).assertExists()
             onNode(hasBackgroundColor(StockholmNightSurfaces.Card)).assertExists()
+            onNode(hasBackgroundColor(BasicDarkDialogSurface)).assertDoesNotExist()
             onNode(hasBackgroundColor(Color(0xFFFAF4F3))).assertDoesNotExist()
             onNode(hasImageResource(R.drawable.widget_inactive_light_background)).assertDoesNotExist()
             onNode(hasImageResource(R.drawable.widget_stockholm_night_background)).assertDoesNotExist()
@@ -325,7 +336,7 @@ class BlickRoutineWidgetRenderTest {
         }
 
     @Test
-    fun `Basic Dark inactive widget is plain navy with only the centered logo despite a light system`() =
+    fun `Basic Dark inactive widget uses the dialog surface with only the centered logo`() =
         runGlanceAppWidgetUnitTest {
             val lightContext = contextWithNightMode(isNightMode = false)
             setContext(lightContext)
@@ -338,7 +349,8 @@ class BlickRoutineWidgetRenderTest {
                 )
             }
 
-            onNode(hasBackgroundColor(Color(0xFF010C2F))).assertExists()
+            onNode(hasBackgroundColor(BasicDarkDialogSurface)).assertExists()
+            onNode(hasBackgroundColor(Color(0xFF010C2F))).assertDoesNotExist()
             onNode(hasImageResource(R.drawable.ic_launcher_foreground)).assertExists()
             onNode(hasImageResource(R.drawable.widget_inactive_skyline_approved)).assertDoesNotExist()
             onNode(hasImageResource(R.drawable.widget_inactive_light_background)).assertDoesNotExist()
