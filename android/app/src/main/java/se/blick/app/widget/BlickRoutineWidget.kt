@@ -66,6 +66,7 @@ import se.blick.app.locale.withAppLocale
 import se.blick.app.notification.disruptionEffectLabelRes
 import se.blick.app.ui.components.stringResourceId
 import se.blick.app.ui.components.visuals
+import se.blick.app.ui.theme.BasicDarkDialogSurface
 import se.blick.app.ui.theme.StockholmNightSurfaces
 import java.time.format.DateTimeFormatter
 
@@ -369,7 +370,7 @@ private val BASIC_DARK_WIDGET_COLORS = colorProviders(
     inverseOnSurface = ColorProvider(Color(0xFF07142B)),
     inverseSurface = ColorProvider(Color(0xFFF4F6FB)),
     inversePrimary = ColorProvider(Color(0xFF3A5A78)),
-    widgetBackground = ColorProvider(Color(0xFF010C2F)),
+    widgetBackground = ColorProvider(BasicDarkDialogSurface),
 )
 private val INACTIVE_WIDGET_MINT = ColorProvider(Color(0xFF33E4A1))
 private val STOCKHOLM_NIGHT_WIDGET_BORDER = ColorProvider(StockholmNightSurfaces.CardBorder)
@@ -404,7 +405,7 @@ private val STOCKHOLM_NIGHT_WIDGET_COLORS = colorProviders(
 )
 /** Responsive logo sizes for the branded inactive state. Artwork is selected by theme rather
  * than by widget size: Light and Stockholm Night fill the shell with their supplied city view,
- * while Basic Dark deliberately remains plain navy. */
+ * while Basic Dark deliberately remains a plain Material dialog surface. */
 internal data class InactiveWidgetLayout(
     val logoViewportWidth: Dp,
     val logoViewportHeight: Dp,
