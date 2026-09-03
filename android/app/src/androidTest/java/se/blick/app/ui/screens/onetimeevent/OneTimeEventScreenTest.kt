@@ -1,6 +1,7 @@
 package se.blick.app.ui.screens.onetimeevent
 
 import android.graphics.Rect
+import android.view.Gravity
 import android.view.WindowManager
 import androidx.activity.ComponentActivity
 import androidx.compose.runtime.getValue
@@ -136,6 +137,36 @@ class OneTimeEventScreenTest {
         assertLongResultsScrollWithKeyboard("destination", useStockholmNightTheme = true)
     }
 
+    @Test
+    fun longToResultsScrollAboveImeInSmallLightWindow() {
+        assertLongResultsScrollWithKeyboard("destination", useStockholmNightTheme = false)
+    }
+
+    @Test
+    fun longFromResultsScrollAboveImeInSmallStockholmNightWindow() {
+        assertLongResultsScrollWithKeyboard("origin", useStockholmNightTheme = true)
+    }
+
+    @Test
+    fun longFromResultsScrollAboveImeInSmallDarkWindow() {
+        assertLongResultsScrollWithKeyboard("origin", useStockholmNightTheme = false, useDarkTheme = true)
+    }
+
+    @Test
+    fun longToResultsScrollAboveImeInSmallDarkWindow() {
+        assertLongResultsScrollWithKeyboard("destination", useStockholmNightTheme = false, useDarkTheme = true)
+    }
+
+    @Test
+    fun longFromResultsScrollAboveImeInFullScreenLightWindow() {
+        assertLongResultsScrollWithKeyboard("origin", useStockholmNightTheme = false, compactWindow = false)
+    }
+
+    @Test
+    fun longToResultsScrollAboveImeInFullScreenStockholmNightWindow() {
+        assertLongResultsScrollWithKeyboard("destination", useStockholmNightTheme = true, compactWindow = false)
+    }
+
     private fun stopResults() = (1..30).map { JourneyLocation("stop-$it", "Stop $it") }
 
     private fun openStopSearch(field: String) {
@@ -160,9 +191,18 @@ class OneTimeEventScreenTest {
         composeRule.onNodeWithTag("save-event-button").assertIsEnabled()
     }
 
-    private fun assertLongResultsScrollWithKeyboard(field: String, useStockholmNightTheme: Boolean) {
-        setEditorContent(searchResults = stopResults(), useStockholmNightTheme = useStockholmNightTheme)
-        useSmallWindow()
+    private fun assertLongResultsScrollWithKeyboard(
+        field: String,
+        useStockholmNightTheme: Boolean,
+        useDarkTheme: Boolean = false,
+        compactWindow: Boolean = true,
+    ) {
+        setEditorContent(
+            searchResults = stopResults(),
+            useDarkTheme = useDarkTheme,
+            useStockholmNightTheme = useStockholmNightTheme,
+        )
+        if (compactWindow) useSmallWindow()
         openStopSearch(field)
         composeRule.waitUntil(timeoutMillis = 10_000) { keyboardIsVisible() }
         composeRule.onNodeWithTag("one-time-event-sticky-action").assertDoesNotExist()
@@ -177,7 +217,8 @@ class OneTimeEventScreenTest {
         }
         assertTrue("Menu must stay below the system top inset", menu.positionOnScreen.y >= visibleFrame.top - 1)
         assertTrue(
-            "Menu must remain above the keyboard",
+            "Menu must remain above the keyboard: position=${menu.positionOnScreen}, " +
+                "size=${menu.size}, visibleFrame=$visibleFrame",
             menu.positionOnScreen.y + menu.size.height <= visibleFrame.bottom + 1,
         )
 
@@ -251,6 +292,8 @@ class OneTimeEventScreenTest {
     private fun useSmallWindow() {
         composeRule.runOnIdle {
             val metrics = composeRule.activity.resources.displayMetrics
+            // Model a smaller app screen, not a centered floating window with a shifted origin.
+            composeRule.activity.window.setGravity(Gravity.TOP or Gravity.START)
             composeRule.activity.window.setLayout(
                 (360 * metrics.density).toInt().coerceAtMost(metrics.widthPixels),
                 (640 * metrics.density).toInt().coerceAtMost(metrics.heightPixels),
