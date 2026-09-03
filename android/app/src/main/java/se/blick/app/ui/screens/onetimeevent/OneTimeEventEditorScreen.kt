@@ -1,17 +1,16 @@
 package se.blick.app.ui.screens.onetimeevent
 
-import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.FlowRow
 import androidx.compose.foundation.layout.Row
+import androidx.compose.foundation.layout.consumeWindowInsets
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.heightIn
 import androidx.compose.foundation.layout.imePadding
-import androidx.compose.foundation.layout.navigationBarsPadding
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.text.KeyboardActions
 import androidx.compose.foundation.text.KeyboardOptions
@@ -26,14 +25,15 @@ import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.DatePicker
 import androidx.compose.material3.DatePickerDialog
 import androidx.compose.material3.ExperimentalMaterial3Api
+import androidx.compose.material3.ExposedDropdownMenuAnchorType
+import androidx.compose.material3.ExposedDropdownMenuBox
+import androidx.compose.material3.DropdownMenuItem
 import androidx.compose.material3.FilterChip
 import androidx.compose.material3.FilterChipDefaults
 import androidx.compose.material3.Icon
-import androidx.compose.material3.ListItem
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.Scaffold
-import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
 import androidx.compose.material3.TimePicker
@@ -48,6 +48,9 @@ import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.focus.onFocusChanged
+import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.graphics.compositeOver
 import androidx.compose.ui.graphics.luminance
 import androidx.compose.ui.platform.LocalFocusManager
 import androidx.compose.ui.platform.testTag
@@ -63,11 +66,13 @@ import se.blick.app.R
 import se.blick.app.domain.model.JourneyLocation
 import se.blick.app.domain.model.OneTimeEventLabel
 import se.blick.app.domain.model.OneTimeEventTimeType
+import se.blick.app.domain.model.RoutineLabel
 import se.blick.app.locale.currentBlickLocale
 import se.blick.app.ui.components.BlickTopBar
 import se.blick.app.ui.components.ScheduleSectionCard
 import se.blick.app.ui.components.ScheduleValueControl
 import se.blick.app.ui.components.scheduleFormOutlinedTextFieldColors
+import se.blick.app.ui.components.visuals
 import se.blick.app.ui.theme.CalmBlue40
 import se.blick.app.ui.theme.CalmBlue80
 import se.blick.app.ui.theme.LocalStockholmNightTheme
@@ -75,7 +80,6 @@ import se.blick.app.ui.theme.Neutral40
 import se.blick.app.ui.theme.Neutral80
 import se.blick.app.ui.theme.StockholmNightSurfaces
 import se.blick.app.ui.theme.themedScreenContainerColor
-import se.blick.app.ui.theme.themedStickyActionVisuals
 import java.time.Instant
 import java.time.LocalDate
 import java.time.LocalTime
@@ -128,9 +132,11 @@ internal fun OneTimeEventEditorContent(
 ) {
     var showDatePicker by remember { mutableStateOf(false) }
     var showTimePicker by remember { mutableStateOf(false) }
+    var activeLocationField by remember { mutableStateOf<EventLocationField?>(null) }
+    val originSuggestionsExpanded = activeLocationField == EventLocationField.Origin && state.originResults.isNotEmpty()
+    val destinationSuggestionsExpanded = activeLocationField == EventLocationField.Destination && state.destinationResults.isNotEmpty()
     val locale = currentBlickLocale()
     val focusManager = LocalFocusManager.current
-    val stickyActionVisuals = themedStickyActionVisuals()
     Scaffold(
         containerColor = themedScreenContainerColor(),
         topBar = {
@@ -149,14 +155,14 @@ internal fun OneTimeEventEditorContent(
                 verticalArrangement = Arrangement.Center,
             ) { CircularProgressIndicator() }
         } else {
-            Box(Modifier.fillMaxSize().padding(padding)) {
+            Box(Modifier.fillMaxSize().padding(padding).consumeWindowInsets(padding).imePadding()) {
                 LazyColumn(
-                    modifier = Modifier.fillMaxSize().imePadding().testTag("one-time-event-content"),
+                    modifier = Modifier.fillMaxSize().testTag("one-time-event-content"),
                     contentPadding = androidx.compose.foundation.layout.PaddingValues(
                         start = 16.dp,
                         top = 12.dp,
                         end = 16.dp,
-                        bottom = 96.dp,
+                        bottom = 24.dp,
                     ),
                     verticalArrangement = Arrangement.spacedBy(12.dp),
                 ) {
@@ -207,6 +213,12 @@ internal fun OneTimeEventEditorContent(
                                 searching = state.isSearchingOrigin,
                                 onValueChange = onOriginQuery,
                                 onSelect = onOrigin,
+                                expanded = originSuggestionsExpanded,
+                                onExpandedChange = { expanded ->
+                                    if (expanded) activeLocationField = EventLocationField.Origin
+                                    else if (activeLocationField == EventLocationField.Origin) activeLocationField = null
+                                },
+                                testTag = "one-time-event-origin",
                             )
                             LocationField(
                                 value = state.destinationQuery,
@@ -215,6 +227,12 @@ internal fun OneTimeEventEditorContent(
                                 searching = state.isSearchingDestination,
                                 onValueChange = onDestinationQuery,
                                 onSelect = onDestination,
+                                expanded = destinationSuggestionsExpanded,
+                                onExpandedChange = { expanded ->
+                                    if (expanded) activeLocationField = EventLocationField.Destination
+                                    else if (activeLocationField == EventLocationField.Destination) activeLocationField = null
+                                },
+                                testTag = "one-time-event-destination",
                             )
                         }
                     }
@@ -280,29 +298,19 @@ internal fun OneTimeEventEditorContent(
                     state.error?.let { error ->
                         item { Text(editorErrorText(error), color = MaterialTheme.colorScheme.error) }
                     }
-                }
-
-                Surface(
-                    color = stickyActionVisuals.containerColor,
-                    shadowElevation = stickyActionVisuals.shadowElevation,
-                    modifier = Modifier
-                        .align(Alignment.BottomCenter)
-                        .fillMaxWidth()
-                        .navigationBarsPadding()
-                        .imePadding()
-                        .testTag("one-time-event-sticky-action"),
-                ) {
-                    Button(
-                        onClick = if (state.hasPremium) onSave else onOpenPremium,
-                        enabled = if (state.hasPremium) state.canSave else true,
-                        modifier = Modifier
-                            .padding(horizontal = 16.dp, vertical = 12.dp)
-                            .fillMaxWidth()
-                            .heightIn(min = 52.dp)
-                            .testTag("save-event-button"),
-                    ) {
-                        if (state.isSaving) CircularProgressIndicator(modifier = Modifier.height(20.dp))
-                        else Text(stringResource(if (state.hasPremium) R.string.one_time_event_save else R.string.premium_feature_badge))
+                    item(key = "save-event") {
+                        Button(
+                            onClick = if (state.hasPremium) onSave else onOpenPremium,
+                            enabled = if (state.hasPremium) state.canSave else true,
+                            modifier = Modifier
+                                .padding(top = 12.dp)
+                                .fillMaxWidth()
+                                .heightIn(min = 52.dp)
+                                .testTag("save-event-button"),
+                        ) {
+                            if (state.isSaving) CircularProgressIndicator(modifier = Modifier.height(20.dp))
+                            else Text(stringResource(if (state.hasPremium) R.string.one_time_event_save else R.string.premium_feature_badge))
+                        }
                     }
                 }
             }
@@ -372,14 +380,95 @@ internal fun OneTimeEventLabelSelector(
         verticalArrangement = Arrangement.spacedBy(4.dp),
     ) {
         OneTimeEventLabel.entries.forEach { label ->
-            EventChoiceChip(
+            OneTimeEventLabelChip(
+                label = label,
                 selected = selectedLabel == label,
                 onClick = { onLabelSelected(label) },
-                label = labelText(label),
                 modifier = Modifier.testTag("one-time-event-label-${label.name.lowercase()}"),
             )
         }
     }
+}
+
+internal data class OneTimeEventLabelVisuals(
+    val accent: Color,
+    val unselectedContainer: Color,
+)
+
+/** Keeps one-time event labels in the same established color families as Routine labels. */
+internal fun OneTimeEventLabel.visuals(darkTheme: Boolean): OneTimeEventLabelVisuals {
+    val routineVisuals = when (this) {
+        OneTimeEventLabel.TRAVEL -> RoutineLabel.WORK
+        OneTimeEventLabel.EVENT -> RoutineLabel.GYM
+        OneTimeEventLabel.APPOINTMENT -> RoutineLabel.STUDY
+        OneTimeEventLabel.OTHER -> RoutineLabel.OTHER
+    }.visuals(darkTheme)
+    return OneTimeEventLabelVisuals(
+        accent = routineVisuals.accent,
+        unselectedContainer = routineVisuals.container,
+    )
+}
+
+internal data class OneTimeEventLabelChipPalette(
+    val accent: Color,
+    val unselectedContainer: Color,
+    val selectedContainer: Color,
+)
+
+internal fun OneTimeEventLabel.chipPalette(
+    darkTheme: Boolean,
+    useStockholmNightSurface: Boolean,
+): OneTimeEventLabelChipPalette {
+    val visuals = visuals(darkTheme)
+    return OneTimeEventLabelChipPalette(
+        accent = visuals.accent,
+        unselectedContainer = if (useStockholmNightSurface) {
+            visuals.accent.copy(alpha = 0.08f).compositeOver(StockholmNightSurfaces.Control)
+        } else {
+            visuals.unselectedContainer
+        },
+        selectedContainer = when {
+            useStockholmNightSurface ->
+                visuals.accent.copy(alpha = 0.18f).compositeOver(StockholmNightSurfaces.SelectedControl)
+            darkTheme -> visuals.accent.copy(alpha = 0.28f)
+            else -> visuals.accent.copy(alpha = 0.18f)
+        },
+    )
+}
+
+@Composable
+private fun OneTimeEventLabelChip(
+    label: OneTimeEventLabel,
+    selected: Boolean,
+    onClick: () -> Unit,
+    modifier: Modifier = Modifier,
+) {
+    val useStockholmNightSurface = LocalStockholmNightTheme.current
+    val isDarkTheme = MaterialTheme.colorScheme.background.luminance() < 0.5f
+    val palette = label.chipPalette(isDarkTheme, useStockholmNightSurface)
+    FilterChip(
+        selected = selected,
+        onClick = onClick,
+        label = { Text(labelText(label)) },
+        colors = FilterChipDefaults.filterChipColors(
+            containerColor = palette.unselectedContainer,
+            labelColor = palette.accent,
+            selectedContainerColor = palette.selectedContainer,
+            selectedLabelColor = palette.accent,
+        ),
+        border = FilterChipDefaults.filterChipBorder(
+            enabled = true,
+            selected = selected,
+            borderColor = if (useStockholmNightSurface) {
+                StockholmNightSurfaces.Border
+            } else {
+                MaterialTheme.colorScheme.outlineVariant
+            },
+            selectedBorderColor = palette.accent,
+            selectedBorderWidth = 2.dp,
+        ),
+        modifier = modifier,
+    )
 }
 
 @Composable
@@ -389,7 +478,7 @@ private fun OneTimeEventTimeTypeSelector(
 ) {
     Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
         OneTimeEventTimeType.entries.forEach { type ->
-            EventChoiceChip(
+            EventTimeTypeChoiceChip(
                 selected = selectedType == type,
                 onClick = { onTimeTypeSelected(type) },
                 label = stringResource(
@@ -406,7 +495,7 @@ private fun OneTimeEventTimeTypeSelector(
 }
 
 @Composable
-private fun EventChoiceChip(
+private fun EventTimeTypeChoiceChip(
     selected: Boolean,
     onClick: () -> Unit,
     label: String,
@@ -449,6 +538,9 @@ private fun EventChoiceChip(
     )
 }
 
+private enum class EventLocationField { Origin, Destination }
+
+@OptIn(ExperimentalMaterial3Api::class)
 @Composable
 private fun LocationField(
     value: String,
@@ -457,22 +549,51 @@ private fun LocationField(
     searching: Boolean,
     onValueChange: (String) -> Unit,
     onSelect: (JourneyLocation) -> Unit,
+    expanded: Boolean,
+    onExpandedChange: (Boolean) -> Unit,
+    testTag: String,
 ) {
-    Column {
+    val focusManager = LocalFocusManager.current
+    ExposedDropdownMenuBox(expanded = expanded, onExpandedChange = onExpandedChange) {
         OutlinedTextField(
             value = value,
-            onValueChange = onValueChange,
+            onValueChange = {
+                onExpandedChange(true)
+                onValueChange(it)
+            },
             label = { Text(label) },
             singleLine = true,
             colors = scheduleFormOutlinedTextFieldColors(useLightSurface = true),
             trailingIcon = if (searching) ({ CircularProgressIndicator(modifier = Modifier.height(20.dp)) }) else null,
-            modifier = Modifier.fillMaxWidth(),
+            keyboardOptions = KeyboardOptions(imeAction = ImeAction.Done),
+            keyboardActions = KeyboardActions(onDone = {
+                onExpandedChange(false)
+                focusManager.clearFocus()
+            }),
+            modifier = Modifier
+                .fillMaxWidth()
+                .onFocusChanged { onExpandedChange(it.isFocused) }
+                .menuAnchor(ExposedDropdownMenuAnchorType.PrimaryEditable)
+                .testTag("$testTag-field"),
         )
-        results.take(5).forEach { location ->
-            ListItem(
-                headlineContent = { Text(location.name, maxLines = 2) },
-                modifier = Modifier.fillMaxWidth().clickable { onSelect(location) },
-            )
+        // The editable anchor preserves the IME; the menu bounds itself around the IME
+        // and scrolls independently of the form, on an opaque theme surface.
+        ExposedDropdownMenu(
+            expanded = expanded,
+            onDismissRequest = { onExpandedChange(false) },
+            containerColor = MaterialTheme.colorScheme.surface,
+            modifier = Modifier.testTag("$testTag-suggestions"),
+        ) {
+            results.forEach { location ->
+                DropdownMenuItem(
+                    text = { Text(location.name, maxLines = 2) },
+                    onClick = {
+                        onExpandedChange(false)
+                        onSelect(location)
+                    },
+                    modifier = Modifier.testTag("$testTag-result-${location.id}"),
+                )
+            }
         }
     }
 }

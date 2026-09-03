@@ -60,6 +60,8 @@ import se.blick.app.ui.components.BlickTopBar
 import se.blick.app.ui.notification.launchLiveUpdateSettings
 import se.blick.app.ui.notification.notificationSettingsIntent
 import se.blick.app.ui.theme.AppearanceMode
+import se.blick.app.ui.theme.LocalLightCityTheme
+import se.blick.app.ui.theme.LocalStockholmNightTheme
 import se.blick.app.ui.theme.themedScreenContainerColor
 
 private const val SUPPORT_EMAIL = "contactblicklabs@gmail.com"
@@ -133,16 +135,22 @@ internal fun AboutContent(
     var showLanguageDialog by remember { mutableStateOf(false) }
     var showAppearanceDialog by remember { mutableStateOf(false) }
     val currentLanguage = currentBlickLocale().language
+    val scrollState = rememberScrollState()
 
     Scaffold(
         containerColor = themedScreenContainerColor(),
         topBar = { BlickTopBar(title = stringResource(R.string.about_title), onBack = onBack) },
     ) { padding ->
+        // Transparent headers need the scroll viewport to stay below the top bar and its insets.
+        val scrollViewport = if (LocalLightCityTheme.current || LocalStockholmNightTheme.current) {
+            Modifier.padding(padding).verticalScroll(scrollState)
+        } else {
+            Modifier.verticalScroll(scrollState).padding(padding)
+        }
         Column(
             Modifier
                 .fillMaxSize()
-                .verticalScroll(rememberScrollState())
-                .padding(padding)
+                .then(scrollViewport)
                 .padding(horizontal = 20.dp, vertical = 12.dp),
         ) {
             SettingsSectionTitle(R.string.settings_section_preferences)
