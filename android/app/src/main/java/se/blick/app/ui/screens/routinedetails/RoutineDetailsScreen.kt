@@ -85,6 +85,10 @@ import se.blick.app.domain.model.LaterJourneyOption
 import se.blick.app.domain.model.JOURNEY_TRANSPORT_MODE_OPTIONS
 import se.blick.app.domain.model.RoutineType
 import se.blick.app.ui.theme.RoutineDestructiveRed
+import se.blick.app.ui.theme.LightJourneyFilterBorder
+import se.blick.app.ui.theme.LightJourneyFilterSelectedSurface
+import se.blick.app.ui.theme.LightJourneyFilterSurface
+import se.blick.app.ui.theme.LocalLightCityTheme
 import se.blick.app.ui.theme.LocalStockholmNightTheme
 import se.blick.app.ui.theme.StockholmNightSurfaces
 import se.blick.app.ui.theme.themedScreenContainerColor
@@ -464,13 +468,19 @@ private fun JourneyFilterRow(
     onToggleWithChanges: () -> Unit,
 ) {
     val useStockholmNightSurface = LocalStockholmNightTheme.current
-    val chipColors = if (useStockholmNightSurface) {
-        FilterChipDefaults.filterChipColors(
+    val useLightSurface = LocalLightCityTheme.current
+    val chipColors = when {
+        useLightSurface -> FilterChipDefaults.filterChipColors(
+            containerColor = LightJourneyFilterSurface,
+            selectedContainerColor = LightJourneyFilterSelectedSurface,
+            disabledContainerColor = LightJourneyFilterSurface,
+            disabledSelectedContainerColor = LightJourneyFilterSelectedSurface,
+        )
+        useStockholmNightSurface -> FilterChipDefaults.filterChipColors(
             containerColor = StockholmNightSurfaces.Control,
             selectedContainerColor = StockholmNightSurfaces.SelectedControl,
         )
-    } else {
-        FilterChipDefaults.filterChipColors()
+        else -> FilterChipDefaults.filterChipColors()
     }
     Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
         FilterChip(
@@ -482,15 +492,23 @@ private fun JourneyFilterRow(
                 { Icon(Icons.Filled.Check, contentDescription = null, modifier = Modifier.size(FilterChipDefaults.IconSize)) }
             } else null,
             colors = chipColors,
-            border = if (useStockholmNightSurface) {
-                FilterChipDefaults.filterChipBorder(
+            border = when {
+                useLightSurface -> FilterChipDefaults.filterChipBorder(
+                    enabled = enabled,
+                    selected = showDirect,
+                    borderColor = LightJourneyFilterBorder,
+                    selectedBorderColor = LightJourneyFilterBorder,
+                    disabledBorderColor = LightJourneyFilterBorder.copy(alpha = 0.5f),
+                    disabledSelectedBorderColor = LightJourneyFilterBorder.copy(alpha = 0.5f),
+                    selectedBorderWidth = 1.dp,
+                )
+                useStockholmNightSurface -> FilterChipDefaults.filterChipBorder(
                     enabled = enabled,
                     selected = showDirect,
                     borderColor = StockholmNightSurfaces.Border,
                     selectedBorderColor = MaterialTheme.colorScheme.outline,
                 )
-            } else {
-                FilterChipDefaults.filterChipBorder(enabled = enabled, selected = showDirect)
+                else -> FilterChipDefaults.filterChipBorder(enabled = enabled, selected = showDirect)
             },
         )
         FilterChip(
@@ -502,15 +520,23 @@ private fun JourneyFilterRow(
                 { Icon(Icons.Filled.Check, contentDescription = null, modifier = Modifier.size(FilterChipDefaults.IconSize)) }
             } else null,
             colors = chipColors,
-            border = if (useStockholmNightSurface) {
-                FilterChipDefaults.filterChipBorder(
+            border = when {
+                useLightSurface -> FilterChipDefaults.filterChipBorder(
+                    enabled = enabled,
+                    selected = showWithChanges,
+                    borderColor = LightJourneyFilterBorder,
+                    selectedBorderColor = LightJourneyFilterBorder,
+                    disabledBorderColor = LightJourneyFilterBorder.copy(alpha = 0.5f),
+                    disabledSelectedBorderColor = LightJourneyFilterBorder.copy(alpha = 0.5f),
+                    selectedBorderWidth = 1.dp,
+                )
+                useStockholmNightSurface -> FilterChipDefaults.filterChipBorder(
                     enabled = enabled,
                     selected = showWithChanges,
                     borderColor = StockholmNightSurfaces.Border,
                     selectedBorderColor = MaterialTheme.colorScheme.outline,
                 )
-            } else {
-                FilterChipDefaults.filterChipBorder(enabled = enabled, selected = showWithChanges)
+                else -> FilterChipDefaults.filterChipBorder(enabled = enabled, selected = showWithChanges)
             },
         )
     }

@@ -18,6 +18,8 @@ import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.lazy.grid.GridCells
 import androidx.compose.foundation.lazy.grid.LazyVerticalGrid
 import androidx.compose.foundation.lazy.grid.items as gridItems
+import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.automirrored.filled.KeyboardArrowRight
 import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.Button
 import androidx.compose.material3.ButtonDefaults
@@ -211,39 +213,51 @@ internal fun OneTimeEventCard(
             CardDefaults.cardElevation()
         },
     ) {
-        Column(Modifier.padding(16.dp), verticalArrangement = Arrangement.spacedBy(5.dp)) {
-            Row(
-                horizontalArrangement = Arrangement.spacedBy(8.dp),
-                verticalAlignment = Alignment.CenterVertically,
-            ) {
-                OneTimeEventLabelPill(event.label)
+        Row(
+            modifier = Modifier.fillMaxWidth().padding(start = 16.dp, end = 10.dp, top = 16.dp, bottom = 16.dp),
+            verticalAlignment = Alignment.CenterVertically,
+            horizontalArrangement = Arrangement.spacedBy(8.dp),
+        ) {
+            Column(Modifier.weight(1f), verticalArrangement = Arrangement.spacedBy(5.dp)) {
+                Row(
+                    horizontalArrangement = Arrangement.spacedBy(8.dp),
+                    verticalAlignment = Alignment.CenterVertically,
+                ) {
+                    OneTimeEventLabelPill(event.label)
+                    Text(
+                        event.date.format(DateTimeFormatter.ofPattern("d MMM", locale)).uppercase(locale),
+                        style = MaterialTheme.typography.labelMedium,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    )
+                }
+                if (locked) {
+                    Text(
+                        stringResource(R.string.one_time_event_locked),
+                        style = MaterialTheme.typography.labelMedium,
+                        color = MaterialTheme.colorScheme.primary,
+                    )
+                }
+                Text(event.name, style = MaterialTheme.typography.titleMedium, fontWeight = FontWeight.SemiBold, maxLines = 2)
                 Text(
-                    event.date.format(DateTimeFormatter.ofPattern("d MMM", locale)).uppercase(locale),
-                    style = MaterialTheme.typography.labelMedium,
+                    stringResource(R.string.one_time_event_route_format, event.originName, event.destinationName),
+                    maxLines = 2,
+                    overflow = TextOverflow.Ellipsis,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                )
+                Text(
+                    stringResource(
+                        if (event.timeType == OneTimeEventTimeType.ARRIVE_BY) R.string.one_time_event_arrive_by_value
+                        else R.string.one_time_event_leave_at_value,
+                        event.time.toString(),
+                    ),
                     color = MaterialTheme.colorScheme.onSurfaceVariant,
                 )
             }
-            if (locked) {
-                Text(
-                    stringResource(R.string.one_time_event_locked),
-                    style = MaterialTheme.typography.labelMedium,
-                    color = MaterialTheme.colorScheme.primary,
-                )
-            }
-            Text(event.name, style = MaterialTheme.typography.titleMedium, fontWeight = FontWeight.SemiBold, maxLines = 2)
-            Text(
-                stringResource(R.string.one_time_event_route_format, event.originName, event.destinationName),
-                maxLines = 2,
-                overflow = TextOverflow.Ellipsis,
-                color = MaterialTheme.colorScheme.onSurfaceVariant,
-            )
-            Text(
-                stringResource(
-                    if (event.timeType == OneTimeEventTimeType.ARRIVE_BY) R.string.one_time_event_arrive_by_value
-                    else R.string.one_time_event_leave_at_value,
-                    event.time.toString(),
-                ),
-                color = MaterialTheme.colorScheme.onSurfaceVariant,
+            Icon(
+                Icons.AutoMirrored.Filled.KeyboardArrowRight,
+                contentDescription = stringResource(R.string.routine_list_open, event.name),
+                tint = MaterialTheme.colorScheme.onSurfaceVariant,
+                modifier = Modifier.size(28.dp).testTag("one_time_event_card_chevron"),
             )
         }
     }

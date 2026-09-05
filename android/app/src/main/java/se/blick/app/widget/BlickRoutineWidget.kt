@@ -1151,10 +1151,14 @@ private fun LargeJourneySummary(
 
         val secondary = content.secondary?.takeIf { isDepartureCurrent(now, it.departureTime) }
         if (secondary != null) {
-            Spacer(modifier = GlanceModifier.height(7.dp))
-            LargeJourneyDivider()
-            Spacer(modifier = GlanceModifier.height(7.dp))
-            LargeSecondaryJourneyRow(context, secondary, now, tier)
+            // RemoteViews keeps only ten children per container. Group this section so
+            // routes with changes cannot push the next departure past that limit.
+            Column(modifier = GlanceModifier.fillMaxWidth()) {
+                Spacer(modifier = GlanceModifier.height(7.dp))
+                LargeJourneyDivider()
+                Spacer(modifier = GlanceModifier.height(7.dp))
+                LargeSecondaryJourneyRow(context, secondary, now, tier)
+            }
         }
     }
 }

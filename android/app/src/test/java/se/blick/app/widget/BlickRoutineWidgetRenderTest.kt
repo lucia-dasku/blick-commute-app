@@ -9,6 +9,10 @@ import androidx.glance.AndroidResourceImageProvider
 import androidx.glance.BackgroundModifier
 import androidx.glance.EmittableImage
 import androidx.glance.appwidget.testing.unit.runGlanceAppWidgetUnitTest
+import androidx.glance.appwidget.compose
+import androidx.glance.appwidget.provideContent
+import kotlinx.coroutines.test.setMain
+import kotlinx.coroutines.test.resetMain
 import androidx.glance.testing.GlanceNodeMatcher
 import androidx.glance.testing.unit.MappedNode
 import androidx.glance.testing.unit.hasText
@@ -52,6 +56,36 @@ import java.util.Locale
 @RunWith(RobolectricTestRunner::class)
 @Config(sdk = [34], application = android.app.Application::class)
 class BlickRoutineWidgetRenderTest {
+
+    @OptIn(kotlinx.coroutines.ExperimentalCoroutinesApi::class)
+    @Test
+    fun `large NEXT survives translation into platform views`() = kotlinx.coroutines.test.runTest {
+        kotlinx.coroutines.Dispatchers.setMain(kotlinx.coroutines.test.UnconfinedTestDispatcher(testScheduler))
+        try {
+            val primary = journeyRow(now.plusSeconds(720), "13", transferCount = 1)
+            val next = journeyRow(now.plusSeconds(1320), "13", role = JourneyRole.NEXT)
+            val widget = object : androidx.glance.appwidget.GlanceAppWidget() {
+                override suspend fun provideGlance(context: android.content.Context, id: androidx.glance.GlanceId) {
+                    provideContent { BlickWidgetContent(activeRoutineState(primary, next), now) }
+                }
+            }
+            for (height in listOf(280, 360)) {
+                val views = widget.compose(context, size = DpSize(340.dp, height.dp))
+                val root = views.apply(context, android.widget.FrameLayout(context))
+                fun texts(view: android.view.View): List<String> = when (view) {
+                    is android.widget.TextView -> listOf(view.text.toString())
+                    is android.view.ViewGroup -> (0 until view.childCount).flatMap { texts(view.getChildAt(it)) }
+                    else -> emptyList()
+                }
+                org.junit.Assert.assertTrue(
+                    "Next departure missing from platform views at height $height",
+                    "${nextLabelText()} ${countdownText(22)}  ›" in texts(root),
+                )
+            }
+        } finally {
+            kotlinx.coroutines.Dispatchers.resetMain()
+        }
+    }
 
     private val context = RuntimeEnvironment.getApplication()
     // A fixed instant, passed explicitly to BlickWidgetContent's own `now` parameter below (see

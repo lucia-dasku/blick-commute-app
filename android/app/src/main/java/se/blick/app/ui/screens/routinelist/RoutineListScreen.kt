@@ -547,25 +547,33 @@ private fun UnlabeledRoutineContent(
         supportingContent = if (!allowed) {
             { Text(stringResource(R.string.routine_list_premium_locked)) }
         } else null,
-        trailingContent = when {
-            !allowed && routine.type == RoutineType.LINE_DIRECTION -> ({
-                TextButton(onClick = { onSelectFreeRoutine(routine.id) }) {
-                    Text(stringResource(R.string.routine_list_use_free))
+        trailingContent = {
+            Row(
+                verticalAlignment = Alignment.CenterVertically,
+                horizontalArrangement = Arrangement.spacedBy(8.dp),
+            ) {
+                when {
+                    !allowed && routine.type == RoutineType.LINE_DIRECTION -> {
+                        TextButton(onClick = { onSelectFreeRoutine(routine.id) }) {
+                            Text(stringResource(R.string.routine_list_use_free))
+                        }
+                    }
+                    !routine.enabled -> Text(
+                        text = stringResource(R.string.routine_details_status_disabled),
+                        color = RoutineDestructiveRed,
+                    )
+                    isPausedToday -> Text(
+                        text = stringResource(R.string.routine_list_status_paused),
+                        color = pausedRoutineStatusColor(),
+                    )
                 }
-            })
-            !routine.enabled -> ({
-                Text(
-                    text = stringResource(R.string.routine_details_status_disabled),
-                    color = RoutineDestructiveRed,
+                Icon(
+                    Icons.AutoMirrored.Filled.KeyboardArrowRight,
+                    contentDescription = stringResource(R.string.routine_list_open, routine.name),
+                    tint = MaterialTheme.colorScheme.onSurfaceVariant,
+                    modifier = Modifier.size(28.dp).testTag("routine_card_chevron"),
                 )
-            })
-            isPausedToday -> ({
-                Text(
-                    text = stringResource(R.string.routine_list_status_paused),
-                    color = pausedRoutineStatusColor(),
-                )
-            })
-            else -> null
+            }
         },
         colors = ListItemDefaults.colors(containerColor = containerColor),
         modifier = modifier,

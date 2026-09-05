@@ -20,3 +20,7 @@ internal val LightOneTimeEventCardDivider = Color(0xFFE7DEDC)
 // Dedicated normal-Light treatment for the Premium offer in routine creation.
 internal val LightPremiumUpsellCardSurface = Color(0xFFFCF8F7)
 internal val LightPremiumUpsellCardBorder = Color(0xFFE7DEDC)
+
+internal val LightJourneyFilterSurface = Color(0xFFF4ECEA)
+internal val LightJourneyFilterSelectedSurface = Color(0xFFEDE4E2)
+internal val LightJourneyFilterBorder = Color(0xFFB6A29D)
