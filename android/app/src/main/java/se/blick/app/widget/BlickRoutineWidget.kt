@@ -373,6 +373,7 @@ private val BASIC_DARK_WIDGET_COLORS = colorProviders(
     widgetBackground = ColorProvider(BasicDarkDialogSurface),
 )
 private val INACTIVE_WIDGET_MINT = ColorProvider(Color(0xFF33E4A1))
+private val LIGHT_INACTIVE_WIDGET_MINT = ColorProvider(Color(0xFFA6DCC3))
 private val STOCKHOLM_NIGHT_WIDGET_BORDER = ColorProvider(StockholmNightSurfaces.CardBorder)
 private val STOCKHOLM_NIGHT_WIDGET_COLORS = colorProviders(
     primary = ColorProvider(Color(0xFFA9C7E0)),
@@ -540,7 +541,10 @@ private fun NoActiveCommuteContent(
                 ),
             contentAlignment = Alignment.Center,
         ) {
-            InactiveBrandingContent(layout)
+            InactiveBrandingContent(
+                layout = layout,
+                logoTint = if (useLightBackground) LIGHT_INACTIVE_WIDGET_MINT else INACTIVE_WIDGET_MINT,
+            )
         }
     }
 }
@@ -572,7 +576,7 @@ private fun StockholmNightWidgetBackgroundImage() {
 }
 
 @Composable
-private fun InactiveBrandingContent(layout: InactiveWidgetLayout) {
+private fun InactiveBrandingContent(layout: InactiveWidgetLayout, logoTint: ColorProvider) {
     // The authoritative adaptive-icon foreground has intentional launcher-mask padding. A
     // centered oversized image inside this clipped viewport removes only that transparent
     // padding, just like BlickWordmark does in standard Compose; the logo itself is unchanged.
@@ -587,7 +591,7 @@ private fun InactiveBrandingContent(layout: InactiveWidgetLayout) {
             provider = ImageProvider(R.drawable.ic_launcher_foreground),
             contentDescription = null,
             modifier = GlanceModifier.size(layout.logoAssetSize),
-            colorFilter = ColorFilter.tint(INACTIVE_WIDGET_MINT),
+            colorFilter = ColorFilter.tint(logoTint),
         )
     }
 }
