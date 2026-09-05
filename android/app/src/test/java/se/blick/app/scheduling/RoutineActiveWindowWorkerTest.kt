@@ -2,6 +2,7 @@ package se.blick.app.scheduling
 
 import android.app.NotificationManager
 import android.content.Context
+import androidx.room.Room
 import androidx.work.ListenableWorker
 import androidx.work.WorkerFactory
 import androidx.work.WorkerParameters
@@ -35,6 +36,9 @@ import se.blick.app.data.repository.RoutineRepository
 import se.blick.app.data.repository.ActiveCommuteOwnership
 import se.blick.app.data.repository.ActiveCommuteOwnershipRepository
 import se.blick.app.data.repository.StaleSnapshotRepository
+import se.blick.app.data.repository.RoomStaleSnapshotRepository
+import se.blick.app.data.local.room.BlickDatabase
+import se.blick.app.data.local.room.toEntity
 import se.blick.app.domain.model.CommuteRoutine
 import se.blick.app.domain.model.ActiveCommuteSource
 import se.blick.app.domain.model.DeparturesResult
@@ -67,6 +71,7 @@ import se.blick.app.domain.usecase.GetJourneyDisruptionRelevanceUseCase
 import se.blick.app.domain.usecase.GetLiveDeparturesUseCase
 import se.blick.app.domain.usecase.GetRankedJourneysUseCase
 import se.blick.app.domain.usecase.LiveDeparturesSnapshot
+import se.blick.app.domain.usecase.departureIdentity
 import se.blick.app.domain.usecase.countdownMinutes
 import se.blick.app.notification.NotificationAvailability
 import se.blick.app.notification.NotificationAvailabilityChecker
@@ -74,9 +79,12 @@ import se.blick.app.notification.NotificationPostResult
 import se.blick.app.notification.RoutineNotificationBuilder
 import se.blick.app.notification.RoutineNotificationContent
 import se.blick.app.notification.RoutineNotificationModel
+import se.blick.app.notification.RoutineNotificationMapper
 import se.blick.app.notification.RoutineNotifier
 import se.blick.app.domain.usecase.LiveDeparturesState
 import se.blick.app.widget.RoutineWidgetUpdater
+import se.blick.app.widget.RoutineWidgetMapper
+import se.blick.app.widget.RoutineWidgetContent
 import java.io.IOException
 import java.time.Clock
 import java.time.DayOfWeek
@@ -1816,6 +1824,133 @@ class RoutineActiveWindowWorkerTest {
 
         assertEquals(1, notifier.removeCallCount)
         assertTrue(scheduler.scheduledRoutines.isEmpty())
+    }
+
+    @Test
+    fun `worker persists five candidates in Room and existing projections roll over without fetching`() = runTest {
+        val start = Instant.parse("2026-07-27T05:00:00Z")
+        val clock = TickingClock(start, zone)
+        val routine = routine()
+        val db = Room.inMemoryDatabaseBuilder(context, BlickDatabase::class.java).build()
+        try {
+            db.routineDao().upsert(routine.toEntity())
+            val snapshots = RoomStaleSnapshotRepository(db.staleSnapshotDao())
+            val candidates = (1..7).map { index ->
+                sampleDeparture().copy(
+                    departureId = "dep-$index",
+                    destination = "Destination $index",
+                    scheduledTime = start.plusSeconds(index * 60L - 10),
+                    expectedTime = start.plusSeconds(index * 60L),
+                    isCancelled = index == 2,
+                )
+            }
+            val departures = FakeDepartureRepository {
+                DeparturesResult(start.minusSeconds(20), routine.siteId, candidates.reversed())
+            }
+            val notifier = RecordingNotifier()
+            val widget = RecordingWidgetUpdater()
+            buildWorker(
+                routine.id,
+                ScriptedRoutineRepository(clock, advanceSecondsPerCall = 0) { if (it < 2) routine else null },
+                GetLiveDeparturesUseCase(departures, clock),
+                notifier,
+                RecordingScheduler(),
+                clock,
+                staleSnapshotRepository = snapshots,
+                widgetUpdater = widget,
+            ).doWork()
+
+            val stored = requireNotNull(snapshots.get(routine.id, routine.departureIdentity()))
+            assertEquals((1..5).map { "dep-$it" }, stored.departures.map { it.departureId })
+            assertEquals(candidates.take(5).map { it.scheduledTime }, stored.departures.map { it.scheduledTime })
+            assertEquals(candidates.take(5).map { it.expectedTime }, stored.departures.map { it.expectedTime })
+            assertEquals(start.minusSeconds(20), stored.fetchedAt)
+            assertNull(snapshots.get(routine.id, routine.departureIdentity().copy(directionCode = 2)))
+            val initial = notifier.shown.single().content as RoutineNotificationContent.Live
+            assertEquals(listOf(1L, 2L), initial.departures.map { it.minutesRemaining })
+            assertEquals(stored, (widget.updateCalls.single().second as LiveDeparturesState.Live).snapshot)
+
+            // These are existing presentation passes over the same persisted response, not new fetches.
+            val live = LiveDeparturesState.Live(stored)
+            val firstWidget = RoutineWidgetMapper.map(routine, live, start).content as RoutineWidgetContent.Live
+            assertEquals(listOf("Destination 1", "Destination 2"), listOf(firstWidget.next.destinationLabel, firstWidget.following?.destinationLabel))
+            clock.instant = start.plusSeconds(61)
+            val nextNotification = RoutineNotificationMapper.map(routine, live, clock.instant()).content as RoutineNotificationContent.Live
+            assertEquals(listOf("Destination 2", "Destination 3"), nextNotification.departures.map { it.destinationLabel })
+            assertEquals(listOf(1L, 2L), nextNotification.departures.map { it.minutesRemaining })
+            assertTrue(nextNotification.departures.first().isCancelled)
+            val nextWidget = RoutineWidgetMapper.map(routine, live, clock.instant()).content as RoutineWidgetContent.Live
+            assertEquals(listOf("Destination 2", "Destination 3"), listOf(nextWidget.next.destinationLabel, nextWidget.following?.destinationLabel))
+            assertEquals(1L, nextWidget.next.minutesRemaining)
+            assertEquals(2L, nextWidget.following?.minutesRemaining)
+            assertTrue(nextWidget.next.isCancelled)
+            assertTrue(nextWidget.next.isRealTime)
+            assertEquals(1, departures.callCount)
+
+            val failing = FakeDepartureRepository { throw IOException("offline") }
+            val staleNotifier = RecordingNotifier()
+            val staleWidget = RecordingWidgetUpdater()
+            buildWorker(
+                routine.id,
+                ScriptedRoutineRepository(clock, advanceSecondsPerCall = 0) { if (it < 2) routine else null },
+                GetLiveDeparturesUseCase(failing, clock),
+                staleNotifier,
+                RecordingScheduler(),
+                clock,
+                staleSnapshotRepository = snapshots,
+                widgetUpdater = staleWidget,
+            ).doWork()
+            val stale = staleNotifier.shown.single().content as RoutineNotificationContent.Stale
+            assertEquals(nextNotification.departures, stale.departures)
+            assertEquals(stored.fetchedAt, stale.lastCheckedAt)
+            val staleState = staleWidget.updateCalls.single().second as LiveDeparturesState.Stale
+            val staleProjection = RoutineWidgetMapper.map(routine, staleState, clock.instant()).content as RoutineWidgetContent.Stale
+            assertEquals(nextWidget.next, staleProjection.next)
+            assertEquals(nextWidget.following, staleProjection.following)
+            assertEquals(stored.fetchedAt, staleProjection.lastCheckedAt)
+            assertEquals(stored, snapshots.get(routine.id, routine.departureIdentity()))
+            assertEquals(1, failing.callCount)
+        } finally {
+            db.close()
+        }
+    }
+
+    @Test
+    fun `fresh smaller and empty worker responses replace the fallback instead of resurrecting candidates`() = runTest {
+        val clock = TickingClock(Instant.parse("2026-07-27T05:00:00Z"), zone)
+        val routine = routine()
+        val snapshots = FakeStaleSnapshotRepository()
+        var response = DeparturesResult(clock.instant(), routine.siteId, (1..5).map {
+            sampleDeparture().copy(departureId = "old-$it")
+        })
+        var fail = false
+        val departures = FakeDepartureRepository { if (fail) throw IOException("offline") else response }
+        suspend fun tick(): RoutineNotificationContent {
+            val notifier = RecordingNotifier()
+            buildWorker(
+                routine.id,
+                ScriptedRoutineRepository(clock, advanceSecondsPerCall = 0) { if (it < 2) routine else null },
+                GetLiveDeparturesUseCase(departures, clock), notifier, RecordingScheduler(), clock,
+                staleSnapshotRepository = snapshots,
+            ).doWork()
+            return notifier.shown.single().content
+        }
+
+        tick()
+        assertEquals(5, snapshots.get(routine.id, routine.departureIdentity())?.departures?.size)
+        response = response.copy(fetchedAt = clock.instant().plusSeconds(1), departures = listOf(sampleDeparture().copy(departureId = "new")))
+        assertEquals(1, (tick() as RoutineNotificationContent.Live).departures.size)
+        val smaller = requireNotNull(snapshots.get(routine.id, routine.departureIdentity()))
+        assertEquals(listOf("new"), smaller.departures.map { it.departureId })
+        fail = true
+        assertEquals(smaller.fetchedAt, (tick() as RoutineNotificationContent.Stale).lastCheckedAt)
+        fail = false
+        response = response.copy(departures = emptyList())
+        assertTrue(tick() is RoutineNotificationContent.NoUpcomingDepartures)
+        assertNull(snapshots.get(routine.id, routine.departureIdentity()))
+        fail = true
+        assertEquals(RoutineNotificationContent.Offline, tick())
+        assertEquals(5, departures.callCount)
     }
 
     @Test

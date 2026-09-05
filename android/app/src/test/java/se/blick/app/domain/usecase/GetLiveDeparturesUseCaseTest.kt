@@ -1,6 +1,8 @@
 package se.blick.app.domain.usecase
 
 import kotlinx.coroutines.CancellationException
+import kotlinx.coroutines.CompletableDeferred
+import kotlinx.coroutines.async
 import kotlinx.coroutines.flow.toList
 import kotlinx.coroutines.test.runTest
 import org.junit.Assert.assertEquals
@@ -22,6 +24,7 @@ import java.time.DayOfWeek
 import java.time.Instant
 import java.time.LocalTime
 import java.time.ZoneOffset
+import java.time.ZoneId
 
 class GetLiveDeparturesUseCaseTest {
 
@@ -86,6 +89,80 @@ class GetLiveDeparturesUseCaseTest {
     }
 
     private fun useCase(repository: DepartureRepository) = GetLiveDeparturesUseCase(repository, clock)
+
+    private class MutableClock(var now: Instant) : Clock() {
+        var reads = 0
+        override fun getZone(): ZoneId = ZoneOffset.UTC
+        override fun withZone(zone: ZoneId): Clock = this
+        override fun instant(): Instant = now.also { reads++ }
+    }
+
+    private class SuspendedDepartureRepository : DepartureRepository {
+        val started = CompletableDeferred<Unit>()
+        val response = CompletableDeferred<DeparturesResult>()
+        var callCount = 0
+        override suspend fun getDepartures(siteId: Long, forecastMinutes: Int?): DeparturesResult {
+            callCount++
+            started.complete(Unit)
+            return response.await()
+        }
+    }
+
+    @Test
+    fun `slow fetch filters expiry before the pool cap using one post-fetch instant`() = runTest {
+        val mutableClock = MutableClock(now)
+        val repository = SuspendedDepartureRepository()
+        val states = async {
+            GetLiveDeparturesUseCase(repository, mutableClock)(
+                routine,
+                maxDepartures = LINE_DEPARTURE_RETENTION_LIMIT,
+            ).toList()
+        }
+        repository.started.await()
+        assertEquals(0, mutableClock.reads)
+        mutableClock.now = now.plusSeconds(121)
+        val departures = (1..8).map {
+            upcomingDeparture("dep-$it").copy(scheduledTime = now.plusSeconds(it * 60L))
+        }
+        repository.response.complete(resultOf(*departures.reversed().toTypedArray()).copy(fetchedAt = now.minusSeconds(30)))
+
+        val emitted = states.await()
+        assertEquals(LiveDeparturesState.Loading, emitted.first())
+        val snapshot = (emitted.last() as LiveDeparturesState.Live).snapshot
+        assertEquals((3..7).map { "dep-$it" }, snapshot.departures.map { it.departureId })
+        assertEquals(listOf(1L, 2L, 3L, 4L, 5L), snapshot.departures.map { it.minutesRemaining })
+        assertEquals(now.minusSeconds(30), snapshot.fetchedAt)
+        assertEquals(1, mutableClock.reads)
+        assertEquals(1, repository.callCount)
+    }
+
+    @Test
+    fun `all departures expiring while suspended produces NoUpcoming with original source time`() = runTest {
+        val mutableClock = MutableClock(now)
+        val repository = SuspendedDepartureRepository()
+        val states = async { GetLiveDeparturesUseCase(repository, mutableClock)(routine).toList() }
+        repository.started.await()
+        mutableClock.now = now.plusSeconds(301)
+        repository.response.complete(resultOf(upcomingDeparture()))
+
+        assertEquals(listOf(LiveDeparturesState.Loading, LiveDeparturesState.NoUpcomingDepartures(now)), states.await())
+        assertEquals(1, mutableClock.reads)
+        assertEquals(1, repository.callCount)
+    }
+
+    @Test
+    fun `ordinary departure exactly at post-fetch time remains eligible with zero countdown`() = runTest {
+        val mutableClock = MutableClock(now)
+        val repository = SuspendedDepartureRepository()
+        val states = async { GetLiveDeparturesUseCase(repository, mutableClock)(routine).toList() }
+        repository.started.await()
+        mutableClock.now = now.plusSeconds(300)
+        repository.response.complete(resultOf(upcomingDeparture().copy(isCancelled = true)))
+
+        val departure = (states.await().last() as LiveDeparturesState.Live).snapshot.departures.single()
+        assertEquals(0L, departure.minutesRemaining)
+        assertTrue(departure.isCancelled)
+    }
 
     @Test
     fun `repository is called with the routine's saved site ID`() = runTest {

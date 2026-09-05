@@ -175,7 +175,7 @@ class RoutineDetailsScreenTest {
         onCollapseJourneyOptions: () -> Unit = {},
         onRetryMoreJourneyOptions: () -> Unit = {},
         exactDestinationDeviationNotices: List<ResolvedJourneyDisruption> = emptyList(),
-        now: Instant = Instant.now(),
+        now: Instant = Instant.parse("2026-08-02T07:00:00Z"),
         onUpdateJourneyTransportModes: (Set<TransportMode>) -> Unit = {},
         isUpdatingChangesPreference: Boolean = false,
         changesPreferenceUpdateFailed: Boolean = false,
@@ -222,7 +222,7 @@ class RoutineDetailsScreenTest {
         onCollapseJourneyOptions: () -> Unit = {},
         onRetryMoreJourneyOptions: () -> Unit = {},
         exactDestinationDeviationNotices: List<ResolvedJourneyDisruption> = emptyList(),
-        now: Instant = Instant.now(),
+        now: Instant = Instant.parse("2026-08-02T07:00:00Z"),
         onUpdateJourneyTransportModes: (Set<TransportMode>) -> Unit = {},
         isUpdatingChangesPreference: Boolean = false,
         changesPreferenceUpdateFailed: Boolean = false,
@@ -1330,6 +1330,40 @@ class RoutineDetailsScreenTest {
 
     // ---- Ordinary line/direction departures: two visible by default, with a local-only
     // expansion to at most five rows from the same fetched snapshot. ----
+
+    @Test
+    fun retainedDepartures_rollOverOnPresentation_thenStaleExpiryShowsNoDepartures() {
+        val start = Instant.parse("2026-08-02T07:00:00Z")
+        var presentationTime by mutableStateOf(start)
+        val snapshot = liveState(sampleDepartures()).snapshot
+        var state: LiveDeparturesState by mutableStateOf(LiveDeparturesState.Live(snapshot))
+        var refreshCount = 0
+        composeRule.setContent {
+            TestRoutineDetailsContent(
+                disruptionsState = DisruptionsState.NoDisruptions,
+                departuresState = state,
+                now = presentationTime,
+                onRefresh = { refreshCount++ },
+            )
+        }
+        composeRule.onNodeWithTag(routineDetailsDepartureRowTag("departure-1")).assertExists()
+        composeRule.onNodeWithTag(routineDetailsDepartureRowTag("departure-3")).assertDoesNotExist()
+        composeRule.runOnIdle { presentationTime = start.plusSeconds(61) }
+        composeRule.onNodeWithTag(routineDetailsDepartureRowTag("departure-1")).assertDoesNotExist()
+        composeRule.onNodeWithTag(routineDetailsDepartureRowTag("departure-2")).assertExists()
+        composeRule.onNodeWithTag(routineDetailsDepartureRowTag("departure-3")).assertExists()
+        composeRule.onNodeWithTag(ROUTINE_DETAILS_DEPARTURES_TOGGLE_TAG).performScrollTo().performClick()
+        composeRule.onNodeWithTag(routineDetailsDepartureRowTag("departure-5")).assertExists()
+        composeRule.runOnIdle {
+            state = LiveDeparturesState.Stale(snapshot)
+            presentationTime = start.plusSeconds(301)
+        }
+        composeRule.onNodeWithTag(routineDetailsDepartureRowTag("departure-5")).assertDoesNotExist()
+        composeRule.onNodeWithText(composeRule.activity.getString(R.string.routine_details_no_departures)).assertExists()
+        composeRule.onNodeWithText(composeRule.activity.getString(R.string.routine_details_stale_warning)).assertExists()
+        composeRule.onNodeWithTag(ROUTINE_DETAILS_DEPARTURES_TOGGLE_TAG).assertDoesNotExist()
+        composeRule.runOnIdle { assertEquals(0, refreshCount) }
+    }
 
     @Test
     fun fiveDepartures_showTwoByDefault_thenMoreAndShowFewerToggleLocally() {

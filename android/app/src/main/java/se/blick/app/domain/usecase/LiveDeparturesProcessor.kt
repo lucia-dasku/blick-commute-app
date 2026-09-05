@@ -7,6 +7,9 @@ import java.time.Instant
 
 internal const val DEFAULT_MAX_DEPARTURES = 2
 
+/** Storage bound shared by ordinary routine callers; each surface applies its own display cap. */
+internal const val LINE_DEPARTURE_RETENTION_LIMIT = 5
+
 /**
  * Pure, deterministic filtering/sorting/countdown logic for turning a raw
  * [DeparturesResult] into the [PreparedDeparture]s relevant to one saved [CommuteRoutine]
@@ -23,8 +26,8 @@ object LiveDeparturesProcessor {
      * whose [Departure.effectiveTime] is before [now], sorts the remainder by effective
      * time ascending, and returns at most [maxDepartures] — each converted to a
      * [PreparedDeparture] with a countdown computed relative to [now]. Existing callers default
-     * to [DEFAULT_MAX_DEPARTURES]; the foreground Routine Details screen may explicitly retain
-     * a few more rows from the same fetch without enlarging worker results globally.
+     * to [DEFAULT_MAX_DEPARTURES]; routine callers explicitly retain a larger bounded pool
+     * from the same fetch so presentation can select later candidates as earlier ones expire.
      *
      * Cancelled departures are deliberately never filtered out here: a future cancelled
      * departure is still relevant information for the caller to show, just flagged via

@@ -129,8 +129,8 @@ sealed interface RoutineNotificationContent {
 
 /**
  * One notification-ready departure line — capped at two per [RoutineNotificationModel] by
- * [RoutineNotificationMapper] (matching the existing live-departures engine's own two-departure
- * maximum; this class does not re-enforce that cap itself).
+ * [RoutineNotificationMapper] from the retained candidate pool; this class does not
+ * re-enforce that display cap itself.
  *
  * [minutesRemaining] is always recomputed by the mapper from [effectiveTime] and its own
  * supplied `now` — never copied from a possibly-stale

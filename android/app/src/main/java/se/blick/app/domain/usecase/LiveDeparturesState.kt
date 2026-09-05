@@ -40,8 +40,10 @@ data class PreparedDeparture(
 )
 
 /**
- * A successful, prepared set of departures as of [fetchedAt]. This is the unit both a
- * live result and a stale fallback are built from — see [LiveDeparturesState.Stale].
+ * A successful, bounded candidate pool retaining the source response's [fetchedAt].
+ * Countdown values reflect preparation time, which may be later than [fetchedAt]; surfaces
+ * must filter expiry and recalculate countdowns before applying their visible-row limits.
+ * Both live results and stale fallbacks use this snapshot — see [LiveDeparturesState.Stale].
  */
 data class LiveDeparturesSnapshot(
     val departures: List<PreparedDeparture>,
@@ -73,10 +75,8 @@ sealed interface LiveDeparturesState {
      * The fetch failed — of any kind — but the caller supplied a previous successful
      * [LiveDeparturesSnapshot], so that snapshot is shown instead of an error.
      *
-     * This milestone does not persist this snapshot anywhere: the caller (a future
-     * ViewModel) is responsible for holding the last successful result in memory and
-     * passing it back in as `previous` on the next call. Durable stale/offline storage is
-     * explicitly out of scope here and will be implemented later.
+     * Callers retrieve identity-matched snapshots from the existing snapshot repository.
+     * The original source timestamp is preserved; presentation must still exclude expiry.
      */
     data class Stale(val snapshot: LiveDeparturesSnapshot) : LiveDeparturesState
 

@@ -76,6 +76,7 @@ import se.blick.app.domain.model.ExactDestinationChangesPreference
 import se.blick.app.domain.usecase.DisruptionsState
 import se.blick.app.domain.usecase.LiveDeparturesState
 import se.blick.app.domain.usecase.PreparedDeparture
+import se.blick.app.domain.usecase.countdownMinutes
 import se.blick.app.domain.usecase.filterCurrentJourneys
 import se.blick.app.domain.usecase.isCurrentJourney
 import se.blick.app.domain.model.TransportMode
@@ -200,6 +201,7 @@ fun RoutineDetailsScreen(
                 // see that field's own doc, and RoutineDetailsContent's now parameter doc, for
                 // why production must never rely on the default here.
                 now = uiState.journeysEvaluatedAt,
+                departuresNow = uiState.departuresEvaluatedAt,
                 isUpdatingJourneyTransportModes = uiState.isUpdatingJourneyTransportModes,
                 journeyTransportModesUpdateFailed = uiState.journeyTransportModesUpdateFailed,
                 onUpdateJourneyTransportModes = viewModel::updateJourneyTransportModes,
@@ -580,6 +582,8 @@ internal fun RoutineDetailsContent(
      * doesn't care about the exact instant (e.g. `RoutineDetailsScreenTest` cases unrelated to
      * journeys) isn't forced to supply one. */
     now: Instant = Instant.now(),
+    /** Ordinary departures use their own post-refresh instant, including stale refreshes. */
+    departuresNow: Instant = now,
     isUpdatingJourneyTransportModes: Boolean = false,
     journeyTransportModesUpdateFailed: Boolean = false,
     onUpdateJourneyTransportModes: (Set<TransportMode>) -> Unit = {},
@@ -708,6 +712,7 @@ internal fun RoutineDetailsContent(
             var departuresExpanded by rememberSaveable(routine.id) { mutableStateOf(false) }
             DeparturesSection(
                 state = departuresState,
+                now = departuresNow,
                 transportMode = routine.transportMode,
                 locale = locale,
                 expanded = departuresExpanded,
@@ -1349,6 +1354,7 @@ private fun statusLabel(routine: CommuteRoutine, isPausedToday: Boolean): String
 @Composable
 private fun DeparturesSection(
     state: LiveDeparturesState,
+    now: Instant,
     transportMode: TransportMode,
     locale: java.util.Locale,
     expanded: Boolean,
@@ -1361,6 +1367,7 @@ private fun DeparturesSection(
         }
         is LiveDeparturesState.Live -> DeparturesList(
             departures = state.snapshot.departures,
+            now = now,
             transportMode = transportMode,
             locale = locale,
             expanded = expanded,
@@ -1375,6 +1382,7 @@ private fun DeparturesSection(
             Spacer(Modifier.height(8.dp))
             DeparturesList(
                 departures = state.snapshot.departures,
+                now = now,
                 transportMode = transportMode,
                 locale = locale,
                 expanded = expanded,
@@ -1510,18 +1518,30 @@ private fun RetryableMessage(messageRes: Int, onRefresh: () -> Unit) {
 @Composable
 private fun DeparturesList(
     departures: List<PreparedDeparture>,
+    now: Instant,
     transportMode: TransportMode,
     locale: java.util.Locale,
     expanded: Boolean,
     onExpandedChange: (Boolean) -> Unit,
 ) {
-    val boundedDepartures = departures.take(ROUTINE_DETAILS_EXPANDED_DEPARTURE_COUNT)
+    val boundedDepartures = departures.asSequence()
+        .filter { !it.effectiveTime.isBefore(now) }
+        .sortedBy { it.effectiveTime }
+        .take(ROUTINE_DETAILS_EXPANDED_DEPARTURE_COUNT)
+        .map { it.copy(minutesRemaining = countdownMinutes(now, it.effectiveTime)) }
+        .toList()
     val visibleDepartures = if (expanded) {
         boundedDepartures
     } else {
         boundedDepartures.take(ROUTINE_DETAILS_COLLAPSED_DEPARTURE_COUNT)
     }
     Column {
+        if (boundedDepartures.isEmpty()) {
+            Text(
+                stringResource(R.string.routine_details_no_departures),
+                style = MaterialTheme.typography.bodyMedium,
+            )
+        }
         visibleDepartures.forEach { departure ->
             DepartureRow(departure, transportMode, locale)
             Spacer(Modifier.height(8.dp))

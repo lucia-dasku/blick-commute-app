@@ -256,7 +256,7 @@ class RoutineDetailsViewModelTest {
     /** Succeeds with [result] while [shouldFail] is false; throws [failure] once flipped on
      * — for proving a later refresh failure falls back to Stale using the earlier success. */
     private class ToggleableDepartureRepository(
-        private val result: DeparturesResult,
+        var result: DeparturesResult,
         var shouldFail: Boolean = false,
         private val failure: Throwable = IOException("network down"),
     ) : DepartureRepository {
@@ -789,12 +789,67 @@ class RoutineDetailsViewModelTest {
         val sixDepartures = fiveUpcomingDepartures() +
             upcomingDeparture("dep-6").copy(scheduledTime = now.plusSeconds(6 * 60L))
         val departures = FakeDepartureRepository(resultOf(*sixDepartures.reversed().toTypedArray()))
-        val vm = viewModel(departures = departures)
+        val snapshots = FakeStaleSnapshotRepository()
+        val vm = viewModel(departures = departures, staleSnapshots = snapshots)
         dispatcher.scheduler.advanceUntilIdle()
 
         val live = vm.uiState.value.departures as LiveDeparturesState.Live
         assertEquals((1..5).map { "dep-$it" }, live.snapshot.departures.map { it.departureId })
+        assertEquals(live.snapshot, snapshots.get(sampleRoutine().id, DepartureIdentity(
+            siteId = sampleRoutine().siteId,
+            lineId = sampleRoutine().lineId,
+            directionCode = sampleRoutine().directionCode,
+            transportMode = sampleRoutine().transportMode,
+        )))
         assertEquals(1, departures.callCount)
+    }
+
+    @Test
+    fun `fresh smaller and empty foreground results replace the persisted fallback`() = runTest(dispatcher) {
+        val departures = ToggleableDepartureRepository(resultOf(*fiveUpcomingDepartures().toTypedArray()))
+        val snapshots = FakeStaleSnapshotRepository()
+        val vm = viewModel(departures = departures, staleSnapshots = snapshots)
+        dispatcher.scheduler.advanceUntilIdle()
+
+        departures.result = resultOf(upcomingDeparture("new")).copy(fetchedAt = now.minusSeconds(10))
+        vm.refresh()
+        dispatcher.scheduler.advanceUntilIdle()
+        val smaller = vm.uiState.value.departures as LiveDeparturesState.Live
+        assertEquals(listOf("new"), smaller.snapshot.departures.map { it.departureId })
+        departures.shouldFail = true
+        vm.refresh()
+        dispatcher.scheduler.advanceUntilIdle()
+        assertEquals(LiveDeparturesState.Stale(smaller.snapshot), vm.uiState.value.departures)
+
+        departures.shouldFail = false
+        departures.result = resultOf()
+        vm.refresh()
+        dispatcher.scheduler.advanceUntilIdle()
+        assertEquals(LiveDeparturesState.NoUpcomingDepartures(now), vm.uiState.value.departures)
+        departures.shouldFail = true
+        vm.refresh()
+        dispatcher.scheduler.advanceUntilIdle()
+        assertEquals(LiveDeparturesState.Offline, vm.uiState.value.departures)
+        assertEquals(5, departures.callCount)
+    }
+
+    @Test
+    fun `identical stale refreshes advance foreground evaluation time without changing source freshness`() = runTest(dispatcher) {
+        val clock = SettableClock(now)
+        val departures = ToggleableDepartureRepository(resultOf(*fiveUpcomingDepartures().toTypedArray()))
+        val vm = viewModel(departures = departures, clock = clock)
+        dispatcher.scheduler.advanceUntilIdle()
+        val snapshot = (vm.uiState.value.departures as LiveDeparturesState.Live).snapshot
+        departures.shouldFail = true
+        repeat(2) { index ->
+            clock.instant = now.plusSeconds((index + 1) * 61L)
+            vm.refresh()
+            dispatcher.scheduler.advanceUntilIdle()
+            assertEquals(LiveDeparturesState.Stale(snapshot), vm.uiState.value.departures)
+            assertEquals(clock.instant, vm.uiState.value.departuresEvaluatedAt)
+            assertEquals(now, (vm.uiState.value.departures as LiveDeparturesState.Stale).snapshot.fetchedAt)
+        }
+        assertEquals(3, departures.callCount)
     }
 
     @Test

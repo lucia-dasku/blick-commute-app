@@ -180,19 +180,22 @@ class RoomStaleSnapshotRepositoryTest {
         // No "journeyRole" key at all -- exactly what an app version predating this field
         // would have written. kotlinx.serialization fills the missing key with
         // StaleDepartureRow's own declared default (null) rather than failing to decode.
-        val legacyJson = """
-            [{"departureId":"d1","lineDesignation":"14","direction":"T-Centralen","destination":"T-Centralen",
+        val legacyRow = """
+            {"departureId":"d1","lineDesignation":"14","direction":"T-Centralen","destination":"T-Centralen",
             "scheduledTimeEpochMilli":${Instant.parse("2026-07-27T05:05:00Z").toEpochMilli()},"expectedTimeEpochMilli":null,
             "effectiveTimeEpochMilli":${Instant.parse("2026-07-27T05:05:00Z").toEpochMilli()},"minutesRemaining":5,
-            "isRealTime":false,"isCancelled":false,"state":"EXPECTED","journeyState":"EXPECTED","predictionState":null}]
+            "isRealTime":false,"isCancelled":false,"state":"EXPECTED","journeyState":"EXPECTED","predictionState":null}
         """.trimIndent()
+        val legacyJson = "[$legacyRow,${legacyRow.replace("d1", "d2")}]"
         insertRawRow(db, "r1", legacyJson)
         val repository = RoomStaleSnapshotRepository(db.staleSnapshotDao())
 
         val result = repository.get("r1", identity)
 
         assertNotNull("a legacy row (missing journeyRole entirely) must still load, not be treated as corrupted", result)
-        assertNull(result?.departures?.single()?.journeyRole)
+        assertEquals(listOf("d1", "d2"), result?.departures?.map { it.departureId })
+        assertEquals(listOf(null, null), result?.departures?.map { it.journeyRole })
+        assertEquals(Instant.parse("2026-07-27T05:00:00Z"), result?.fetchedAt)
     }
 
     @Test

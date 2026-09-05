@@ -40,6 +40,7 @@ import se.blick.app.domain.usecase.GetRankedJourneysUseCase
 import se.blick.app.domain.usecase.DisruptionsState
 import se.blick.app.domain.usecase.GetDisruptionsUseCase
 import se.blick.app.domain.usecase.GetLiveDeparturesUseCase
+import se.blick.app.domain.usecase.LINE_DEPARTURE_RETENTION_LIMIT
 import se.blick.app.domain.usecase.LiveDeparturesSnapshot
 import se.blick.app.domain.usecase.LiveDeparturesState
 import se.blick.app.domain.usecase.PrimaryJourneyExpiryBoundary
@@ -73,7 +74,6 @@ import java.util.Optional
 import javax.inject.Inject
 
 private const val LOG_TAG = "RoutineDetailsViewModel"
-private const val ROUTINE_DETAILS_LINE_DEPARTURE_LIMIT = 5
 private const val COLLAPSED_LATER_JOURNEY_COUNT = 1
 private const val EXPANDED_LATER_JOURNEY_COUNT = 3
 
@@ -97,6 +97,9 @@ data class RoutineDetailsUiState(
      * the whole section blanking out while refreshing.
      */
     val departures: LiveDeparturesState = LiveDeparturesState.Loading,
+    /** Updated after each ordinary refresh, including identical stale results, so the existing
+     * refresh loop also advances presentation expiry and countdowns without a second timer. */
+    val departuresEvaluatedAt: Instant = Instant.EPOCH,
     val isRefreshingDepartures: Boolean = false,
     /** The dedicated disruptions section's own state — loaded independently of, and never
      * affected by the failure of, [departures] (see [RoutineDetailsViewModel.loadDisruptions]'s
@@ -1119,7 +1122,7 @@ class RoutineDetailsViewModel @Inject constructor(
             getLiveDepartures(
                 routine = routine,
                 previous = previousForThisFetch,
-                maxDepartures = ROUTINE_DETAILS_LINE_DEPARTURE_LIMIT,
+                maxDepartures = LINE_DEPARTURE_RETENTION_LIMIT,
             ).collect { state ->
                 if (requestId != departuresRequestId) return@collect
 
@@ -1134,10 +1137,15 @@ class RoutineDetailsViewModel @Inject constructor(
                     return@collect
                 }
 
-                if (state is LiveDeparturesState.Live) {
-                    staleSnapshotRepository.save(routineId, identity, state.snapshot)
+                when (state) {
+                    is LiveDeparturesState.Live -> staleSnapshotRepository.save(routineId, identity, state.snapshot)
+                    is LiveDeparturesState.NoUpcomingDepartures -> staleSnapshotRepository.clear(routineId)
+                    else -> Unit
                 }
-                _uiState.update { it.copy(departures = state, isRefreshingDepartures = false) }
+                val evaluatedAt = clock.instant()
+                _uiState.update {
+                    it.copy(departures = state, departuresEvaluatedAt = evaluatedAt, isRefreshingDepartures = false)
+                }
             }
         }
     }

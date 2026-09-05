@@ -30,6 +30,7 @@ import se.blick.app.domain.model.toPresentation
 import se.blick.app.domain.usecase.DisruptionsState
 import se.blick.app.domain.usecase.GetDisruptionsUseCase
 import se.blick.app.domain.usecase.GetLiveDeparturesUseCase
+import se.blick.app.domain.usecase.LINE_DEPARTURE_RETENTION_LIMIT
 import se.blick.app.domain.usecase.LiveDeparturesState
 import se.blick.app.domain.usecase.RoutineDurationValidationResult
 import se.blick.app.domain.usecase.RoutineDurationValidator
@@ -676,8 +677,16 @@ class RoutineActiveWindowWorker @AssistedInject constructor(
                 } else {
                     val identity = current.departureIdentity()
                     val previous = staleSnapshotRepository.get(routineId, identity)
-                    getLiveDepartures(current, previous = previous).last().also { state ->
-                        if (state is LiveDeparturesState.Live) staleSnapshotRepository.save(routineId, identity, state.snapshot)
+                    getLiveDepartures(
+                        current,
+                        previous = previous,
+                        maxDepartures = LINE_DEPARTURE_RETENTION_LIMIT,
+                    ).last().also { state ->
+                        when (state) {
+                            is LiveDeparturesState.Live -> staleSnapshotRepository.save(routineId, identity, state.snapshot)
+                            is LiveDeparturesState.NoUpcomingDepartures -> staleSnapshotRepository.clear(routineId)
+                            else -> Unit
+                        }
                     }
                 }
 

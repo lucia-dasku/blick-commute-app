@@ -18,10 +18,8 @@ import javax.inject.Inject
  * without any ViewModel or UI involved, and gives future callers (the live-preview screen,
  * a notification refresh worker) a single, simple contract to collect.
  *
- * This milestone intentionally does not persist anything. If a caller wants stale-data
- * fallback on a failed refresh, it must hold its own last-successful [LiveDeparturesSnapshot]
- * in memory and pass it back in as [previous]; a future milestone may move that
- * responsibility into a persistent cache (see [LiveDeparturesState.Stale]'s doc comment).
+ * Callers manage snapshot persistence and supply an identity-matched [previous] snapshot
+ * when stale-data fallback is appropriate.
  */
 class GetLiveDeparturesUseCase @Inject constructor(
     private val departureRepository: DepartureRepository,
@@ -44,9 +42,9 @@ class GetLiveDeparturesUseCase @Inject constructor(
         previous: LiveDeparturesSnapshot?,
         maxDepartures: Int,
     ): LiveDeparturesState {
-        val now = clock.instant()
         return try {
             val result = departureRepository.getDepartures(routine.siteId)
+            val now = clock.instant()
             val prepared = LiveDeparturesProcessor.prepare(result, routine, now, maxDepartures)
             if (prepared.isEmpty()) {
                 LiveDeparturesState.NoUpcomingDepartures(fetchedAt = result.fetchedAt)

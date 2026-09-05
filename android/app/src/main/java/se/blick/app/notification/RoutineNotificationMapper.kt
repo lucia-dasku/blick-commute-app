@@ -28,9 +28,8 @@ import java.time.Instant
  * mapper's only job is: recompute each departure's countdown against its own supplied `now`
  * (never trust [PreparedDeparture.minutesRemaining], which was only valid at the instant the
  * underlying fetch happened), drop any departure whose effective time has since passed, and
- * cap at two — the same two-departure maximum the live-departures engine already enforces,
- * re-applied here defensively since a [LiveDeparturesState.Stale] snapshot can be arbitrarily
- * old by the time this mapper runs.
+ * cap at two visible rows from the retained pool. A snapshot may contain more candidates,
+ * and even a freshly prepared departure can expire before this mapper runs.
  */
 object RoutineNotificationMapper {
 
