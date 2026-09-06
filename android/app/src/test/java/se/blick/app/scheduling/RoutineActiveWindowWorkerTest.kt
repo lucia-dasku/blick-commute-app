@@ -13,6 +13,8 @@ import io.mockk.mockk
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.CompletableDeferred
 import kotlinx.coroutines.cancelAndJoin
+import kotlinx.coroutines.currentCoroutineContext
+import kotlinx.coroutines.ensureActive
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.test.advanceUntilIdle
@@ -3273,6 +3275,189 @@ class RoutineActiveWindowWorkerTest {
 
         jobB.cancel()
         jobB.join()
+    }
+
+    private class DiagnosticOwnershipRepository(private val releaseFailure: Exception? = null) : ActiveCommuteOwnershipRepository {
+        var owner: ActiveCommuteOwnership? = null
+        var releaseCalls = 0
+        override suspend fun claim(source: ActiveCommuteSource, ownerRunId: String) {
+            owner = ActiveCommuteOwnership(source, ownerRunId)
+        }
+        override suspend fun currentOwner() = owner
+        override suspend fun releaseIfOwner(source: ActiveCommuteSource, ownerRunId: String): Boolean {
+            releaseCalls++
+            currentCoroutineContext().ensureActive()
+            kotlinx.coroutines.yield()
+            releaseFailure?.let { throw it }
+            if (owner != ActiveCommuteOwnership(source, ownerRunId)) return false
+            owner = null
+            return true
+        }
+    }
+
+    @Test
+    fun cancelledWidgetCleanupReleasesOwnerAndNewWorkerCanClaim() = runTest {
+        val clock = TickingClock(Instant.parse("2026-07-27T05:00:00Z"), zone)
+        val routine = routine()
+        val ownership = DiagnosticOwnershipRepository()
+        val notifier = RecordingNotifier()
+        val scheduler = RecordingScheduler()
+        val recordingWidget = RecordingWidgetUpdater()
+        var clearEntered = false
+        val widget = object : RoutineWidgetUpdater by recordingWidget {
+            override suspend fun clear() {
+                clearEntered = true
+                // Model a cancellable Glance/DataStore operation in the cancelled worker.
+                currentCoroutineContext().ensureActive()
+                recordingWidget.clear()
+            }
+        }
+        val departures = GetLiveDeparturesUseCase(
+            FakeDepartureRepository { DeparturesResult(clock.instant(), 9145, listOf(sampleDeparture())) }, clock,
+        )
+        val worker = buildWorker(
+            routine.id, ScriptedRoutineRepository(clock, advanceSecondsPerCall = 0) { routine },
+            departures, notifier, scheduler, clock,
+            widgetUpdater = widget, routineWorkOwnershipRepository = ownership,
+        )
+        val job = launch { worker.doWork() }
+        runCurrent()
+        assertEquals(1, notifier.shown.size)
+        job.cancelAndJoin()
+        assertTrue(job.isCancelled)
+        assertTrue(clearEntered)
+        assertEquals(1, notifier.removeCallCount)
+        assertEquals(0, recordingWidget.clearCallCount)
+        assertEquals(1, ownership.releaseCalls)
+        assertNull(ownership.owner)
+        assertTrue(scheduler.scheduledRoutines.isEmpty())
+
+        val nextRoutine = routine.copy(id = "next-routine")
+        val nextNotifier = RecordingNotifier()
+        val nextWorker = buildWorker(
+            nextRoutine.id, ScriptedRoutineRepository(clock, advanceSecondsPerCall = 0) { nextRoutine },
+            departures, nextNotifier, RecordingScheduler(), clock,
+            routineWorkOwnershipRepository = ownership,
+        )
+        val nextJob = launch { nextWorker.doWork() }
+        runCurrent()
+        assertEquals(1, nextNotifier.shown.size)
+        assertEquals(ActiveCommuteOwnership(ActiveCommuteSource.Routine(nextRoutine.id), nextWorker.id.toString()), ownership.owner)
+        nextJob.cancelAndJoin()
+        assertNull(ownership.owner)
+    }
+
+    @Test
+    fun diagnosticSuccessfulWidgetCleanupReleasesCancelledOwner() = runTest {
+        val clock = TickingClock(Instant.parse("2026-07-27T05:00:00Z"), zone)
+        val routine = routine()
+        val ownership = DiagnosticOwnershipRepository()
+        val widget = RecordingWidgetUpdater()
+        val worker = buildWorker(
+            routine.id, ScriptedRoutineRepository(clock, advanceSecondsPerCall = 0) { routine },
+            GetLiveDeparturesUseCase(FakeDepartureRepository { DeparturesResult(clock.instant(), 9145, listOf(sampleDeparture())) }, clock),
+            RecordingNotifier(), RecordingScheduler(), clock,
+            widgetUpdater = widget, routineWorkOwnershipRepository = ownership,
+        )
+        val job = launch { worker.doWork() }
+        runCurrent()
+        job.cancelAndJoin()
+        assertEquals(1, widget.clearCallCount)
+        assertEquals(1, ownership.releaseCalls)
+        assertNull(ownership.owner)
+    }
+
+    @Test
+    fun diagnosticReplacementOwnerSkipsOldWorkerCleanup() = runTest {
+        val clock = TickingClock(Instant.parse("2026-07-27T05:00:00Z"), zone)
+        val routine = routine()
+        val ownership = DiagnosticOwnershipRepository()
+        val notifier = RecordingNotifier()
+        val widget = RecordingWidgetUpdater()
+        val worker = buildWorker(
+            routine.id, ScriptedRoutineRepository(clock, advanceSecondsPerCall = 0) { routine },
+            GetLiveDeparturesUseCase(FakeDepartureRepository { DeparturesResult(clock.instant(), 9145, listOf(sampleDeparture())) }, clock),
+            notifier, RecordingScheduler(), clock,
+            widgetUpdater = widget, routineWorkOwnershipRepository = ownership,
+        )
+        val job = launch { worker.doWork() }
+        runCurrent()
+        val replacement = ActiveCommuteOwnership(ActiveCommuteSource.Routine("replacement"), "replacement-run")
+        ownership.claim(replacement.source, replacement.ownerRunId)
+        job.cancelAndJoin()
+        assertEquals(replacement, ownership.owner)
+        assertEquals(0, ownership.releaseCalls)
+        assertEquals(0, notifier.removeCallCount)
+        assertEquals(0, widget.clearCallCount)
+    }
+
+    @Test
+    fun replacementClaimedDuringWidgetCleanupSurvivesConditionalRelease() = runTest {
+        val clock = TickingClock(Instant.parse("2026-07-27T05:00:00Z"), zone)
+        val routine = routine()
+        val ownership = DiagnosticOwnershipRepository()
+        val replacement = ActiveCommuteOwnership(ActiveCommuteSource.Routine("replacement"), "replacement-run")
+        val original = CancellationException("widget cleanup cancelled after replacement claim")
+        val widget = object : RoutineWidgetUpdater by RecordingWidgetUpdater() {
+            override suspend fun clear() {
+                ownership.claim(replacement.source, replacement.ownerRunId)
+                throw original
+            }
+        }
+        val scheduler = RecordingScheduler()
+        val worker = buildWorker(
+            routine.id, ScriptedRoutineRepository(clock, advanceSecondsPerCall = 0) { routine },
+            GetLiveDeparturesUseCase(FakeDepartureRepository { DeparturesResult(clock.instant(), 9145, listOf(sampleDeparture())) }, clock),
+            RecordingNotifier(), scheduler, clock,
+            widgetUpdater = widget, routineWorkOwnershipRepository = ownership,
+        )
+        var propagated: CancellationException? = null
+        val job = launch {
+            try { worker.doWork() } catch (e: CancellationException) { propagated = e; throw e }
+        }
+        runCurrent()
+        job.cancelAndJoin()
+        assertTrue(propagated === original)
+        assertEquals(1, ownership.releaseCalls)
+        assertEquals(replacement, ownership.owner)
+        assertTrue(scheduler.scheduledRoutines.isEmpty())
+    }
+
+    @Test
+    fun ordinaryReleaseFailureDoesNotMaskNotificationFailureOrWidgetCancellation() = runTest {
+        for (cancelWidget in listOf(false, true)) {
+            val clock = TickingClock(Instant.parse("2026-07-27T05:00:00Z"), zone)
+            val routine = routine()
+            val ownership = DiagnosticOwnershipRepository(IOException("ownership storage unavailable"))
+            val original = if (cancelWidget) CancellationException("widget cancelled") else IOException("notification cleanup failed")
+            val notifier = object : RoutineNotifier by RecordingNotifier() {
+                override fun remove() { if (!cancelWidget) throw original }
+            }
+            val widget = object : RoutineWidgetUpdater by RecordingWidgetUpdater() {
+                override suspend fun clear() { throw original }
+            }
+            val scheduler = RecordingScheduler()
+            val worker = buildWorker(
+                routine.id, ScriptedRoutineRepository(clock, advanceSecondsPerCall = 0) { routine },
+                GetLiveDeparturesUseCase(FakeDepartureRepository { DeparturesResult(clock.instant(), 9145, listOf(sampleDeparture())) }, clock),
+                notifier, scheduler, clock,
+                widgetUpdater = widget, routineWorkOwnershipRepository = ownership,
+            )
+            var propagated: Exception? = null
+            val job = launch {
+                try { worker.doWork() } catch (e: Exception) {
+                    propagated = e
+                    if (e is CancellationException) throw e
+                }
+            }
+            runCurrent()
+            job.cancelAndJoin()
+            assertTrue(propagated === original)
+            assertEquals(1, ownership.releaseCalls)
+            // Storage failure permits a retained row; it must not hide the original failure.
+            assertEquals(ActiveCommuteOwnership(ActiveCommuteSource.Routine(routine.id), worker.id.toString()), ownership.owner)
+            assertTrue(scheduler.scheduledRoutines.isEmpty())
+        }
     }
 
     // ---- Exact-destination journeys: the worker re-filters the ranked list AGAIN, immediately

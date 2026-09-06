@@ -65,6 +65,28 @@ class RoomRoutineWorkOwnershipRepositoryTest {
     )
 
     @Test
+    fun diagnosticPauseRetainsLegacyOwnershipAndDeletionCascadesOnlyLegacyRow() = runTest {
+        val db = openDatabase()
+        val routine = routineEntity()
+        db.routineDao().upsert(routine)
+        val legacy = RoomRoutineWorkOwnershipRepository(db.routineWorkOwnershipDao())
+        val global = RoomActiveCommuteOwnershipRepository(db.activeCommuteOwnershipDao())
+        val source = se.blick.app.domain.model.ActiveCommuteSource.Routine(routine.id)
+        legacy.claim(routine.id, "terminal-run")
+        global.claim(source, "terminal-run")
+        db.routineDao().update(routine.copy(pausedDateEpochDay = 20701L))
+        assertEquals(true, legacy.isOwner(routine.id, "terminal-run"))
+        assertEquals(true, global.isOwner(source, "terminal-run"))
+        db.routineDao().deleteById(routine.id)
+        assertEquals(false, legacy.isOwner(routine.id, "terminal-run"))
+        assertEquals(true, global.isOwner(source, "terminal-run"))
+        val replacement = se.blick.app.domain.model.ActiveCommuteSource.Routine("new-routine")
+        global.claim(replacement, "new-run")
+        assertEquals(false, global.releaseIfOwner(source, "terminal-run"))
+        assertEquals(true, global.isOwner(replacement, "new-run"))
+    }
+
+    @Test
     fun `isOwner is false when nothing has ever been claimed for this routine`() = runTest {
         val db = openDatabase()
         db.routineDao().upsert(routineEntity())

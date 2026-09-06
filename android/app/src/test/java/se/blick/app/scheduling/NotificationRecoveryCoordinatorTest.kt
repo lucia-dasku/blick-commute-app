@@ -15,6 +15,8 @@ import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.flow.flow
+import se.blick.app.data.local.room.toDomain
+import se.blick.app.data.local.room.toEntity
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.test.runCurrent
 import kotlinx.coroutines.test.runTest
@@ -223,6 +225,56 @@ class NotificationRecoveryCoordinatorTest {
         clock = coordinatorClock,
         deviceZoneProvider = zoneProvider,
     )
+
+    @Test
+    fun diagnosticRetainedGlobalOwnerDoesNotRevivePausedOrDeletedRoutineOrBlockRecovery() = runTest {
+        val db = androidx.room.Room.inMemoryDatabaseBuilder(
+            RuntimeEnvironment.getApplication(), se.blick.app.data.local.room.BlickDatabase::class.java,
+        ).build()
+        try {
+            val paused = routine().copy(pausedDate = LocalDate.of(2026, 7, 27))
+            db.routineDao().upsert(paused.toEntity())
+            val ownership = se.blick.app.data.repository.RoomActiveCommuteOwnershipRepository(db.activeCommuteOwnershipDao())
+            val oldSource = se.blick.app.domain.model.ActiveCommuteSource.Routine(paused.id)
+            ownership.claim(oldSource, "terminal-run")
+            val repository = object : RoutineRepository by FakeRoutineRepository(emptyList()) {
+                override fun observeAll(): Flow<List<CommuteRoutine>> = flow {
+                    emit(db.routineDao().getAll().map { it.toDomain() })
+                }
+            }
+            val scheduler = RecordingRoutineScheduler()
+            val pending = InMemoryRecoveryPendingStateStore(initiallyPending = true)
+            val coordinator = buildCoordinator(repository, scheduler, pending, available = true)
+            coordinator.onForeground()
+            assertTrue(scheduler.scheduledRoutines.isEmpty())
+            val localNow = java.time.ZonedDateTime.ofInstant(now, zoneProvider.currentZone())
+            assertEquals(
+                se.blick.app.widget.RoutineWidgetUiState.NoActiveCommute,
+                se.blick.app.widget.decideReconciledWidgetState(listOf(paused), localNow),
+            )
+            coordinator.onAppStart()
+            assertTrue(scheduler.scheduledRoutines.all {
+                NextOccurrenceCalculator.nextOccurrence(it, localNow, excludedDate = it.pausedDate) !is NextOccurrence.ActiveNow
+            })
+            scheduler.scheduledRoutines.clear()
+            db.routineDao().deleteById(paused.id)
+            coordinator.onAppStart()
+            assertTrue(scheduler.scheduledRoutines.isEmpty())
+            assertEquals(
+                se.blick.app.widget.RoutineWidgetUiState.NoActiveCommute,
+                se.blick.app.widget.decideReconciledWidgetState(emptyList(), localNow),
+            )
+            assertTrue(ownership.isOwner(oldSource, "terminal-run"))
+            val next = routine(id = "new-routine")
+            db.routineDao().upsert(next.toEntity())
+            pending.markRecoveryPending()
+            coordinator.onForeground()
+            assertEquals(listOf(next.id), scheduler.scheduledRoutines.map { it.id })
+            assertTrue(ownership.isOwner(oldSource, "terminal-run"))
+        } finally {
+            db.close()
+        }
+    }
 
     // ---- 1. Serialized concurrent foreground callbacks schedule recovery exactly once ----
 

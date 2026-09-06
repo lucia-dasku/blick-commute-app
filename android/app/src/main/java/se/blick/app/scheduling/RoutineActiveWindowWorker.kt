@@ -954,34 +954,38 @@ class RoutineActiveWindowWorker @AssistedInject constructor(
                 }
             }
             if (stillOwnsContent) {
-                routineNotifier.remove()
-                if (notificationsBecameUnavailable) {
-                    // The window is still genuinely open -- represent that honestly instead of
-                    // clearing to "No active commute." (see the pre-loop check's own comment).
-                    // Best-effort: a widget failure inside a `finally` must never replace an
-                    // in-flight CancellationException or exception being propagated out of this
-                    // block -- runWidgetUpdateSafely still rethrows a real CancellationException
-                    // unconverted, but swallows anything else so it can never mask whatever this
-                    // `finally` was already unwinding.
-                    runWidgetUpdateSafely { routineWidgetUpdater.showNotificationsUnavailable(lastKnownRoutine) }
-                } else if (unexpectedFailure != null) {
-                    // The active window may still be open and WorkManager is going to retry this
-                    // same request. Re-derive an honest ActiveRoutine/Loading state from current
-                    // routine data instead of falsely clearing the widget to NoActiveCommute.
-                    runWidgetUpdateSafely { routineWidgetUpdater.reconcile() }
-                } else {
-                    runWidgetUpdateSafely { routineWidgetUpdater.clear() }
-                }
-                withContext(NonCancellable) {
-                    try {
-                        activeCommuteOwnershipRepository.releaseIfOwner(
-                            ActiveCommuteSource.Routine(routineId),
-                            id.toString(),
-                        )
-                    } catch (e: CancellationException) {
-                        throw e
-                    } catch (e: Exception) {
-                        Log.w(LOG_TAG, "Failed to release active commute ownership for routine $routineId", e)
+                try {
+                    routineNotifier.remove()
+                    if (notificationsBecameUnavailable) {
+                        // The window is still genuinely open -- represent that honestly instead of
+                        // clearing to "No active commute." (see the pre-loop check's own comment).
+                        // Best-effort: a widget failure inside a `finally` must never replace an
+                        // in-flight CancellationException or exception being propagated out of this
+                        // block -- runWidgetUpdateSafely still rethrows a real CancellationException
+                        // unconverted, but swallows anything else so it can never mask whatever this
+                        // `finally` was already unwinding.
+                        runWidgetUpdateSafely { routineWidgetUpdater.showNotificationsUnavailable(lastKnownRoutine) }
+                    } else if (unexpectedFailure != null) {
+                        // The active window may still be open and WorkManager is going to retry this
+                        // same request. Re-derive an honest ActiveRoutine/Loading state from current
+                        // routine data instead of falsely clearing the widget to NoActiveCommute.
+                        runWidgetUpdateSafely { routineWidgetUpdater.reconcile() }
+                    } else {
+                        runWidgetUpdateSafely { routineWidgetUpdater.clear() }
+                    }
+                } finally {
+                    // Reach the conditional release even when widget cleanup is cancelled.
+                    withContext(NonCancellable) {
+                        try {
+                            activeCommuteOwnershipRepository.releaseIfOwner(
+                                ActiveCommuteSource.Routine(routineId),
+                                id.toString(),
+                            )
+                        } catch (e: CancellationException) {
+                            throw e
+                        } catch (e: Exception) {
+                            Log.w(LOG_TAG, "Failed to release active commute ownership for routine $routineId", e)
+                        }
                     }
                 }
             }
