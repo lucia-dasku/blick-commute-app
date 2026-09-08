@@ -119,7 +119,7 @@ code and a handful of unused derived TypeScript type aliases whose underlying Zo
 remained genuinely in use.
 
 All of the above passed clean in the authoring sandbox (0 type errors, 0 lint
-errors/warnings, 268/268 tests passing, `npm audit`: 0 vulnerabilities). A live smoke
+errors/warnings, 1,087/1,087 tests passing, `npm audit`: 0 vulnerabilities). A live smoke
 test of the running server against the real SL endpoints could not be completed from
 that sandbox — its outbound network proxy blocks `transport.integration.sl.se` /
 `deviations.integration.sl.se` / `vercel.com` / `api.vercel.com` by allowlist. The
