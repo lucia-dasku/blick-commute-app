@@ -18,8 +18,10 @@ and acknowledges an unacknowledged valid purchase through the publisher API. The
 not the time a cached record was read. A PostgreSQL record keyed by the SHA-256 purchase-token
 fingerprint stores the minimum lifecycle fields needed for entitlement. Raw purchase tokens are
 never persisted. Transaction-scoped advisory locks make duplicate/concurrent verification and
-acknowledgement idempotent. Active records are revalidated with Google at least every six hours;
-pending and inactive records use shorter intervals. The route has a billing-only fixed-window
+acknowledgement idempotent. A verification request may reuse an active record while its last
+Google check is less than six hours old; the next request after that cache window queries Google.
+Pending and inactive records use shorter windows. These windows bound cache reuse when a request
+arrives; they do not create background polling. The route has a billing-only fixed-window
 limit keyed by the token fingerprint plus a global billing limit. It never uses an IP address as
 purchase identity and does not affect transit endpoints. Credentials never enter the Android app
 or repository. Responses use the existing sanitized error envelope and `Cache-Control: no-store`.
@@ -30,8 +32,14 @@ and an overall billing count, not raw purchase tokens, saved routines or event t
 
 ### `POST /api/v1/billing/rtdn`
 
-This is the Google Cloud Pub/Sub push target for Google Play Real-time Developer Notifications,
-not an Android-client API. It requires a Google-signed OIDC bearer token with the exact configured
+This optional enhanced-mode endpoint is the Google Cloud Pub/Sub push target for Google Play
+Real-time Developer Notifications, not an Android-client API. The initial zero-cost production
+mode leaves both RTDN settings unset, so no handler is constructed and this endpoint returns a
+sanitized, non-cacheable `UPSTREAM_ERROR` (502). This disabled state does not affect ordinary `/verify`,
+acknowledgement, restore, health, or transit endpoints. Setting only one RTDN value is an invalid
+deployment configuration and fails startup; enabling the route requires both values.
+
+When enabled, RTDN requires a Google-signed OIDC bearer token with the exact configured
 audience, verified email and configured push service-account email. The Pub/Sub envelope and
 Google Play payload are validated strictly. Each Pub/Sub message ID is claimed durably; completed
 IDs are idempotent and failed claims may be retried. Purchase, cancellation, refund and revocation
@@ -55,6 +63,15 @@ Active purchase records remain available to maintain and restore entitlement. Th
 describe Blick's database rows, not Google Play/Pub/Sub delivery-message retention, retries,
 dead-letter messages, provider logs or backups; those depend on provider configuration.
 The endpoint returns `204` after successful or already-completed processing.
+
+With RTDN disabled, refunds and revocations are discovered on the next successful Android
+lifecycle or explicit entitlement refresh. A successful BillingClient query returning no owned
+product clears Premium immediately; if BillingClient still returns a token, `/verify` performs or
+reuses the authoritative Google check according to the cache windows above. There is no fixed
+wall-clock removal guarantee while the app remains continuously foregrounded without a refresh.
+Future enhanced production mode can enable RTDN for near-real-time lifecycle changes. A bounded
+Voided Purchases reconciliation process is another future option, but is not scheduled or
+implemented in the initial mode.
 
 ### `GET /api/v1/journeys/locations/search?query=`
 

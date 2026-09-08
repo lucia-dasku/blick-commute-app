@@ -1,6 +1,7 @@
 import { describe, expect, it } from "vitest";
 import {
   readDatabaseConfig,
+  readGooglePlayConfig,
   readGooglePlayRtdnConfig,
   readPort,
   readRedisConfig,
@@ -132,6 +133,21 @@ describe("readRedisConfig", () => {
 });
 
 describe("billing runtime configuration", () => {
+  it("keeps Play verification configuration independent from absent RTDN configuration", () => {
+    const play = readGooglePlayConfig(
+      "se.blick.app",
+      "play-verifier@example.invalid",
+      "-----BEGIN PRIVATE KEY-----\nplaceholder\n-----END PRIVATE KEY-----",
+    );
+
+    expect(play).toEqual({
+      packageName: "se.blick.app",
+      serviceAccountEmail: "play-verifier@example.invalid",
+      privateKey: "-----BEGIN PRIVATE KEY-----\nplaceholder\n-----END PRIVATE KEY-----",
+    });
+    expect(readGooglePlayRtdnConfig(undefined, undefined)).toBeUndefined();
+  });
+
   it("accepts PostgreSQL and rejects non-database URLs", () => {
     expect(readDatabaseConfig("postgresql://user:pass@example.invalid/blick")).toEqual({
       connectionString: "postgresql://user:pass@example.invalid/blick",

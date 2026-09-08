@@ -124,6 +124,57 @@ describe("Google Play purchase verifier", () => {
     await expect(verifier.verifyAndAcknowledge("failed-api-token1")).rejects.toMatchObject({ code: "UPSTREAM_ERROR" });
   });
 
+  it("fails closed when Google Play verification credentials are absent", async () => {
+    const store = new FakePurchaseStateStore();
+    const api: GooglePlayApiClient = {
+      getProductPurchase: vi.fn(async () => purchase()),
+      acknowledgeProduct: vi.fn(async () => {}),
+      reviewRefund: vi.fn(async () => {}),
+    };
+
+    await expect(createGooglePlayPurchaseVerifier(undefined, store, api)
+      .verifyAndAcknowledge("missing-play-config-token"))
+      .rejects.toMatchObject({
+        code: "UPSTREAM_ERROR",
+        message: "Purchase verification is temporarily unavailable",
+      });
+    expect(api.getProductPurchase).not.toHaveBeenCalled();
+  });
+
+  it("fails closed when durable purchase storage is absent", async () => {
+    const api: GooglePlayApiClient = {
+      getProductPurchase: vi.fn(async () => purchase()),
+      acknowledgeProduct: vi.fn(async () => {}),
+      reviewRefund: vi.fn(async () => {}),
+    };
+
+    await expect(createGooglePlayPurchaseVerifier(config, undefined, api)
+      .verifyAndAcknowledge("missing-database-token"))
+      .rejects.toMatchObject({
+        code: "UPSTREAM_ERROR",
+        message: "Purchase verification is temporarily unavailable",
+      });
+    expect(api.getProductPurchase).not.toHaveBeenCalled();
+  });
+
+  it("removes an existing entitlement after an authoritative refund result", async () => {
+    const { verifier, api, store } = setup();
+    const purchaseToken = "refunded-after-grant-token";
+    await expect(verifier.verifyAndAcknowledge(purchaseToken)).resolves.toMatchObject({
+      verified: true,
+      state: "PURCHASED",
+    });
+
+    vi.mocked(api.getProductPurchase).mockResolvedValue(purchase("PURCHASED", { refundableQuantity: 0 }));
+    await expect(verifier.verifyAndAcknowledge(purchaseToken, { forceGoogleRefresh: true }))
+      .resolves.toMatchObject({ verified: false, state: "CANCELLED" });
+    expect(store.records.get(purchaseTokenFingerprint(purchaseToken))).toMatchObject({
+      entitlementActive: false,
+      voided: true,
+      refundableQuantity: 0,
+    });
+  });
+
   it("rejects a misconfigured package before any request", () => {
     expect(() => createGooglePlayApiClient({ ...realApiConfig(), packageName: "wrong.package" }))
       .toThrow(`GOOGLE_PLAY_PACKAGE_NAME must be ${ANDROID_PACKAGE_NAME}`);

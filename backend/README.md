@@ -27,7 +27,8 @@ with a sanitized upstream error until the Google Play credentials and `DATABASE_
 Run `npm run migrate:billing` once against the provisioned PostgreSQL database before enabling
 billing traffic. Raw purchase tokens are never stored; the database contains only their SHA-256
 fingerprints and the lifecycle fields documented in `../docs/api-contract.md`. Authenticated RTDN
-also requires `GOOGLE_PLAY_RTDN_AUDIENCE` and `GOOGLE_PLAY_RTDN_SERVICE_ACCOUNT_EMAIL`.
+is an optional enhanced mode: it requires both `GOOGLE_PLAY_RTDN_AUDIENCE` and
+`GOOGLE_PLAY_RTDN_SERVICE_ACCOUNT_EMAIL`, while leaving both unset disables only the RTDN route.
 The shared Upstash
 Redis cache/lock that protects SL Deviations in production (see
 `../docs/api-contract.md`, "Caching and fair use") is **optional** here: with
@@ -52,11 +53,11 @@ value, or an unprotected fallback (see `src/config/env.ts`).
 npm run typecheck   # tsc --noEmit
 npm run lint        # eslint (flat config, eslint.config.js)
 npm run build       # tsc, emits to dist/
-npm test            # vitest — 268 tests
+npm test            # vitest — 1,087 tests
 npm audit           # dependency vulnerability scan
 ```
 
-Test coverage (268 tests across 21 files): DST resolver (including calendar validation
+Test coverage (1,087 tests across 48 files): DST resolver (including calendar validation
 — rejecting impossible dates and the spring DST gap, and ISO round-trip consistency),
 cancellation derivation, search ranking, cache/dedup, `fetchedAt` semantics (fresh,
 cached, and deduplicated-concurrent requests — including concurrent requests with
@@ -148,6 +149,56 @@ setup" immediately below. The upstream base URLs (`SL_TRANSPORT_BASE_URL`,
 `SL_DEVIATIONS_BASE_URL`) and `UPSTREAM_TIMEOUT_MS` remain optional and overridable via
 Vercel's Environment Variables settings if ever needed (e.g. pointing at a mock upstream
 for a preview environment).
+
+### Premium billing: initial zero-cost mode
+
+The initial production mode enables server-side Google Play Developer API verification and
+acknowledgement with durable PostgreSQL state, while leaving Pub/Sub RTDN disabled. Configure all
+three Google Play verification values plus `DATABASE_URL`; leave both RTDN values unset. These
+configuration groups are independent in `src/config/env.ts` and `src/app.ts`: absent RTDN values do
+not affect `/api/v1/billing/verify`, acknowledgement, restore, health, or transit routes. The
+disabled `/api/v1/billing/rtdn` route returns the same sanitized, non-cacheable availability error
+to every caller and does not expose which setting is absent.
+
+For the zero-cost database, Neon Free is the preferred current fit. It exposes standard
+PostgreSQL, requires no credit card, scales idle compute to zero after five minutes, wakes it when
+a query arrives, and restricts or suspends service instead of creating Free-plan overage charges.
+Current Free limits include 0.5 GB storage, 100 CU-hours per project per month, 5 GB monthly public
+network transfer, and a restore window of up to six hours or 1 GB of changes. Those limits and the
+lack of a production SLA or long backup window are operational constraints, so monitor usage and
+make regular off-provider logical backups.
+
+Use Neon's pooled connection string as the deployed Vercel `DATABASE_URL`. The store opens at most
+one connection per function instance, disables prepared statements, and keeps its advisory lock
+inside the same explicit transaction, which is compatible with Neon's transaction pooler. Run the
+one-time `npm run migrate:billing` command with a direct Neon connection supplied to that process;
+do not replace the deployed pooled value or commit either connection string. The migration uses
+ordinary PostgreSQL tables, indexes, constraints and built-in transaction/advisory-lock support;
+no provider-specific schema change is needed.
+
+Without RTDN, Android still refreshes entitlement after a purchase update, on process startup,
+on every foreground transition, through Restore purchase, and through any explicit refresh. A
+successful BillingClient query with no owned product clears Premium immediately. When the client
+still reports the token, the backend may reuse an active Google result for up to six hours before
+it asks Google again. A failed refresh can preserve a prior server-verified client result for at
+most 24 hours from that verification time. There is no timer while the app stays continuously in
+the foreground, so refund or revocation removal has no fixed wall-clock guarantee in that unusual
+case; it happens on the next successful lifecycle or explicit revalidation. This bounded,
+lifecycle-based approach avoids a second polling loop and keeps billing work out of commute,
+notification and widget workers.
+
+A pending purchase that completes while the app is closed is observed and acknowledged when the
+app next starts or returns to the foreground. If the user does not return within Google's
+acknowledgement window, Google can automatically refund it. Future enhanced mode should add
+authenticated Pub/Sub RTDN for near-real-time lifecycle changes and server-side acknowledgement
+even while the app is closed. The Voided Purchases API is also available for a later bounded
+reconciliation job, but the initial release does not poll it globally.
+
+Current provider references: [Google Play Developer API setup](https://developers.google.com/android-publisher/getting_started),
+[Billing integration](https://developer.android.com/google/play/billing/integrate),
+[Pub/Sub prerequisites](https://cloud.google.com/pubsub/docs/publish-receive-messages-client-library),
+[Neon pricing](https://neon.com/pricing), and
+[Neon connection pooling](https://neon.com/docs/connect/connection-pooling).
 
 ### Redis (Upstash) setup
 

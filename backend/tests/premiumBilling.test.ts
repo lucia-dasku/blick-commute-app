@@ -1,8 +1,15 @@
 import { describe, expect, it, vi } from "vitest";
 import { createBillingRoute } from "../src/routes/billing.js";
-import { PREMIUM_PRODUCT_ID, type GooglePlayPurchaseVerifier } from "../src/services/googlePlayPurchaseVerifier.js";
+import {
+  ANDROID_PACKAGE_NAME,
+  PREMIUM_PRODUCT_ID,
+  createGooglePlayPurchaseVerifier,
+  type GooglePlayApiClient,
+  type GooglePlayPurchaseVerifier,
+} from "../src/services/googlePlayPurchaseVerifier.js";
 import type { SuccessEnvelope } from "./testHelpers.js";
 import { onError } from "../src/middleware/errorHandler.js";
+import { FakePurchaseStateStore } from "./billingTestHelpers.js";
 
 describe("premium billing verification route", () => {
   it("accepts only the configured lifetime product and returns no-store", async () => {
@@ -75,5 +82,72 @@ describe("premium billing verification route", () => {
     expect(response.status).toBe(204);
     expect(response.headers.get("Cache-Control")).toBe("no-store");
     expect(handle).toHaveBeenCalledWith("Bearer signed", { message: { data: "encoded" } });
+  });
+
+  it("verifies and acknowledges with Play and database configuration while RTDN is absent", async () => {
+    const api: GooglePlayApiClient = {
+      getProductPurchase: vi.fn(async () => ({
+        purchaseStateContext: { purchaseState: "PURCHASED" },
+        acknowledgementState: "ACKNOWLEDGEMENT_STATE_PENDING",
+        productLineItem: [{
+          productId: PREMIUM_PRODUCT_ID,
+          productOfferDetails: {
+            quantity: 1,
+            refundableQuantity: 1,
+            consumptionState: "CONSUMPTION_STATE_YET_TO_BE_CONSUMED",
+          },
+        }],
+        orderId: "order-zero-cost",
+        purchaseCompletionTime: "2026-09-08T08:00:00.000Z",
+      })),
+      acknowledgeProduct: vi.fn(async () => {}),
+      reviewRefund: vi.fn(async () => {}),
+    };
+    const verifier = createGooglePlayPurchaseVerifier(
+      {
+        packageName: ANDROID_PACKAGE_NAME,
+        serviceAccountEmail: "play-verifier@example.invalid",
+        privateKey: "unused with fake API",
+      },
+      new FakePurchaseStateStore(),
+      api,
+      () => new Date("2026-09-08T09:00:00.000Z"),
+    );
+
+    const response = await createBillingRoute(verifier).request("/verify", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ productId: PREMIUM_PRODUCT_ID, purchaseToken: "zero-cost-launch-token" }),
+    });
+
+    expect(response.status).toBe(200);
+    expect(await response.json()).toMatchObject({
+      data: { productId: PREMIUM_PRODUCT_ID, verified: true, state: "PURCHASED" },
+    });
+    expect(api.getProductPurchase).toHaveBeenCalledTimes(1);
+    expect(api.acknowledgeProduct).toHaveBeenCalledTimes(1);
+  });
+
+  it("fails the RTDN endpoint safely when optional notification configuration is absent", async () => {
+    const verifier: GooglePlayPurchaseVerifier = {
+      async verifyAndAcknowledge() {
+        return { verified: false, state: "UNKNOWN", verifiedAt: "2026-09-08T09:00:00.000Z" };
+      },
+      async reviewPendingRefund() {},
+    };
+    const app = createBillingRoute(verifier);
+    app.onError(onError);
+
+    const response = await app.request("/rtdn", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ message: { data: "not-processed" } }),
+    });
+
+    expect(response.status).toBe(502);
+    expect(response.headers.get("Cache-Control")).toBe("no-store");
+    const body = await response.text();
+    expect(body).toContain("Purchase notifications are unavailable");
+    expect(body).not.toContain("GOOGLE_PLAY_RTDN");
   });
 });
