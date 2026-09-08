@@ -5,7 +5,7 @@
 **Document status:** Android-first MVP specification — see "Current implementation
 status" immediately below for what already exists in this repository versus what the
 rest of this document specifies as still planned.  
-**Updated:** 4 August 2026
+**Updated:** 8 September 2026 (privacy reconciliation only; implementation and test history below retains its original dates)
 
 ---
 
@@ -1959,34 +1959,49 @@ No TV, casting, pairing, or cloud-synchronization code is included now.
 
 ## 18. Privacy and security
 
-**Implemented:** a real, user-facing privacy policy is now shown in `ui/screens/about/AboutScreen`
-(reachable from the routine list's top app bar), stating in plain terms that Blick is
-operated by Blick Labs, does not require an account and does not collect the user's name,
-email address, precise location, contacts, or advertising ID; that routines, preferences,
-and cached departure information are stored only locally on the device (not backed up,
-and removable by deleting the routine, clearing the app's data, or uninstalling it); that
-the backend receives only station searches and selected route identifiers to provide
-departure/disruption information, with the hosting provider separately able to process
-limited technical information (IP address, request logs) to deliver and secure the
-service; that this information is used only to operate, secure, and improve Blick, never
-sold or used for advertising; and a contact address, `contactblicklabs@gmail.com`, for
-privacy questions or deletion requests. See `android/README.md`'s "About screen rewritten
-with a real privacy policy" entry for the full account of exactly what was added and why.
+**Privacy reconciliation: 8 September 2026.** This section supersedes earlier
+privacy descriptions that predate Premium billing and advertising. Historical test
+results elsewhere in this document are not new validation results.
 
-The first Android application does not require the user's identity or precise location.
+Blick has no user-account system and does not ask for a name, email address, precise
+location or contacts. Complete routines, one-time events, labels, preferences and
+notification/widget state remain local; Android backup and device transfer are excluded.
+Selected searches, route/journey identifiers and timing parameters are sent to the backend
+and, where needed, SL/Trafiklab to retrieve transport information. Hosting providers may
+process IP addresses and request logs. Blick does not maintain an account-based travel profile.
 
-MVP privacy choices:
+Premium purchase and restore requests send a product ID and purchase token for Google Play
+verification. Blick's PostgreSQL database stores the token's SHA-256 fingerprint and limited
+purchase lifecycle fields, including order identifiers, state and timestamps, not the raw token
+or payment-card details. Active records support entitlement and restoration. Cleanup selects
+inactive purchases last updated more than 24 months ago and notification claims successfully
+processed more than 90 days ago. It runs during purchase-verification activity, including
+notification handling that invokes verification, without an independent scheduled job.
+Eligible records are deleted on the next successful cleanup, which can be later than the
+thresholds. Failed or unfinished notification claims are not covered by the 90-day rule.
 
-- no account;
-- routines stored locally in Room;
-- no GPS permission;
-- no analytics;
-- no advertising identifiers;
-- no travel-history profile;
-- no cloud synchronization;
-- no cross-device sharing.
+Redis also holds short-lived technical billing rate-limit counters associated with purchase-token
+fingerprints and an overall billing counter, configured to expire after a 60-second window.
+These are distinct from shared public-transport caches and contain no raw tokens or saved routines.
+Database cleanup and counter expiry do not guarantee deletion of provider-held messages, logs
+or backups. Google Play/Pub/Sub delivery retention, retries and dead-letter handling depend on
+external service configuration.
 
-The backend receives public SL identifiers and filters needed for each request. A saved site and routine can still reveal a travel pattern, so logs must avoid retaining complete routine behaviour or associating requests with an identifiable person unnecessarily.
+The Basic tier uses Google Mobile Ads, which can process advertising/device identifiers,
+IP-derived approximate location, interactions and diagnostics for advertising, measurement
+and fraud prevention. There is no separate general-purpose analytics SDK; advertising SDK
+analytics still apply. UMP manages applicable privacy choices. Verified Premium access suppresses
+banner requests/display, while UMP may still refresh privacy-choice state. Blick does not send
+saved routines or event titles for ad targeting. Google's advertising/consent retention is
+separate from Blick's database cleanup.
+
+Users can delete local data or contact `contactblicklabs@gmail.com` for privacy questions and
+deletion of identifiable purchase records, subject to legal and fraud-prevention needs.
+Provider retention and the operational deletion process still require external verification.
+The concise About privacy summary is localized in English and Swedish and links to the full
+public policy. The reconciled publication source is `docs/privacy/blick-privacy.html`; committing
+it does not publish the policy. See `docs/privacy/README.md` and `docs/api-contract.md` for scope
+and implementation details.
 
 Security requirements:
 

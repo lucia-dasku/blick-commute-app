@@ -24,6 +24,10 @@ limit keyed by the token fingerprint plus a global billing limit. It never uses 
 purchase identity and does not affect transit endpoints. Credentials never enter the Android app
 or repository. Responses use the existing sanitized error envelope and `Cache-Control: no-store`.
 
+Production uses Redis for these short-lived technical counters, with a 60-second expiry
+set when each window starts. They contain counts associated with a purchase-token fingerprint
+and an overall billing count, not raw purchase tokens, saved routines or event titles.
+
 ### `POST /api/v1/billing/rtdn`
 
 This is the Google Cloud Pub/Sub push target for Google Play Real-time Developer Notifications,
@@ -41,8 +45,16 @@ purchase-usage history from which to make a more specific recommendation. The pe
 is used only for that Google API call and is not persisted. A later voided-purchase notification
 continues through the normal authoritative revalidation path and removes entitlement when Google
 reports that ownership is no longer valid.
-Processed notification claims are retained for 90 days; inactive purchase records are retained
-for 24 months. The endpoint returns `204` after successful or already-completed processing.
+The cleanup thresholds are 90 days since a notification claim was successfully processed
+(`processed_at`) and 24 months since an inactive purchase record was last updated (`updated_at`).
+`verifyAndAcknowledge` invokes `pruneExpiredRecords` before reading or refreshing a purchase,
+including when notification handling invokes verification. There is no independent scheduled
+pruner: eligible rows are removed on the next successful cleanup, which may be later than
+these thresholds. Failed or still-processing notification claims are not covered by this rule.
+Active purchase records remain available to maintain and restore entitlement. These rules
+describe Blick's database rows, not Google Play/Pub/Sub delivery-message retention, retries,
+dead-letter messages, provider logs or backups; those depend on provider configuration.
+The endpoint returns `204` after successful or already-completed processing.
 
 ### `GET /api/v1/journeys/locations/search?query=`
 
