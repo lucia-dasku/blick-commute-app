@@ -187,6 +187,14 @@ case; it happens on the next successful lifecycle or explicit revalidation. This
 lifecycle-based approach avoids a second polling loop and keeps billing work out of commute,
 notification and widget workers.
 
+If Google removes a refunded purchase from BillingClient ownership, the app clears Premium but no
+longer has that token to send to `/api/v1/billing/verify`. Its PostgreSQL row may consequently stay
+active and not voided even though the device is Free and Restore cannot recover the purchase. The
+stored row does not independently push entitlement to Android. This is an accepted lifecycle-data
+limitation of initial no-RTDN mode; do not manually rewrite purchase rows to simulate provider
+notifications. RTDN or a future bounded Voided Purchases reconciliation is needed for prompt
+server-side lifecycle convergence.
+
 A pending purchase that completes while the app is closed is observed and acknowledged when the
 app next starts or returns to the foreground. If the user does not return within Google's
 acknowledgement window, Google can automatically refund it. Future enhanced mode should add

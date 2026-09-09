@@ -69,6 +69,12 @@ lifecycle or explicit entitlement refresh. A successful BillingClient query retu
 product clears Premium immediately; if BillingClient still returns a token, `/verify` performs or
 reuses the authoritative Google check according to the cache windows above. There is no fixed
 wall-clock removal guarantee while the app remains continuously foregrounded without a refresh.
+When Google no longer returns a refunded token, Android has no token to submit for backend
+reverification. The corresponding PostgreSQL lifecycle row can therefore remain marked active and
+not voided even though the device correctly returns to Free and Restore finds no owned purchase.
+The row does not independently push or restore entitlement. Initial zero-cost mode has no
+guaranteed server-side convergence for that row; RTDN or a future bounded Voided Purchases
+reconciliation is required for prompt durable lifecycle synchronization.
 Future enhanced production mode can enable RTDN for near-real-time lifecycle changes. A bounded
 Voided Purchases reconciliation process is another future option, but is not scheduled or
 implemented in the initial mode.

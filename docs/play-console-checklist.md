@@ -2,19 +2,52 @@
 
 The code uses one non-consumable, one-time product: `blick_premium_lifetime`. The planned
 Swedish base price is 49 SEK, but the app always displays Google Play's localized price.
-Repository-side purchase verification is implemented, but launch is **not production-ready**
-until every external provisioning, configuration and internal-track test below is complete.
+The production billing path and the real Google Play Internal Testing acceptance described below
+are **VERIFIED as of September 9, 2026**. This closes the billing-verification readiness item; it
+does not sign off the overall Play production release or its separate declarations and reviewer
+access requirements.
+
+## Verified production billing acceptance — September 9, 2026
+
+The accepted Lenovo test used the Google Play Internal Testing build installed by
+`com.android.vending`, version 1.0.0 (build 1), without debug or test-only package flags. No code or
+production configuration changed during acceptance.
+
+- **PASS — Play product:** Google Play returned `blick_premium_lifetime` as a one-time purchase at
+  the localized Swedish price of 49.00 SEK and identified the transaction as a no-charge test.
+- **PASS — pending:** Google's slow approving test card produced `PENDING`; Blick did not grant
+  Premium and made no `/api/v1/billing/verify` request while the purchase was pending.
+- **PASS — verification and grant:** after Google changed the purchase to completed,
+  `/api/v1/billing/verify` returned HTTP 200 and Blick granted Premium only after that backend
+  result.
+- **PASS — acknowledgement and durable state:** PostgreSQL recorded the purchase as `PURCHASED`,
+  `ACKNOWLEDGED` and active. The stored purchase identity was a 64-character token fingerprint;
+  no raw purchase token was stored.
+- **PASS — recovery and restore:** a cold process start recovered the entitlement and explicit
+  Restore purchase reverified it through the production backend.
+- **PASS — advertising:** the Premium state did not mount the Google Mobile Ads view.
+- **PASS — refund/revocation:** Play Console completed a full test refund with entitlement
+  removal. The next cold start returned Blick to Free, and Restore did not reactivate the refunded
+  purchase.
+- **PASS — ordinary backend:** the production location-search transport request still returned
+  HTTP 200 after billing acceptance.
+
+This acceptance supplies evidence for completed, pending-to-purchased, acknowledgement, cold
+restart recovery, explicit restore, refund/revocation and post-refund denial. Purchase-sheet user
+cancellation and uninstall/reinstall restoration are separate scenarios and are not implied by
+this evidence.
 
 ## Play Console
 
-- Create and activate the one-time product `blick_premium_lifetime` for Blick's package. Add a
-  purchase option, set the Swedish price to 49 SEK, review Google's converted local prices, and
-  provide the required title/description in release languages.
-- Confirm Play App Signing and upload a signed Android App Bundle to an internal test track.
-- Add license testers and test: successful purchase, user cancellation, slow/pending payment,
-  acknowledgement, reinstall/automatic restore, explicit Restore purchase, refund and revoke.
-- Test from a Play-installed build; Billing cannot be validated reliably from an ordinary
-  side-loaded debug APK.
+- **VERIFIED:** the active product and Swedish price were returned by Google Play during the real
+  test purchase. Review Google's converted prices and release-language product copy separately
+  during production release sign-off.
+- **VERIFIED:** Google Play distributed and installed the production-style Internal Testing build.
+- **VERIFIED:** a license tester completed successful purchase, slow/pending payment,
+  acknowledgement, cold restart recovery, explicit Restore purchase, refund/revoke and
+  post-refund denial.
+- Keep purchase-sheet user cancellation and uninstall/reinstall restoration as separate test
+  scenarios; the September 9 acceptance did not claim them.
 
 Official references: [one-time products](https://developer.android.com/google/play/billing/one-time-products),
 [Billing integration](https://developer.android.com/google/play/billing/integrate), and
@@ -40,8 +73,10 @@ Official references: [one-time products](https://developer.android.com/google/pl
   acknowledgement.
 - Keep the existing production Upstash variables configured as documented in
   [`../backend/README.md`](../backend/README.md).
-- Redeploy and confirm `/api/v1/billing/verify` validates a real test purchase and acknowledges
-  it. Confirm invalid, cancelled, pending, refunded and revoked tokens do not grant access.
+- **VERIFIED:** the deployed `/api/v1/billing/verify` validated and acknowledged real test
+  purchases. Pending state did not call verification, and refunded/revoked ownership did not
+  grant or restore access. Invalid-token and purchase-sheet cancellation checks remain separate
+  negative-path coverage.
 
 Official references: [Android Publisher API setup](https://developers.google.com/android-publisher/getting_started),
 [Product Purchases v2 verification](https://developers.google.com/android-publisher/api-ref/rest/v3/purchases.productsv2/getproductpurchasev2),
@@ -50,7 +85,9 @@ and [secure backend integration](https://developer.android.com/google/play/billi
 ## Durable billing state for initial zero-cost production
 
 The repository contains the PostgreSQL schema/migration, transaction-safe purchase store,
-authenticated optional RTDN handler and Google revalidation. Complete these external steps:
+authenticated optional RTDN handler and Google revalidation. The production PostgreSQL path,
+schema accessibility and durable purchase write are **VERIFIED** by the September 9 acceptance.
+Retain these operating requirements:
 
 - Provision a Neon Free PostgreSQL project without adding a payment method. Free currently
   includes 0.5 GB storage, 100 CU-hours per project each month, 5 GB public network transfer, and
@@ -70,6 +107,11 @@ authenticated optional RTDN handler and Google revalidation. Complete these exte
   restore, cancellation, refund and revoke with Play license testers. Confirm a successful Play
   query with no owned product clears Premium and a temporary backend/database failure does not
   manufacture entitlement.
+
+The accepted real flow verified completed purchase, pending-to-purchased, acknowledgement, cold
+restart recovery, explicit restore, refund/revoke and a successful Play query with no owned
+product clearing Premium. It did not exercise purchase-sheet cancellation or a forced temporary
+backend/database outage.
 
 The current SQL and store are Neon-compatible: they use standard PostgreSQL tables, partial
 indexes, check constraints, `ON CONFLICT`, explicit transactions, and the built-in
@@ -101,6 +143,17 @@ startup/foreground refresh; if the user does not return within Google's three-da
 automatically refund the unacknowledged purchase. Refund and revocation removal may likewise wait
 for the next successful lifecycle or explicit revalidation. The app does not start a second timer,
 poll from commute workers, or globally poll stored tokens.
+
+The September 9 acceptance demonstrated the important split between device entitlement and
+server lifecycle data in this mode. After the test orders were fully refunded with entitlement
+removal, Google stopped returning the purchases as owned. Blick therefore returned to Free on a
+cold start and Restore did not reactivate Premium, but the client also had no refunded purchase
+token to send to `/api/v1/billing/verify`. The sanitized PostgreSQL aggregate consequently remained
+three active rows and zero voided rows. Those stale lifecycle fields did not preserve user access
+and do not by themselves push entitlement to a device. Without RTDN or a future bounded Voided
+Purchases reconciliation, there is no guaranteed prompt server-side transition for such rows.
+Treat this as an accepted no-RTDN lifecycle-data limitation, not a failed entitlement test, and do
+not manually rewrite or delete the test records.
 
 After revenue justifies Cloud Billing, enable enhanced mode with these steps:
 
@@ -156,6 +209,15 @@ Pending external release work:
 
 ## Release sign-off
 
+- **Billing acceptance: VERIFIED (September 9, 2026).**
+- **Overall Play production release:** separate sign-off; not concluded by billing acceptance.
+- **Reviewer Premium access:** separate Play review-access task.
+- **Data Safety:** separate declaration task.
+- **Target audience:** separate declaration task.
+- **Countries/regions:** separate distribution task.
+- **Content rating and other app-content declarations:** separate declaration tasks.
+- **RTDN/Pub/Sub:** future enhancement for near-real-time server lifecycle synchronization once
+  Cloud Billing is acceptable; it is intentionally outside the initial zero-cost launch mode.
 - Run Android unit tests, lint, assemble, migration tests on an emulator/device, and a real
   internal-track purchase matrix.
 - Run backend typecheck, lint, tests, build and dependency audit with Node 22.

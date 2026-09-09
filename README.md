@@ -68,10 +68,13 @@ outside it. Tapping the widget opens the routine's details screen. See
 
 ## Status
 
-The Free/Premium implementation is code-complete but still requires the Play Console product,
-Google Cloud service-account access, backend secrets, and release-track testing described in
-[`docs/play-console-checklist.md`](docs/play-console-checklist.md). Do not treat a build without
-that configuration as production-ready purchase verification.
+The Free/Premium implementation and production billing path are code-complete. The Play Console
+one-time product, Google Play verification identity, production backend/database configuration,
+and real Internal Testing billing acceptance were verified on September 9, 2026; see
+[`docs/play-console-checklist.md`](docs/play-console-checklist.md). This verifies the purchase and
+entitlement path, not the overall Play production release. Reviewer Premium access, Data Safety,
+target audience, countries/regions, content rating and other app-content declarations retain
+their own release sign-off.
 
 Foundation plus a real, largely end-to-end feature set, device-verified on a physical
 tablet and on a real Samsung Galaxy S23 Ultra (One UI 8.5, Android 16), where the full
