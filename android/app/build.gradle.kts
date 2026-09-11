@@ -1,3 +1,4 @@
+import com.android.build.api.variant.HasUnitTestBuilder
 import org.jetbrains.kotlin.gradle.dsl.JvmTarget
 
 plugins {
@@ -109,6 +110,14 @@ android {
         getByName("androidTest") {
             assets.srcDirs("$projectDir/schemas")
         }
+    }
+}
+
+// AGP 9 creates host tests only for the tested (debug) build type by default. This
+// release-only guard must compile against the actual release BuildConfig and source set.
+androidComponents {
+    beforeVariants(selector().withBuildType("release")) { variantBuilder ->
+        (variantBuilder as HasUnitTestBuilder).enableUnitTest = true
     }
 }
 

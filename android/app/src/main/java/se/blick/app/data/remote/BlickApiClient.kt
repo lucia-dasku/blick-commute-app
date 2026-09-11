@@ -4,6 +4,7 @@ import se.blick.app.data.remote.dto.DeparturesResponseDto
 import se.blick.app.data.remote.dto.DisruptionsResponseDto
 import se.blick.app.data.remote.dto.StopSearchResponseDto
 import se.blick.app.data.remote.dto.PurchaseVerificationResponseDto
+import se.blick.app.data.remote.dto.ReviewerAccessValidationResponseDto
 import se.blick.app.data.remote.dto.JourneyLocationSearchDto
 import se.blick.app.data.remote.dto.JourneysResponseDto
 import se.blick.app.data.remote.dto.JourneyDisruptionRelevanceRequestDto
@@ -21,6 +22,8 @@ interface BlickApiClient {
     suspend fun getDisruptions(siteId: Long, lineId: Long?, transportMode: String?): DisruptionsResponseDto
     suspend fun verifyPurchase(productId: String, purchaseToken: String): PurchaseVerificationResponseDto =
         throw UnsupportedOperationException("Purchase verification is not implemented by this test client")
+    suspend fun validateReviewerAccess(code: String): ReviewerAccessValidationResponseDto =
+        throw UnsupportedOperationException("Reviewer access validation is not implemented by this test client")
     suspend fun searchJourneyLocations(query: String): JourneyLocationSearchDto =
         throw UnsupportedOperationException("Journey location search is not implemented by this test client")
     /** [searchUntil] is an ISO-8601 instant (see [java.time.Instant.toString]) bounding how far

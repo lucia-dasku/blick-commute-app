@@ -33,6 +33,8 @@ import se.blick.app.billing.GooglePlayPremiumEntitlementRepository
 import se.blick.app.billing.PremiumEntitlementRepository
 import se.blick.app.billing.PreferencesPremiumRoutineOrderStore
 import se.blick.app.billing.PremiumRoutineOrderStore
+import se.blick.app.billing.PreferencesReviewerAccessGrantStore
+import se.blick.app.billing.ReviewerAccessGrantStore
 
 @Module
 @InstallIn(SingletonComponent::class)
@@ -49,6 +51,12 @@ abstract class RepositoryModule {
     abstract fun bindPremiumRoutineOrderStore(
         impl: PreferencesPremiumRoutineOrderStore,
     ): PremiumRoutineOrderStore
+
+    @Binds
+    @Singleton
+    abstract fun bindReviewerAccessGrantStore(
+        impl: PreferencesReviewerAccessGrantStore,
+    ): ReviewerAccessGrantStore
 
     @Binds
     @Singleton

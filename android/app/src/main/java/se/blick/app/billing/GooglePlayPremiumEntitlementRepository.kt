@@ -33,16 +33,25 @@ import kotlin.coroutines.resume
 class GooglePlayPremiumEntitlementRepository @Inject constructor(
     @ApplicationContext context: Context,
     private val apiClient: BlickApiClient,
+    private val reviewerAccessController: ReviewerAccessController,
 ) : PremiumEntitlementRepository, PurchasesUpdatedListener {
     private val preferences = context.getSharedPreferences("premium_entitlement_cache", Context.MODE_PRIVATE)
     private val scope = CoroutineScope(SupervisorJob() + Dispatchers.IO)
-    private val _entitlement = MutableStateFlow<EntitlementState>(EntitlementState.Loading)
-    override val entitlement: StateFlow<EntitlementState> = _entitlement.asStateFlow()
     private val _localizedPrice = MutableStateFlow<String?>(null)
     override val localizedPrice: StateFlow<String?> = _localizedPrice.asStateFlow()
     private val _debugOverrideEnabled = MutableStateFlow(readDebugPremiumOverride(preferences))
     override val debugOverrideEnabled: StateFlow<Boolean> = _debugOverrideEnabled.asStateFlow()
     override val debugOverrideAvailable: Boolean = DEBUG_PREMIUM_OVERRIDE_AVAILABLE
+    override val reviewerAccessActive: StateFlow<Boolean> = reviewerAccessController.active
+    private val _playEntitlement = MutableStateFlow<EntitlementState>(EntitlementState.Loading)
+    private val _entitlement = MutableStateFlow(
+        effectivePremiumEntitlement(
+            playEntitlement = _playEntitlement.value,
+            reviewerAccessActive = reviewerAccessActive.value,
+            debugOverrideEnabled = _debugOverrideEnabled.value,
+        ),
+    )
+    override val entitlement: StateFlow<EntitlementState> = _entitlement.asStateFlow()
     private var productDetails: ProductDetails? = null
     private var offerToken: String? = null
 
@@ -54,12 +63,12 @@ class GooglePlayPremiumEntitlementRepository @Inject constructor(
 
     override suspend fun refresh() {
         if (_debugOverrideEnabled.value) {
-            _entitlement.value = EntitlementState.Premium
+            publishEffectiveEntitlement()
             return
         }
         runBoundedPremiumRefresh(
             lastVerifiedPremium = ::lastVerifiedPremium,
-            updateEntitlement = { _entitlement.value = it },
+            updateEntitlement = ::updatePlayEntitlement,
         ) {
             ensureConnected()
             queryProduct()
@@ -69,6 +78,17 @@ class GooglePlayPremiumEntitlementRepository @Inject constructor(
     }
 
     override suspend fun restore() = refresh()
+
+    override suspend fun activateReviewerAccess(code: String): ReviewerAccessActivationResult {
+        val result = reviewerAccessController.activate(code)
+        publishEffectiveEntitlement()
+        return result
+    }
+
+    override suspend fun deactivateReviewerAccess() {
+        reviewerAccessController.deactivate()
+        publishEffectiveEntitlement()
+    }
 
     override fun launchPurchase(activity: Activity) {
         val details = productDetails ?: run {
@@ -90,22 +110,22 @@ class GooglePlayPremiumEntitlementRepository @Inject constructor(
         writeDebugPremiumOverride(preferences, enabled)
         _debugOverrideEnabled.value = enabled
         if (enabled) {
-            _entitlement.value = EntitlementState.Premium
+            publishEffectiveEntitlement()
         } else {
-            _entitlement.value = EntitlementState.Loading
+            updatePlayEntitlement(EntitlementState.Loading)
             scope.launch { refresh() }
         }
     }
 
     override fun onPurchasesUpdated(result: BillingResult, purchases: MutableList<Purchase>?) {
         if (_debugOverrideEnabled.value) {
-            _entitlement.value = EntitlementState.Premium
+            publishEffectiveEntitlement()
             return
         }
         when (result.responseCode) {
             BillingClient.BillingResponseCode.OK -> scope.launch { applyPurchases(purchases.orEmpty()) }
             BillingClient.BillingResponseCode.USER_CANCELED -> scope.launch { refresh() }
-            else -> _entitlement.value = EntitlementState.TemporarilyUnavailable(lastVerifiedPremium())
+            else -> updatePlayEntitlement(EntitlementState.TemporarilyUnavailable(lastVerifiedPremium()))
         }
     }
 
@@ -117,34 +137,67 @@ class GooglePlayPremiumEntitlementRepository @Inject constructor(
                 val verification = apiClient.verifyPurchase(PREMIUM_PRODUCT_ID, purchased.purchaseToken)
                 if (verification.verified && verification.state == "PURCHASED") {
                     cacheVerified(true, Instant.parse(verification.verifiedAt).toEpochMilli())
-                    _entitlement.value = BillingEntitlementReducer.reduce(
-                        PurchaseObservation.PURCHASED, VerificationObservation.VERIFIED, lastVerifiedPremium(),
+                    updatePlayEntitlement(
+                        BillingEntitlementReducer.reduce(
+                            PurchaseObservation.PURCHASED,
+                            VerificationObservation.VERIFIED,
+                            lastVerifiedPremium(),
+                        ),
                     )
                 } else {
                     cacheVerified(false)
-                    _entitlement.value = BillingEntitlementReducer.reduce(
-                        PurchaseObservation.PURCHASED, VerificationObservation.REJECTED, lastVerifiedPremium(),
+                    updatePlayEntitlement(
+                        BillingEntitlementReducer.reduce(
+                            PurchaseObservation.PURCHASED,
+                            VerificationObservation.REJECTED,
+                            lastVerifiedPremium(),
+                        ),
                     )
                 }
             } catch (e: CancellationException) {
                 throw e
             } catch (_: Exception) {
-                _entitlement.value = BillingEntitlementReducer.reduce(
-                    PurchaseObservation.PURCHASED, VerificationObservation.UNAVAILABLE, lastVerifiedPremium(),
+                updatePlayEntitlement(
+                    BillingEntitlementReducer.reduce(
+                        PurchaseObservation.PURCHASED,
+                        VerificationObservation.UNAVAILABLE,
+                        lastVerifiedPremium(),
+                    ),
                 )
             }
             return
         }
         if (relevant.any { it.purchaseState == Purchase.PurchaseState.PENDING }) {
-            _entitlement.value = BillingEntitlementReducer.reduce(
-                PurchaseObservation.PENDING, VerificationObservation.NOT_NEEDED, lastVerifiedPremium(),
+            updatePlayEntitlement(
+                BillingEntitlementReducer.reduce(
+                    PurchaseObservation.PENDING,
+                    VerificationObservation.NOT_NEEDED,
+                    lastVerifiedPremium(),
+                ),
             )
             return
         }
         // A successful Play query returning no owned product is authoritative revocation/refund.
         cacheVerified(false)
-        _entitlement.value = BillingEntitlementReducer.reduce(
-            PurchaseObservation.NONE, VerificationObservation.NOT_NEEDED, lastVerifiedPremium(),
+        updatePlayEntitlement(
+            BillingEntitlementReducer.reduce(
+                PurchaseObservation.NONE,
+                VerificationObservation.NOT_NEEDED,
+                lastVerifiedPremium(),
+            ),
+        )
+    }
+
+    private fun updatePlayEntitlement(state: EntitlementState) {
+        _playEntitlement.value = state
+        publishEffectiveEntitlement()
+    }
+
+    private fun publishEffectiveEntitlement() {
+        _entitlement.value = effectivePremiumEntitlement(
+            playEntitlement = _playEntitlement.value,
+            reviewerAccessActive = reviewerAccessActive.value,
+            debugOverrideEnabled = _debugOverrideEnabled.value,
         )
     }
 

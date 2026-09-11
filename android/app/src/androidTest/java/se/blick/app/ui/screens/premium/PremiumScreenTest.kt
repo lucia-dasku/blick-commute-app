@@ -84,6 +84,28 @@ class PremiumScreenTest {
         }
     }
 
+    @Test
+    fun reviewerPremiumUsesInstallationWordingInsteadOfClaimingGooglePlayOwnership() {
+        composeRule.setContent {
+            BlickTheme {
+                PremiumContent(
+                    state = PremiumUiState(
+                        entitlement = EntitlementState.Premium,
+                        localizedPrice = null,
+                        reviewerAccessActive = true,
+                    ),
+                    canLaunchPurchase = true,
+                    onPurchase = {},
+                    onRestore = {},
+                    onToggleDebugPremium = {},
+                )
+            }
+        }
+
+        composeRule.onNodeWithText(string(R.string.premium_reviewer_active)).assertIsDisplayed()
+        composeRule.onNodeWithText(string(R.string.premium_active)).assertDoesNotExist()
+    }
+
     private fun setPremiumContent(
         localizedPrice: String?,
         onPurchase: () -> Unit = {},

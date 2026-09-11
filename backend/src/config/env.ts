@@ -1,6 +1,6 @@
 /**
- * Runtime configuration. Both current upstreams (SL Transport, SL Deviations) are
- * keyless public APIs (see docs/api-contract.md) so nothing here is a secret today.
+ * Runtime configuration. The transit upstreams are keyless public APIs, while billing
+ * credentials and the reviewer-access verification digest are server-only values.
  * Base URLs are overridable for testing against a mock server.
  *
  * `PORT` and `UPSTREAM_TIMEOUT_MS` are validated eagerly at module load: both are only
@@ -49,6 +49,19 @@ export interface GooglePlayConfig {
 
 export interface DatabaseConfig { connectionString: string }
 export interface GooglePlayRtdnConfig { audience: string; serviceAccountEmail: string }
+export interface ReviewerAccessConfig { codeHashHex: string }
+
+/**
+ * Reviewer access is deliberately optional and isolated. Missing, blank, or malformed
+ * configuration disables only reviewer validation; it must never prevent health,
+ * transit, or Google Play purchase verification routes from starting. The configured
+ * value is a SHA-256 digest, not the reusable code itself.
+ */
+export function readReviewerAccessConfig(rawHash: string | undefined): ReviewerAccessConfig | undefined {
+  const codeHashHex = rawHash?.trim();
+  if (!codeHashHex || !/^[a-fA-F0-9]{64}$/.test(codeHashHex)) return undefined;
+  return { codeHashHex: codeHashHex.toLowerCase() };
+}
 
 export function readDatabaseConfig(raw: string | undefined): DatabaseConfig | undefined {
   const connectionString = raw?.trim();
@@ -157,6 +170,10 @@ const nodeEnv = process.env.NODE_ENV ?? "development";
 
 export const config = {
   nodeEnv,
+  /** Vercel overwrites its forwarded-for header, allowing reviewer-access rate limiting
+   * to use it as a trustworthy client signal. Other environments use a shared fallback
+   * client bucket rather than trusting a spoofable forwarding header. */
+  isVercel: process.env.VERCEL === "1",
   port: readPort(process.env.PORT),
   slTransportBaseUrl: process.env.SL_TRANSPORT_BASE_URL ?? "https://transport.integration.sl.se/v1",
   slDeviationsBaseUrl: process.env.SL_DEVIATIONS_BASE_URL ?? "https://deviations.integration.sl.se/v1",
@@ -181,6 +198,7 @@ export const config = {
     process.env.GOOGLE_PLAY_RTDN_AUDIENCE,
     process.env.GOOGLE_PLAY_RTDN_SERVICE_ACCOUNT_EMAIL,
   ),
+  reviewerAccess: readReviewerAccessConfig(process.env.REVIEWER_ACCESS_CODE_SHA256),
   /** Trafiklab GTFS Regional requires an API key to download (`GET
    * https://opendata.samtrafiken.se/gtfs/{operator}/{operator}.zip?key=...` — verified live
    * against Trafiklab's own current documentation, 2026-08-16; no free/keyless tier exists for

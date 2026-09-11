@@ -41,6 +41,7 @@ fun PrivacyPolicyScreen(onBack: () -> Unit) {
         LegalParagraph(R.string.about_privacy_no_account)
         LegalParagraph(R.string.about_privacy_local_storage)
         LegalParagraph(R.string.about_privacy_backend)
+        LegalParagraph(R.string.about_privacy_reviewer_access)
         LegalParagraph(R.string.about_privacy_advertising)
         LegalParagraph(R.string.about_privacy_usage)
         LegalParagraph(R.string.about_privacy_contact)

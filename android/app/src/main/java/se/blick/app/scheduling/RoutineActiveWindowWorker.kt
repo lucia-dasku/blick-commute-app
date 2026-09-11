@@ -46,6 +46,7 @@ import se.blick.app.billing.FreePremiumEntitlementRepository
 import se.blick.app.billing.FreeRoutineSelectionStore
 import se.blick.app.billing.PremiumEntitlementRepository
 import se.blick.app.billing.RoutineTierPolicy
+import se.blick.app.billing.hasPremiumAccess
 import kotlinx.coroutines.flow.first
 import se.blick.app.domain.model.RoutineType
 import se.blick.app.domain.model.JourneyPlan
@@ -515,6 +516,7 @@ class RoutineActiveWindowWorker @AssistedInject constructor(
         var notificationsBecameUnavailable = false
         var unexpectedFailure: Throwable? = null
         var hitHardRuntimeCap = false
+        var tierBecameIneligible = false
         var runOutcome = ActiveWindowRunOutcome.WINDOW_COMPLETED
         var lastKnownRoutine: CommuteRoutine = routine
         // Persists across loop ticks -- see the main loop's own comment on why a timed-out or
@@ -553,6 +555,28 @@ class RoutineActiveWindowWorker @AssistedInject constructor(
                 if (current.pausedDate == zonedNow().toLocalDate()) {
                     runOutcome = ActiveWindowRunOutcome.ROUTINE_PAUSED
                     break
+                }
+                // Reviewer access can be deactivated while this long-running worker is already
+                // inside its normal refresh loop. Re-check the effective entitlement on that
+                // same loop (no additional timer or polling path) so a Premium-only routine
+                // cannot keep its notification/widget alive until the window ends. The full
+                // routine list is read only after access has actually become Free, because it is
+                // needed to identify which one line-direction routine remains eligible there.
+                if (freeRoutineSelectionStore != null &&
+                    !entitlementRepository.entitlement.value.hasPremiumAccess
+                ) {
+                    val allRoutines = routineRepository.observeAll().first()
+                    if (!RoutineTierPolicy.canRun(
+                            current,
+                            allRoutines,
+                            entitlementRepository.entitlement.value,
+                            freeRoutineSelectionStore.selectedRoutineId.value,
+                        )
+                    ) {
+                        tierBecameIneligible = true
+                        runOutcome = ActiveWindowRunOutcome.ROUTINE_TIER_INELIGIBLE
+                        break
+                    }
                 }
                 if (!zonedNow().isBefore(windowEnd)) break
                 // Independent of windowEnd -- see HARD_FOREGROUND_RUNTIME_CAP_MINUTES's own doc
@@ -1037,7 +1061,12 @@ class RoutineActiveWindowWorker @AssistedInject constructor(
         // see rescheduleSkippingToday's own doc for why a plain rescheduleNext here would loop.
         // Unexpected exceptions returned above through Result.retry() and never reach this
         // manual-rescheduling branch.
-        if (notificationsBecameUnavailable || hitHardRuntimeCap) {
+        if (tierBecameIneligible) {
+            // This worker is the unique work for the now-ineligible routine and is already
+            // finishing successfully. Leaving it complete (with no replacement) is sufficient;
+            // asking RoutineScheduler to schedule it again would only enqueue an activation that
+            // the worker's own pre-foreground tier check would immediately cancel.
+        } else if (notificationsBecameUnavailable || hitHardRuntimeCap) {
             rescheduleSkippingToday(routineId)
         } else {
             rescheduleNext(routineId)
