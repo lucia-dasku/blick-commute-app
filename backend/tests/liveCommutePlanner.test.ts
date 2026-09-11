@@ -1,8 +1,10 @@
 import { describe, expect, it } from "vitest";
 import {
-  canonicalLiveCommuteQueryKey,
-  canonicalizeLiveCommuteQuery,
+  canonicalizeAcquisitionQuery,
+  canonicalizePublicationQuery,
   createLiveCommuteSession,
+  liveCommuteAcquisitionKey,
+  liveCommutePublicationKey,
   type ExactDestinationLiveQueryInput,
   type LineDirectionLiveQueryInput,
   type LiveCommuteSession,
@@ -81,9 +83,7 @@ describe("live commute session validation", () => {
       "query.transportModes must contain at least one supported mode",
     );
     expect(() =>
-      session({
-        query: exactQuery({ destinationId: " A=1@O=Odenplan " }),
-      }),
+      session({ query: exactQuery({ destinationId: " A=1@O=Odenplan " }) }),
     ).toThrow("query origin and destination must differ");
   });
 
@@ -93,6 +93,7 @@ describe("live commute session validation", () => {
     const created = session({ startsAt, query: exactQuery({ searchUntil }) });
     startsAt.setUTCFullYear(2030);
     searchUntil.setUTCFullYear(2030);
+
     expect(created.startsAt.toISOString()).toBe(STARTS_AT.toISOString());
     expect(created.query.kind).toBe("EXACT_DESTINATION");
     if (created.query.kind === "EXACT_DESTINATION") {
@@ -101,64 +102,66 @@ describe("live commute session validation", () => {
   });
 });
 
-describe("canonical live query identity", () => {
-  it("uses a readable fixed-field line identity independent of property insertion order", () => {
-    const reordered = {
-      directionCode: 1,
-      lineId: 4,
-      transportMode: "bus",
-      siteId: 9001,
+describe("live commute acquisition and publication identity", () => {
+  it("uses only the site for LINE_DIRECTION acquisition", () => {
+    expect(canonicalizeAcquisitionQuery(lineQuery())).toEqual({
       kind: "LINE_DIRECTION",
-    } as const;
-
-    expect(canonicalLiveCommuteQueryKey(reordered)).toBe(
-      '{"kind":"LINE_DIRECTION","siteId":9001,"transportMode":"BUS","lineId":4,"directionCode":1}',
+      siteId: 9001,
+    });
+    expect(liveCommuteAcquisitionKey(lineQuery())).toBe(
+      '{"kind":"LINE_DIRECTION","siteId":9001}',
     );
-    expect(canonicalLiveCommuteQueryKey(reordered)).toBe(
-      canonicalLiveCommuteQueryKey(lineQuery()),
+    expect(
+      liveCommuteAcquisitionKey(
+        lineQuery({ transportMode: "METRO", lineId: null, directionCode: null }),
+      ),
+    ).toBe(liveCommuteAcquisitionKey(lineQuery()));
+  });
+
+  it("retains the complete LINE_DIRECTION filter for publication", () => {
+    expect(canonicalizePublicationQuery(lineQuery())).toEqual({
+      kind: "LINE_DIRECTION",
+      siteId: 9001,
+      transportMode: "BUS",
+      lineId: 4,
+      directionCode: 1,
+    });
+    expect(liveCommutePublicationKey(lineQuery())).toBe(
+      '{"kind":"LINE_DIRECTION","siteId":9001,"transportMode":"BUS","lineId":4,"directionCode":1}',
     );
   });
 
-  it("preserves nullable line filters as explicit canonical semantics", () => {
-    expect(canonicalizeLiveCommuteQuery(lineQuery({ lineId: null, directionCode: null }))).toEqual({
+  it("preserves nullable line and direction wildcards in publication identity", () => {
+    expect(
+      canonicalizePublicationQuery(lineQuery({ lineId: null, directionCode: null })),
+    ).toEqual({
       kind: "LINE_DIRECTION",
       siteId: 9001,
       transportMode: "BUS",
       lineId: null,
       directionCode: null,
     });
+    expect(
+      liveCommutePublicationKey(lineQuery({ lineId: null, directionCode: null })),
+    ).not.toBe(liveCommutePublicationKey(lineQuery()));
   });
 
-  it("sorts and deduplicates the order-insensitive exact-destination mode allow-list", () => {
+  it("sorts and deduplicates the exact-destination mode allow-list for both keys", () => {
     const first = exactQuery({ transportModes: ["BUS", "METRO", "BUS"] });
     const second = exactQuery({ transportModes: ["METRO", "BUS"] });
 
-    expect(canonicalLiveCommuteQueryKey(first)).toBe(
-      canonicalLiveCommuteQueryKey(second),
-    );
-    expect(canonicalLiveCommuteQueryKey(first)).toBe(
+    expect(liveCommuteAcquisitionKey(first)).toBe(liveCommuteAcquisitionKey(second));
+    expect(liveCommutePublicationKey(first)).toBe(liveCommutePublicationKey(second));
+    expect(liveCommuteAcquisitionKey(first)).toBe(
       '{"kind":"EXACT_DESTINATION","originId":"A=1@O=Odenplan","destinationId":"A=1@O=Slussen","transportModes":["METRO","BUS"],"changesPreference":"BOTH","searchUntil":"2026-09-11T08:00:00.000Z","searchMode":"NOW","laterJourneyCount":0}',
     );
   });
 
-  it("canonicalizes equivalent absolute search boundaries", () => {
+  it("canonicalizes equivalent exact-destination absolute boundaries", () => {
     const utc = exactQuery({ searchUntil: new Date("2026-09-11T08:00:00.000Z") });
     const offset = exactQuery({ searchUntil: new Date("2026-09-11T10:00:00.000+02:00") });
-    expect(canonicalLiveCommuteQueryKey(utc)).toBe(canonicalLiveCommuteQueryKey(offset));
-  });
-
-  it("canonicalizes exact-destination fields independently of property insertion order", () => {
-    const reordered = {
-      searchUntil: ENDS_AT,
-      changesPreference: "BOTH",
-      transportModes: ["METRO", "BUS"],
-      destinationId: "A=1@O=Slussen",
-      originId: "A=1@O=Odenplan",
-      kind: "EXACT_DESTINATION",
-    } as const;
-    expect(canonicalLiveCommuteQueryKey(reordered)).toBe(
-      canonicalLiveCommuteQueryKey(exactQuery()),
-    );
+    expect(liveCommuteAcquisitionKey(utc)).toBe(liveCommuteAcquisitionKey(offset));
+    expect(liveCommutePublicationKey(utc)).toBe(liveCommutePublicationKey(offset));
   });
 });
 
@@ -178,7 +181,7 @@ describe("live commute planning", () => {
     expect(plan.notStartedSessions).toEqual([]);
   });
 
-  it("partitions future, active, and expired sessions and groups only active sessions", () => {
+  it("groups only active sessions", () => {
     const future = session({
       sessionId: "future",
       startsAt: new Date("2026-09-11T07:30:00.001Z"),
@@ -197,15 +200,22 @@ describe("live commute planning", () => {
     expect(plan.activeSessions.map((item) => item.sessionId)).toEqual(["active"]);
     expect(plan.expiredSessions.map((item) => item.sessionId)).toEqual(["expired"]);
     expect(plan.acquisitionGroups).toHaveLength(1);
-    expect(plan.acquisitionGroups[0]?.sessions.map((item) => item.sessionId)).toEqual(["active"]);
+    expect(plan.publicationGroups).toHaveLength(1);
   });
 
-  it("plans one acquisition for 100 identical active line queries", () => {
+  it("plans one site acquisition and several publication states for 100 mixed line sessions", () => {
+    const variants = [
+      lineQuery(),
+      lineQuery({ transportMode: "METRO", lineId: null, directionCode: null }),
+      lineQuery({ lineId: 5 }),
+      lineQuery({ directionCode: 2 }),
+    ];
     const sessions = Array.from({ length: 100 }, (_, index) =>
       session({
         sessionId: `session-${index}`,
         installationId: `installation-${index}`,
         routineId: `routine-${index}`,
+        query: variants[index % variants.length]!,
       }),
     );
 
@@ -214,57 +224,63 @@ describe("live commute planning", () => {
     expect(plan.activeSessions).toHaveLength(100);
     expect(plan.acquisitionGroups).toHaveLength(1);
     expect(plan.acquisitionGroups[0]?.sessions).toHaveLength(100);
-  });
-
-  it("does not let session, installation, or routine identity prevent grouping", () => {
-    const first = session();
-    const second = session({
-      sessionId: "different-session",
-      installationId: "different-installation",
-      routineId: "different-routine",
-    });
-    expect(planLiveCommuteSessions(NOW, [first, second]).acquisitionGroups).toHaveLength(1);
-  });
-
-  it("does not let different active line-session windows prevent query grouping", () => {
-    const first = session();
-    const second = session({
-      sessionId: "different-window",
-      startsAt: new Date("2026-09-11T06:30:00.000Z"),
-      endsAt: new Date("2026-09-11T09:00:00.000Z"),
-    });
-    expect(planLiveCommuteSessions(NOW, [first, second]).acquisitionGroups).toHaveLength(1);
+    expect(plan.acquisitionGroups[0]?.publicationGroups).toHaveLength(4);
+    expect(plan.publicationGroups).toHaveLength(4);
   });
 
   it.each([
-    ["station", { siteId: 9002 }],
+    ["mode", { transportMode: "METRO" }],
     ["line", { lineId: 5 }],
     ["line wildcard", { lineId: null }],
     ["direction", { directionCode: 2 }],
     ["direction wildcard", { directionCode: null }],
-    ["mode", { transportMode: "METRO" }],
-  ])("separates a different line-direction %s", (_name, queryOverride) => {
-    const first = session({ sessionId: "first" });
-    const second = session({
-      sessionId: "second",
-      query: lineQuery(queryOverride),
-    });
-    expect(planLiveCommuteSessions(NOW, [first, second]).acquisitionGroups).toHaveLength(2);
+  ])("shares same-site %s acquisition but separates publication", (_name, queryOverride) => {
+    const plan = planLiveCommuteSessions(NOW, [
+      session({ sessionId: "first" }),
+      session({ sessionId: "second", query: lineQuery(queryOverride) }),
+    ]);
+
+    expect(plan.acquisitionGroups).toHaveLength(1);
+    expect(plan.publicationGroups).toHaveLength(2);
   });
 
-  it("groups exact-destination mode sets with the same members in different orders", () => {
-    const first = session({ sessionId: "first", query: exactQuery() });
-    const second = session({
-      sessionId: "second",
-      query: exactQuery({ transportModes: ["BUS", "METRO"] }),
-    });
-    expect(planLiveCommuteSessions(NOW, [first, second]).acquisitionGroups).toHaveLength(1);
+  it("separates different sites for both acquisition and publication", () => {
+    const plan = planLiveCommuteSessions(NOW, [
+      session({ sessionId: "first" }),
+      session({ sessionId: "second", query: lineQuery({ siteId: 9002 }) }),
+    ]);
+
+    expect(plan.acquisitionGroups).toHaveLength(2);
+    expect(plan.publicationGroups).toHaveLength(2);
   });
 
-  it("never groups different query kinds", () => {
-    const line = session({ sessionId: "line" });
-    const exact = session({ sessionId: "exact", query: exactQuery() });
-    expect(planLiveCommuteSessions(NOW, [line, exact]).acquisitionGroups).toHaveLength(2);
+  it("groups identical complete publication queries despite session identity and windows", () => {
+    const plan = planLiveCommuteSessions(NOW, [
+      session(),
+      session({
+        sessionId: "different-session",
+        installationId: "different-installation",
+        routineId: "different-routine",
+        startsAt: new Date("2026-09-11T06:30:00.000Z"),
+        endsAt: new Date("2026-09-11T09:00:00.000Z"),
+      }),
+    ]);
+
+    expect(plan.acquisitionGroups).toHaveLength(1);
+    expect(plan.publicationGroups).toHaveLength(1);
+    expect(plan.publicationGroups[0]?.sessions).toHaveLength(2);
+  });
+
+  it("groups equivalent exact requests", () => {
+    const plan = planLiveCommuteSessions(NOW, [
+      session({ sessionId: "first", query: exactQuery() }),
+      session({
+        sessionId: "second",
+        query: exactQuery({ transportModes: ["BUS", "METRO"] }),
+      }),
+    ]);
+    expect(plan.acquisitionGroups).toHaveLength(1);
+    expect(plan.publicationGroups).toHaveLength(1);
   });
 
   it.each([
@@ -273,42 +289,48 @@ describe("live commute planning", () => {
     ["transport-mode allow-list", { transportModes: ["METRO"] }],
     ["changes preference", { changesPreference: "DIRECT_ONLY" }],
     ["search boundary", { searchUntil: new Date("2026-09-11T08:15:00.000Z") }],
-  ] as const)("separates a different exact-destination %s", (_name, queryOverride) => {
-    const first = session({ sessionId: "first", query: exactQuery() });
-    const second = session({
-      sessionId: "second",
-      query: exactQuery(queryOverride),
-    });
-    expect(planLiveCommuteSessions(NOW, [first, second]).acquisitionGroups).toHaveLength(2);
+  ] as const)("separates a materially different exact %s acquisition", (_name, queryOverride) => {
+    const plan = planLiveCommuteSessions(NOW, [
+      session({ sessionId: "first", query: exactQuery() }),
+      session({ sessionId: "second", query: exactQuery(queryOverride) }),
+    ]);
+    expect(plan.acquisitionGroups).toHaveLength(2);
+    expect(plan.publicationGroups).toHaveLength(2);
+  });
+
+  it("never groups different query kinds", () => {
+    const plan = planLiveCommuteSessions(NOW, [
+      session({ sessionId: "line" }),
+      session({ sessionId: "exact", query: exactQuery() }),
+    ]);
+    expect(plan.acquisitionGroups).toHaveLength(2);
+    expect(plan.publicationGroups).toHaveLength(2);
   });
 
   it("revalidates forged session windows at the planner boundary", () => {
-    const invalid = {
-      ...session(),
-      endsAt: STARTS_AT,
-    };
+    const invalid = { ...session(), endsAt: STARTS_AT };
     expect(() => planLiveCommuteSessions(NOW, [invalid])).toThrow(
       "endsAt must be later than startsAt",
     );
   });
 
-  it("prevents publication when every acquired session has expired", () => {
-    const acquisitionGroup = planLiveCommuteSessions(NOW, [session()]).acquisitionGroups[0];
-    expect(acquisitionGroup).toBeDefined();
-    expect(prepareLiveCommutePublicationGroup(ENDS_AT, acquisitionGroup!)).toBeNull();
+  it("prevents publication when every session expires during acquisition", () => {
+    const publication = planLiveCommuteSessions(NOW, [session()]).publicationGroups[0];
+    expect(publication).toBeDefined();
+    expect(prepareLiveCommutePublicationGroup(ENDS_AT, publication!)).toBeNull();
   });
 
-  it("removes sessions that expire during acquisition before publication", () => {
+  it("removes only sessions that expire during acquisition", () => {
     const earlyEnd = new Date("2026-09-11T07:30:01.000Z");
     const laterEnd = new Date("2026-09-11T07:45:00.000Z");
-    const acquisitionGroup = planLiveCommuteSessions(NOW, [
+    const publication = planLiveCommuteSessions(NOW, [
       session({ sessionId: "early", endsAt: earlyEnd }),
       session({ sessionId: "later", endsAt: laterEnd }),
-    ]).acquisitionGroups[0];
+    ]).publicationGroups[0];
 
-    const publicationGroup = prepareLiveCommutePublicationGroup(earlyEnd, acquisitionGroup!);
+    const ready = prepareLiveCommutePublicationGroup(earlyEnd, publication!);
 
-    expect(publicationGroup?.validatedAt).toBe(earlyEnd.toISOString());
-    expect(publicationGroup?.sessions.map((item) => item.sessionId)).toEqual(["later"]);
+    expect(ready?.validatedAt).toBe(earlyEnd.toISOString());
+    expect(ready?.sessions.map((item) => item.sessionId)).toEqual(["later"]);
   });
 });

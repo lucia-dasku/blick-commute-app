@@ -66,7 +66,7 @@ export interface LiveCommuteSession {
   readonly query: LiveCommuteQuery;
 }
 
-export interface CanonicalLineDirectionLiveQuery {
+export interface CanonicalLineDirectionPublicationQuery {
   readonly kind: "LINE_DIRECTION";
   readonly siteId: number;
   readonly transportMode: string;
@@ -74,7 +74,12 @@ export interface CanonicalLineDirectionLiveQuery {
   readonly directionCode: number | null;
 }
 
-export interface CanonicalExactDestinationLiveQuery {
+export interface CanonicalLineDirectionAcquisitionQuery {
+  readonly kind: "LINE_DIRECTION";
+  readonly siteId: number;
+}
+
+export interface CanonicalExactDestinationQuery {
   readonly kind: "EXACT_DESTINATION";
   readonly originId: string;
   readonly destinationId: string;
@@ -85,11 +90,22 @@ export interface CanonicalExactDestinationLiveQuery {
   readonly laterJourneyCount: typeof LIVE_EXACT_DESTINATION_LATER_JOURNEY_COUNT;
 }
 
-export type CanonicalLiveCommuteQuery =
-  | CanonicalLineDirectionLiveQuery
-  | CanonicalExactDestinationLiveQuery;
+export type CanonicalAcquisitionQuery =
+  | CanonicalLineDirectionAcquisitionQuery
+  | CanonicalExactDestinationQuery;
 
-export type CanonicalLiveCommuteQueryKey = string;
+export type CanonicalPublicationQuery =
+  | CanonicalLineDirectionPublicationQuery
+  | CanonicalExactDestinationQuery;
+
+declare const acquisitionKeyBrand: unique symbol;
+declare const publicationKeyBrand: unique symbol;
+
+/** Identity for one safely shareable upstream transit acquisition. */
+export type AcquisitionKey = string & { readonly [acquisitionKeyBrand]: true };
+
+/** Identity for sessions that can share the same final dynamic commute state. */
+export type PublicationKey = string & { readonly [publicationKeyBrand]: true };
 
 const JOURNEY_CHANGES_PREFERENCES: readonly JourneyChangesPreference[] = [
   "DIRECT_ONLY",
@@ -227,10 +243,41 @@ export function createLiveCommuteSession(input: LiveCommuteSessionInput): LiveCo
   });
 }
 
-/** A stable, inspectable representation of exactly the fields that affect acquisition. */
-export function canonicalizeLiveCommuteQuery(
+/**
+ * A stable representation of the fields that affect one upstream acquisition. A LINE
+ * acquisition is site-wide because SL Transport returns the raw departures for a site;
+ * mode, line, and direction are applied only during publication projection.
+ */
+export function canonicalizeAcquisitionQuery(
   query: LiveCommuteQueryInput,
-): CanonicalLiveCommuteQuery {
+): CanonicalAcquisitionQuery {
+  const normalized = normalizeLiveCommuteQuery(query);
+  if (normalized.kind === "LINE_DIRECTION") {
+    return Object.freeze({
+      kind: "LINE_DIRECTION",
+      siteId: normalized.siteId,
+    });
+  }
+
+  return Object.freeze({
+    kind: "EXACT_DESTINATION",
+    originId: normalized.originId,
+    destinationId: normalized.destinationId,
+    transportModes: normalized.transportModes,
+    changesPreference: normalized.changesPreference,
+    searchUntil: normalized.searchUntil.toISOString(),
+    searchMode: normalized.searchMode,
+    laterJourneyCount: normalized.laterJourneyCount,
+  });
+}
+
+/**
+ * A stable representation of the fields that affect final dynamic commute content.
+ * LINE publication retains nullable wildcard filters even though acquisition does not.
+ */
+export function canonicalizePublicationQuery(
+  query: LiveCommuteQueryInput,
+): CanonicalPublicationQuery {
   const normalized = normalizeLiveCommuteQuery(query);
   if (normalized.kind === "LINE_DIRECTION") {
     return Object.freeze({
@@ -254,13 +301,12 @@ export function canonicalizeLiveCommuteQuery(
   });
 }
 
-/**
- * Readable JSON is intentional: it is collision-safe for these values, deterministic
- * because canonicalization constructs a fixed property order, and keeps tests/reviews
- * explicit about every equality rule instead of hiding them behind a hash.
- */
-export function canonicalLiveCommuteQueryKey(
-  query: LiveCommuteQueryInput,
-): CanonicalLiveCommuteQueryKey {
-  return JSON.stringify(canonicalizeLiveCommuteQuery(query));
+/** Readable deterministic JSON keeps every equality rule explicit and collision-safe. */
+export function liveCommuteAcquisitionKey(query: LiveCommuteQueryInput): AcquisitionKey {
+  return JSON.stringify(canonicalizeAcquisitionQuery(query)) as AcquisitionKey;
+}
+
+/** Readable deterministic JSON for final-state sharing, distinct from acquisition identity. */
+export function liveCommutePublicationKey(query: LiveCommuteQueryInput): PublicationKey {
+  return JSON.stringify(canonicalizePublicationQuery(query)) as PublicationKey;
 }

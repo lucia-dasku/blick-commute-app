@@ -82,10 +82,11 @@ export function requestMaxChanges(preference: JourneyChangesPreference): number 
  * every real search; this exists only so a bug elsewhere can never turn into an unbounded
  * request storm against SL. Exported so tests can assert against the literal directly.
  *
- * Shared across a WHOLE `CandidateCollector` instance — i.e. a whole `/journeys` request —
- * never reset per `acquireUntil` call, so NEXT acquisition and ALTERNATIVE acquisition
- * spend from the SAME budget rather than each independently getting their own 30 requests.
- * The initial acquisition batch (fetched directly by the route handler, not through
+ * Shared across a WHOLE `CandidateCollector` instance — one authoritative live acquisition,
+ * whether requested by the HTTP route or the live-commute tick — and never reset per
+ * `acquireUntil` call, so NEXT acquisition and ALTERNATIVE acquisition spend from the SAME
+ * budget rather than each independently getting their own 30 requests. The initial
+ * acquisition batch (fetched directly by `acquireAuthoritativeLiveJourneys`, not through
  * `acquireUntil`) counts against it too: every `fetchBatch` call increments the same
  * counter regardless of which search invoked it, because what's being bounded is real
  * requests against SL, and the initial batch is as real a request as any other. See
@@ -149,7 +150,8 @@ export type AcquisitionOptions = Omit<CandidateBatchOptions, "departureAt">;
  * request budget (see `MAX_ACQUISITION_BATCHES`), so the same logical journey can never
  * appear twice in the final pool regardless of which search found it first, and one
  * request-heavy search can never silently starve another of its own separate budget. See
- * backend/src/routes/journeys.ts's own doc for how its caller uses this.
+ * backend/src/services/liveJourneyAcquisition.ts for the shared caller and
+ * backend/src/routes/journeys.ts for the public behavior contract.
  *
  * The pool holds the MOST RECENTLY returned representation of each journeyId, never the
  * first — SL's own realtime data can change between two requests for what is structurally
@@ -195,7 +197,7 @@ export class CandidateCollector {
    * class's own doc). A caller re-derives its own selection (PRIMARY/NEXT/ALTERNATIVE)
    * from this after every batch, rather than threading its own separately-accumulated
    * array, so a later batch's updated data is always what selection actually sees — see
-   * backend/src/routes/journeys.ts's own `deriveSelection`. Iteration order is each id's
+   * backend/src/services/liveJourneyAcquisition.ts's `deriveSelection`. Iteration order is each id's
    * first-ever insertion order (`Map`'s own guarantee); not meaningful to selection (every
    * selector here is order-independent) but stable enough for deterministic tests. */
   get pool(): NormalizedJourney[] {
@@ -456,8 +458,9 @@ export class CandidateCollector {
    * minute an earlier, narrower one already touched).
    *
    * "Already probed" is checked against `probedQueries`, not re-derived from batch
-   * contents — necessary once PRIMARY retargeting (see backend/src/routes/journeys.ts's own
-   * doc) can restart a search from an earlier anchor than one already explored: a new,
+   * contents — necessary once PRIMARY retargeting (see
+   * backend/src/services/liveJourneyAcquisition.ts) can restart a search from an earlier
+   * anchor than one already explored: a new,
    * earlier-departing PRIMARY's own targeted search can climb back up through (bucket,
    * options) pairs an earlier, now-abandoned search already queried, and re-querying those
    * wastes shared budget without discovering anything new. When the candidate query was

@@ -1,20 +1,27 @@
+import type { PublicationKey, LiveCommuteSession } from "./model.js";
 import type { LiveCommutePublicationGroup } from "./planner.js";
-import type { CanonicalLiveCommuteQuery, LiveCommuteSession } from "./model.js";
+import type { LiveCommuteSnapshot } from "./snapshot.js";
 
 /** Supplies concrete sessions without prescribing persistence or an account model. */
 export interface LiveCommuteSessionSource {
   listSessions(): Promise<readonly LiveCommuteSession[]>;
 }
 
-/** Acquires one fresh, normalized transit state for one canonical query group. */
-export interface LiveCommuteStateSource<State> {
-  acquireFreshState(query: CanonicalLiveCommuteQuery, now: Date): Promise<State>;
+/**
+ * Optional caller-owned history. This phase provides no storage implementation; an eventual
+ * host can supply a previous publication snapshot without changing the tick engine.
+ */
+export interface LiveCommutePreviousSnapshotSource {
+  getPreviousSnapshot(key: PublicationKey): LiveCommuteSnapshot | undefined;
 }
 
 /**
- * Publishes one acquired state without naming a push platform. The distinct group type
- * requires callers to revalidate session expiry after asynchronous acquisition.
+ * Future platform-neutral delivery seam. The Phase 2 tick returns publication outcomes and
+ * never invokes this port itself.
  */
-export interface LiveCommuteStatePublisher<State> {
-  publishState(group: LiveCommutePublicationGroup, state: State): Promise<void>;
+export interface LiveCommuteSnapshotPublisher {
+  publishSnapshot(
+    group: LiveCommutePublicationGroup,
+    snapshot: LiveCommuteSnapshot,
+  ): Promise<void>;
 }

@@ -1,20 +1,34 @@
 import {
-  canonicalLiveCommuteQueryKey,
-  canonicalizeLiveCommuteQuery,
+  canonicalizeAcquisitionQuery,
+  canonicalizePublicationQuery,
   createLiveCommuteSession,
-  type CanonicalLiveCommuteQuery,
-  type CanonicalLiveCommuteQueryKey,
+  liveCommuteAcquisitionKey,
+  liveCommutePublicationKey,
+  type AcquisitionKey,
+  type CanonicalAcquisitionQuery,
+  type CanonicalPublicationQuery,
   type LiveCommuteSession,
+  type PublicationKey,
 } from "./model.js";
 
-export interface LiveCommuteAcquisitionGroup {
-  readonly key: CanonicalLiveCommuteQueryKey;
-  readonly query: CanonicalLiveCommuteQuery;
+/** Sessions that will receive one identical projected snapshot after acquisition. */
+export interface LiveCommutePublicationPlan {
+  readonly key: PublicationKey;
+  readonly acquisitionKey: AcquisitionKey;
+  readonly query: CanonicalPublicationQuery;
   readonly sessions: readonly LiveCommuteSession[];
 }
 
-/** A group whose sessions were checked again after acquisition, immediately before publish. */
-export interface LiveCommutePublicationGroup extends LiveCommuteAcquisitionGroup {
+/** One upstream request whose result may feed several publication groups. */
+export interface LiveCommuteAcquisitionGroup {
+  readonly key: AcquisitionKey;
+  readonly query: CanonicalAcquisitionQuery;
+  readonly sessions: readonly LiveCommuteSession[];
+  readonly publicationGroups: readonly LiveCommutePublicationPlan[];
+}
+
+/** A publication group checked again after its asynchronous acquisition completed. */
+export interface LiveCommutePublicationGroup extends LiveCommutePublicationPlan {
   readonly validatedAt: string;
 }
 
@@ -23,31 +37,45 @@ export interface LiveCommutePlan {
   readonly activeSessions: readonly LiveCommuteSession[];
   readonly expiredSessions: readonly LiveCommuteSession[];
   readonly acquisitionGroups: readonly LiveCommuteAcquisitionGroup[];
+  readonly publicationGroups: readonly LiveCommutePublicationPlan[];
 }
 
 interface MutableAcquisitionGroup {
-  readonly key: CanonicalLiveCommuteQueryKey;
-  readonly query: CanonicalLiveCommuteQuery;
+  readonly key: AcquisitionKey;
+  readonly query: CanonicalAcquisitionQuery;
+  readonly sessions: LiveCommuteSession[];
+  readonly publicationKeys: Set<PublicationKey>;
+}
+
+interface MutablePublicationGroup {
+  readonly key: PublicationKey;
+  readonly acquisitionKey: AcquisitionKey;
+  readonly query: CanonicalPublicationQuery;
   readonly sessions: LiveCommuteSession[];
 }
 
+function validNowMillis(now: Date): number {
+  if (!(now instanceof Date) || !Number.isFinite(now.getTime())) {
+    throw new RangeError("now must be a valid absolute Date");
+  }
+  return now.getTime();
+}
+
 /**
- * Partitions validated sessions using `[startsAt, endsAt)` and groups only active ones.
- * This function performs no I/O and does not read the wall clock; callers supply `now`.
+ * Partitions validated sessions using `[startsAt, endsAt)`, groups active sessions by
+ * upstream acquisition identity, and independently groups them by final publication identity.
+ * This function performs no I/O and never reads the wall clock.
  */
 export function planLiveCommuteSessions(
   now: Date,
   sessions: readonly LiveCommuteSession[],
 ): LiveCommutePlan {
-  if (!(now instanceof Date) || !Number.isFinite(now.getTime())) {
-    throw new RangeError("now must be a valid absolute Date");
-  }
-
-  const nowMillis = now.getTime();
+  const nowMillis = validNowMillis(now);
   const notStartedSessions: LiveCommuteSession[] = [];
   const activeSessions: LiveCommuteSession[] = [];
   const expiredSessions: LiveCommuteSession[] = [];
-  const groupsByKey = new Map<CanonicalLiveCommuteQueryKey, MutableAcquisitionGroup>();
+  const acquisitionsByKey = new Map<AcquisitionKey, MutableAcquisitionGroup>();
+  const publicationsByKey = new Map<PublicationKey, MutablePublicationGroup>();
 
   for (const input of sessions) {
     const session = createLiveCommuteSession(input);
@@ -61,24 +89,55 @@ export function planLiveCommuteSessions(
     }
 
     activeSessions.push(session);
-    const key = canonicalLiveCommuteQueryKey(session.query);
-    const existing = groupsByKey.get(key);
-    if (existing != null) {
-      existing.sessions.push(session);
-    } else {
-      groupsByKey.set(key, {
-        key,
-        query: canonicalizeLiveCommuteQuery(session.query),
+    const acquisitionKey = liveCommuteAcquisitionKey(session.query);
+    const publicationKey = liveCommutePublicationKey(session.query);
+
+    const publication = publicationsByKey.get(publicationKey);
+    if (publication == null) {
+      publicationsByKey.set(publicationKey, {
+        key: publicationKey,
+        acquisitionKey,
+        query: canonicalizePublicationQuery(session.query),
         sessions: [session],
       });
+    } else {
+      publication.sessions.push(session);
+    }
+
+    const acquisition = acquisitionsByKey.get(acquisitionKey);
+    if (acquisition == null) {
+      acquisitionsByKey.set(acquisitionKey, {
+        key: acquisitionKey,
+        query: canonicalizeAcquisitionQuery(session.query),
+        sessions: [session],
+        publicationKeys: new Set([publicationKey]),
+      });
+    } else {
+      acquisition.sessions.push(session);
+      acquisition.publicationKeys.add(publicationKey);
     }
   }
 
-  const acquisitionGroups = [...groupsByKey.values()].map((group) =>
+  const publicationGroups = [...publicationsByKey.values()].map((group) =>
+    Object.freeze({
+      key: group.key,
+      acquisitionKey: group.acquisitionKey,
+      query: group.query,
+      sessions: Object.freeze([...group.sessions]),
+    }),
+  );
+  const frozenPublicationsByKey = new Map(
+    publicationGroups.map((group) => [group.key, group]),
+  );
+
+  const acquisitionGroups = [...acquisitionsByKey.values()].map((group) =>
     Object.freeze({
       key: group.key,
       query: group.query,
       sessions: Object.freeze([...group.sessions]),
+      publicationGroups: Object.freeze(
+        [...group.publicationKeys].map((key) => frozenPublicationsByKey.get(key)!),
+      ),
     }),
   );
 
@@ -87,28 +146,28 @@ export function planLiveCommuteSessions(
     activeSessions: Object.freeze(activeSessions),
     expiredSessions: Object.freeze(expiredSessions),
     acquisitionGroups: Object.freeze(acquisitionGroups),
+    publicationGroups: Object.freeze(publicationGroups),
   });
 }
 
 /**
- * Revalidates an acquisition group at the publication instant. Acquisition is asynchronous,
- * so a session that was active in the original plan may have reached `endsAt` meanwhile.
- * A caller must skip publication when this returns `null`.
+ * Revalidates one final-state group at the publication instant. A session can expire while
+ * its shared upstream request is in flight, so callers must skip a `null` result.
  */
 export function prepareLiveCommutePublicationGroup(
   now: Date,
-  acquisitionGroup: LiveCommuteAcquisitionGroup,
+  publicationGroup: LiveCommutePublicationPlan,
 ): LiveCommutePublicationGroup | null {
-  const publicationPlan = planLiveCommuteSessions(now, acquisitionGroup.sessions);
-  const currentGroup = publicationPlan.acquisitionGroups.find(
-    (candidate) => candidate.key === acquisitionGroup.key,
+  const publicationPlan = planLiveCommuteSessions(now, publicationGroup.sessions);
+  const currentGroup = publicationPlan.publicationGroups.find(
+    (candidate) =>
+      candidate.key === publicationGroup.key &&
+      candidate.acquisitionKey === publicationGroup.acquisitionKey,
   );
   if (currentGroup == null) return null;
 
   return Object.freeze({
-    key: currentGroup.key,
-    query: currentGroup.query,
-    sessions: currentGroup.sessions,
-    validatedAt: now.toISOString(),
+    ...currentGroup,
+    validatedAt: new Date(validNowMillis(now)).toISOString(),
   });
 }
