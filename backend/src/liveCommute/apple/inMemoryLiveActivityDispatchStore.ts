@@ -1,6 +1,10 @@
 import {
+  createLiveActivityDispatchBindingReference,
+  createLiveActivityDirectDispatchHistory,
   createLiveActivityDirectDispatchAttempt,
   createLiveActivityDispatchCursor,
+  type LiveActivityDispatchBindingReference,
+  type LiveActivityDirectDispatchHistory,
   type LiveActivityDirectDispatchAttempt,
   type LiveActivityDispatchCursor,
 } from "./dispatchModel.js";
@@ -55,6 +59,18 @@ function sameAttemptIdentity(
   left: LiveActivityDirectDispatchAttempt,
   right: LiveActivityDirectDispatchAttempt,
 ): boolean {
+  const publicationMetadataMatches =
+    left.publicationMetadata == null || right.publicationMetadata == null
+      ? left.publicationMetadata === right.publicationMetadata
+      : left.publicationMetadata.visibleContentFingerprint ===
+          right.publicationMetadata.visibleContentFingerprint &&
+        left.publicationMetadata.sourceFetchedAt.getTime() ===
+          right.publicationMetadata.sourceFetchedAt.getTime() &&
+        (left.publicationMetadata.staleAt == null ||
+        right.publicationMetadata.staleAt == null
+          ? left.publicationMetadata.staleAt === right.publicationMetadata.staleAt
+          : left.publicationMetadata.staleAt.getTime() ===
+            right.publicationMetadata.staleAt.getTime());
   return (
     left.dispatchId === right.dispatchId &&
     left.bindingId === right.bindingId &&
@@ -66,6 +82,7 @@ function sameAttemptIdentity(
     left.tokenGeneration.serverRevision === right.tokenGeneration.serverRevision &&
     left.environment === right.environment &&
     left.apnsRequestId === right.apnsRequestId &&
+    publicationMetadataMatches &&
     left.createdAt.getTime() === right.createdAt.getTime()
   );
 }
@@ -101,6 +118,35 @@ export class InMemoryLiveActivityDispatchStore extends CoordinatedLiveActivityDi
 
   constructor(private readonly deliveryStore: LiveActivityDeliveryStore) {
     super();
+  }
+
+  async listDirectDispatchHistoryForBindings(
+    references: readonly LiveActivityDispatchBindingReference[],
+  ): Promise<readonly LiveActivityDirectDispatchHistory[]> {
+    if (!Array.isArray(references)) {
+      throw new TypeError("dispatch binding references must be an array");
+    }
+    return Object.freeze(
+      references.map((input) => {
+        const reference = createLiveActivityDispatchBindingReference(input);
+        const attempts = [
+          ...(this.states.get(reference.installationId)?.attempts.values() ?? []),
+        ]
+          .filter(
+            (attempt) =>
+              attempt.bindingId === reference.bindingId &&
+              attempt.installationId === reference.installationId &&
+              attempt.sessionRevision === reference.sessionRevision,
+          )
+          .sort((left, right) => right.eventTimestamp - left.eventTimestamp);
+        return createLiveActivityDirectDispatchHistory({
+          ...reference,
+          latestAcceptedAttempt:
+            attempts.find((attempt) => attempt.state === "ACCEPTED") ?? null,
+          latestAttempt: attempts[0] ?? null,
+        });
+      }),
+    );
   }
 
   protected async withDispatchInstallationTransaction<T>(

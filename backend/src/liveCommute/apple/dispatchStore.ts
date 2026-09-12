@@ -1,12 +1,16 @@
 import type {
   LiveActivityDispatchCursor,
+  LiveActivityDispatchBindingReference,
+  LiveActivityDirectDispatchHistory,
   LiveActivityDirectDispatchAttempt,
   LiveActivityDirectDispatchOperation,
   LiveActivityDispatchRetryAdvice,
+  LiveActivityPublicationMetadata,
 } from "./dispatchModel.js";
 import {
   createLiveActivityDirectDispatchAttempt,
   createLiveActivityDispatchCursor,
+  createLiveActivityPublicationMetadata,
   normalizedLiveActivityDispatchInstant,
   normalizedLiveActivityDispatchOperation,
   normalizedLiveActivityDispatchUuid,
@@ -38,6 +42,8 @@ export interface ReserveLiveActivityDirectDispatchInput {
   readonly eventTimestamp: number;
   readonly dispatchId: string;
   readonly apnsRequestId: string;
+  /** Safe policy metadata; null/omitted keeps pre-Phase 5A callers backward compatible. */
+  readonly publicationMetadata?: LiveActivityPublicationMetadata | null;
   /** Trusted application instant used for the authoritative half-open-window check. */
   readonly reservedAt: Date;
 }
@@ -125,6 +131,10 @@ export type CompleteLiveActivityDirectDispatchResult =
  * lock. No method in this interface may perform APNs or transit network I/O.
  */
 export interface LiveActivityDispatchStore {
+  /** Returns one history result per validated input reference, preserving input order. */
+  listDirectDispatchHistoryForBindings(
+    references: readonly LiveActivityDispatchBindingReference[],
+  ): Promise<readonly LiveActivityDirectDispatchHistory[]>;
   reserveDirectDispatch(
     input: ReserveLiveActivityDirectDispatchInput,
   ): Promise<ReserveLiveActivityDirectDispatchResult>;
@@ -303,6 +313,10 @@ function completionAttempt(
 export abstract class CoordinatedLiveActivityDispatchStore
   implements LiveActivityDispatchStore
 {
+  abstract listDirectDispatchHistoryForBindings(
+    references: readonly LiveActivityDispatchBindingReference[],
+  ): Promise<readonly LiveActivityDirectDispatchHistory[]>;
+
   protected abstract withDispatchInstallationTransaction<T>(
     installationId: string,
     operation: (
@@ -333,6 +347,10 @@ export abstract class CoordinatedLiveActivityDispatchStore
       input.reservedAt,
       "reservedAt",
     );
+    const publicationMetadata =
+      input.publicationMetadata == null
+        ? null
+        : createLiveActivityPublicationMetadata(input.publicationMetadata);
 
     return await this.withDispatchInstallationTransaction(
       installationId,
@@ -483,6 +501,7 @@ export abstract class CoordinatedLiveActivityDispatchStore
           environment: token.environment,
           apnsRequestId,
           payloadFingerprint: null,
+          publicationMetadata,
           state: "RESERVED",
           apnsStatus: null,
           apnsReason: null,

@@ -4,6 +4,7 @@ import { afterAll, beforeAll, beforeEach, describe, expect, it } from "vitest";
 import { runLiveCommuteMigration } from "../scripts/migrateLiveCommute.js";
 import { runLiveActivityDeliveryMigration } from "../scripts/migrateLiveActivityDelivery.js";
 import { runLiveActivityDispatchMigration } from "../scripts/migrateLiveActivityDispatch.js";
+import { runLiveActivityPublicationPolicyMigration } from "../scripts/migrateLiveActivityPublicationPolicy.js";
 import { createLiveCommuteInstallationService } from "../src/liveCommute/installationService.js";
 import { PostgresLiveCommuteSessionStore } from "../src/liveCommute/postgresLiveCommuteSessionStore.js";
 import { createLiveActivityDeliveryService } from "../src/liveCommute/apple/deliveryService.js";
@@ -26,6 +27,9 @@ const describeWithPostgres = RAW_TEST_DATABASE_URL == null ? describe.skip : des
 const ACTIVE_AT = new Date("2026-09-12T07:30:00.000Z");
 const EVENT = Math.floor(ACTIVE_AT.getTime() / 1_000);
 const FINGERPRINT = "d".repeat(64);
+const VISIBLE_FINGERPRINT = "e".repeat(64);
+const SOURCE_FETCHED_AT = new Date("2026-09-12T07:29:00.000Z");
+const STALE_AT = new Date("2026-09-12T07:34:00.000Z");
 
 describeWithPostgres("PostgreSQL Live Activity direct dispatch store", () => {
   const schema = `${LIVE_COMMUTE_TEST_SCHEMA_PREFIX}dispatch_${randomUUID().replaceAll("-", "").slice(0, 24)}`;
@@ -203,9 +207,11 @@ describeWithPostgres("PostgreSQL Live Activity direct dispatch store", () => {
     await runLiveCommuteMigration(scoped);
     await runLiveActivityDeliveryMigration(scoped);
     await runLiveActivityDispatchMigration(scoped);
+    await runLiveActivityPublicationPolicyMigration(scoped);
     await runLiveCommuteMigration(scoped);
     await runLiveActivityDeliveryMigration(scoped);
     await runLiveActivityDispatchMigration(scoped);
+    await runLiveActivityPublicationPolicyMigration(scoped);
     firstCore = new PostgresLiveCommuteSessionStore(firstSql);
     secondCore = new PostgresLiveCommuteSessionStore(secondSql);
     firstDelivery = new PostgresLiveActivityDeliveryStore(firstSql);
@@ -681,6 +687,392 @@ describeWithPostgres("PostgreSQL Live Activity direct dispatch store", () => {
     });
   });
 
+  it("batch-loads delivery bindings only for exact session-version references", async () => {
+    const first = await setupDirect(true);
+    const second = await setupDirect(false);
+
+    const bindings = await firstDelivery.listDeliveryBindingsForSessionVersions([
+      {
+        installationId: second.authentication.installationId,
+        sessionId: "dispatch-occurrence",
+        revision: 1,
+      },
+      {
+        installationId: first.authentication.installationId,
+        sessionId: "dispatch-occurrence",
+        revision: 2,
+      },
+      {
+        installationId: first.authentication.installationId,
+        sessionId: "dispatch-occurrence",
+        revision: 1,
+      },
+    ]);
+
+    expect(bindings.map(({ binding }) => binding.bindingId).sort()).toEqual(
+      [first.bindingId, second.bindingId].sort(),
+    );
+    expect(
+      Object.fromEntries(
+        bindings.map(({ binding, hasUpdateTokenHistory }) => [
+          binding.bindingId,
+          hasUpdateTokenHistory,
+        ]),
+      ),
+    ).toEqual({
+      [first.bindingId]: true,
+      [second.bindingId]: false,
+    });
+  });
+
+  it("publishes accepted metadata atomically and keeps newer accepted history authoritative", async () => {
+    const setup = await setupDirect(true);
+    const reference = {
+      bindingId: setup.bindingId,
+      installationId: setup.authentication.installationId,
+      sessionRevision: 1,
+    } as const;
+    await expect(
+      firstDispatch.listDirectDispatchHistoryForBindings([
+        reference,
+        { ...reference, sessionRevision: 2 },
+      ]),
+    ).resolves.toEqual([
+      { ...reference, latestAcceptedAttempt: null, latestAttempt: null },
+      {
+        ...reference,
+        sessionRevision: 2,
+        latestAcceptedAttempt: null,
+        latestAttempt: null,
+      },
+    ]);
+
+    const older = await firstDispatch.reserveDirectDispatch({
+      ...reserveInput(
+        setup.authentication,
+        setup.bindingId,
+        "DIRECT_UPDATE",
+        EVENT,
+      ),
+      publicationMetadata: {
+        visibleContentFingerprint: VISIBLE_FINGERPRINT,
+        sourceFetchedAt: SOURCE_FETCHED_AT,
+        staleAt: STALE_AT,
+      },
+    });
+    if (older.status !== "RESERVED") throw new Error("expected reservation");
+    await claim(firstDispatch, setup.authentication, older.attempt.dispatchId);
+
+    const [beforeAcceptance] =
+      await secondDispatch.listDirectDispatchHistoryForBindings([reference]);
+    expect(beforeAcceptance).toMatchObject({
+      latestAcceptedAttempt: null,
+      latestAttempt: {
+        dispatchId: older.attempt.dispatchId,
+        state: "IN_FLIGHT",
+        publicationMetadata: {
+          visibleContentFingerprint: VISIBLE_FINGERPRINT,
+          sourceFetchedAt: SOURCE_FETCHED_AT,
+          staleAt: STALE_AT,
+        },
+      },
+    });
+
+    await complete(secondDispatch, setup.authentication, older.attempt.dispatchId);
+    const newerSource = new Date(SOURCE_FETCHED_AT.getTime() + 30_000);
+    const newerStale = new Date(STALE_AT.getTime() + 30_000);
+    const newer = await firstDispatch.reserveDirectDispatch({
+      ...reserveInput(
+        setup.authentication,
+        setup.bindingId,
+        "DIRECT_UPDATE",
+        EVENT + 1,
+      ),
+      publicationMetadata: {
+        visibleContentFingerprint: "f".repeat(64),
+        sourceFetchedAt: newerSource,
+        staleAt: newerStale,
+      },
+    });
+    if (newer.status !== "RESERVED") throw new Error("expected reservation");
+    await claim(firstDispatch, setup.authentication, newer.attempt.dispatchId);
+    await complete(secondDispatch, setup.authentication, newer.attempt.dispatchId);
+
+    await expect(
+      complete(firstDispatch, setup.authentication, older.attempt.dispatchId),
+    ).resolves.toMatchObject({ status: "NOT_IN_FLIGHT" });
+    const [history] =
+      await secondDispatch.listDirectDispatchHistoryForBindings([reference]);
+    expect(history).toMatchObject({
+      latestAcceptedAttempt: {
+        dispatchId: newer.attempt.dispatchId,
+        eventTimestamp: EVENT + 1,
+        operation: "DIRECT_UPDATE",
+        state: "ACCEPTED",
+        publicationMetadata: {
+          visibleContentFingerprint: "f".repeat(64),
+          sourceFetchedAt: newerSource,
+          staleAt: newerStale,
+        },
+      },
+      latestAttempt: { dispatchId: newer.attempt.dispatchId },
+    });
+
+    const legacy = await setupDirect(true);
+    const legacyAttempt = await firstDispatch.reserveDirectDispatch(
+      reserveInput(
+        legacy.authentication,
+        legacy.bindingId,
+        "DIRECT_UPDATE",
+        EVENT,
+      ),
+    );
+    if (legacyAttempt.status !== "RESERVED") throw new Error("expected reservation");
+    await claim(firstDispatch, legacy.authentication, legacyAttempt.attempt.dispatchId);
+    await complete(
+      secondDispatch,
+      legacy.authentication,
+      legacyAttempt.attempt.dispatchId,
+    );
+    const [legacyHistory] =
+      await secondDispatch.listDirectDispatchHistoryForBindings([
+        {
+          bindingId: legacy.bindingId,
+          installationId: legacy.authentication.installationId,
+          sessionRevision: 1,
+        },
+      ]);
+    expect(legacyHistory?.latestAcceptedAttempt).toMatchObject({
+      state: "ACCEPTED",
+      publicationMetadata: null,
+    });
+  });
+
+  it("returns a coherent publication history while acceptance races on another connection", async () => {
+    const setup = await setupDirect(true);
+    const reference = {
+      bindingId: setup.bindingId,
+      installationId: setup.authentication.installationId,
+      sessionRevision: 1,
+    } as const;
+    const reserved = await firstDispatch.reserveDirectDispatch({
+      ...reserveInput(
+        setup.authentication,
+        setup.bindingId,
+        "DIRECT_UPDATE",
+        EVENT,
+      ),
+      publicationMetadata: {
+        visibleContentFingerprint: VISIBLE_FINGERPRINT,
+        sourceFetchedAt: SOURCE_FETCHED_AT,
+        staleAt: STALE_AT,
+      },
+    });
+    if (reserved.status !== "RESERVED") throw new Error("expected reservation");
+    await claim(firstDispatch, setup.authentication, reserved.attempt.dispatchId);
+
+    const [firstPid, secondPid] = await Promise.all([
+      firstSql!<{ backend_pid: number }[]>`
+        SELECT pg_backend_pid()::integer AS backend_pid
+      `,
+      secondSql!<{ backend_pid: number }[]>`
+        SELECT pg_backend_pid()::integer AS backend_pid
+      `,
+    ]);
+    expect(firstPid[0]?.backend_pid).not.toBe(secondPid[0]?.backend_pid);
+
+    const [during, completion] = await Promise.all([
+      firstDispatch.listDirectDispatchHistoryForBindings([reference]),
+      complete(secondDispatch, setup.authentication, reserved.attempt.dispatchId),
+    ]);
+    expect(completion).toMatchObject({ status: "COMPLETED" });
+    const observed = during[0];
+    expect(observed).toBeDefined();
+    if (observed?.latestAcceptedAttempt == null) {
+      expect(observed?.latestAttempt).toMatchObject({
+        dispatchId: reserved.attempt.dispatchId,
+        state: "IN_FLIGHT",
+        publicationMetadata: {
+          visibleContentFingerprint: VISIBLE_FINGERPRINT,
+          sourceFetchedAt: SOURCE_FETCHED_AT,
+          staleAt: STALE_AT,
+        },
+      });
+    } else {
+      expect(observed.latestAcceptedAttempt).toMatchObject({
+        dispatchId: reserved.attempt.dispatchId,
+        state: "ACCEPTED",
+        publicationMetadata: {
+          visibleContentFingerprint: VISIBLE_FINGERPRINT,
+          sourceFetchedAt: SOURCE_FETCHED_AT,
+          staleAt: STALE_AT,
+        },
+      });
+    }
+    await expect(
+      secondDispatch.listDirectDispatchHistoryForBindings([reference]),
+    ).resolves.toMatchObject([
+      {
+        latestAcceptedAttempt: {
+          dispatchId: reserved.attempt.dispatchId,
+          state: "ACCEPTED",
+          publicationMetadata: {
+            visibleContentFingerprint: VISIBLE_FINGERPRINT,
+            sourceFetchedAt: SOURCE_FETCHED_AT,
+            staleAt: STALE_AT,
+          },
+        },
+      },
+    ]);
+  });
+
+  it("keeps distinct accepted publication metadata isolated in one batch lookup", async () => {
+    const first = await setupDirect(true);
+    const second = await setupDirect(true);
+    const firstMetadata = {
+      visibleContentFingerprint: VISIBLE_FINGERPRINT,
+      sourceFetchedAt: SOURCE_FETCHED_AT,
+      staleAt: STALE_AT,
+    } as const;
+    const secondMetadata = {
+      visibleContentFingerprint: "f".repeat(64),
+      sourceFetchedAt: new Date(SOURCE_FETCHED_AT.getTime() + 30_000),
+      staleAt: new Date(STALE_AT.getTime() + 30_000),
+    } as const;
+    const firstReserved = await firstDispatch.reserveDirectDispatch({
+      ...reserveInput(first.authentication, first.bindingId, "DIRECT_UPDATE", EVENT),
+      publicationMetadata: firstMetadata,
+    });
+    const secondReserved = await secondDispatch.reserveDirectDispatch({
+      ...reserveInput(
+        second.authentication,
+        second.bindingId,
+        "DIRECT_UPDATE",
+        EVENT + 1,
+      ),
+      publicationMetadata: secondMetadata,
+    });
+    if (firstReserved.status !== "RESERVED" || secondReserved.status !== "RESERVED") {
+      throw new Error("expected reservations");
+    }
+    await Promise.all([
+      claim(firstDispatch, first.authentication, firstReserved.attempt.dispatchId),
+      claim(secondDispatch, second.authentication, secondReserved.attempt.dispatchId),
+    ]);
+    await Promise.all([
+      complete(secondDispatch, first.authentication, firstReserved.attempt.dispatchId),
+      complete(firstDispatch, second.authentication, secondReserved.attempt.dispatchId),
+    ]);
+
+    const histories = await firstDispatch.listDirectDispatchHistoryForBindings([
+      {
+        bindingId: second.bindingId,
+        installationId: second.authentication.installationId,
+        sessionRevision: 1,
+      },
+      {
+        bindingId: first.bindingId,
+        installationId: first.authentication.installationId,
+        sessionRevision: 1,
+      },
+      {
+        bindingId: first.bindingId,
+        installationId: first.authentication.installationId,
+        sessionRevision: 2,
+      },
+    ]);
+    expect(histories[0]?.latestAcceptedAttempt?.publicationMetadata).toEqual(
+      secondMetadata,
+    );
+    expect(histories[1]?.latestAcceptedAttempt?.publicationMetadata).toEqual(
+      firstMetadata,
+    );
+    expect(histories[2]).toMatchObject({
+      sessionRevision: 2,
+      latestAcceptedAttempt: null,
+      latestAttempt: null,
+    });
+  });
+
+  it("rolls back failed acceptance and reuses distinct PostgreSQL connections", async () => {
+    const setup = await setupDirect(true);
+    const reserved = await firstDispatch.reserveDirectDispatch({
+      ...reserveInput(
+        setup.authentication,
+        setup.bindingId,
+        "DIRECT_UPDATE",
+        EVENT,
+      ),
+      publicationMetadata: {
+        visibleContentFingerprint: VISIBLE_FINGERPRINT,
+        sourceFetchedAt: SOURCE_FETCHED_AT,
+        staleAt: STALE_AT,
+      },
+    });
+    if (reserved.status !== "RESERVED") throw new Error("expected reservation");
+    await claim(firstDispatch, setup.authentication, reserved.attempt.dispatchId);
+
+    const [firstPid, secondPid] = await Promise.all([
+      firstSql!<{ backend_pid: number }[]>`
+        SELECT pg_backend_pid()::integer AS backend_pid
+      `,
+      secondSql!<{ backend_pid: number }[]>`
+        SELECT pg_backend_pid()::integer AS backend_pid
+      `,
+    ]);
+    expect(firstPid[0]?.backend_pid).not.toBe(secondPid[0]?.backend_pid);
+
+    await firstSql!.unsafe(`
+      CREATE FUNCTION fail_publication_acceptance() RETURNS trigger
+      LANGUAGE plpgsql AS $$
+      BEGIN
+        IF NEW.state = 'ACCEPTED' THEN
+          RAISE EXCEPTION 'synthetic publication acceptance failure';
+        END IF;
+        RETURN NEW;
+      END
+      $$
+    `);
+    await firstSql!`
+      CREATE TRIGGER fail_publication_acceptance
+      BEFORE UPDATE OF state ON live_activity_direct_dispatch_attempts
+      FOR EACH ROW EXECUTE FUNCTION fail_publication_acceptance()
+    `;
+    try {
+      await expect(
+        complete(secondDispatch, setup.authentication, reserved.attempt.dispatchId),
+      ).rejects.toMatchObject({
+        code: "LIVE_ACTIVITY_DISPATCH_PERSISTENCE_FAILED",
+      });
+    } finally {
+      await firstSql!`
+        DROP TRIGGER IF EXISTS fail_publication_acceptance
+        ON live_activity_direct_dispatch_attempts
+      `;
+      await firstSql!.unsafe("DROP FUNCTION IF EXISTS fail_publication_acceptance()");
+    }
+
+    await expect(
+      secondDispatch.getDirectDispatchAttempt(
+        setup.authentication.installationId,
+        reserved.attempt.dispatchId,
+      ),
+    ).resolves.toMatchObject({ state: "IN_FLIGHT" });
+    await expect(
+      secondDispatch.listDirectDispatchHistoryForBindings([
+        {
+          bindingId: setup.bindingId,
+          installationId: setup.authentication.installationId,
+          sessionRevision: 1,
+        },
+      ]),
+    ).resolves.toMatchObject([{ latestAcceptedAttempt: null }]);
+
+    await expect(
+      complete(firstDispatch, setup.authentication, reserved.attempt.dispatchId),
+    ).resolves.toMatchObject({ status: "COMPLETED" });
+  });
+
   it("creates constrained dispatch catalog objects without sensitive columns", async () => {
     const setup = await setupDirect(true);
     const seed = await firstDispatch.reserveDirectDispatch(
@@ -717,6 +1109,13 @@ describeWithPostgres("PostgreSQL Live Activity direct dispatch store", () => {
     expect(columns.map(({ column_name }) => column_name).join(" ")).not.toMatch(
       /ciphertext|nonce|auth_tag|provider_jwt|private_key|request_body|raw_header/,
     );
+    expect(columns.map(({ column_name }) => column_name)).toEqual(
+      expect.arrayContaining([
+        "visible_content_fingerprint",
+        "publication_source_fetched_at",
+        "publication_stale_at",
+      ]),
+    );
     const indexes = await firstSql!<{ indexname: string }[]>`
       SELECT indexname
       FROM pg_indexes
@@ -725,11 +1124,31 @@ describeWithPostgres("PostgreSQL Live Activity direct dispatch store", () => {
           'live_activity_direct_dispatch_active_idx',
           'live_activity_direct_dispatch_start_blocker_idx',
           'live_activity_direct_dispatch_history_idx',
-          'live_activity_direct_dispatch_in_flight_idx'
+          'live_activity_direct_dispatch_in_flight_idx',
+          'live_activity_direct_dispatch_accepted_publication_idx'
         )
       ORDER BY indexname
     `;
-    expect(indexes).toHaveLength(4);
+    expect(indexes).toHaveLength(5);
+
+    await expect(firstSql!`
+      UPDATE live_activity_direct_dispatch_attempts
+      SET visible_content_fingerprint = ${VISIBLE_FINGERPRINT}
+      WHERE dispatch_id = ${seed.attempt.dispatchId}
+    `).rejects.toMatchObject({ code: "23514" });
+    await expect(firstSql!`
+      UPDATE live_activity_direct_dispatch_attempts
+      SET visible_content_fingerprint = ${"not-a-fingerprint"},
+          publication_source_fetched_at = ${SOURCE_FETCHED_AT}
+      WHERE dispatch_id = ${seed.attempt.dispatchId}
+    `).rejects.toMatchObject({ code: "23514" });
+    await expect(firstSql!`
+      UPDATE live_activity_direct_dispatch_attempts
+      SET visible_content_fingerprint = ${VISIBLE_FINGERPRINT},
+          publication_source_fetched_at = ${SOURCE_FETCHED_AT},
+          publication_stale_at = ${new Date(SOURCE_FETCHED_AT.getTime() - 1)}
+      WHERE dispatch_id = ${seed.attempt.dispatchId}
+    `).rejects.toMatchObject({ code: "23514" });
 
     for (const operation of ["START", "DIRECT_UPDATE"] as const) {
       await expect(firstSql!`

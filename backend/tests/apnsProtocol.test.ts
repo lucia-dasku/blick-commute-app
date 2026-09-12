@@ -194,6 +194,29 @@ describe("APNs request descriptions", () => {
     expectNoSecrets(inspect(request));
   });
 
+  it("accepts stale-date for update but rejects it for start and end", () => {
+    expect(() => directDescription(updatePayload())).not.toThrow();
+
+    for (const payload of [startPayload(), endPayload()]) {
+      const value = {
+        aps: {
+          ...payload.value.aps,
+          "stale-date": GENERATED_AT + 120,
+        },
+      };
+      const serialized = JSON.stringify(value);
+      const forged = {
+        ...payload,
+        value,
+        serialized,
+        utf8ByteLength: Buffer.byteLength(serialized, "utf8"),
+      } as BuiltActivityKitPayload;
+      expect(() => directDescription(forged)).toThrow(
+        "stale-date is only valid for update events",
+      );
+    }
+  });
+
   it("describes broadcast updates and ends with a bare bundle path", () => {
     for (const payload of [updatePayload(), endPayload()]) {
       const request = createBroadcastLiveActivityRequestDescription({

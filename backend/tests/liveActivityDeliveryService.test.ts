@@ -1224,6 +1224,8 @@ describe("ownership, secrecy, and transaction boundaries", () => {
       environment: "SANDBOX",
     });
     const failingStore: LiveActivityDeliveryStore = {
+      listDeliveryBindingsForSessionVersions: async (references) =>
+        await value.deliveryStore.listDeliveryBindingsForSessionVersions(references),
       withInstallationTransaction: async (installationId, operation) =>
         await value.deliveryStore.withInstallationTransaction(
           installationId,

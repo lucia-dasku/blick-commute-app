@@ -32,6 +32,7 @@ import type { ApplePushEnvironment } from "./deliveryModel.js";
 import {
   createBlickLiveActivityAttributes,
   mapLiveCommuteSnapshotToContentState,
+  type BlickLiveActivityContentState,
 } from "./liveActivityWireContract.js";
 
 export type AuthoritativeReadyLiveCommutePublication =
@@ -64,9 +65,55 @@ export interface LiveActivityDeliveryPlan {
   readonly request: ApnsRequestDescription;
 }
 
+export interface PreparedLiveActivityContentState {
+  readonly publication: AuthoritativeReadyLiveCommutePublication;
+  readonly generatedAt: Date;
+  readonly contentState: BlickLiveActivityContentState;
+}
+
+const preparedLiveActivityContentStates = new WeakSet<object>();
+
+/** Performs the final expiry projection once and returns an opaque group-scoped result. */
+export function prepareLiveActivityContentState(input: {
+  readonly publication: AuthoritativeReadyLiveCommutePublication;
+  readonly generatedAt: Date;
+}): PreparedLiveActivityContentState {
+  if (input == null || typeof input !== "object") {
+    throw new TypeError("prepared content-state input must be an object");
+  }
+  if (
+    input.publication == null ||
+    (input.publication.status !== "READY" &&
+      input.publication.status !== "READY_STALE")
+  ) {
+    throw new LiveActivityDeliveryPlanError("PUBLICATION_NOT_READY");
+  }
+  if (
+    !(input.generatedAt instanceof Date) ||
+    !Number.isFinite(input.generatedAt.getTime())
+  ) {
+    throw new RangeError("generatedAt must be a valid absolute Date");
+  }
+  const generatedAt = new Date(input.generatedAt);
+  const generatedAtMilliseconds = generatedAt.getTime();
+  const prepared = Object.freeze({
+    publication: input.publication,
+    get generatedAt() {
+      return new Date(generatedAtMilliseconds);
+    },
+    contentState: mapLiveCommuteSnapshotToContentState(
+      input.publication.snapshot,
+      generatedAt,
+    ),
+  });
+  preparedLiveActivityContentStates.add(prepared);
+  return prepared;
+}
+
 export type LiveActivityDeliveryPlanErrorCode =
   | "PUBLICATION_NOT_READY"
   | "PUBLICATION_TARGET_MISMATCH"
+  | "PUBLICATION_CONTENT_STATE_MISMATCH"
   | "TARGET_KIND_MISMATCH"
   | "START_MODE_MISMATCH"
   | "PROVIDER_TOKEN_UNAVAILABLE";
@@ -78,6 +125,8 @@ export class LiveActivityDeliveryPlanError extends Error {
         ? "Live Activity publication is not ready"
         : code === "PUBLICATION_TARGET_MISMATCH"
           ? "Live Activity publication does not match the delivery target"
+          : code === "PUBLICATION_CONTENT_STATE_MISMATCH"
+            ? "Precomputed Live Activity content state does not match the publication"
           : code === "TARGET_KIND_MISMATCH"
             ? "Live Activity delivery target kind is incompatible"
             : code === "START_MODE_MISMATCH"
@@ -111,6 +160,8 @@ interface EventStateInput {
   readonly publication: AuthoritativeReadyLiveCommutePublication;
   /** Used both for final expiry projection and the ActivityKit event timestamp. */
   readonly generatedAt: Date;
+  /** Opaque wire projection already mapped once for this authoritative group. */
+  readonly preparedContentState?: PreparedLiveActivityContentState;
 }
 
 export interface BuildLiveActivityStartPlanInput
@@ -173,6 +224,7 @@ function contentStateFor(
   publication: AuthoritativeReadyLiveCommutePublication,
   target: AnyDeliveryTarget,
   generatedAt: Date,
+  preparedContentState?: PreparedLiveActivityContentState,
 ) {
   if (publication.status !== "READY" && publication.status !== "READY_STALE") {
     throw new LiveActivityDeliveryPlanError("PUBLICATION_NOT_READY");
@@ -185,6 +237,16 @@ function contentStateFor(
     )
   ) {
     throw new LiveActivityDeliveryPlanError("PUBLICATION_TARGET_MISMATCH");
+  }
+  if (preparedContentState != null) {
+    if (
+      !preparedLiveActivityContentStates.has(preparedContentState) ||
+      preparedContentState.publication !== publication ||
+      preparedContentState.generatedAt.getTime() !== generatedAt.getTime()
+    ) {
+      throw new LiveActivityDeliveryPlanError("PUBLICATION_CONTENT_STATE_MISMATCH");
+    }
+    return preparedContentState.contentState;
   }
   return mapLiveCommuteSnapshotToContentState(publication.snapshot, generatedAt);
 }
@@ -255,6 +317,7 @@ export function buildLiveActivityStartPlan(
     input.publication,
     input.target,
     input.generatedAt,
+    input.preparedContentState,
   );
   const payload = buildActivityKitStartPayload({
     generatedAt: input.generatedAt,
@@ -291,6 +354,7 @@ export function buildDirectLiveActivityUpdatePlan(
     input.publication,
     input.target,
     input.generatedAt,
+    input.preparedContentState,
   );
   const payload = buildActivityKitUpdatePayload({
     generatedAt: input.generatedAt,
@@ -330,6 +394,7 @@ export function buildBroadcastLiveActivityUpdatePlan(
     input.publication,
     input.target,
     input.generatedAt,
+    input.preparedContentState,
   );
   const payload = buildActivityKitUpdatePayload({
     generatedAt: input.generatedAt,
@@ -365,6 +430,7 @@ export function buildDirectLiveActivityEndPlan(
     input.publication,
     input.target,
     input.generatedAt,
+    input.preparedContentState,
   );
   const payload = buildActivityKitEndPayload({
     generatedAt: input.generatedAt,
@@ -404,6 +470,7 @@ export function buildBroadcastLiveActivityEndPlan(
     input.publication,
     input.target,
     input.generatedAt,
+    input.preparedContentState,
   );
   const payload = buildActivityKitEndPayload({
     generatedAt: input.generatedAt,

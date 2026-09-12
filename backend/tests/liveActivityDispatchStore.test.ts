@@ -14,6 +14,9 @@ const STARTS_AT = new Date("2026-09-12T07:00:00.000Z");
 const ENDS_AT = new Date("2026-09-12T08:00:00.000Z");
 const EVENT = 1_789_198_200;
 const FINGERPRINT = "a".repeat(64);
+const VISIBLE_FINGERPRINT = "b".repeat(64);
+const SOURCE_FETCHED_AT = new Date("2026-09-12T07:29:00.000Z");
+const STALE_AT = new Date("2026-09-12T07:34:00.000Z");
 
 const INSTALLATION_IDS = [
   "00000000-0000-4000-8000-000000000001",
@@ -120,6 +123,165 @@ function reserveInput(
 }
 
 describe("durable direct-dispatch state machine", () => {
+  it("batch-loads delivery bindings for exact session-version references", async () => {
+    const value = harness();
+    const first = await setupDirect(value, true);
+    const second = await setupDirect(value, false);
+
+    const bindings = await value.deliveryStore.listDeliveryBindingsForSessionVersions([
+      {
+        installationId: second.authentication.installationId,
+        sessionId: "occurrence-1",
+        revision: 1,
+      },
+      {
+        installationId: first.authentication.installationId,
+        sessionId: "occurrence-1",
+        revision: 2,
+      },
+      {
+        installationId: first.authentication.installationId,
+        sessionId: "occurrence-1",
+        revision: 1,
+      },
+    ]);
+
+    expect(bindings.map(({ binding }) => binding.bindingId)).toEqual([
+      first.bindingId,
+      second.bindingId,
+    ]);
+    expect(bindings.map(({ hasUpdateTokenHistory }) => hasUpdateTokenHistory)).toEqual([
+      true,
+      false,
+    ]);
+    expect(Object.isFrozen(bindings)).toBe(true);
+  });
+
+  it("returns loaded-empty history and preserves accepted publication metadata", async () => {
+    const value = harness();
+    const { authentication, bindingId } = await setupDirect(value, true);
+    const references = [
+      {
+        bindingId,
+        installationId: authentication.installationId,
+        sessionRevision: 1,
+      },
+      {
+        bindingId,
+        installationId: authentication.installationId,
+        sessionRevision: 2,
+      },
+    ] as const;
+
+    await expect(
+      value.dispatchStore.listDirectDispatchHistoryForBindings(references),
+    ).resolves.toEqual([
+      { ...references[0], latestAcceptedAttempt: null, latestAttempt: null },
+      { ...references[1], latestAcceptedAttempt: null, latestAttempt: null },
+    ]);
+
+    const accepted = await value.dispatchStore.reserveDirectDispatch({
+      ...reserveInput(authentication, bindingId, "DIRECT_UPDATE", EVENT, 1),
+      publicationMetadata: {
+        visibleContentFingerprint: VISIBLE_FINGERPRINT,
+        sourceFetchedAt: SOURCE_FETCHED_AT,
+        staleAt: STALE_AT,
+      },
+    });
+    if (accepted.status !== "RESERVED") throw new Error("expected reservation");
+    await value.dispatchStore.claimDirectDispatch({
+      installationId: authentication.installationId,
+      dispatchId: accepted.attempt.dispatchId,
+      payloadFingerprint: FINGERPRINT,
+      claimedAt: ACTIVE_AT,
+    });
+    await value.dispatchStore.completeDirectDispatch({
+      installationId: authentication.installationId,
+      dispatchId: accepted.attempt.dispatchId,
+      completedAt: ACTIVE_AT,
+      state: "ACCEPTED",
+      apnsStatus: 200,
+      apnsReason: null,
+      retryAdvice: "NO_RETRY",
+      retryNotBefore: null,
+      invalidateExactTokenGeneration: false,
+    });
+
+    const later = await value.dispatchStore.reserveDirectDispatch(
+      reserveInput(authentication, bindingId, "DIRECT_UPDATE", EVENT + 1, 2),
+    );
+    if (later.status !== "RESERVED") throw new Error("expected reservation");
+    await value.dispatchStore.abortDirectDispatch({
+      installationId: authentication.installationId,
+      dispatchId: later.attempt.dispatchId,
+      completedAt: ACTIVE_AT,
+      retryAdvice: "NO_RETRY",
+    });
+
+    const [history, wrongRevision] =
+      await value.dispatchStore.listDirectDispatchHistoryForBindings(references);
+    expect(history).toMatchObject({
+      ...references[0],
+      latestAcceptedAttempt: {
+        dispatchId: accepted.attempt.dispatchId,
+        state: "ACCEPTED",
+        publicationMetadata: {
+          visibleContentFingerprint: VISIBLE_FINGERPRINT,
+          sourceFetchedAt: SOURCE_FETCHED_AT,
+          staleAt: STALE_AT,
+        },
+      },
+      latestAttempt: { dispatchId: later.attempt.dispatchId, state: "ABORTED" },
+    });
+    expect(wrongRevision).toEqual({
+      ...references[1],
+      latestAcceptedAttempt: null,
+      latestAttempt: null,
+    });
+
+    const legacy = harness();
+    const legacySetup = await setupDirect(legacy, true);
+    const legacyReserved = await legacy.dispatchStore.reserveDirectDispatch(
+      reserveInput(
+        legacySetup.authentication,
+        legacySetup.bindingId,
+        "DIRECT_UPDATE",
+        EVENT,
+        1,
+      ),
+    );
+    if (legacyReserved.status !== "RESERVED") throw new Error("expected reservation");
+    await legacy.dispatchStore.claimDirectDispatch({
+      installationId: legacySetup.authentication.installationId,
+      dispatchId: legacyReserved.attempt.dispatchId,
+      payloadFingerprint: FINGERPRINT,
+      claimedAt: ACTIVE_AT,
+    });
+    await legacy.dispatchStore.completeDirectDispatch({
+      installationId: legacySetup.authentication.installationId,
+      dispatchId: legacyReserved.attempt.dispatchId,
+      completedAt: ACTIVE_AT,
+      state: "ACCEPTED",
+      apnsStatus: 200,
+      apnsReason: null,
+      retryAdvice: "NO_RETRY",
+      retryNotBefore: null,
+      invalidateExactTokenGeneration: false,
+    });
+    const [legacyHistory] =
+      await legacy.dispatchStore.listDirectDispatchHistoryForBindings([
+        {
+          bindingId: legacySetup.bindingId,
+          installationId: legacySetup.authentication.installationId,
+          sessionRevision: 1,
+        },
+      ]);
+    expect(legacyHistory?.latestAcceptedAttempt).toMatchObject({
+      state: "ACCEPTED",
+      publicationMetadata: null,
+    });
+  });
+
   it("reports stale/same-second events and supersedes only an unsent update", async () => {
     const value = harness();
     const { authentication, bindingId } = await setupDirect(value, true);

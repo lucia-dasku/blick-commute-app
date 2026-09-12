@@ -12,6 +12,7 @@ import {
   buildDirectLiveActivityEndPlan,
   buildDirectLiveActivityUpdatePlan,
   buildLiveActivityStartPlan,
+  prepareLiveActivityContentState,
   type AuthoritativeReadyLiveCommutePublication,
 } from "../src/liveCommute/apple/deliveryPlan.js";
 import type { SensitiveApnsProviderToken } from "../src/liveCommute/apple/apnsProviderToken.js";
@@ -198,6 +199,7 @@ describe("Live Activity delivery request planning", () => {
     expect(request.headers.authorization).toBe(`bearer ${RAW_PROVIDER_TOKEN}`);
     const body = parsedBody(plan);
     expect(body.aps.event).toBe("start");
+    expect(body.aps).not.toHaveProperty("stale-date");
     expect(body.aps["content-state"].departures).toEqual([
       expect.objectContaining({ departureId: "current" }),
     ]);
@@ -336,6 +338,71 @@ describe("Live Activity delivery request planning", () => {
     });
     expect(parsedBody(broadcastStart).aps["input-push-channel"]).toBe(CHANNEL_ID);
     expect(broadcastStart.request.kind).toBe("DIRECT_LIVE_ACTIVITY");
+  });
+
+  it("reuses only an opaque wire state prepared for the exact publication and instant", () => {
+    const original = publication();
+    const preparedContentState = prepareLiveActivityContentState({
+      publication: original,
+      generatedAt: GENERATED_AT,
+    });
+    const plan = buildDirectLiveActivityUpdatePlan({
+      target: directTarget(),
+      publication: original,
+      generatedAt: GENERATED_AT,
+      preparedContentState,
+      bundleId: "se.blick.commute",
+      providerToken: PROVIDER_TOKEN,
+      priority: 5,
+    });
+
+    expect(parsedBody(plan).aps["content-state"]).toEqual(
+      preparedContentState.contentState,
+    );
+
+    if (original.snapshot.kind !== "LINE_DIRECTION") {
+      throw new Error("expected synthetic LINE publication");
+    }
+    const changedSnapshot: LiveCommuteSnapshot = {
+      ...original.snapshot,
+      departures: original.snapshot.departures.map((departure) =>
+        departure.departureId === "current"
+          ? { ...departure, destination: "Would appear after remapping" }
+          : departure,
+      ),
+    };
+    const buildWith = (
+      publicationInput: AuthoritativeReadyLiveCommutePublication,
+      generatedAt: Date,
+      prepared = preparedContentState,
+    ) =>
+      buildDirectLiveActivityUpdatePlan({
+        target: directTarget(),
+        publication: publicationInput,
+        generatedAt,
+        preparedContentState: prepared,
+        bundleId: "se.blick.commute",
+        providerToken: PROVIDER_TOKEN,
+        priority: 5,
+      });
+    expect(
+      thrownBy(() =>
+        buildWith(publication({ snapshot: changedSnapshot }), GENERATED_AT),
+      ),
+    ).toMatchObject({ code: "PUBLICATION_CONTENT_STATE_MISMATCH" });
+    expect(
+      thrownBy(() =>
+        buildWith(
+          original,
+          new Date(GENERATED_AT.getTime() + 1_000),
+        ),
+      ),
+    ).toMatchObject({ code: "PUBLICATION_CONTENT_STATE_MISMATCH" });
+    expect(
+      thrownBy(() =>
+        buildWith(original, GENERATED_AT, { ...preparedContentState }),
+      ),
+    ).toMatchObject({ code: "PUBLICATION_CONTENT_STATE_MISMATCH" });
   });
 
   it("fails closed when publication key, session revision, or commute kind differs", () => {

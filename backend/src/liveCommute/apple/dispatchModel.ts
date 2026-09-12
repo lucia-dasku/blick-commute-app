@@ -54,6 +54,13 @@ export interface LiveActivityDispatchTokenGeneration {
   readonly serverRevision: number;
 }
 
+/** Safe semantic publication metadata. It deliberately contains no ContentState or token. */
+export interface LiveActivityPublicationMetadata {
+  readonly visibleContentFingerprint: string;
+  readonly sourceFetchedAt: Date;
+  readonly staleAt: Date | null;
+}
+
 export interface LiveActivityDispatchCursor {
   readonly bindingId: string;
   readonly installationId: string;
@@ -75,6 +82,8 @@ export interface LiveActivityDirectDispatchAttempt {
   readonly environment: ApplePushEnvironment;
   readonly apnsRequestId: string;
   readonly payloadFingerprint: string | null;
+  /** Nullable for Phase 4B/legacy attempts that predate durable publication policy. */
+  readonly publicationMetadata: LiveActivityPublicationMetadata | null;
   readonly state: LiveActivityDispatchState;
   readonly apnsStatus: number | null;
   readonly apnsReason: string | null;
@@ -85,6 +94,18 @@ export interface LiveActivityDirectDispatchAttempt {
   readonly createdAt: Date;
   readonly inFlightAt: Date | null;
   readonly completedAt: Date | null;
+}
+
+export interface LiveActivityDispatchBindingReference {
+  readonly bindingId: string;
+  readonly installationId: string;
+  readonly sessionRevision: number;
+}
+
+export interface LiveActivityDirectDispatchHistory
+  extends LiveActivityDispatchBindingReference {
+  readonly latestAcceptedAttempt: LiveActivityDirectDispatchAttempt | null;
+  readonly latestAttempt: LiveActivityDirectDispatchAttempt | null;
 }
 
 export function normalizedLiveActivityDispatchUuid(
@@ -126,6 +147,54 @@ export function normalizedPayloadFingerprint(value: string): string {
     throw new RangeError("payloadFingerprint must be a lowercase SHA-256 value");
   }
   return value;
+}
+
+export function createLiveActivityPublicationMetadata(
+  input: LiveActivityPublicationMetadata,
+): LiveActivityPublicationMetadata {
+  if (input == null || typeof input !== "object") {
+    throw new TypeError("publication metadata must be an object");
+  }
+  const sourceFetchedAt = normalizedLiveActivityDispatchInstant(
+    input.sourceFetchedAt,
+    "publicationMetadata.sourceFetchedAt",
+  );
+  const staleAt =
+    input.staleAt == null
+      ? null
+      : normalizedLiveActivityDispatchInstant(
+          input.staleAt,
+          "publicationMetadata.staleAt",
+        );
+  if (staleAt != null && staleAt.getTime() < sourceFetchedAt.getTime()) {
+    throw new RangeError("publication staleAt cannot precede sourceFetchedAt");
+  }
+  return Object.freeze({
+    visibleContentFingerprint: normalizedPayloadFingerprint(
+      input.visibleContentFingerprint,
+    ),
+    sourceFetchedAt,
+    staleAt,
+  });
+}
+
+export function createLiveActivityDispatchBindingReference(
+  input: LiveActivityDispatchBindingReference,
+): LiveActivityDispatchBindingReference {
+  if (input == null || typeof input !== "object") {
+    throw new TypeError("dispatch binding reference must be an object");
+  }
+  return Object.freeze({
+    bindingId: normalizedLiveActivityBindingId(input.bindingId),
+    installationId: normalizedAppleDeliveryIdentifier(
+      input.installationId,
+      "installationId",
+    ),
+    sessionRevision: positiveActivityKitGeneration(
+      input.sessionRevision,
+      "sessionRevision",
+    ),
+  });
 }
 
 export function normalizedSafeApnsReason(value: string | null): string | null {
@@ -300,6 +369,10 @@ export function createLiveActivityDirectDispatchAttempt(
     input.payloadFingerprint == null
       ? null
       : normalizedPayloadFingerprint(input.payloadFingerprint);
+  const publicationMetadata =
+    input.publicationMetadata == null
+      ? null
+      : createLiveActivityPublicationMetadata(input.publicationMetadata);
   const retryAdvice = normalizedRetryAdvice(input.retryAdvice);
   const postSendAuthority = normalizedPostSendAuthority(input.postSendAuthority);
   const tokenInvalidationOutcome = normalizedTokenInvalidationOutcome(
@@ -399,6 +472,7 @@ export function createLiveActivityDirectDispatchAttempt(
       "apnsRequestId",
     ),
     payloadFingerprint,
+    publicationMetadata,
     state,
     apnsStatus: input.apnsStatus,
     apnsReason: normalizedSafeApnsReason(input.apnsReason),
@@ -409,6 +483,38 @@ export function createLiveActivityDirectDispatchAttempt(
     createdAt,
     inFlightAt,
     completedAt,
+  });
+}
+
+export function createLiveActivityDirectDispatchHistory(
+  input: LiveActivityDirectDispatchHistory,
+): LiveActivityDirectDispatchHistory {
+  const reference = createLiveActivityDispatchBindingReference(input);
+  const latestAcceptedAttempt =
+    input.latestAcceptedAttempt == null
+      ? null
+      : createLiveActivityDirectDispatchAttempt(input.latestAcceptedAttempt);
+  const latestAttempt =
+    input.latestAttempt == null
+      ? null
+      : createLiveActivityDirectDispatchAttempt(input.latestAttempt);
+  for (const attempt of [latestAcceptedAttempt, latestAttempt]) {
+    if (
+      attempt != null &&
+      (attempt.bindingId !== reference.bindingId ||
+        attempt.installationId !== reference.installationId ||
+        attempt.sessionRevision !== reference.sessionRevision)
+    ) {
+      throw new RangeError("dispatch history attempt identity does not match");
+    }
+  }
+  if (latestAcceptedAttempt != null && latestAcceptedAttempt.state !== "ACCEPTED") {
+    throw new RangeError("latest accepted dispatch history is not accepted");
+  }
+  return Object.freeze({
+    ...reference,
+    latestAcceptedAttempt,
+    latestAttempt,
   });
 }
 

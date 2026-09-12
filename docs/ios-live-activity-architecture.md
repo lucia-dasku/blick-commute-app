@@ -1,18 +1,20 @@
 # iOS Live Activity architecture
 
-Status: Phase 4B direct APNs dispatch foundation, implemented locally 2026-09-12. In
-addition to the accepted Phase 3A ownership/session authority, Phase 3B protected-token
-delivery targets, and Phase 4A payload/protocol contract, it provides a lazy reusable Node
-HTTP/2 transport, an on-demand provider-token cache, and durable direct START/UPDATE/END
-ordering and result state. It remains callable internal code: no production caller, public
-route, timer, worker, scheduler, or application-startup path invokes it.
+Status: Phase 5A publication-policy and scheduler-independent one-shot cycle foundation,
+implemented locally 2026-09-12. In addition to the accepted Phase 3A ownership/session
+authority, Phase 3B protected-token delivery targets, Phase 4A payload/protocol contract,
+and Phase 4B direct dispatcher, it decides whether an authoritative snapshot warrants a
+START, material UPDATE, freshness heartbeat, no push, or deferral. It remains callable
+internal code: no production caller, public route, timer, recurring worker, scheduler, or
+application-startup path invokes it.
 
 The implemented boundary includes immutable session planning and grouping, direct SL
 acquisition, authoritative exact-journey role reuse, one final-clock projection, fresh/stale
 fallback projection, semantic comparison, persistent ownership and lifecycle records,
 revision-controlled mutations, and an authoritative post-acquisition store check. Snapshot
-history persistence, public enrollment, publication policy, scheduling, broadcast-channel
-orchestration, and client rendering remain deferred. There is no iOS target, Apple
+history persistence, public enrollment, recurring scheduling, broadcast-channel
+orchestration, and client rendering remain deferred. Accepted publication metadata is now
+durable in the dispatch history, but the larger transit snapshot is not. There is no iOS target, Apple
 credential, production APNs configuration, production caller, or production migration
 wiring. All Apple behavior described below is derived from Apple's public documentation and
 has not been verified with an iOS target, physical device, or real APNs environment.
@@ -763,6 +765,111 @@ Ordinary WidgetKit widgets are not the 30-second live engine. Widget extensions 
 continuously active, reloads are budgeted and scheduled by the system, and Apple recommends
 timeline entries at least about five minutes apart. See [Keeping a widget up to date](https://developer.apple.com/documentation/widgetkit/keeping-a-widget-up-to-date).
 
+## Phase 5A publication policy and one-shot cycle
+
+Phase 5A adds a pure policy between the authoritative stored tick and the Phase 4B direct
+dispatcher. Approximately 30-second-capable transit acquisition does **not** mean an APNs
+submission every 30 seconds. Absolute departure and journey timestamps let the device
+advance a countdown without a new server message; the policy submits only a material
+visible change, a narrowly allowed freshness heartbeat, or an eligible initial START.
+
+### Visible state and durable accepted history
+
+The policy fingerprints the exact version-1 wire `ContentState` that the Live Activity can
+render, after final expiry filtering and the two-row LINE presentation selection. The
+lowercase SHA-256 input includes the schema and commute kind, `FRESH`/`STALE`, every visible
+LINE or EXACT field, authoritative journey roles, and visible cancellation/operational
+state. It deliberately excludes `sourceFetchedAt`, the ActivityKit event timestamp,
+`stale-date`, binding/session identity, request identity, token generation, and all hidden
+third-through-fifth LINE reserve rows. A refreshed source timestamp or changing wall-clock
+countdown therefore cannot masquerade as changed visible content.
+
+Migration 005 extends the immutable Phase 4B attempt history with nullable
+`visible_content_fingerprint`, `publication_source_fetched_at`, and
+`publication_stale_at`. The fields are attached at reservation and become accepted history
+in the same transaction that changes that attempt to `ACCEPTED`; there is no separate
+best-effort checkpoint. Policy reads select the newest accepted attempt by ActivityKit
+event timestamp for the exact binding, installation, and session revision. An older result
+cannot overwrite a newer row. Pre-005 accepted rows remain readable but have explicitly
+incomplete publication metadata, which causes policy deferral rather than a guessed push.
+`payload_fingerprint` remains the hash of the complete APNs JSON body and is not reused as
+visible identity.
+
+APNs `ACCEPTED` means that APNs accepted the request, not that the phone displayed it. It is
+nevertheless the strongest server-side evidence available for cross-process publication
+decisions; there is no device-delivered acknowledgement to wait for.
+
+### Pure decision rules
+
+- A new START requires an authoritative active session, a `READY` (never `READY_STALE`)
+  publication with nonempty visible state, an exact current binding, a known direct client
+  capability, and an injected localized alert. `DIRECT_LEGACY` and `DIRECT_IOS18` select
+  their respective Phase 4A start modes. `UNKNOWN` defers instead of inferring an iOS
+  version from a token; `BROADCAST_CAPABLE` and broadcast bindings remain deferred. Under
+  Apple's current ActivityKit contract, START does not carry `stale-date`, so an accepted
+  START records `publication_stale_at = NULL`.
+- For an existing direct activity, a changed visible fingerprint requests
+  `UPDATE_CONTENT`. This includes expected-time/rollover/cancellation changes,
+  `FRESH`/`STALE` transitions, and authoritative journey role or timing changes. It excludes
+  source bookkeeping, hidden reserves, and countdown-only changes.
+- An UPDATE `stale-date` derives only from
+  `sourceFetchedAt + configured fresh-source lifetime`, never from worker or dispatch time.
+  A supposedly fresh result whose derived stale date is not safely in the future is rejected
+  as stale source. A stale fallback keeps its original source time and may publish an honest
+  visible transition to `STALE`, but it omits `stale-date` and never renews freshness.
+- `UPDATE_FRESHNESS` is possible only when visible state is unchanged, the current snapshot
+  is fresh, its source acquisition is genuinely newer, the derived stale date extends the
+  accepted value, the accepted value is within the configured lead window, the minimum
+  interval has elapsed, and the injected frequent-push state is `ENABLED`. `DISABLED` and
+  `UNKNOWN` still permit material updates but do not assume a frequent-update budget.
+- An unknown UPDATE outcome is not treated as accepted. An explicit injected reconciliation
+  rule may request a later update with a strictly newer ActivityKit timestamp; this is
+  distinct from a freshness heartbeat. An unknown START remains a blocker and is never
+  blindly retried.
+
+Because accepted START history has no stale date, the current heartbeat rule cannot bootstrap
+an otherwise unchanged activity: the first accepted material UPDATE establishes its first
+server-selected stale deadline. Initial stale-state establishment and physical-device
+validation remain deliberate follow-up work rather than an undocumented START field or a
+relaxed heartbeat rule.
+
+Fresh-source lifetime, heartbeat lead, minimum heartbeat interval, minimum safe stale-date
+lead, unknown-update reconciliation, and APNs priority are explicit policy inputs. The
+foundation does not choose production timing values. The priority boundary permits a
+caller-reviewed policy; ordinary content and freshness updates can conservatively use
+priority 5 without turning every acquisition into priority 10.
+The future client should report
+[`frequentPushesEnabled`](https://developer.apple.com/documentation/activitykit/activityauthorizationinfo/frequentpushesenabled)
+to the server so the injected capability state reflects the user's system setting.
+
+### One-shot publication cycle
+
+`runLiveActivityPublicationCycle` executes exactly once when explicitly called. It invokes
+`runStoredLiveCommuteTick`, retains only authoritative `READY`/`READY_STALE` groups, maps
+each group to the Phase 4A wire state once, fingerprints it once, batch-loads bindings for
+the exact session-version references, and batch-loads their dispatch histories. Recipient
+policy and dispatch then run with an explicit bounded fan-out limit. Once the batch reads
+succeed, one recipient's missing token, changed authority, busy reservation, APNs result, or
+binding-local empty/incomplete history is represented in that binding's sanitized result and
+does not suppress siblings. A systemic batch-read failure fails the cycle closed before any
+recipient dispatch.
+
+For each requested send the existing Phase 4B dispatcher remains responsible for sensitive
+target resolution, provider-token use, payload/request construction, strict event ordering,
+same-second rejection, one active attempt, START blocking, terminal intent, APNs transport,
+and durable result classification. A prepared-content seam reuses the exact group mapping
+while still checking publication key, session version, commute kind, and source timestamp;
+no token, JWT, private key, APNs body, or raw transit response enters cycle summaries.
+
+The cycle performs no recurrence and is not connected to Vercel, application startup, an
+HTTP route, a queue, or a timer. Two overlapping invocations can still duplicate upstream
+transit acquisition before Phase 4B ordering is reached. A global cross-process schedule
+lease is required before recurring activation; a process-local mutex would not provide that
+guarantee. Automatic END is also not added: cancelled, expired, and replaced sessions are
+absent from the active tick, while the ordinary Phase 3B resolver intentionally requires
+current session authority. A later security design needs a narrow END-only cleanup resolver,
+including the START-before-update-token gap, informed by real client/device evidence.
+
 ## Freshness and authoritative state
 
 Phase 4A live payloads carry absolute departure/journey timestamps, and Phase 4B does not
@@ -778,9 +885,9 @@ backend-authoritative. Apple describes broadcast delivery as best effort in
 
 Fresh transit changes, cancellations, a changed authoritative role set, and meaningful
 disruption changes require new live state. Disruption acquisition/enrichment remains
-secondary and must never delay primary departure/journey publication. A future publisher
-will choose an ActivityKit `stale-date` policy so the system can mark data out of date when a
-newer push does not arrive; this phase does not invent that duration. Passing `stale-date`
+secondary and must never delay primary departure/journey publication. Phase 5A supplies the
+source-based UPDATE `stale-date` calculation and requires its lifetime/lead values to be
+injected; it deliberately does not select production durations. Passing `stale-date`
 changes the system-visible activity state to stale after that date, but it does not design an
 honest stale presentation automatically. The future Activity view must observe and render
 stale/expired state explicitly. Apple documents the corresponding behavior in
@@ -797,8 +904,9 @@ move role selection to a client.
 ## Security, privacy, and retention
 
 The Phase 3B tables store encrypted push-to-start and per-activity update-token generations,
-plus comparison-only digests and lifecycle metadata. The Phase 4B dispatch tables add only
-safe correlation, ordering, lifecycle, and result fields. Neither layer stores token
+plus comparison-only digests and lifecycle metadata. The Phase 4B/5A dispatch history adds
+only safe correlation, ordering, result fields, a visible-state digest, and source/stale
+timestamps. Neither layer stores token
 plaintext, provider JWTs, Apple signing keys, raw installation bearer credentials, complete
 payload bodies, purchase tokens, copied billing credentials, or user-account data.
 ActivityKit tokens are installation-linked delivery identifiers and must be treated as
@@ -831,9 +939,9 @@ for the remaining check-to-send and START-cleanup races.
 
 ## Local migration and PostgreSQL verification
 
-Migration execution is manual and scoped to the live-commute schema file. From `backend`, set
-a dedicated non-production target explicitly, run the command, and then clear the process
-variable:
+Migration execution is manual. Each independent runner is scoped to one checked-in migration
+file. From `backend`, set a dedicated non-production target explicitly, run the command, and
+then clear the process variable:
 
 ```powershell
 $env:LIVE_COMMUTE_MIGRATION_DATABASE_URL = 'postgresql://localhost/blick_live_commute_dev'
@@ -876,6 +984,20 @@ provider-signing key, create an APNs transport, or connect on import. Migration 
 idempotent and additive: it adds dispatch-specific indexes plus direct-dispatch cursor and
 attempt tables without rewriting migrations 001–003.
 
+After migration 004, apply the independent publication-policy migration to the same reviewed
+non-production target:
+
+```powershell
+$env:LIVE_COMMUTE_MIGRATION_DATABASE_URL = 'postgresql://localhost/blick_live_commute_dev'
+npm run migrate:live-activity-publication-policy
+Remove-Item Env:LIVE_COMMUTE_MIGRATION_DATABASE_URL
+```
+
+That runner applies only `005_live_activity_publication_policy.sql`. It does not inspect
+`DATABASE_URL`, run another migration, load any Apple material, construct a dispatcher, or
+connect on import. Migration 005 is additive and idempotent; its nullable attempt metadata
+keeps Phase 4B rows valid while making incomplete accepted history explicit.
+
 Real PostgreSQL adapter and concurrency verification uses a separate setting and command:
 
 ```powershell
@@ -889,8 +1011,8 @@ The PostgreSQL integration suites share one fail-closed URL guard: they refuse n
 hosts and database names without a distinct `test` segment. Each creates its own random
 `blick_live_commute_test_*` schema, applies its required checked-in migrations twice,
 exercises independent connections, and drops only that prefixed schema. The synthetic
-PostgreSQL 17 CI job also invokes migration 004 twice before running the combined Phase 3B
-delivery and Phase 4B dispatch suite. Use an explicitly disposable local test database;
+PostgreSQL 17 CI job also invokes migrations 004 and 005 twice before running the combined
+delivery, dispatch, and publication-history suite. Use an explicitly disposable local test database;
 never substitute a real `.env` or production `DATABASE_URL`. When
 `LIVE_COMMUTE_TEST_DATABASE_URL` is absent, the database-backed suites are guarded and skip.
 A skipped run, unit test, or SQL-text assertion is not evidence that real PostgreSQL
@@ -905,20 +1027,27 @@ transactions, constraints, migration execution, or cross-connection locking pass
 - broadcast channel registry, creation/deletion execution, publication-group mapping, and
   real-environment validation of Apple's documented host behavior
 - public installation enrollment/authentication routes and any user-account system
-- production application of migrations 002–004, database-pool wiring, and dispatcher
+- production application of migrations 002–005, database-pool wiring, and dispatcher
   construction/configuration
 - persistent snapshot history
 - recurrence and timezone calculation
 - GPS or location tracking
-- any production execution mechanism, timer, scheduler, polling loop, or cleanup job
+- any production recurring execution mechanism, timer, scheduler, polling loop, or cleanup job
 - an outbox or delivery-queue worker, abandoned-attempt reconciliation, and compensation for
   the remaining check-to-send and START-before-update-token cleanup races
 - cross-tick/process acquisition coalescing, concurrency/rate limiting, backpressure,
   monitoring/metrics, multi-connection APNs scaling, and any required cross-process
   provider-token issuance coordination
-- snapshot publication, heartbeat, stale-date, and push-frequency policy
+- production freshness/stale timing values and real client reporting of
+  `frequentPushesEnabled`
+- initial stale-deadline establishment for an unchanged accepted START, plus device validation
+  of the resulting ActivityKit stale-state transition
+- localized English/Swedish START alerts and finalized START priority policy
+- global cross-process publication-cycle lease, queue/outbox recovery, and recurring
+  approximately 30-second activation
+- narrow END cleanup authority, including the START-before-update-token gap
 
-No timer, sleep loop, worker, self-HTTP callback, or Vercel Cron configuration is added here.
+No timer, sleep loop, recurring worker, self-HTTP callback, or Vercel Cron configuration is added here.
 Vercel Cron uses minute-granularity expressions and, even on paid plans, schedules within
 the selected minute; it is not an exact 30-second scheduler. See Vercel's current
 [Cron usage limits](https://vercel.com/docs/cron-jobs/usage-and-pricing) and

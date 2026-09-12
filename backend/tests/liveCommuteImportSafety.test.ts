@@ -68,6 +68,9 @@ describe("live commute module import safety", () => {
       postgresDispatchStore,
       directDispatcher,
       dispatchMigrationRunner,
+      publicationPolicy,
+      publicationWorker,
+      publicationPolicyMigrationRunner,
     ] =
       await Promise.all([
         import("../src/liveCommute/engine.js"),
@@ -96,6 +99,9 @@ describe("live commute module import safety", () => {
         import("../src/liveCommute/apple/postgresLiveActivityDispatchStore.js"),
         import("../src/liveCommute/apple/directDispatcher.js"),
         import("../scripts/migrateLiveActivityDispatch.js"),
+        import("../src/liveCommute/apple/publicationPolicy.js"),
+        import("../src/liveCommute/apple/publicationWorker.js"),
+        import("../scripts/migrateLiveActivityPublicationPolicy.js"),
       ]);
 
     expect(engine.runLiveCommuteTick).toBeTypeOf("function");
@@ -152,6 +158,11 @@ describe("live commute module import safety", () => {
     expect(dispatchMigrationRunner.runLiveActivityDispatchMigration).toBeTypeOf(
       "function",
     );
+    expect(publicationPolicy.decideLiveActivityPublication).toBeTypeOf("function");
+    expect(publicationWorker.runLiveActivityPublicationCycle).toBeTypeOf("function");
+    expect(
+      publicationPolicyMigrationRunner.runLiveActivityPublicationPolicyMigration,
+    ).toBeTypeOf("function");
     await expect(migrationRunner.runLiveCommuteMigration("")).rejects.toThrow(
       "LIVE_COMMUTE_MIGRATION_DATABASE_URL is required",
     );
@@ -160,6 +171,9 @@ describe("live commute module import safety", () => {
     ).rejects.toThrow("LIVE_COMMUTE_MIGRATION_DATABASE_URL is required");
     await expect(
       dispatchMigrationRunner.runLiveActivityDispatchMigration(""),
+    ).rejects.toThrow("LIVE_COMMUTE_MIGRATION_DATABASE_URL is required");
+    await expect(
+      publicationPolicyMigrationRunner.runLiveActivityPublicationPolicyMigration(""),
     ).rejects.toThrow("LIVE_COMMUTE_MIGRATION_DATABASE_URL is required");
   });
 });

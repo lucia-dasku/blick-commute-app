@@ -1,4 +1,4 @@
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 import { liveCommutePublicationKey } from "../src/liveCommute/model.js";
 import type { LiveCommuteSnapshot } from "../src/liveCommute/snapshot.js";
 import { createLiveCommuteInstallationService } from "../src/liveCommute/installationService.js";
@@ -29,6 +29,10 @@ import {
 } from "../src/liveCommute/apple/directDispatcher.js";
 import { createAes256GcmActivityKitTokenProtector } from "../src/liveCommute/apple/tokenProtection.js";
 import type { AuthoritativeReadyLiveCommutePublication } from "../src/liveCommute/apple/deliveryPlan.js";
+import {
+  createLiveActivityPublicationPolicyConfig,
+  prepareLiveActivityPublication,
+} from "../src/liveCommute/apple/publicationPolicy.js";
 
 const INITIAL_NOW = new Date("2026-09-12T06:00:00.000Z");
 const ACTIVE_AT = new Date("2026-09-12T07:30:00.000Z");
@@ -87,6 +91,7 @@ function response(statusCode: number, reason: string): ApnsTransportResult {
 
 class RecordingTransport implements ApnsTransport {
   readonly diagnostics: unknown[] = [];
+  readonly bodies: string[] = [];
   #index = 0;
 
   constructor(
@@ -102,6 +107,8 @@ class RecordingTransport implements ApnsTransport {
     const index = this.#index;
     this.#index += 1;
     this.diagnostics.push(request.toRedactedDiagnostic());
+    const body = request.materializeForTransport().body;
+    if (body != null) this.bodies.push(body);
     await this.beforeResponse?.(index);
     const result = this.results[index];
     if (result == null) throw new Error("synthetic transport script exhausted");
@@ -298,6 +305,131 @@ function commonInput(
 }
 
 describe("one-shot Live Activity direct dispatcher", () => {
+  it("forwards an opaque reusable wire state and persists metadata matching START", async () => {
+    const value = harness();
+    const { authentication } = await establish(value);
+    const cache = new ProviderCacheStub();
+    const transport = new RecordingTransport([successfulResponse()]);
+    const reserve = vi.spyOn(value.dispatchStore, "reserveDirectDispatch");
+    const dispatcher = createDispatcher(value, value.resolver, transport, cache);
+    const authoritativePublication = publication(authentication.installationId);
+    const preparedPublication = prepareLiveActivityPublication({
+      publication: authoritativePublication,
+      generatedAt: ACTIVE_AT,
+      config: createLiveActivityPublicationPolicyConfig({
+        freshSourceLifetimeMilliseconds: 60_000,
+        freshnessHeartbeatLeadMilliseconds: 30_000,
+        minimumFreshnessPublicationIntervalMilliseconds: 30_000,
+        minimumStaleDateLeadMilliseconds: 10_000,
+        unknownUpdateReconciliation: "ENABLED",
+      }),
+    });
+    const publicationMetadata = {
+      visibleContentFingerprint:
+        preparedPublication.intent.visibleContentFingerprint,
+      sourceFetchedAt: preparedPublication.intent.sourceFetchedAt,
+      staleAt: null,
+    } as const;
+    preparedPublication.intent.sourceFetchedAt.setTime(0);
+    preparedPublication.intent.staleAt.setTime(0);
+    preparedPublication.generatedAt.setTime(0);
+    preparedPublication.preparedContentState.generatedAt.setTime(0);
+
+    const result = await dispatcher.dispatch({
+      installationId: authentication.installationId,
+      bindingId: BINDING_ID,
+      sessionRevision: 1,
+      publication: authoritativePublication,
+      generatedAt: ACTIVE_AT,
+      preparedPublication,
+      priority: 5,
+      operation: "START",
+      mode: { kind: "DIRECT_IOS_18" },
+      alert: { title: "Commute", body: "Live commute started" },
+    });
+
+    expect(result).toMatchObject({
+      outcome: "RECORDED",
+      attempt: { publicationMetadata },
+    });
+    expect(reserve).toHaveBeenCalledWith(
+      expect.objectContaining({ publicationMetadata }),
+    );
+    const body = JSON.parse(transport.bodies[0]!) as {
+      aps: {
+        "content-state": unknown;
+      };
+    };
+    expect(body.aps["content-state"]).toEqual(
+      preparedPublication.intent.contentState,
+    );
+    expect(body.aps).not.toHaveProperty("stale-date");
+  });
+
+  it("sends honest STALE content without an expired stale-date", async () => {
+    const value = harness();
+    const { authentication, binding } = await establish(value);
+    await addUpdateToken(value, authentication, binding.bindingId, 1);
+    const transport = new RecordingTransport([successfulResponse()]);
+    const reserve = vi.spyOn(value.dispatchStore, "reserveDirectDispatch");
+    const authoritativePublication = publication(authentication.installationId);
+    const stalePublication = {
+      ...authoritativePublication,
+      status: "READY_STALE",
+      snapshot: { ...authoritativePublication.snapshot, freshness: "STALE" },
+    } as AuthoritativeReadyLiveCommutePublication;
+    const preparedPublication = prepareLiveActivityPublication({
+      publication: stalePublication,
+      generatedAt: ACTIVE_AT,
+      config: createLiveActivityPublicationPolicyConfig({
+        freshSourceLifetimeMilliseconds: 10_000,
+        freshnessHeartbeatLeadMilliseconds: 5_000,
+        minimumFreshnessPublicationIntervalMilliseconds: 1_000,
+        minimumStaleDateLeadMilliseconds: 1_000,
+        unknownUpdateReconciliation: "ENABLED",
+      }),
+    });
+    const dispatcher = createDispatcher(
+      value,
+      value.resolver,
+      transport,
+      new ProviderCacheStub(),
+    );
+
+    const result = await dispatcher.dispatch({
+      installationId: authentication.installationId,
+      bindingId: binding.bindingId,
+      sessionRevision: 1,
+      publication: stalePublication,
+      generatedAt: ACTIVE_AT,
+      preparedPublication,
+      priority: 5,
+      operation: "DIRECT_UPDATE",
+    });
+
+    expect(result).toMatchObject({
+      outcome: "RECORDED",
+      attempt: {
+        publicationMetadata: {
+          visibleContentFingerprint:
+            preparedPublication.intent.visibleContentFingerprint,
+          sourceFetchedAt: preparedPublication.intent.sourceFetchedAt,
+          staleAt: null,
+        },
+      },
+    });
+    expect(reserve).toHaveBeenCalledWith(
+      expect.objectContaining({
+        publicationMetadata: expect.objectContaining({ staleAt: null }),
+      }),
+    );
+    const body = JSON.parse(transport.bodies[0]!) as { aps: Record<string, unknown> };
+    expect(body.aps).not.toHaveProperty("stale-date");
+    expect(body.aps["content-state"]).toEqual(
+      preparedPublication.intent.contentState,
+    );
+  });
+
   it("sends START, UPDATE, and END exactly once with durable safe correlations", async () => {
     const value = harness();
     const { authentication } = await establish(value);

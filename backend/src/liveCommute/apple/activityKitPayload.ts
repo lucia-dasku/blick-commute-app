@@ -184,6 +184,11 @@ function normalizedAlert(value: ActivityKitAlert, field: string): ActivityKitAle
   return Object.freeze(alert);
 }
 
+/** Validates and copies an injected user-facing alert before any dispatch is reserved. */
+export function createActivityKitAlert(value: ActivityKitAlert): ActivityKitAlert {
+  return normalizedAlert(value, "alert");
+}
+
 /** Converts an explicit absolute instant to the whole epoch seconds ActivityKit expects. */
 export function activityKitEpochSeconds(
   value: Date | number,

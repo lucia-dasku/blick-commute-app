@@ -3,6 +3,7 @@ import {
   createStoredLiveCommuteInstallation,
   createStoredLiveCommuteSession,
   deserializePersistedLiveCommuteQuery,
+  type LiveCommuteSessionVersionRef,
   type StoredLiveCommuteInstallation,
   type StoredLiveCommuteSession,
 } from "../sessionStore.js";
@@ -20,6 +21,7 @@ import {
 import type {
   LiveActivityDeliveryInstallationTransaction,
   LiveActivityDeliveryStore,
+  LiveActivityPublicationBindingState,
 } from "./deliveryStore.js";
 import type { ProtectedActivityKitToken } from "./tokenProtection.js";
 
@@ -93,6 +95,10 @@ interface DeliveryBindingRow {
   updated_at: Date;
   ended_at: Date | null;
   invalidated_at: Date | null;
+}
+
+interface PublicationBindingRow extends DeliveryBindingRow {
+  has_update_token_history: boolean;
 }
 
 interface UpdateTokenRow {
@@ -316,6 +322,63 @@ async function persistenceOperation<T>(operation: () => Promise<T> | T): Promise
  */
 export class PostgresLiveActivityDeliveryStore implements LiveActivityDeliveryStore {
   constructor(private readonly sql: LiveActivityDeliveryPostgresSql) {}
+
+  async listDeliveryBindingsForSessionVersions(
+    references: readonly LiveCommuteSessionVersionRef[],
+  ): Promise<readonly LiveActivityPublicationBindingState[]> {
+    if (!Array.isArray(references)) {
+      throw new TypeError("session version references must be an array");
+    }
+    if (references.length === 0) return Object.freeze([]);
+    const requested = references.map((reference) => ({
+      installation_id: normalizedAppleDeliveryIdentifier(
+        reference.installationId,
+        "installationId",
+      ),
+      session_id: normalizedAppleDeliveryIdentifier(reference.sessionId, "sessionId"),
+      session_revision: positiveActivityKitGeneration(
+        reference.revision,
+        "revision",
+      ),
+    }));
+
+    return await persistenceOperation(async () => {
+      const rows = await this.sql<PublicationBindingRow[]>`
+        WITH requested AS (
+          SELECT DISTINCT installation_id, session_id, session_revision
+          FROM jsonb_to_recordset(${this.sql.json(requested)}::jsonb)
+            AS value(
+              installation_id TEXT,
+              session_id TEXT,
+              session_revision INTEGER
+            )
+        )
+        SELECT b.binding_id, b.installation_id, b.session_id, b.session_revision,
+               b.delivery_strategy, b.lifecycle, b.apple_activity_id, b.created_at,
+               b.updated_at, b.ended_at, b.invalidated_at,
+               EXISTS (
+                 SELECT 1
+                 FROM live_activity_update_tokens AS t
+                 WHERE t.binding_id = b.binding_id
+                   AND t.installation_id = b.installation_id
+               ) AS has_update_token_history
+        FROM requested AS r
+        INNER JOIN live_activity_delivery_bindings AS b
+          ON b.installation_id = r.installation_id
+         AND b.session_id = r.session_id
+         AND b.session_revision = r.session_revision
+        ORDER BY b.installation_id, b.session_id, b.session_revision, b.binding_id
+      `;
+      return Object.freeze(
+        rows.map((row) =>
+          Object.freeze({
+            binding: deliveryBindingFromRow(row),
+            hasUpdateTokenHistory: row.has_update_token_history,
+          }),
+        ),
+      );
+    });
+  }
 
   async withInstallationTransaction<T>(
     installationId: string,

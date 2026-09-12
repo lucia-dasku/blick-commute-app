@@ -31,6 +31,10 @@ import type {
   LiveActivityDeliveryResolver,
 } from "./deliveryResolver.js";
 import {
+  assertPreparedLiveActivityPublication,
+  type PreparedLiveActivityPublication,
+} from "./publicationPolicy.js";
+import {
   normalizedLiveActivityDispatchUuid,
   sameLiveActivityDispatchTokenGeneration,
   type LiveActivityDirectDispatchAttempt,
@@ -55,6 +59,8 @@ interface LiveActivityDirectDispatchInputBase {
   readonly publication: AuthoritativeReadyLiveCommutePublication;
   /** The authoritative content-generation instant and ActivityKit ordering value. */
   readonly generatedAt: Date;
+  /** Opaque group-level mapping/fingerprint reused across recipient bindings. */
+  readonly preparedPublication?: PreparedLiveActivityPublication;
   readonly priority: ApnsDirectLiveActivityPriority;
   readonly expiration?: number;
   readonly collapseId?: string;
@@ -347,6 +353,13 @@ export class LiveActivityDirectDispatcher {
   async dispatch(
     input: LiveActivityDirectDispatchInput,
   ): Promise<LiveActivityDirectDispatchResult> {
+    if (input.preparedPublication != null) {
+      assertPreparedLiveActivityPublication(
+        input.preparedPublication,
+        input.publication,
+        input.generatedAt,
+      );
+    }
     const eventTimestamp = activityKitEpochSeconds(input.generatedAt, "generatedAt");
     const dispatchId = normalizedLiveActivityDispatchUuid(
       input.dispatchId ?? this.#createUuid(),
@@ -369,6 +382,19 @@ export class LiveActivityDirectDispatcher {
         dispatchId,
         apnsRequestId,
         reservedAt,
+        publicationMetadata:
+          input.preparedPublication == null
+            ? undefined
+            : {
+                visibleContentFingerprint:
+                  input.preparedPublication.intent.visibleContentFingerprint,
+                sourceFetchedAt: input.preparedPublication.intent.sourceFetchedAt,
+                staleAt:
+                  input.operation === "DIRECT_UPDATE" &&
+                  input.preparedPublication.intent.contentState.freshness === "FRESH"
+                    ? input.preparedPublication.intent.staleAt
+                    : null,
+              },
       });
     } catch {
       return Object.freeze({
@@ -574,6 +600,7 @@ export class LiveActivityDirectDispatcher {
       target,
       publication: input.publication,
       generatedAt: input.generatedAt,
+      preparedContentState: input.preparedPublication?.preparedContentState,
       bundleId: this.#bundleId,
       providerToken: lease.token,
       priority: input.priority,
@@ -597,7 +624,12 @@ export class LiveActivityDirectDispatcher {
       return buildDirectLiveActivityUpdatePlan({
         ...request,
         target,
-        staleAt: input.staleAt,
+        staleAt:
+          input.preparedPublication == null
+            ? input.staleAt
+            : input.preparedPublication.intent.contentState.freshness === "FRESH"
+              ? input.preparedPublication.intent.staleAt
+              : undefined,
         alert: input.alert,
       });
     }

@@ -15,10 +15,14 @@ import {
   type StoredPushToStartToken,
 } from "./deliveryModel.js";
 import {
+  createLiveActivityDispatchBindingReference,
+  createLiveActivityDirectDispatchHistory,
   createLiveActivityDirectDispatchAttempt,
   createLiveActivityDispatchCursor,
   normalizedLiveActivityDispatchOperation,
+  type LiveActivityDispatchBindingReference,
   type LiveActivityDirectDispatchAttempt,
+  type LiveActivityDirectDispatchHistory,
   type LiveActivityDispatchCursor,
 } from "./dispatchModel.js";
 import {
@@ -115,6 +119,9 @@ interface AttemptRow {
   apns_environment: LiveActivityDirectDispatchAttempt["environment"];
   apns_request_id: string;
   payload_fingerprint: string | null;
+  visible_content_fingerprint: string | null;
+  publication_source_fetched_at: Date | null;
+  publication_stale_at: Date | null;
   state: LiveActivityDirectDispatchAttempt["state"];
   apns_status: number | null;
   apns_reason: string | null;
@@ -125,6 +132,12 @@ interface AttemptRow {
   created_at: Date;
   in_flight_at: Date | null;
   completed_at: Date | null;
+}
+
+interface AttemptHistoryRow extends AttemptRow {
+  requested_ordinal: number;
+  latest_rank: string | number;
+  accepted_rank: string | number;
 }
 
 function installationFromRow(row: InstallationRow): StoredLiveCommuteInstallation {
@@ -256,6 +269,13 @@ function attemptFromRow(row: AttemptRow): LiveActivityDirectDispatchAttempt {
   if (clientGeneration == null || serverRevision == null) {
     throw new Error("dispatch token correlation is incomplete");
   }
+  if (
+    (row.visible_content_fingerprint == null) !==
+      (row.publication_source_fetched_at == null) ||
+    (row.visible_content_fingerprint == null && row.publication_stale_at != null)
+  ) {
+    throw new Error("dispatch publication metadata is incomplete");
+  }
   return createLiveActivityDirectDispatchAttempt({
     dispatchId: row.dispatch_id,
     bindingId: row.binding_id,
@@ -267,6 +287,15 @@ function attemptFromRow(row: AttemptRow): LiveActivityDirectDispatchAttempt {
     environment: row.apns_environment,
     apnsRequestId: row.apns_request_id,
     payloadFingerprint: row.payload_fingerprint,
+    publicationMetadata:
+      row.visible_content_fingerprint == null ||
+      row.publication_source_fetched_at == null
+        ? null
+        : {
+            visibleContentFingerprint: row.visible_content_fingerprint,
+            sourceFetchedAt: row.publication_source_fetched_at,
+            staleAt: row.publication_stale_at,
+          },
     state: row.state,
     apnsStatus: row.apns_status,
     apnsReason: row.apns_reason,
@@ -284,6 +313,91 @@ function attemptFromRow(row: AttemptRow): LiveActivityDirectDispatchAttempt {
 export class PostgresLiveActivityDispatchStore extends CoordinatedLiveActivityDispatchStore {
   constructor(private readonly sql: LiveActivityDispatchPostgresSql) {
     super();
+  }
+
+  async listDirectDispatchHistoryForBindings(
+    references: readonly LiveActivityDispatchBindingReference[],
+  ): Promise<readonly LiveActivityDirectDispatchHistory[]> {
+    if (!Array.isArray(references)) {
+      throw new TypeError("dispatch binding references must be an array");
+    }
+    const normalized = references.map(createLiveActivityDispatchBindingReference);
+    if (normalized.length === 0) return Object.freeze([]);
+    const requested = normalized.map((reference, requestedOrdinal) => ({
+      requested_ordinal: requestedOrdinal,
+      binding_id: reference.bindingId,
+      installation_id: reference.installationId,
+      session_revision: reference.sessionRevision,
+    }));
+
+    try {
+      const rows = await this.sql<AttemptHistoryRow[]>`
+        WITH requested AS (
+          SELECT requested_ordinal, binding_id, installation_id, session_revision
+          FROM jsonb_to_recordset(${this.sql.json(requested)}::jsonb)
+            AS value(
+              requested_ordinal INTEGER,
+              binding_id UUID,
+              installation_id TEXT,
+              session_revision INTEGER
+            )
+        ), ranked AS (
+          SELECT r.requested_ordinal, a.*,
+                 row_number() OVER (
+                   PARTITION BY r.requested_ordinal
+                   ORDER BY a.event_timestamp DESC, a.dispatch_id DESC
+                 ) AS latest_rank,
+                 count(*) FILTER (WHERE a.state = 'ACCEPTED') OVER (
+                   PARTITION BY r.requested_ordinal
+                   ORDER BY a.event_timestamp DESC, a.dispatch_id DESC
+                   ROWS BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW
+                 ) AS accepted_rank
+          FROM requested AS r
+          INNER JOIN live_activity_direct_dispatch_attempts AS a
+            ON a.binding_id = r.binding_id
+           AND a.installation_id = r.installation_id
+           AND a.session_revision = r.session_revision
+        )
+        SELECT requested_ordinal, latest_rank, accepted_rank,
+               dispatch_id, binding_id, installation_id, session_revision,
+               operation_kind, event_timestamp, push_to_start_server_revision,
+               push_to_start_client_generation, update_token_server_revision,
+               update_token_client_generation, apns_environment, apns_request_id,
+               payload_fingerprint, visible_content_fingerprint,
+               publication_source_fetched_at, publication_stale_at, state,
+               apns_status, apns_reason, retry_advice, retry_not_before,
+               post_send_authority, token_invalidation_outcome, created_at,
+               in_flight_at, completed_at
+        FROM ranked
+        WHERE latest_rank = 1
+           OR (state = 'ACCEPTED' AND accepted_rank = 1)
+        ORDER BY requested_ordinal, event_timestamp DESC, dispatch_id DESC
+      `;
+      const latestAcceptedAttempts = new Map<number, LiveActivityDirectDispatchAttempt>();
+      const latestAttempts = new Map<number, LiveActivityDirectDispatchAttempt>();
+      for (const row of rows) {
+        const attempt = attemptFromRow(row);
+        const ordinal = Number(row.requested_ordinal);
+        if (!Number.isInteger(ordinal) || ordinal < 0 || ordinal >= normalized.length) {
+          throw new Error("dispatch history ordinal is invalid");
+        }
+        if (Number(row.latest_rank) === 1) latestAttempts.set(ordinal, attempt);
+        if (attempt.state === "ACCEPTED" && Number(row.accepted_rank) === 1) {
+          latestAcceptedAttempts.set(ordinal, attempt);
+        }
+      }
+      return Object.freeze(
+        normalized.map((reference, ordinal) =>
+          createLiveActivityDirectDispatchHistory({
+            ...reference,
+            latestAcceptedAttempt: latestAcceptedAttempts.get(ordinal) ?? null,
+            latestAttempt: latestAttempts.get(ordinal) ?? null,
+          }),
+        ),
+      );
+    } catch {
+      throw new LiveActivityDispatchPersistenceError();
+    }
   }
 
   protected async withDispatchInstallationTransaction<T>(
@@ -476,7 +590,9 @@ export class PostgresLiveActivityDispatchStore extends CoordinatedLiveActivityDi
                      push_to_start_server_revision,
                      push_to_start_client_generation, update_token_server_revision,
                      update_token_client_generation, apns_environment,
-                     apns_request_id, payload_fingerprint, state, apns_status,
+                     apns_request_id, payload_fingerprint,
+                     visible_content_fingerprint, publication_source_fetched_at,
+                     publication_stale_at, state, apns_status,
                      apns_reason, retry_advice, retry_not_before,
                      post_send_authority, token_invalidation_outcome, created_at,
                      in_flight_at, completed_at
@@ -493,7 +609,9 @@ export class PostgresLiveActivityDispatchStore extends CoordinatedLiveActivityDi
                      push_to_start_server_revision,
                      push_to_start_client_generation, update_token_server_revision,
                      update_token_client_generation, apns_environment,
-                     apns_request_id, payload_fingerprint, state, apns_status,
+                     apns_request_id, payload_fingerprint,
+                     visible_content_fingerprint, publication_source_fetched_at,
+                     publication_stale_at, state, apns_status,
                      apns_reason, retry_advice, retry_not_before,
                      post_send_authority, token_invalidation_outcome, created_at,
                      in_flight_at, completed_at
@@ -513,7 +631,9 @@ export class PostgresLiveActivityDispatchStore extends CoordinatedLiveActivityDi
                      push_to_start_server_revision,
                      push_to_start_client_generation, update_token_server_revision,
                      update_token_client_generation, apns_environment,
-                     apns_request_id, payload_fingerprint, state, apns_status,
+                     apns_request_id, payload_fingerprint,
+                     visible_content_fingerprint, publication_source_fetched_at,
+                     publication_stale_at, state, apns_status,
                      apns_reason, retry_advice, retry_not_before,
                      post_send_authority, token_invalidation_outcome, created_at,
                      in_flight_at, completed_at
@@ -535,9 +655,11 @@ export class PostgresLiveActivityDispatchStore extends CoordinatedLiveActivityDi
                 operation_kind, event_timestamp, push_to_start_server_revision,
                 push_to_start_client_generation, update_token_server_revision,
                 update_token_client_generation, apns_environment, apns_request_id,
-                payload_fingerprint, state, apns_status, apns_reason, retry_advice,
-                retry_not_before, post_send_authority, token_invalidation_outcome,
-                created_at, in_flight_at, completed_at
+                payload_fingerprint, visible_content_fingerprint,
+                publication_source_fetched_at, publication_stale_at, state,
+                apns_status, apns_reason, retry_advice, retry_not_before,
+                post_send_authority, token_invalidation_outcome, created_at,
+                in_flight_at, completed_at
               ) VALUES (
                 ${attempt.dispatchId}, ${attempt.bindingId}, ${attempt.installationId},
                 ${attempt.sessionRevision}, ${attempt.operation}, ${attempt.eventTimestamp},
@@ -546,8 +668,12 @@ export class PostgresLiveActivityDispatchStore extends CoordinatedLiveActivityDi
                 ${isStart ? null : attempt.tokenGeneration.serverRevision},
                 ${isStart ? null : attempt.tokenGeneration.clientGeneration},
                 ${attempt.environment}, ${attempt.apnsRequestId},
-                ${attempt.payloadFingerprint}, ${attempt.state}, ${attempt.apnsStatus},
-                ${attempt.apnsReason}, ${attempt.retryAdvice}, ${attempt.retryNotBefore},
+                ${attempt.payloadFingerprint},
+                ${attempt.publicationMetadata?.visibleContentFingerprint ?? null},
+                ${attempt.publicationMetadata?.sourceFetchedAt ?? null},
+                ${attempt.publicationMetadata?.staleAt ?? null}, ${attempt.state},
+                ${attempt.apnsStatus}, ${attempt.apnsReason}, ${attempt.retryAdvice},
+                ${attempt.retryNotBefore},
                 ${attempt.postSendAuthority}, ${attempt.tokenInvalidationOutcome},
                 ${attempt.createdAt}, ${attempt.inFlightAt}, ${attempt.completedAt}
               )

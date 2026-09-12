@@ -1,4 +1,5 @@
 import type {
+  LiveCommuteSessionVersionRef,
   StoredLiveCommuteInstallation,
   StoredLiveCommuteSession,
 } from "../sessionStore.js";
@@ -35,6 +36,12 @@ export interface LiveActivityDeliveryInstallationTransaction {
   saveUpdateToken(token: StoredLiveActivityUpdateToken): Promise<void>;
 }
 
+export interface LiveActivityPublicationBindingState {
+  readonly binding: LiveActivityDeliveryBinding;
+  /** Nonsecret evidence used to avoid attempting START for an existing activity. */
+  readonly hasUpdateTokenHistory: boolean;
+}
+
 /**
  * Apple delivery state shares the Phase 3A installation-parent lock. The callback is for
  * short persistence/crypto work only and must never perform APNs or transit network I/O.
@@ -42,6 +49,10 @@ export interface LiveActivityDeliveryInstallationTransaction {
  * must finish with the latest token either CURRENT or explicitly INVALIDATED.
  */
 export interface LiveActivityDeliveryStore {
+  /** Batch lookup for exact authoritative session versions; never returns token material. */
+  listDeliveryBindingsForSessionVersions(
+    references: readonly LiveCommuteSessionVersionRef[],
+  ): Promise<readonly LiveActivityPublicationBindingState[]>;
   withInstallationTransaction<T>(
     installationId: string,
     operation: (transaction: LiveActivityDeliveryInstallationTransaction) => Promise<T>,

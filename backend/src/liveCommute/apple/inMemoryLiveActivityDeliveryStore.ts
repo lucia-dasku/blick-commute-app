@@ -2,6 +2,7 @@ import {
   createStoredLiveCommuteInstallation,
   createStoredLiveCommuteSession,
   type LiveCommuteInstallationTransaction,
+  type LiveCommuteSessionVersionRef,
   type LiveCommuteSessionStore,
   type StoredLiveCommuteInstallation,
   type StoredLiveCommuteSession,
@@ -20,6 +21,7 @@ import {
 import type {
   LiveActivityDeliveryInstallationTransaction,
   LiveActivityDeliveryStore,
+  LiveActivityPublicationBindingState,
 } from "./deliveryStore.js";
 import type { ProtectedActivityKitToken } from "./tokenProtection.js";
 
@@ -218,6 +220,14 @@ function sessionVersionKey(sessionId: string, revision: number): string {
   return JSON.stringify([sessionId, revision]);
 }
 
+function ownedSessionVersionKey(reference: LiveCommuteSessionVersionRef): string {
+  return JSON.stringify([
+    normalizedAppleDeliveryIdentifier(reference.installationId, "installationId"),
+    normalizedAppleDeliveryIdentifier(reference.sessionId, "sessionId"),
+    positiveActivityKitGeneration(reference.revision, "revision"),
+  ]);
+}
+
 function emptyState(): InstallationDeliveryState {
   return {
     pushToStartTokens: new Map(),
@@ -344,6 +354,43 @@ export class InMemoryLiveActivityDeliveryStore implements LiveActivityDeliverySt
   private readonly states = new Map<string, InstallationDeliveryState>();
 
   constructor(private readonly coreStore: LiveCommuteSessionStore) {}
+
+  async listDeliveryBindingsForSessionVersions(
+    references: readonly LiveCommuteSessionVersionRef[],
+  ): Promise<readonly LiveActivityPublicationBindingState[]> {
+    if (!Array.isArray(references)) {
+      throw new TypeError("session version references must be an array");
+    }
+    const requested = new Set(references.map(ownedSessionVersionKey));
+    const bindings = [...this.states.values()]
+      .flatMap((state) =>
+        [...state.bindings.values()].map((binding) => ({ binding, state })),
+      )
+      .filter(({ binding }) =>
+        requested.has(
+          ownedSessionVersionKey({
+            installationId: binding.installationId,
+            sessionId: binding.sessionId,
+            revision: binding.sessionRevision,
+          }),
+        ),
+      )
+      .map(({ binding, state }) =>
+        Object.freeze({
+          binding: createLiveActivityDeliveryBinding(binding),
+          hasUpdateTokenHistory:
+            (state.updateTokens.get(binding.bindingId)?.size ?? 0) > 0,
+        }),
+      )
+      .sort(
+        (left, right) =>
+          left.binding.installationId.localeCompare(right.binding.installationId) ||
+          left.binding.sessionId.localeCompare(right.binding.sessionId) ||
+          left.binding.sessionRevision - right.binding.sessionRevision ||
+          left.binding.bindingId.localeCompare(right.binding.bindingId),
+      );
+    return Object.freeze(bindings);
+  }
 
   async withInstallationTransaction<T>(
     installationId: string,
