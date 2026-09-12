@@ -28,7 +28,7 @@ const EVENT = Math.floor(ACTIVE_AT.getTime() / 1_000);
 const FINGERPRINT = "d".repeat(64);
 
 describeWithPostgres("PostgreSQL Live Activity direct dispatch store", () => {
-  const schema = `${LIVE_COMMUTE_TEST_SCHEMA_PREFIX}dispatch_${randomUUID().replaceAll("-", "")}`;
+  const schema = `${LIVE_COMMUTE_TEST_SCHEMA_PREFIX}dispatch_${randomUUID().replaceAll("-", "").slice(0, 24)}`;
   let adminSql: ReturnType<typeof postgres> | undefined;
   let firstSql: ReturnType<typeof postgres> | undefined;
   let secondSql: ReturnType<typeof postgres> | undefined;
