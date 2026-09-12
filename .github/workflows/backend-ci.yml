@@ -93,6 +93,12 @@ jobs:
       - name: Verify live activity delivery migration is idempotent
         run: npm run migrate:live-activity-delivery
 
+      - name: Apply live activity dispatch migration
+        run: npm run migrate:live-activity-dispatch
+
+      - name: Verify live activity dispatch migration is idempotent
+        run: npm run migrate:live-activity-dispatch
+
       - name: Test live commute PostgreSQL integration
         run: npm run test:live-commute-postgres
 

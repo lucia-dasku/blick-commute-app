@@ -65,10 +65,16 @@ describe("deterministic fake APNs transport", () => {
     const first = await fake.send(request);
     const second = await fake.send(request);
 
-    expect(first.statusCode).toBe(200);
+    expect(first).toMatchObject({
+      outcome: "APNS_RESPONSE",
+      response: { statusCode: 200 },
+    });
     expect(second).toMatchObject({
-      statusCode: 503,
-      reason: "ServiceUnavailable",
+      outcome: "APNS_RESPONSE",
+      response: {
+        statusCode: 503,
+        reason: "ServiceUnavailable",
+      },
     });
     expect(fake.sendCount).toBe(2);
   });
@@ -112,12 +118,15 @@ describe("deterministic fake APNs transport", () => {
     headers["apns-id"] = "mutated-request-id";
     body.fill(0);
 
-    const response = await fake.send(syntheticRequest().request);
+    const result = await fake.send(syntheticRequest().request);
 
-    expect(response).toMatchObject({
-      statusCode: 410,
-      reason: "Unregistered",
-      tokenInvalidationTimestampMilliseconds: 1_789_123_456_000,
+    expect(result).toMatchObject({
+      outcome: "APNS_RESPONSE",
+      response: {
+        statusCode: 410,
+        reason: "Unregistered",
+        tokenInvalidationTimestampMilliseconds: 1_789_123_456_000,
+      },
     });
   });
 

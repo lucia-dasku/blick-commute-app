@@ -1113,7 +1113,7 @@ function retryDirective(
       ? "AFTER_CORRECTION"
       : "WITH_DELAY";
   }
-  if (statusCode === 500 || statusCode === 503) return "AFTER_15_MINUTES";
+  if (statusCode >= 500 && statusCode < 600) return "AFTER_15_MINUTES";
   if (statusCode >= 400 && statusCode < 500) return "AFTER_CORRECTION";
   return "NO_RETRY";
 }
@@ -1137,7 +1137,7 @@ export function classifyApnsDeviceResponse(
     disposition = "AUTHENTICATION_ERROR";
   } else if (response.statusCode === 429) {
     disposition = "THROTTLED";
-  } else if (response.statusCode === 500 || response.statusCode === 503) {
+  } else if (response.statusCode >= 500 && response.statusCode < 600) {
     disposition = "TRANSIENT_SERVER_ERROR";
   } else if (response.statusCode >= 400 && response.statusCode < 500) {
     disposition = "REQUEST_REJECTED";
@@ -1206,7 +1206,7 @@ export function classifyApnsBroadcastResponse(
     disposition = "AUTHENTICATION_ERROR";
   } else if (response.statusCode === 429) {
     disposition = "THROTTLED";
-  } else if (response.statusCode === 500 || response.statusCode === 503) {
+  } else if (response.statusCode >= 500 && response.statusCode < 600) {
     disposition = "TRANSIENT_SERVER_ERROR";
   } else if (response.statusCode >= 400 && response.statusCode < 500) {
     disposition = "REQUEST_REJECTED";
@@ -1424,7 +1424,7 @@ export function classifyApnsChannelResponse(
     disposition = "AUTHENTICATION_ERROR";
   } else if (response.statusCode === 429) {
     disposition = "THROTTLED";
-  } else if (response.statusCode === 500 || response.statusCode === 503) {
+  } else if (response.statusCode >= 500 && response.statusCode < 600) {
     disposition = "TRANSIENT_SERVER_ERROR";
   } else if (response.statusCode >= 400 && response.statusCode < 500) {
     disposition = "REQUEST_REJECTED";

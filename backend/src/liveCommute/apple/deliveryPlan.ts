@@ -1,3 +1,4 @@
+import { createHash } from "node:crypto";
 import type {
   ReadyLiveCommutePublication,
   ReadyStaleLiveCommutePublication,
@@ -9,8 +10,10 @@ import {
   buildActivityKitEndPayload,
   buildActivityKitStartPayload,
   buildActivityKitUpdatePayload,
+  verifiedActivityKitPayloadBody,
   type ActivityKitAlert,
   type ActivityKitStartMode,
+  type BuiltActivityKitPayload,
 } from "./activityKitPayload.js";
 import {
   createBroadcastLiveActivityRequestDescription,
@@ -55,6 +58,8 @@ export interface LiveActivityDeliveryPlanCorrelation {
 export interface LiveActivityDeliveryPlan {
   readonly kind: LiveActivityDeliveryPlanKind;
   readonly eventTimestamp: number;
+  /** Safe durable correlation over the exact ActivityKit JSON body; never log it. */
+  readonly payloadFingerprint: string;
   readonly correlation: LiveActivityDeliveryPlanCorrelation;
   readonly request: ApnsRequestDescription;
 }
@@ -214,10 +219,14 @@ function plan(
   generatedAt: Date,
   target: AnyDeliveryTarget,
   request: ApnsRequestDescription,
+  payload: BuiltActivityKitPayload,
 ): LiveActivityDeliveryPlan {
   return Object.freeze({
     kind,
     eventTimestamp: activityKitEpochSeconds(generatedAt, "generatedAt"),
+    payloadFingerprint: createHash("sha256")
+      .update(verifiedActivityKitPayloadBody(payload), "utf8")
+      .digest("hex"),
     correlation: correlationFor(target),
     request,
   });
@@ -269,7 +278,7 @@ export function buildLiveActivityStartPlan(
     apnsId: input.apnsId,
     collapseId: input.collapseId,
   });
-  return plan("START", input.generatedAt, input.target, request);
+  return plan("START", input.generatedAt, input.target, request, payload);
 }
 
 export function buildDirectLiveActivityUpdatePlan(
@@ -305,7 +314,7 @@ export function buildDirectLiveActivityUpdatePlan(
     apnsId: input.apnsId,
     collapseId: input.collapseId,
   });
-  return plan("DIRECT_UPDATE", input.generatedAt, input.target, request);
+  return plan("DIRECT_UPDATE", input.generatedAt, input.target, request, payload);
 }
 
 export function buildBroadcastLiveActivityUpdatePlan(
@@ -343,7 +352,7 @@ export function buildBroadcastLiveActivityUpdatePlan(
     expiration: input.expiration,
     requestId: input.requestId,
   });
-  return plan("BROADCAST_UPDATE", input.generatedAt, input.target, request);
+  return plan("BROADCAST_UPDATE", input.generatedAt, input.target, request, payload);
 }
 
 export function buildDirectLiveActivityEndPlan(
@@ -379,7 +388,7 @@ export function buildDirectLiveActivityEndPlan(
     apnsId: input.apnsId,
     collapseId: input.collapseId,
   });
-  return plan("DIRECT_END", input.generatedAt, input.target, request);
+  return plan("DIRECT_END", input.generatedAt, input.target, request, payload);
 }
 
 export function buildBroadcastLiveActivityEndPlan(
@@ -417,5 +426,5 @@ export function buildBroadcastLiveActivityEndPlan(
     expiration: input.expiration,
     requestId: input.requestId,
   });
-  return plan("BROADCAST_END", input.generatedAt, input.target, request);
+  return plan("BROADCAST_END", input.generatedAt, input.target, request, payload);
 }

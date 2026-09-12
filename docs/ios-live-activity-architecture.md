@@ -1,21 +1,21 @@
 # iOS Live Activity architecture
 
-Status: Phase 4A backend protocol foundation, implemented locally 2026-09-12. In addition to
-the accepted Phase 3A ownership/session authority and Phase 3B protected-token delivery
-targets, it provides the versioned Blick/Swift wire contract, ActivityKit payload builders,
-APNs request/response descriptions, ES256 provider-token signing primitive, and an injected
-fake transport boundary. It remains callable internal code: no production caller, public
-route, timer, worker, scheduler, or real APNs client invokes it.
+Status: Phase 4B direct APNs dispatch foundation, implemented locally 2026-09-12. In
+addition to the accepted Phase 3A ownership/session authority, Phase 3B protected-token
+delivery targets, and Phase 4A payload/protocol contract, it provides a lazy reusable Node
+HTTP/2 transport, an on-demand provider-token cache, and durable direct START/UPDATE/END
+ordering and result state. It remains callable internal code: no production caller, public
+route, timer, worker, scheduler, or application-startup path invokes it.
 
 The implemented boundary includes immutable session planning and grouping, direct SL
 acquisition, authoritative exact-journey role reuse, one final-clock projection, fresh/stale
 fallback projection, semantic comparison, persistent ownership and lifecycle records,
 revision-controlled mutations, and an authoritative post-acquisition store check. Snapshot
-history persistence, public enrollment, scheduling, real push delivery, and client rendering
-remain deferred. There is no iOS target, Apple credential, network transport, APNs sender
-integration, or production migration wiring. All Apple behavior described below is derived
-from Apple's public documentation and has not been verified with an iOS target, physical
-device, or APNs setup.
+history persistence, public enrollment, publication policy, scheduling, broadcast-channel
+orchestration, and client rendering remain deferred. There is no iOS target, Apple
+credential, production APNs configuration, production caller, or production migration
+wiring. All Apple behavior described below is derived from Apple's public documentation and
+has not been verified with an iOS target, physical device, or real APNs environment.
 
 ## Intended system shape
 
@@ -322,9 +322,9 @@ projection, or fallback logic. One coordinated tick proceeds as follows:
 4. Immediately after that asynchronous check, the engine reads the injected clock again and
    runs its existing active-session and transit-expiry projection at that final instant.
 5. Return only surviving publication outcomes, each carrying `sessionVersions` and
-   `authorityCheckCompletedAt` for a future dispatcher. The latter is the application clock
-   used for final projection after the check returns, not a database snapshot timestamp or
-   authorization lease.
+   `authorityCheckCompletedAt` for later delivery planning and dispatch. The latter is the
+   application clock used for final projection after the check returns, not a database
+   snapshot timestamp or authorization lease.
 
 This excludes a cancelled, replaced, revoked, deleted, or newly expired occurrence before a
 publication outcome is returned. A changed query invalidates work acquired for the old query;
@@ -348,11 +348,13 @@ A returned outcome matched authoritative rows at the database statement snapshot
 the last check. Under PostgreSQL read-committed semantics, that snapshot can precede the
 application's `authorityCheckCompletedAt` marker, and a conflicting mutation can commit as
 soon as the statement no longer observes it. The marker therefore supports sequencing and
-final time projection only; it does not extend authorization. A session can be cancelled,
-replaced, revoked, or deleted during result handling or before a future APNs send. The
-dispatcher must recheck the attached session versions and coordinate that check with its
-send/ordering mechanism. Phase 3A deliberately adds no outbox, queue, lease, distributed
-scheduler, exactly-once claim, or solution to this check-to-send race.
+final time projection only; it does not extend authorization. Phase 4B's direct dispatcher
+uses a new locked reservation check and an exact target-generation check when claiming an
+attempt immediately before the external send. No database lock spans APNs network I/O. A
+session can consequently still be cancelled, replaced, revoked, or deleted after that final
+check but before APNs receives the request. The post-send authority marker records this race;
+it cannot make PostgreSQL and APNs atomic. The coordinator itself still adds no outbox,
+queue, lease, distributed scheduler, or exactly-once claim.
 
 ## Apple delivery direction
 
@@ -457,17 +459,17 @@ subscribe to that channel. `AcquisitionKey`, `PublicationKey`, and an Apple chan
 three different identities. Channel creation, persistence, replacement, and deletion remain
 a later APNs channel-management phase.
 
-### Still deferred
+### Still deferred at the Phase 3B boundary
 
 - iOS/ActivityKit code that obtains, observes, and uploads real tokens
 - physical-device and real Apple-environment verification
 - Apple Developer account, APNs credentials, production provider-token configuration, and
-  network requests
+  any real Apple request
 - broadcast-channel creation and real channel identifiers
 - public enrollment/token/binding routes, their rate limits, and abuse controls
 - production key management, rotation, retention, deletion, and operational access policy
-- stale-date, freshness-heartbeat, scheduler, dispatcher, queue/outbox, and check-to-send
-  coordination
+- stale-date, freshness-heartbeat, publication policy, scheduler, and queue/outbox worker;
+  Phase 4B adds an explicit direct-dispatch call but no recurring execution
 - cross-instance transit acquisition coordination and App Store configuration
 
 APNs delivery remains best effort and distinct from backend session authority. A successful
@@ -538,7 +540,7 @@ and [response contract](https://developer.apple.com/documentation/usernotificati
 - Sensitive paths, authorization headers, channel headers, and bodies live behind a private
   request representation. Ordinary JSON, string conversion, inspection, fake-transport
   recording, and errors expose only bounded redacted diagnostics. Raw transport material is
-  available only through the explicit future transport boundary.
+  available only through the explicit transport boundary.
 - The provider-token primitive validates a caller-supplied private P-256 key and explicit Team
   ID, Key ID, and issued-at instant. It emits an ES256 JWT with `iss`/`iat` and a 64-byte JOSE
   R||S signature using Node's IEEE-P1363 encoding. The token wrapper is redacted from ordinary
@@ -568,10 +570,11 @@ per-activity ordering; a process-local counter or wall-clock assumption is not a
 ordering guarantee.
 
 The Phase 3B resolver check and Phase 4A publication match are point-in-time checks, not a
-lease. A future dispatcher still owns the outstanding check-to-send race, durable ordering,
-retry/idempotency policy, and generation-specific token invalidation. Constructing an `end`
-payload is separate from terminalizing backend storage, and neither action alone proves the
-device ended the Live Activity.
+lease. Phase 4B adds durable direct ordering, a second target-generation check at claim,
+retry classification, and generation-specific token invalidation. It cannot eliminate the
+remaining post-claim check-to-send race, and broadcast orchestration remains future work.
+Constructing an `end` payload is separate from recording backend terminal intent, and neither
+action alone proves the device ended the Live Activity.
 
 Apple's current broadcast documentation is internally inconsistent. The connection table in
 [Sending broadcast push notification requests to APNs](https://developer.apple.com/documentation/usernotifications/sending-broadcast-push-notification-requests-to-apns)
@@ -592,21 +595,169 @@ code must also choose legacy direct, iOS 18+ direct update-token, or iOS 18+ cha
 must not infer capability from token shape. Caller-supplied start alert localization remains a
 future English/Swedish client/product integration decision.
 
-### Still deferred
+### Boundary after Phase 4B
 
-- real APNs HTTP/2/TLS transport, connection pooling, retries, backoff, and delivery telemetry
-- a real Apple `.p8`, Team ID/Key ID configuration, finalized bundle ID, and signing-key
-  lifecycle
-- provider-token cache/reuse/refresh policy; Apple rejects tokens older than one hour and
-  advises refresh no more often than every 20 minutes and no less often than every 60 minutes,
-  so a future connection layer must reuse tokens deliberately
-- transactional mutation from APNs results, including exact-generation token invalidation
+Phase 4A's request builders and classifiers remain pure. Phase 4B adds the direct transport,
+provider-token reuse, durable ordering, result mutation, and exact-generation invalidation
+described next. The following remain outside both phases:
+
+- a real Apple `.p8`, Team ID/Key ID production configuration, finalized bundle ID, and a
+  reviewed signing-key lifecycle
 - broadcast channel creation execution, persistence, replacement, deletion, subscriber
   coordination, and final message-storage policy
-- scheduler, dispatcher, queue/outbox, persistent send ordering, heartbeat, and stale-date
+- publication policy, scheduler, queue/outbox worker, freshness heartbeat, and stale-date
   policy
-- iOS/Swift implementation, push-to-start/update token upload integration, localization,
+- iOS/Swift implementation, push-to-start/update-token upload integration, localization,
   entitlements, App Store configuration, and physical-device validation
+- production telemetry, connection scaling, idle PING policy, retry scheduling, and
+  credential/key rotation procedure
+
+## Phase 4B direct APNs dispatch foundation
+
+Phase 4B was rechecked against Apple's current
+[connection guidance](https://developer.apple.com/documentation/usernotifications/establishing-a-connection-to-apns),
+[direct request contract](https://developer.apple.com/documentation/usernotifications/sending-notification-requests-to-apns),
+[response guidance](https://developer.apple.com/documentation/usernotifications/handling-notification-responses-from-apns),
+[provider-token requirements](https://developer.apple.com/documentation/usernotifications/establishing-a-token-based-connection-to-apns),
+and [ActivityKit push guide](https://developer.apple.com/documentation/activitykit/starting-and-updating-live-activities-with-activitykit-push-notifications).
+The implemented dispatcher is deliberately limited to device-addressed `START`,
+`DIRECT_UPDATE`, and `DIRECT_END`. The Phase 4A broadcast and channel descriptions remain
+available to pure callers, and the transport can carry them, but no production dispatcher
+or channel registry makes broadcast publication operational.
+
+### HTTP/2 transport and provider authentication
+
+- `NodeHttp2ApnsTransport` uses Node's standard HTTP/2 client, keeps ordinary certificate
+  verification enabled, and requests TLS 1.2 or newer. Construction performs no network
+  I/O. The first explicit send lazily creates one reusable session per APNs authority; later
+  calls share it, including concurrent streams, without a fixed stream-count assumption or
+  HTTP/2 PRIORITY frames.
+- Session error, unexpected close, or GOAWAY retires that session for future work. A later
+  explicit send may create a replacement, but the failed call is never reconnected and
+  resent automatically. A stream that has already obtained a complete response can still
+  return that response while the session is being retired. Controlled shutdown stops new
+  sends and lets existing streams finish through Node's graceful session close.
+- Every explicit send makes at most one attempt with a 15-second request deadline and a 64
+  KiB response-body ceiling. A local refusal that provably occurs before stream creation,
+  such as request-materialization failure or an already-closed transport, is explicit
+  `NOT_ATTEMPTED`; the dispatcher records the claimed attempt as `ABORTED`. A missing
+  definitive response after network initiation is an enumerated, redacted
+  `OUTCOME_UNKNOWN`, not an invented APNs rejection. There is no retry loop, backoff sleep,
+  reconnect timer, fixed concurrency limit, idle PING timer, or hourly reconnect. Apple
+  documents an optional PING for a mostly idle connection after roughly an hour; that is a
+  future connection-pool concern.
+- The device path and bearer JWT, plus a channel identifier when present, are marked as
+  never-index HTTP/2 header values. Those values and the body remain inside the private
+  materialized request. Transport results expose bounded response metadata or a sanitized
+  unknown-outcome reason; they do not expose target tokens, provider JWTs, request bodies,
+  signing material, or complete sensitive paths.
+- Transport tests exercise real stream/write/read, reuse, concurrency, timeout, reset,
+  close, error, GOAWAY, and replacement behavior against injected local HTTP/2 servers. They
+  separately assert the production connector's TLS minimum without weakening certificate
+  checks. They perform neither a real TLS handshake nor any Apple request.
+- `LazyApnsProviderTokenCache` is process-local, wraps the Phase 4A ES256 signer, and accepts
+  an explicit trusted clock. It signs only when `getToken()` is explicitly called, has no
+  refresh timer, and reuses the same lease for Blick's named 50-minute refresh interval. A
+  caller override must be a whole number of seconds from 20 minutes inclusive to one hour
+  exclusive. Refresh is lazy at the next request boundary, before Apple's one-hour rejection
+  boundary.
+- Cache invalidation is conditional on the exact provider-token lease used by a response.
+  The last issuance time survives invalidation, so an authentication response cannot force
+  another signature inside Apple's 20-minute lower boundary. Replacing an HTTP/2 session
+  does not rotate the cached JWT. `ExpiredProviderToken` can invalidate the matching lease
+  for the next explicit dispatch; it never triggers a same-call resend. If that next call is
+  still inside the 20-minute floor, the no-send attempt records the cache's defensible
+  not-before instant. Invalid provider configuration and `TooManyProviderTokenUpdates` fail
+  closed without an immediate regeneration loop. This in-process floor does not coordinate
+  signing across recycled or concurrent serverless processes; production rollout must assess
+  process lifetime and concurrency or add shared issuance coordination if required.
+
+### Durable per-binding ordering
+
+The additive `004_live_activity_dispatch.sql` migration separates network-delivery state
+from commute sessions and from the Phase 3B token registry. One cursor row per direct binding
+stores the exact session revision, the last reserved ActivityKit event timestamp, and
+optional END terminal-intent timestamp. Attempt rows store safe correlation and lifecycle
+data: dispatch and APNs request UUIDs, operation, exact token generation and environment,
+payload fingerprint, APNs status/reason, retry advice, post-send authority, and
+generation-invalidation outcome. They do not store plaintext or copied encrypted ActivityKit
+tokens, provider JWTs, signing keys, request headers, or complete payload JSON.
+
+Each reservation runs in a short PostgreSQL transaction under the installation-parent lock,
+so separate backend processes share the same authority without serializing unrelated
+installations. The transaction rechecks active installation, registered exact-revision
+session, half-open active window, direct binding eligibility, and a current operation-
+appropriate token. Its caller supplies the intended generation instant using the Phase 4A
+whole-epoch-second rule. The timestamp must be strictly greater than the binding cursor:
+an older value returns `STALE_EVENT`, an equal value returns `SAME_SECOND`, and Blick never
+fabricates a future timestamp to break a tie. Apple's documentation does not define
+same-second tie behavior; the strict comparison is Blick's conservative ordering policy.
+Once advanced, the cursor never moves backward after rejection, timeout, or unknown outcome.
+
+A partial unique index permits only one `RESERVED` or `IN_FLIGHT` attempt per binding. A
+newer UPDATE or END may supersede an older unsent `RESERVED` UPDATE. It cannot supersede an
+`IN_FLIGHT` request, which returns `BUSY`; separate bindings can proceed independently. An
+older UPDATE with an already-recorded ambiguous outcome does not freeze later authoritative
+content: a strictly newer timestamp may still be reserved and ActivityKit ordering protects
+the device if both arrive. An abandoned `IN_FLIGHT` attempt is not presumed unsent and
+remains blocking for later reconciliation; Phase 4B does not invent crash recovery or a
+blind resend.
+
+Before APNs I/O, the dispatcher re-resolves the sensitive Phase 3B target, builds the bounded
+request in memory, and claims its reservation with a payload fingerprint. The short claim
+transaction again checks current authority, the latest cursor, and the exact recorded token
+generation/environment. Failure or supersession changes the attempt to `ABORTED` or
+`SUPERSEDED` and performs zero APNs traffic. No database transaction or row lock is held
+while the transport waits for APNs.
+
+START reservation is blocked by an active, accepted, or unknown prior START, by an attached
+Apple Activity identifier, or by update-token history proving an activity exists. A
+definitive rejection may permit a later explicit attempt, while a retryable START respects
+its durable not-before boundary. An unresolved or process-abandoned START is never retried
+blindly. END uses the same timestamp cursor and records durable terminal intent at
+reservation; subsequent ordinary UPDATE is rejected even if APNs later rejects, times out,
+or accepts the END. APNs acceptance remains separate from backend terminal intent and does
+not prove on-device dismissal.
+
+### Honest APNs outcomes and remaining races
+
+One completed network attempt is durably one of `ACCEPTED`, `REJECTED`, `RETRYABLE`, or
+`OUTCOME_UNKNOWN`; a claimed attempt that the transport provably did not initiate is
+`ABORTED` and does not create false unknown-START evidence. **APNs HTTP 200 means accepted by
+APNs; it does not mean delivered to the device, displayed to the user, or still visible as a
+Live Activity.** Apple 5xx responses
+receive `RETRY_AFTER_APPLE_BACKOFF` with a 15-minute not-before instant. Throttling is marked
+retryable without inventing an Apple-specified delay. Provider-authentication failures are
+kept separate from destination-token validity: they never invalidate an ActivityKit token,
+and no classification schedules or performs another request.
+
+If APNs may have observed a request but the completion transaction cannot record its result,
+the dispatcher returns `RESULT_NOT_RECORDED` with safe dispatch/APNs request correlation and
+leaves the attempt unresolved; it neither rewrites the attempt as unsent nor retries it.
+
+Only a classifier-proven terminal destination response for `BadDeviceToken`,
+`DeviceTokenNotForTopic`, `ExpiredToken`, or `Unregistered` requests ActivityKit-token
+invalidation. Completion applies that mutation only when the exact client generation,
+server revision, and APNs environment used by the attempt are still current; a delayed
+response for generation N cannot invalidate N+1. Server errors, authentication failures,
+timeout, GOAWAY, stream/session failure, and other unknown outcomes never invalidate the
+destination token.
+
+After APNs accepts a request, the result transaction rechecks the installation, exact session
+revision/window, binding, and token generation, then records post-send authority as
+`MATCHED` or `CHANGED`. `CHANGED` is evidence that the request happened across a concurrent
+authority change; it does not rewrite the attempt as unsent and triggers no compensating
+network call here.
+
+The final claim still cannot create an atomic transaction across PostgreSQL and APNs. A
+cancellation, replacement, revocation, expiry, or token rotation may commit after claim but
+before the request reaches APNs. That check-to-send race is explicit and remains input to a
+future cleanup policy. START has an additional important boundary: APNs may accept START,
+then authority may change before the iPhone uploads its Apple Activity identifier or update
+token. Blick can temporarily lack a direct token with which to end that new activity.
+Phase 4B neither weakens Phase 3B authorization nor invents an unverified cleanup upload
+path; local client cleanup and a narrowly reviewed compensation path require real Swift and
+device evidence before production.
 
 Ordinary WidgetKit widgets are not the 30-second live engine. Widget extensions are not
 continuously active, reloads are budgeted and scheduled by the system, and Apple recommends
@@ -614,9 +765,10 @@ timeline entries at least about five minutes apart. See [Keeping a widget up to 
 
 ## Freshness and authoritative state
 
-Phase 4A live payloads carry absolute departure/journey timestamps. Countdown rendering
-should derive from those timestamps and the current device/system time; a push should not be
-sent merely to turn “4 min” into “3 min”. Before acquisition results are published, expired
+Phase 4A live payloads carry absolute departure/journey timestamps, and Phase 4B does not
+change their semantic comparison. Countdown rendering should derive from those timestamps
+and the current device/system time; a push should not be sent merely to turn “4 min” into
+“3 min”. Before acquisition results are published, expired
 departures and journeys must be filtered again against the publication instant. The future
 client must also reject expired absolute timestamps locally: backend pre-filtering cannot
 prove correct presentation when a push is delayed, throttled, reordered, or never delivered.
@@ -645,13 +797,14 @@ move role selection to a client.
 ## Security, privacy, and retention
 
 The Phase 3B tables store encrypted push-to-start and per-activity update-token generations,
-plus comparison-only digests and lifecycle metadata. They do not store token plaintext,
-Apple signing keys, raw installation bearer credentials, purchase tokens, copied billing
-credentials, or user-account data. ActivityKit tokens are installation-linked delivery
-identifiers and must be treated as sensitive operational data even when encrypted. They are
-excluded from safe DTOs, errors, logs, snapshots, and committed fixtures; tests use only
-synthetic byte sequences. The Apple delivery migration and services remain separate from
-Google Play purchase state.
+plus comparison-only digests and lifecycle metadata. The Phase 4B dispatch tables add only
+safe correlation, ordering, lifecycle, and result fields. Neither layer stores token
+plaintext, provider JWTs, Apple signing keys, raw installation bearer credentials, complete
+payload bodies, purchase tokens, copied billing credentials, or user-account data.
+ActivityKit tokens are installation-linked delivery identifiers and must be treated as
+sensitive operational data even when encrypted. They are excluded from safe DTOs, errors,
+logs, snapshots, and committed fixtures; tests use only synthetic byte sequences. The Apple
+delivery and dispatch migrations remain separate from Google Play purchase state.
 
 Installation-linked stop choices, destinations, route filters, and commute windows can still
 reveal habits and are potentially sensitive personal data. Replacing a name with an opaque
@@ -673,8 +826,8 @@ authentication system. Public activation requires at least enrollment abuse prot
 rate limits, request and per-installation resource limits, credential rotation/recovery and
 loss policy, server-authoritative Premium authorization, and an explicit decision about
 device attestation. It also requires reviewed database privileges, retention policy,
-operational monitoring, migration/rollback procedures, and dispatcher coordination for the
-remaining check-to-send race.
+operational monitoring, migration/rollback procedures, and a reviewed compensation policy
+for the remaining check-to-send and START-cleanup races.
 
 ## Local migration and PostgreSQL verification
 
@@ -708,6 +861,21 @@ Remove-Item Env:LIVE_COMMUTE_MIGRATION_DATABASE_URL
 That runner applies only `003_live_activity_delivery.sql`; it does not inspect `DATABASE_URL`,
 run migration 002 or the billing migration, load an encryption key, or connect on import.
 
+After migration 003, apply the independent direct-dispatch migration explicitly to the same
+reviewed non-production target:
+
+```powershell
+$env:LIVE_COMMUTE_MIGRATION_DATABASE_URL = 'postgresql://localhost/blick_live_commute_dev'
+npm run migrate:live-activity-dispatch
+Remove-Item Env:LIVE_COMMUTE_MIGRATION_DATABASE_URL
+```
+
+That runner applies only `004_live_activity_dispatch.sql`; it does not inspect
+`DATABASE_URL`, run migrations 001–003 or the billing migration, load a token-encryption or
+provider-signing key, create an APNs transport, or connect on import. Migration 004 is
+idempotent and additive: it adds dispatch-specific indexes plus direct-dispatch cursor and
+attempt tables without rewriting migrations 001–003.
+
 Real PostgreSQL adapter and concurrency verification uses a separate setting and command:
 
 ```powershell
@@ -720,37 +888,44 @@ Remove-Item Env:LIVE_COMMUTE_TEST_DATABASE_URL
 The PostgreSQL integration suites share one fail-closed URL guard: they refuse non-local
 hosts and database names without a distinct `test` segment. Each creates its own random
 `blick_live_commute_test_*` schema, applies its required checked-in migrations twice,
-exercises independent one-connection pools, and drops only that prefixed schema. Use an
-explicitly disposable local test database; never substitute a real `.env` or production
-`DATABASE_URL`. When `LIVE_COMMUTE_TEST_DATABASE_URL` is absent, the database-backed suites
-are guarded and skip. A skipped run, unit test, or SQL-text assertion is not evidence that
-real PostgreSQL transactions, constraints, migration execution, or cross-connection locking
-passed.
+exercises independent connections, and drops only that prefixed schema. The synthetic
+PostgreSQL 17 CI job also invokes migration 004 twice before running the combined Phase 3B
+delivery and Phase 4B dispatch suite. Use an explicitly disposable local test database;
+never substitute a real `.env` or production `DATABASE_URL`. When
+`LIVE_COMMUTE_TEST_DATABASE_URL` is absent, the database-backed suites are guarded and skip.
+A skipped run, unit test, or SQL-text assertion is not evidence that real PostgreSQL
+transactions, constraints, migration execution, or cross-connection locking passed.
 
 ## Explicitly deferred
 
 - Swift/SwiftUI, ActivityKit and WidgetKit client code
 - real token acquisition/upload and physical-device validation
-- APNs credentials, real channel-management execution/persistence, provider-token operational
-  configuration/caching, and network requests
+- APNs credentials, production provider-token configuration, signing-key rotation, real
+  Apple/TLS-environment verification, and any production network request
+- broadcast channel registry, creation/deletion execution, publication-group mapping, and
+  real-environment validation of Apple's documented host behavior
 - public installation enrollment/authentication routes and any user-account system
-- production application of the migration, database-pool wiring, and provider configuration
+- production application of migrations 002–004, database-pool wiring, and dispatcher
+  construction/configuration
 - persistent snapshot history
 - recurrence and timezone calculation
 - GPS or location tracking
 - any production execution mechanism, timer, scheduler, polling loop, or cleanup job
-- an outbox, delivery queue, dispatcher, and check-to-send coordination
+- an outbox or delivery-queue worker, abandoned-attempt reconciliation, and compensation for
+  the remaining check-to-send and START-before-update-token cleanup races
 - cross-tick/process acquisition coalescing, concurrency/rate limiting, backpressure,
-  monitoring, and publication ordering
-- heartbeat and push-frequency policy
+  monitoring/metrics, multi-connection APNs scaling, and any required cross-process
+  provider-token issuance coordination
+- snapshot publication, heartbeat, stale-date, and push-frequency policy
 
-No timer, sleep loop, worker, self-HTTP callback, or Vercel Cron configuration is added here. Vercel Cron uses
-minute-granularity expressions and, even on paid plans, schedules within the selected minute;
-it is not an exact 30-second scheduler. See Vercel's current [Cron usage limits](https://vercel.com/docs/cron-jobs/usage-and-pricing)
-and [accuracy guidance](https://vercel.com/docs/cron-jobs/manage-cron-jobs#cron-jobs-accuracy).
+No timer, sleep loop, worker, self-HTTP callback, or Vercel Cron configuration is added here.
+Vercel Cron uses minute-granularity expressions and, even on paid plans, schedules within
+the selected minute; it is not an exact 30-second scheduler. See Vercel's current
+[Cron usage limits](https://vercel.com/docs/cron-jobs/usage-and-pricing) and
+[accuracy guidance](https://vercel.com/docs/cron-jobs/manage-cron-jobs#cron-jobs-accuracy).
 The existing Android active-window worker, notifications, widgets, and approximately
 30-second loop remain unchanged, as do `/departures`, `/journeys`, journey-role selection,
 Google Play billing, and English/Swedish presentation behavior. No public route invokes the
-store-backed coordinator or snapshot engine, so this foundation opens no production database
-connection and performs no production SL or Apple request until a future execution mechanism
-is deliberately reviewed and wired.
+store-backed coordinator, snapshot engine, or direct dispatcher. Import and application
+startup therefore open no production database or APNs connection and perform no production
+SL or Apple request until a future execution mechanism is deliberately reviewed and wired.

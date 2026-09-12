@@ -9,13 +9,66 @@ import {
 const FAKE_SCRIPT_EXHAUSTED_MESSAGE = "Fake APNs transport response script is exhausted";
 const DIAGNOSTIC_FAILURE_MESSAGE = "APNs request diagnostic could not be recorded";
 
+export type ApnsTransportUnknownReason =
+  | "CONNECTION_ERROR"
+  | "SESSION_ERROR"
+  | "STREAM_ERROR"
+  | "REQUEST_TIMEOUT"
+  | "UNEXPECTED_CLOSE"
+  | "GOAWAY"
+  | "RESPONSE_TOO_LARGE"
+  | "INVALID_RESPONSE";
+
+export type ApnsTransportNotAttemptedReason =
+  | "REQUEST_MATERIALIZATION_FAILED"
+  | "TRANSPORT_CLOSED";
+
+export interface ApnsTransportResponseResult {
+  readonly outcome: "APNS_RESPONSE";
+  readonly response: NormalizedApnsTransportResponse;
+}
+
+export interface ApnsTransportUnknownResult {
+  readonly outcome: "OUTCOME_UNKNOWN";
+  readonly reason: ApnsTransportUnknownReason;
+}
+
+export interface ApnsTransportNotAttemptedResult {
+  readonly outcome: "NOT_ATTEMPTED";
+  readonly reason: ApnsTransportNotAttemptedReason;
+}
+
+export type ApnsTransportResult =
+  | ApnsTransportResponseResult
+  | ApnsTransportUnknownResult
+  | ApnsTransportNotAttemptedResult;
+
 /**
- * Network-independent boundary for a future APNs HTTP/2 implementation. A real
- * implementation may materialize the request's sensitive wire data immediately before
- * sending; callers and fakes should otherwise use only its redacted diagnostic surface.
+ * Network-independent APNs boundary. Implementations make at most one transport attempt.
+ * A provable local refusal is NOT_ATTEMPTED; an absent definitive response after an attempt
+ * is OUTCOME_UNKNOWN. Neither result is retried here.
  */
 export interface ApnsTransport {
-  send(request: ApnsRequestDescription): Promise<NormalizedApnsTransportResponse>;
+  send(request: ApnsRequestDescription): Promise<ApnsTransportResult>;
+  close(): Promise<void>;
+}
+
+export function apnsTransportResponse(
+  response: NormalizedApnsTransportResponse,
+): ApnsTransportResponseResult {
+  return Object.freeze({ outcome: "APNS_RESPONSE", response });
+}
+
+export function unknownApnsTransportOutcome(
+  reason: ApnsTransportUnknownReason,
+): ApnsTransportUnknownResult {
+  return Object.freeze({ outcome: "OUTCOME_UNKNOWN", reason });
+}
+
+export function apnsTransportNotAttempted(
+  reason: ApnsTransportNotAttemptedReason,
+): ApnsTransportNotAttemptedResult {
+  return Object.freeze({ outcome: "NOT_ATTEMPTED", reason });
 }
 
 export class FakeApnsTransportScriptExhaustedError extends Error {
@@ -106,13 +159,19 @@ export class DeterministicFakeApnsTransport implements ApnsTransport {
 
   async send(
     request: ApnsRequestDescription,
-  ): Promise<NormalizedApnsTransportResponse> {
+  ): Promise<ApnsTransportResult> {
     const diagnostic = cloneRedactedDiagnostic(request.toRedactedDiagnostic());
     this.#recordedDiagnostics.push(diagnostic);
 
     const response = this.#responses[this.#nextResponseIndex];
     if (response == null) throw new FakeApnsTransportScriptExhaustedError();
     this.#nextResponseIndex += 1;
-    return normalizeApnsTransportResponse(copiedRawResponse(response));
+    return apnsTransportResponse(
+      normalizeApnsTransportResponse(copiedRawResponse(response)),
+    );
+  }
+
+  async close(): Promise<void> {
+    // The deterministic fake owns no runtime resources.
   }
 }

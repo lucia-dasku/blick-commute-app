@@ -58,8 +58,16 @@ describe("live commute module import safety", () => {
       activityKitPayload,
       apnsProtocol,
       apnsProviderToken,
+      apnsProviderTokenCache,
       apnsTransport,
+      nodeHttp2ApnsTransport,
       deliveryPlan,
+      dispatchModel,
+      dispatchStore,
+      memoryDispatchStore,
+      postgresDispatchStore,
+      directDispatcher,
+      dispatchMigrationRunner,
     ] =
       await Promise.all([
         import("../src/liveCommute/engine.js"),
@@ -78,8 +86,16 @@ describe("live commute module import safety", () => {
         import("../src/liveCommute/apple/activityKitPayload.js"),
         import("../src/liveCommute/apple/apnsProtocol.js"),
         import("../src/liveCommute/apple/apnsProviderToken.js"),
+        import("../src/liveCommute/apple/apnsProviderTokenCache.js"),
         import("../src/liveCommute/apple/apnsTransport.js"),
+        import("../src/liveCommute/apple/nodeHttp2ApnsTransport.js"),
         import("../src/liveCommute/apple/deliveryPlan.js"),
+        import("../src/liveCommute/apple/dispatchModel.js"),
+        import("../src/liveCommute/apple/dispatchStore.js"),
+        import("../src/liveCommute/apple/inMemoryLiveActivityDispatchStore.js"),
+        import("../src/liveCommute/apple/postgresLiveActivityDispatchStore.js"),
+        import("../src/liveCommute/apple/directDispatcher.js"),
+        import("../scripts/migrateLiveActivityDispatch.js"),
       ]);
 
     expect(engine.runLiveCommuteTick).toBeTypeOf("function");
@@ -112,13 +128,38 @@ describe("live commute module import safety", () => {
     expect(apnsProviderToken.createEs256ApnsProviderTokenSigner).toBeTypeOf(
       "function",
     );
+    expect(apnsProviderTokenCache.LazyApnsProviderTokenCache).toBeTypeOf(
+      "function",
+    );
     expect(apnsTransport.DeterministicFakeApnsTransport).toBeTypeOf("function");
+    expect(nodeHttp2ApnsTransport.NodeHttp2ApnsTransport).toBeTypeOf("function");
     expect(deliveryPlan.buildLiveActivityStartPlan).toBeTypeOf("function");
+    expect(dispatchModel.createLiveActivityDirectDispatchAttempt).toBeTypeOf(
+      "function",
+    );
+    expect(dispatchStore.CoordinatedLiveActivityDispatchStore).toBeTypeOf(
+      "function",
+    );
+    expect(memoryDispatchStore.InMemoryLiveActivityDispatchStore).toBeTypeOf(
+      "function",
+    );
+    expect(postgresDispatchStore.PostgresLiveActivityDispatchStore).toBeTypeOf(
+      "function",
+    );
+    expect(directDispatcher.createLiveActivityDirectDispatcher).toBeTypeOf(
+      "function",
+    );
+    expect(dispatchMigrationRunner.runLiveActivityDispatchMigration).toBeTypeOf(
+      "function",
+    );
     await expect(migrationRunner.runLiveCommuteMigration("")).rejects.toThrow(
       "LIVE_COMMUTE_MIGRATION_DATABASE_URL is required",
     );
     await expect(
       deliveryMigrationRunner.runLiveActivityDeliveryMigration(""),
+    ).rejects.toThrow("LIVE_COMMUTE_MIGRATION_DATABASE_URL is required");
+    await expect(
+      dispatchMigrationRunner.runLiveActivityDispatchMigration(""),
     ).rejects.toThrow("LIVE_COMMUTE_MIGRATION_DATABASE_URL is required");
   });
 });

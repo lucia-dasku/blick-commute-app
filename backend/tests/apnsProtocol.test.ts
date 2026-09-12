@@ -441,6 +441,7 @@ describe("APNs response normalization and classification", () => {
       [403, "ExpiredProviderToken", "AUTHENTICATION_ERROR", "AFTER_CORRECTION"],
       [429, "TooManyRequests", "THROTTLED", "WITH_DELAY"],
       [503, "Shutdown", "TRANSIENT_SERVER_ERROR", "AFTER_15_MINUTES"],
+      [599, "SyntheticServerFailure", "TRANSIENT_SERVER_ERROR", "AFTER_15_MINUTES"],
     ] as const;
     for (const [status, reason, disposition, retry] of cases) {
       const classified = classifyApnsDeviceResponse(
@@ -473,7 +474,7 @@ describe("APNs response normalization and classification", () => {
         "NO_RETRY",
       ],
       [
-        520,
+        399,
         "SyntheticFutureReason",
         "PROTOCOL_ERROR",
         "NO_RETRY",
@@ -499,7 +500,7 @@ describe("APNs response normalization and classification", () => {
     const device = classifyApnsDeviceResponse(
       normalizeApnsTransportResponse(
         rawResponse(
-          503,
+          520,
           { "apns-id": APNS_ID },
           JSON.stringify({ reason: "BadDeviceToken" }),
         ),
@@ -513,7 +514,7 @@ describe("APNs response normalization and classification", () => {
     const broadcast = classifyApnsBroadcastResponse(
       normalizeApnsTransportResponse(
         rawResponse(
-          503,
+          598,
           { "apns-request-id": REQUEST_ID },
           JSON.stringify({ reason: "ChannelNotRegistered" }),
         ),
@@ -528,7 +529,7 @@ describe("APNs response normalization and classification", () => {
       "READ",
       normalizeApnsTransportResponse(
         rawResponse(
-          503,
+          599,
           { "apns-request-id": REQUEST_ID },
           JSON.stringify({ reason: "FeatureNotEnabled" }),
         ),
