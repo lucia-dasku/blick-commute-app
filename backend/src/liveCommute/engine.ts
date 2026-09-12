@@ -15,7 +15,6 @@ import {
   planLiveCommuteSessions,
   prepareLiveCommutePublicationGroup,
   type LiveCommuteAcquisitionGroup,
-  type LiveCommutePlan,
   type LiveCommutePublicationGroup,
 } from "./planner.js";
 import type { LiveCommutePreviousSnapshotSource } from "./ports.js";
@@ -29,7 +28,7 @@ import {
 
 export interface RunLiveCommuteTickInput {
   readonly sessions: readonly LiveCommuteSession[];
-  /** Injectable clock read once for planning and again after each acquisition finishes. */
+  /** Injectable clock read for planning, each acquisition outcome, and final publication. */
   readonly now: () => Date;
   readonly transportClient: SlTransportClient;
   readonly journeyClient: SlJourneyPlannerClient;
@@ -88,7 +87,6 @@ export type LiveCommutePublicationOutcome =
 
 export interface LiveCommuteTickResult {
   readonly plannedAt: string;
-  readonly plan: LiveCommutePlan;
   readonly acquisitions: readonly LiveCommuteAcquisitionOutcome[];
   readonly publications: readonly LiveCommutePublicationOutcome[];
 }
@@ -150,23 +148,29 @@ function freshSnapshotFor(
 function readyPublications(
   group: LiveCommuteAcquisitionGroup,
   state: AcquiredTransitState,
-  completedAt: Date,
+  publicationAt: Date,
   previousSnapshots: LiveCommutePreviousSnapshotSource | undefined,
 ): readonly LiveCommutePublicationOutcome[] {
   const publications: LiveCommutePublicationOutcome[] = [];
   for (const planned of group.publicationGroups) {
-    const ready = prepareLiveCommutePublicationGroup(completedAt, planned);
+    const ready = prepareLiveCommutePublicationGroup(publicationAt, planned);
     if (ready == null) continue;
 
     try {
-      const snapshot = freshSnapshotFor(ready, state, completedAt);
-      const previous = previousSnapshot(previousSnapshots, ready.key, snapshot.kind);
+      const snapshot = freshSnapshotFor(ready, state, publicationAt);
+      let contentChanged = true;
+      try {
+        const previous = previousSnapshot(previousSnapshots, ready.key, snapshot.kind);
+        contentChanged = liveCommuteSnapshotContentChanged(previous, snapshot);
+      } catch {
+        // History is optional comparison input; fresh transit state remains publishable.
+      }
       publications.push(
         Object.freeze({
           status: "READY",
           group: ready,
           snapshot,
-          contentChanged: liveCommuteSnapshotContentChanged(previous, snapshot),
+          contentChanged,
         }),
       );
     } catch {
@@ -178,12 +182,12 @@ function readyPublications(
 
 function failedPublications(
   group: LiveCommuteAcquisitionGroup,
-  completedAt: Date,
+  publicationAt: Date,
   previousSnapshots: LiveCommutePreviousSnapshotSource | undefined,
 ): readonly LiveCommutePublicationOutcome[] {
   const publications: LiveCommutePublicationOutcome[] = [];
   for (const planned of group.publicationGroups) {
-    const ready = prepareLiveCommutePublicationGroup(completedAt, planned);
+    const ready = prepareLiveCommutePublicationGroup(publicationAt, planned);
     if (ready == null) continue;
 
     try {
@@ -193,7 +197,7 @@ function failedPublications(
         continue;
       }
 
-      const snapshot = reprojectStaleLiveCommuteSnapshot(previous, completedAt);
+      const snapshot = reprojectStaleLiveCommuteSnapshot(previous, publicationAt);
       publications.push(
         Object.freeze({
           status: "READY_STALE",
@@ -213,10 +217,17 @@ async function acquireGroup(
   group: LiveCommuteAcquisitionGroup,
   planningAt: Date,
   input: RunLiveCommuteTickInput,
-): Promise<{
-  readonly acquisition: LiveCommuteAcquisitionOutcome;
-  readonly publications: readonly LiveCommutePublicationOutcome[];
-}> {
+): Promise<
+  | {
+      readonly group: LiveCommuteAcquisitionGroup;
+      readonly acquisition: AcquiredLiveCommuteGroup;
+      readonly state: AcquiredTransitState;
+    }
+  | {
+      readonly group: LiveCommuteAcquisitionGroup;
+      readonly acquisition: FailedLiveCommuteGroup;
+    }
+> {
   try {
     let state: AcquiredTransitState;
     if (group.query.kind === "LINE_DIRECTION") {
@@ -226,13 +237,8 @@ async function acquireGroup(
         kind: "LINE_DIRECTION",
         state: normalizeDeparturesResponse(group.query.siteId, raw, completedAt),
       };
-      const publications = readyPublications(
-        group,
-        state,
-        completedAt,
-        input.previousSnapshots,
-      );
       return {
+        group,
         acquisition: Object.freeze({
           status: "ACQUIRED",
           key: group.key,
@@ -240,7 +246,7 @@ async function acquireGroup(
           sourceFetchedAt: state.state.fetchedAt,
           publicationKeys: publicationKeys(group),
         }),
-        publications,
+        state,
       };
     }
 
@@ -257,13 +263,8 @@ async function acquireGroup(
       }),
     };
     const completedAt = readClock(input.now);
-    const publications = readyPublications(
-      group,
-      state,
-      completedAt,
-      input.previousSnapshots,
-    );
     return {
+      group,
       acquisition: Object.freeze({
         status: "ACQUIRED",
         key: group.key,
@@ -271,18 +272,18 @@ async function acquireGroup(
         sourceFetchedAt: state.state.fetchedAt.toISOString(),
         publicationKeys: publicationKeys(group),
       }),
-      publications,
+      state,
     };
   } catch {
     const completedAt = readClock(input.now);
     return {
+      group,
       acquisition: Object.freeze({
         status: "ACQUISITION_FAILED",
         key: group.key,
         completedAt: completedAt.toISOString(),
         publicationKeys: publicationKeys(group),
       }),
-      publications: failedPublications(group, completedAt, input.previousSnapshots),
     };
   }
 }
@@ -299,11 +300,21 @@ export async function runLiveCommuteTick(
   const executed = await Promise.all(
     plan.acquisitionGroups.map((group) => acquireGroup(group, planningAt, input)),
   );
+  const publicationAt = executed.length === 0 ? planningAt : readClock(input.now);
+  const publications = executed.flatMap((result) =>
+    "state" in result
+      ? readyPublications(
+          result.group,
+          result.state,
+          publicationAt,
+          input.previousSnapshots,
+        )
+      : failedPublications(result.group, publicationAt, input.previousSnapshots),
+  );
 
   return Object.freeze({
     plannedAt: planningAt.toISOString(),
-    plan,
     acquisitions: Object.freeze(executed.map((result) => result.acquisition)),
-    publications: Object.freeze(executed.flatMap((result) => result.publications)),
+    publications: Object.freeze(publications),
   });
 }

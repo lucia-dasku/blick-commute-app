@@ -19,7 +19,10 @@ export interface LiveCommutePublicationPlan {
   readonly sessions: readonly LiveCommuteSession[];
 }
 
-/** One upstream request whose result may feed several publication groups. */
+/**
+ * One logical acquisition whose result may feed several publication groups. LINE uses one
+ * site fetch; EXACT may use several bounded Journey Planner calls.
+ */
 export interface LiveCommuteAcquisitionGroup {
   readonly key: AcquisitionKey;
   readonly query: CanonicalAcquisitionQuery;
