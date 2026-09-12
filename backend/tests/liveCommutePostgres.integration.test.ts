@@ -19,41 +19,15 @@ import {
   type LiveCommutePostgresSql,
 } from "../src/liveCommute/postgresLiveCommuteSessionStore.js";
 import { liveCommuteSessionVersionRef } from "../src/liveCommute/sessionStore.js";
+import {
+  checkedLocalLiveCommuteTestDatabaseUrl,
+  LIVE_COMMUTE_TEST_SCHEMA_PREFIX,
+  liveCommuteTestSchemaConnectionUrl,
+} from "./liveCommutePostgresTestSupport.js";
 
 const RAW_TEST_DATABASE_URL =
   process.env.LIVE_COMMUTE_TEST_DATABASE_URL?.trim() || undefined;
 const describeWithPostgres = RAW_TEST_DATABASE_URL == null ? describe.skip : describe;
-const TEST_SCHEMA_PREFIX = "blick_live_commute_test_";
-
-function checkedLocalTestDatabaseUrl(raw: string): string {
-  let url: URL;
-  try {
-    url = new URL(raw);
-  } catch {
-    throw new Error("LIVE_COMMUTE_TEST_DATABASE_URL must be a valid PostgreSQL URL");
-  }
-  if (url.protocol !== "postgres:" && url.protocol !== "postgresql:") {
-    throw new Error("LIVE_COMMUTE_TEST_DATABASE_URL must use PostgreSQL");
-  }
-  const database = decodeURIComponent(url.pathname.replace(/^\/+/, ""));
-  if (
-    !/(^|[-_])test([-_]|$)/i.test(database) ||
-    /(^|[-_])(prod|production)([-_]|$)/i.test(database)
-  ) {
-    throw new Error("LIVE_COMMUTE_TEST_DATABASE_URL must name a dedicated test database");
-  }
-  if (!["localhost", "127.0.0.1", "[::1]"].includes(url.hostname)) {
-    throw new Error("LIVE_COMMUTE_TEST_DATABASE_URL must point to a local database");
-  }
-  return url.toString();
-}
-
-function schemaConnectionUrl(connectionString: string, schema: string): string {
-  const url = new URL(connectionString);
-  url.searchParams.set("search_path", schema);
-  return url.toString();
-}
-
 describe("PostgreSQL live commute test safeguards", () => {
   it.each([
     [
@@ -73,11 +47,11 @@ describe("PostgreSQL live commute test safeguards", () => {
       "postgresql://blick_test:blick_test_ci_only@database.example.invalid:5432/blick_test",
     ],
   ])("rejects %s", (_description, connectionString) => {
-    expect(() => checkedLocalTestDatabaseUrl(connectionString)).toThrow();
+    expect(() => checkedLocalLiveCommuteTestDatabaseUrl(connectionString)).toThrow();
   });
 
   it("accepts a dedicated loopback test database", () => {
-    const checked = checkedLocalTestDatabaseUrl(
+    const checked = checkedLocalLiveCommuteTestDatabaseUrl(
       "postgresql://blick_test:blick_test_ci_only@127.0.0.1:5432/blick_test",
     );
 
@@ -116,7 +90,7 @@ describeWithPostgres("PostgreSQL live commute session store", () => {
   let secondSql: LiveCommutePostgresSql | undefined;
   let firstStore: PostgresLiveCommuteSessionStore;
   let secondStore: PostgresLiveCommuteSessionStore;
-  const schema = `${TEST_SCHEMA_PREFIX}${randomUUID().replaceAll("-", "")}`;
+  const schema = `${LIVE_COMMUTE_TEST_SCHEMA_PREFIX}${randomUUID().replaceAll("-", "")}`;
 
   async function assertIndependentScopedConnections(): Promise<void> {
     const [firstScope, secondScope] = await Promise.all([
@@ -141,7 +115,9 @@ describeWithPostgres("PostgreSQL live commute session store", () => {
   }
 
   beforeAll(async () => {
-    const connectionString = checkedLocalTestDatabaseUrl(RAW_TEST_DATABASE_URL!);
+    const connectionString = checkedLocalLiveCommuteTestDatabaseUrl(
+      RAW_TEST_DATABASE_URL!,
+    );
     adminSql = postgres(connectionString, {
       max: 1,
       prepare: false,
@@ -149,7 +125,10 @@ describeWithPostgres("PostgreSQL live commute session store", () => {
     });
     await adminSql`CREATE SCHEMA ${adminSql(schema)}`;
 
-    const scopedConnectionString = schemaConnectionUrl(connectionString, schema);
+    const scopedConnectionString = liveCommuteTestSchemaConnectionUrl(
+      connectionString,
+      schema,
+    );
     firstSql = postgres(scopedConnectionString, {
       max: 1,
       prepare: false,
@@ -178,7 +157,7 @@ describeWithPostgres("PostgreSQL live commute session store", () => {
     await firstSql?.end({ timeout: 5 });
     await secondSql?.end({ timeout: 5 });
     if (adminSql != null) {
-      if (!schema.startsWith(TEST_SCHEMA_PREFIX)) {
+      if (!schema.startsWith(LIVE_COMMUTE_TEST_SCHEMA_PREFIX)) {
         throw new Error("refusing to remove an unexpected test schema");
       }
       await adminSql`DROP SCHEMA IF EXISTS ${adminSql(schema)} CASCADE`;

@@ -33,6 +33,12 @@ export interface LiveCommuteInstallationAuthentication {
   readonly bearerCredential: string;
 }
 
+/** Internal, validated authentication material for installation-scoped services. */
+export interface LiveCommuteInstallationAuthenticationProof {
+  readonly installationId: string;
+  readonly digest: InstallationCredentialDigest;
+}
+
 export type IssuedLiveCommuteInstallation = LiveCommuteInstallationAuthentication;
 
 export type LiveCommuteConcreteSessionInput = Omit<
@@ -117,9 +123,9 @@ function readClock(now: () => Date): Date {
   return new Date(value.getTime());
 }
 
-function normalizedAuthentication(
+export function createLiveCommuteInstallationAuthenticationProof(
   authentication: LiveCommuteInstallationAuthentication,
-): LiveCommuteInstallationAuthentication & { readonly digest: InstallationCredentialDigest } {
+): LiveCommuteInstallationAuthenticationProof {
   if (authentication == null || typeof authentication !== "object") {
     throw new LiveCommuteSessionServiceError("INSTALLATION_AUTHENTICATION_FAILED");
   }
@@ -136,7 +142,6 @@ function normalizedAuthentication(
   }
   return Object.freeze({
     installationId,
-    bearerCredential: authentication.bearerCredential,
     digest: digestBearerCredential(authentication.bearerCredential),
   });
 }
@@ -145,7 +150,7 @@ function digestBearerCredential(value: string): InstallationCredentialDigest {
   return installationCredentialDigest(createHash("sha256").update(value, "utf8").digest("hex"));
 }
 
-function credentialMatches(
+export function liveCommuteInstallationCredentialMatches(
   stored: InstallationCredentialDigest,
   supplied: InstallationCredentialDigest,
 ): boolean {
@@ -257,7 +262,7 @@ export class LiveCommuteInstallationService {
     authentication: LiveCommuteInstallationAuthentication,
     input: LiveCommuteConcreteSessionInput,
   ): Promise<RegisterLiveCommuteSessionResult> {
-    const proof = normalizedAuthentication(authentication);
+    const proof = createLiveCommuteInstallationAuthenticationProof(authentication);
     return await this.withAuthenticatedProof(proof, false, async (transaction) => {
       const proposed = ownedSession(proof.installationId, input);
       const existing = await transaction.getSession(proposed.sessionId);
@@ -300,7 +305,7 @@ export class LiveCommuteInstallationService {
     authentication: LiveCommuteInstallationAuthentication,
     input: ReplaceLiveCommuteSessionInput,
   ): Promise<ReplaceLiveCommuteSessionResult> {
-    const proof = normalizedAuthentication(authentication);
+    const proof = createLiveCommuteInstallationAuthenticationProof(authentication);
     return await this.withAuthenticatedProof(proof, false, async (transaction) => {
       const expectedRevision = validExpectedRevision(input.expectedRevision);
       const proposed = ownedSession(proof.installationId, input);
@@ -407,16 +412,14 @@ export class LiveCommuteInstallationService {
     ) => Promise<T>,
   ): Promise<T> {
     return await this.withAuthenticatedProof(
-      normalizedAuthentication(authentication),
+      createLiveCommuteInstallationAuthenticationProof(authentication),
       allowRevoked,
       operation,
     );
   }
 
   private async withAuthenticatedProof<T>(
-    proof: LiveCommuteInstallationAuthentication & {
-      readonly digest: InstallationCredentialDigest;
-    },
+    proof: LiveCommuteInstallationAuthenticationProof,
     allowRevoked: boolean,
     operation: (
       transaction: LiveCommuteInstallationTransaction,
@@ -429,7 +432,10 @@ export class LiveCommuteInstallationService {
         const installation = await transaction.getInstallation();
         if (
           installation == null ||
-          !credentialMatches(installation.credentialDigest, proof.digest) ||
+          !liveCommuteInstallationCredentialMatches(
+            installation.credentialDigest,
+            proof.digest,
+          ) ||
           (!allowRevoked && installation.state !== "ACTIVE")
         ) {
           throw new LiveCommuteSessionServiceError(

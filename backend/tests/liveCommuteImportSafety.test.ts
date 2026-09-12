@@ -48,6 +48,12 @@ describe("live commute module import safety", () => {
       memoryStore,
       postgresStore,
       migrationRunner,
+      tokenProtection,
+      deliveryService,
+      deliveryResolver,
+      memoryDeliveryStore,
+      postgresDeliveryStore,
+      deliveryMigrationRunner,
     ] =
       await Promise.all([
         import("../src/liveCommute/engine.js"),
@@ -56,6 +62,12 @@ describe("live commute module import safety", () => {
         import("../src/liveCommute/inMemoryLiveCommuteSessionStore.js"),
         import("../src/liveCommute/postgresLiveCommuteSessionStore.js"),
         import("../scripts/migrateLiveCommute.js"),
+        import("../src/liveCommute/apple/tokenProtection.js"),
+        import("../src/liveCommute/apple/deliveryService.js"),
+        import("../src/liveCommute/apple/deliveryResolver.js"),
+        import("../src/liveCommute/apple/inMemoryLiveActivityDeliveryStore.js"),
+        import("../src/liveCommute/apple/postgresLiveActivityDeliveryStore.js"),
+        import("../scripts/migrateLiveActivityDelivery.js"),
       ]);
 
     expect(engine.runLiveCommuteTick).toBeTypeOf("function");
@@ -66,8 +78,23 @@ describe("live commute module import safety", () => {
     expect(memoryStore.InMemoryLiveCommuteSessionStore).toBeTypeOf("function");
     expect(postgresStore.PostgresLiveCommuteSessionStore).toBeTypeOf("function");
     expect(migrationRunner.runLiveCommuteMigration).toBeTypeOf("function");
+    expect(tokenProtection.createAes256GcmActivityKitTokenProtector).toBeTypeOf(
+      "function",
+    );
+    expect(deliveryService.createLiveActivityDeliveryService).toBeTypeOf("function");
+    expect(deliveryResolver.createLiveActivityDeliveryResolver).toBeTypeOf("function");
+    expect(memoryDeliveryStore.InMemoryLiveActivityDeliveryStore).toBeTypeOf("function");
+    expect(postgresDeliveryStore.PostgresLiveActivityDeliveryStore).toBeTypeOf(
+      "function",
+    );
+    expect(deliveryMigrationRunner.runLiveActivityDeliveryMigration).toBeTypeOf(
+      "function",
+    );
     await expect(migrationRunner.runLiveCommuteMigration("")).rejects.toThrow(
       "LIVE_COMMUTE_MIGRATION_DATABASE_URL is required",
     );
+    await expect(
+      deliveryMigrationRunner.runLiveActivityDeliveryMigration(""),
+    ).rejects.toThrow("LIVE_COMMUTE_MIGRATION_DATABASE_URL is required");
   });
 });

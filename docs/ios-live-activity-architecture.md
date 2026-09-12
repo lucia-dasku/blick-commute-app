@@ -1,17 +1,18 @@
 # iOS Live Activity architecture
 
-Status: Phase 3A backend foundation, implemented locally 2026-09-12. It provides persistent
-installation ownership, concrete-session lifecycle control, and a store-backed coordinator
-around the accepted platform-neutral snapshot engine. It remains callable internal code:
-no production caller, public route, timer, worker, or scheduler invokes it.
+Status: Phase 3B backend foundation, implemented locally 2026-09-12. In addition to the
+accepted Phase 3A ownership/session authority, it provides protected ActivityKit token
+registries, exact-session-revision delivery bindings, and an authority-revalidating internal
+delivery-target seam. It remains callable internal code: no production caller, public route,
+timer, worker, scheduler, or APNs client invokes it.
 
 The implemented boundary includes immutable session planning and grouping, direct SL
 acquisition, authoritative exact-journey role reuse, one final-clock projection, fresh/stale
 fallback projection, semantic comparison, persistent ownership and lifecycle records,
 revision-controlled mutations, and an authoritative post-acquisition store check. Snapshot
 history persistence, public enrollment, scheduling, publication, push delivery, and client
-rendering remain deferred. There is no iOS target, Apple credential, push integration, or
-production migration wiring. All Apple behavior described below is derived from Apple's
+rendering remain deferred. There is no iOS target, Apple credential, APNs sender integration,
+or production migration wiring. All Apple behavior described below is derived from Apple's
 public documentation and has not been verified with an iOS target, physical device, or APNs
 setup.
 
@@ -359,6 +360,18 @@ push-to-start token that a server can eventually use for a device-targeted remot
 Broadcast push notifications cannot start a Live Activity; they update activities already
 subscribed to a channel and do not replace the device-targeted start request.
 
+Apple exposes the current value through
+[`Activity<Attributes>.pushToStartToken`](https://developer.apple.com/documentation/activitykit/activity/pushtostarttoken)
+and replacements through
+[`pushToStartTokenUpdates`](https://developer.apple.com/documentation/activitykit/activity/pushtostarttokenupdates).
+The per-activity [`pushToken`](https://developer.apple.com/documentation/activitykit/activity/pushtoken)
+and [`pushTokenUpdates`](https://developer.apple.com/documentation/activitykit/activity/pushtokenupdates-swift.property)
+lifecycle is separate. Apple directs clients to upload replacements
+and invalidate outdated values for both token kinds. Apple does not document a fixed byte
+length, rotation cadence, or one-use lifetime for these ActivityKit tokens; Blick therefore
+treats them as bounded opaque bytes with explicit client-observation generations, not as
+fixed-format or permanent credentials.
+
 On iOS 18 and later, that individual start payload can include `input-push-channel`. The
 new Live Activity then listens on the named channel, and later dynamic updates can be sent
 once to every activity subscribed to that channel. The intended, not yet implemented,
@@ -375,6 +388,90 @@ be throttled. A future Blick engine may aim to acquire fresh state approximately
 seconds while a session is active, but it cannot promise that every corresponding push will
 arrive on an exact 30-second boundary. Acquisition cadence and Apple delivery cadence are
 different contracts. Users can also disable frequent Live Activity pushes.
+
+## Phase 3B delivery foundation
+
+### Implemented
+
+- Apple-specific code lives under `backend/src/liveCommute/apple`; ActivityKit delivery
+  concepts do not enter `LiveCommuteQuery`, acquisition/publication keys, transit snapshots,
+  journey roles, or SL clients.
+- One installation-scoped push-to-start token history records explicit monotonically
+  increasing client generations and immutable server revisions. An identical retry of the
+  current generation is idempotent; a higher generation supersedes the former current row;
+  an older or same-generation different value is rejected. Exactly one row may be `CURRENT`.
+- Each direct-delivery binding has an independent update-token history with the same
+  rotation, replay, and invalidation rules. A push-to-start token is never interchangeable
+  with a per-activity update token.
+- Token plaintext is accepted only as copied, nonempty raw bytes. The 4,096-byte maximum is
+  Blick's own API/storage resource bound, not an assertion about an Apple token length.
+  Persistence uses an injected caller-supplied 256-bit key with AES-256-GCM, a fresh 12-byte
+  nonce, a 16-byte authentication tag, context-bound additional authenticated data (including
+  token kind, owner, generation, and APNs environment), and a separate deterministic SHA-256
+  digest used only for equality. A bounded recent-nonce detector catches a repeating random
+  source without creating unbounded process state; cryptographic uniqueness relies on Node's
+  CSPRNG. The key is neither hard-coded nor derived from the installation credential, and
+  production key configuration is deferred.
+- Delivery bindings use server-generated UUIDs and bind one installation/session to one
+  exact mutable-session revision. Their honest backend lifecycle is `PENDING_START`,
+  `ENDED`, or `INVALIDATED`; no row claims that APNs successfully started an on-device
+  activity. An invalidated exact-revision binding is a retained tombstone and cannot be
+  recreated by delayed replay. A normalized Apple activity identifier can be attached once
+  after creation, is unique per installation, and cannot be changed or attached to a terminal
+  binding. Its presence—or any direct update-token history—prevents that binding from resolving
+  another start target.
+- `DIRECT_TOKEN` and `BROADCAST_CHANNEL` are explicit strategies. Direct bindings alone may
+  accept update tokens. No channel identifier is invented or persisted.
+- Every authenticated mutation takes the same Phase 3A installation-parent lock before
+  credential, session, binding, or token checks. PostgreSQL provides cross-process
+  serialization; the in-memory adapter composes through the Phase 3A transaction only for
+  deterministic tests. No process-local mutex is production authority.
+- Internal start/update target resolution rechecks that the installation is active, the
+  session is `REGISTERED`, its revision exactly matches the binding, the half-open session
+  window contains the resolution instant, the binding remains eligible, and the needed
+  token is current. Only then is plaintext decrypted. Safe service DTOs, ordinary
+  installation/session values, errors, snapshots, and diagnostic output contain no token,
+  ciphertext, authentication tag, nonce, or digest.
+- Revocation, cancellation, replacement, expiry, explicit token invalidation, and terminal
+  binding state all fail delivery lookup closed. Physical token history rows need not be
+  rewritten row by row for session authority changes. Push-to-start and direct update-token
+  invalidation both use an expected client generation so a delayed invalidation cannot disable
+  a newer token. Resolver time comes only from its injected trusted clock and is read after
+  locked persistence reads, immediately before the half-open window check. No token mutation
+  performs an SL request.
+
+The intended iOS 18+ broadcast boundary remains:
+
+```text
+installation push-to-start token
+        -> future device-addressed APNs start request
+        -> input-push-channel names a real APNs-created channel
+        -> the individual Live Activity subscribes
+        -> later identical publication-group updates may be broadcast once
+```
+
+An acquisition group may feed several publication groups. One publication group may later
+map to one active Apple broadcast channel, and many installation-specific activities may
+subscribe to that channel. `AcquisitionKey`, `PublicationKey`, and an Apple channel ID are
+three different identities. Channel creation, persistence, replacement, and deletion remain
+a later APNs channel-management phase.
+
+### Still deferred
+
+- iOS/ActivityKit code that obtains, observes, and uploads real tokens
+- physical-device and real Apple-environment verification
+- Apple Developer account, APNs credentials, signing JWTs, and network requests
+- broadcast-channel creation and real channel identifiers
+- ActivityKit start/update/end payload schemas and APNs response handling
+- public enrollment/token/binding routes, their rate limits, and abuse controls
+- production key management, rotation, retention, deletion, and operational access policy
+- stale-date, freshness-heartbeat, scheduler, dispatcher, queue/outbox, and check-to-send
+  coordination
+- cross-instance transit acquisition coordination and App Store configuration
+
+APNs delivery remains best effort and distinct from backend session authority. A successful
+authority lookup is a point-in-time check, not a lease across a later network request. None
+of the Apple behavior or token shapes above has been exercised on a real device.
 
 Ordinary WidgetKit widgets are not the 30-second live engine. Widget extensions are not
 continuously active, reloads are budgeted and scheduled by the system, and Apple recommends
@@ -412,10 +509,14 @@ move role selection to a client.
 
 ## Security, privacy, and retention
 
-The Phase 3A tables do not store APNs device, push-to-start, or activity-update tokens; Apple
-signing keys; raw installation bearer credentials; purchase tokens; copied billing
-credentials; or user-account data. The live-commute migration and service remain separate
-from Google Play purchase state. Test fixtures use synthetic commute data.
+The Phase 3B tables store encrypted push-to-start and per-activity update-token generations,
+plus comparison-only digests and lifecycle metadata. They do not store token plaintext,
+Apple signing keys, raw installation bearer credentials, purchase tokens, copied billing
+credentials, or user-account data. ActivityKit tokens are installation-linked delivery
+identifiers and must be treated as sensitive operational data even when encrypted. They are
+excluded from safe DTOs, errors, logs, snapshots, and committed fixtures; tests use only
+synthetic byte sequences. The Apple delivery migration and services remain separate from
+Google Play purchase state.
 
 Installation-linked stop choices, destinations, route filters, and commute windows can still
 reveal habits and are potentially sensitive personal data. Replacing a name with an opaque
@@ -460,27 +561,42 @@ start work, or require Redis or Apple configuration. In particular, imports init
 acquisition or periodic cleanup. The existing production Redis validation elsewhere in the
 application is unchanged.
 
+After migration 002, apply the independent delivery migration explicitly to the same
+reviewed non-production target:
+
+```powershell
+$env:LIVE_COMMUTE_MIGRATION_DATABASE_URL = 'postgresql://localhost/blick_live_commute_dev'
+npm run migrate:live-activity-delivery
+Remove-Item Env:LIVE_COMMUTE_MIGRATION_DATABASE_URL
+```
+
+That runner applies only `003_live_activity_delivery.sql`; it does not inspect `DATABASE_URL`,
+run migration 002 or the billing migration, load an encryption key, or connect on import.
+
 Real PostgreSQL adapter and concurrency verification uses a separate setting and command:
 
 ```powershell
 $env:LIVE_COMMUTE_TEST_DATABASE_URL = 'postgresql://localhost/blick_live_commute_test'
 npm run test:live-commute-postgres
+npm run test:live-activity-postgres
 Remove-Item Env:LIVE_COMMUTE_TEST_DATABASE_URL
 ```
 
-The integration suite refuses non-local hosts and database names without a distinct `test`
-segment. It creates a random `blick_live_commute_test_*` schema, runs the checked-in migration
-there, exercises independent one-connection pools, and drops only that prefixed schema. Use
-an explicitly disposable local test database; never substitute a real `.env` or production
-`DATABASE_URL`. When `LIVE_COMMUTE_TEST_DATABASE_URL` is absent, the suite is guarded and
-skips. A skipped run, unit test, or SQL-text assertion is not evidence that real PostgreSQL
-transactions, constraints, migration execution, or cross-connection locking passed.
+The PostgreSQL integration suites share one fail-closed URL guard: they refuse non-local
+hosts and database names without a distinct `test` segment. Each creates its own random
+`blick_live_commute_test_*` schema, applies its required checked-in migrations twice,
+exercises independent one-connection pools, and drops only that prefixed schema. Use an
+explicitly disposable local test database; never substitute a real `.env` or production
+`DATABASE_URL`. When `LIVE_COMMUTE_TEST_DATABASE_URL` is absent, the database-backed suites
+are guarded and skip. A skipped run, unit test, or SQL-text assertion is not evidence that
+real PostgreSQL transactions, constraints, migration execution, or cross-connection locking
+passed.
 
 ## Explicitly deferred
 
 - Swift/SwiftUI, ActivityKit and WidgetKit client code
-- push-to-start and per-activity token persistence
-- APNs credentials, channel management, signing, and network requests
+- real token acquisition/upload and physical-device validation
+- APNs credentials, channel management, signing, payloads, and network requests
 - public installation enrollment/authentication routes and any user-account system
 - production application of the migration, database-pool wiring, and provider configuration
 - persistent snapshot history
