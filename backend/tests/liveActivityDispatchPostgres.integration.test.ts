@@ -52,6 +52,28 @@ describeWithPostgres("PostgreSQL Live Activity direct dispatch store", () => {
     });
   }
 
+  async function assertIndependentScopedConnections(): Promise<void> {
+    const [firstScope, secondScope] = await Promise.all([
+      firstSql!<{ current_schema: string | null; backend_pid: number }[]>`
+        SELECT current_schema() AS current_schema,
+               pg_backend_pid()::integer AS backend_pid
+      `,
+      secondSql!<{ current_schema: string | null; backend_pid: number }[]>`
+        SELECT current_schema() AS current_schema,
+               pg_backend_pid()::integer AS backend_pid
+      `,
+    ]);
+    if (
+      firstScope[0]?.current_schema !== schema ||
+      secondScope[0]?.current_schema !== schema
+    ) {
+      throw new Error("refusing to run outside the randomized dispatch test schema");
+    }
+    if (firstScope[0]?.backend_pid === secondScope[0]?.backend_pid) {
+      throw new Error("dispatch integration stores must use independent connections");
+    }
+  }
+
   async function setupDirect(withUpdateToken: boolean) {
     const authentication = await installationService().registerInstallation();
     await installationService().registerSession(authentication, {
@@ -177,6 +199,7 @@ describeWithPostgres("PostgreSQL Live Activity direct dispatch store", () => {
       prepare: false,
       connection: { application_name: "blick_dispatch_test_second" },
     });
+    await assertIndependentScopedConnections();
     await runLiveCommuteMigration(scoped);
     await runLiveActivityDeliveryMigration(scoped);
     await runLiveActivityDispatchMigration(scoped);
@@ -192,6 +215,7 @@ describeWithPostgres("PostgreSQL Live Activity direct dispatch store", () => {
   });
 
   beforeEach(async () => {
+    await assertIndependentScopedConnections();
     await firstSql!`
       TRUNCATE live_activity_direct_dispatch_attempts,
                live_activity_direct_dispatch_state,
@@ -658,6 +682,18 @@ describeWithPostgres("PostgreSQL Live Activity direct dispatch store", () => {
   });
 
   it("creates constrained dispatch catalog objects without sensitive columns", async () => {
+    const setup = await setupDirect(true);
+    const seed = await firstDispatch.reserveDirectDispatch(
+      reserveInput(setup.authentication, setup.bindingId, "DIRECT_UPDATE", EVENT),
+    );
+    if (seed.status !== "RESERVED") throw new Error("expected reservation");
+    await firstDispatch.abortDirectDispatch({
+      installationId: setup.authentication.installationId,
+      dispatchId: seed.attempt.dispatchId,
+      completedAt: ACTIVE_AT,
+      retryAdvice: "NO_RETRY",
+    });
+
     const tables = await firstSql!<{ table_name: string }[]>`
       SELECT table_name
       FROM information_schema.tables
@@ -694,5 +730,51 @@ describeWithPostgres("PostgreSQL Live Activity direct dispatch store", () => {
       ORDER BY indexname
     `;
     expect(indexes).toHaveLength(4);
+
+    for (const operation of ["START", "DIRECT_UPDATE"] as const) {
+      await expect(firstSql!`
+        INSERT INTO live_activity_direct_dispatch_attempts (
+          dispatch_id, binding_id, installation_id, session_revision,
+          operation_kind, event_timestamp, apns_environment, apns_request_id,
+          state, created_at
+        ) VALUES (
+          ${randomUUID()}, ${setup.bindingId},
+          ${setup.authentication.installationId}, 1, ${operation},
+          ${EVENT + (operation === "START" ? 1 : 2)}, 'SANDBOX',
+          ${randomUUID()}, 'RESERVED', ${ACTIVE_AT}
+        )
+      `).rejects.toMatchObject({ code: "23514" });
+    }
+
+    for (const result of [
+      { state: "ACCEPTED", retryAdvice: "NO_RETRY", authority: "MATCHED" },
+      {
+        state: "REJECTED",
+        retryAdvice: "PERMANENT_PAYLOAD_FAILURE",
+        authority: "NOT_CHECKED",
+      },
+      {
+        state: "RETRYABLE",
+        retryAdvice: "RETRY_AFTER_APPLE_BACKOFF",
+        authority: "NOT_CHECKED",
+      },
+    ] as const) {
+      await expect(firstSql!`
+        INSERT INTO live_activity_direct_dispatch_attempts (
+          dispatch_id, binding_id, installation_id, session_revision,
+          operation_kind, event_timestamp, update_token_server_revision,
+          update_token_client_generation, apns_environment, apns_request_id,
+          payload_fingerprint, state, apns_status, retry_advice,
+          post_send_authority, created_at, in_flight_at, completed_at
+        ) VALUES (
+          ${randomUUID()}, ${setup.bindingId},
+          ${setup.authentication.installationId}, 1, 'DIRECT_UPDATE',
+          ${EVENT + 3 + ["ACCEPTED", "REJECTED", "RETRYABLE"].indexOf(result.state)},
+          1, 1, 'SANDBOX', ${randomUUID()}, ${FINGERPRINT}, ${result.state},
+          NULL, ${result.retryAdvice}, ${result.authority},
+          ${ACTIVE_AT}, ${ACTIVE_AT}, ${ACTIVE_AT}
+        )
+      `).rejects.toMatchObject({ code: "23514" });
+    }
   });
 });

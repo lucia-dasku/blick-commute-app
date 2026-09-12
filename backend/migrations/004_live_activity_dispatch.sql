@@ -176,7 +176,9 @@ CREATE TABLE IF NOT EXISTS live_activity_direct_dispatch_attempts (
   CHECK (
     (
       operation_kind = 'START'
+      AND push_to_start_server_revision IS NOT NULL
       AND push_to_start_server_revision BETWEEN 1 AND 2147483647
+      AND push_to_start_client_generation IS NOT NULL
       AND push_to_start_client_generation BETWEEN 1 AND 2147483647
       AND update_token_server_revision IS NULL
       AND update_token_client_generation IS NULL
@@ -185,7 +187,9 @@ CREATE TABLE IF NOT EXISTS live_activity_direct_dispatch_attempts (
       operation_kind IN ('DIRECT_UPDATE', 'DIRECT_END')
       AND push_to_start_server_revision IS NULL
       AND push_to_start_client_generation IS NULL
+      AND update_token_server_revision IS NOT NULL
       AND update_token_server_revision BETWEEN 1 AND 2147483647
+      AND update_token_client_generation IS NOT NULL
       AND update_token_client_generation BETWEEN 1 AND 2147483647
     )
   ),
@@ -236,8 +240,15 @@ CREATE TABLE IF NOT EXISTS live_activity_direct_dispatch_attempts (
     )
   ),
   CHECK (
-    (state = 'ACCEPTED' AND apns_status = 200)
-    OR (state IN ('REJECTED', 'RETRYABLE') AND apns_status IS NOT NULL)
+    (
+      state = 'ACCEPTED'
+      AND apns_status IS NOT NULL
+      AND apns_status = 200
+    )
+    OR (
+      state IN ('REJECTED', 'RETRYABLE')
+      AND apns_status IS NOT NULL
+    )
     OR (
       state IN ('RESERVED', 'IN_FLIGHT', 'ABORTED', 'SUPERSEDED')
       AND apns_status IS NULL
