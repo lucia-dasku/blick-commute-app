@@ -5,6 +5,7 @@ import {
   readGooglePlayRtdnConfig,
   readPort,
   readRedisConfig,
+  readReviewerAccessConfig,
   readUpstreamTimeoutMs,
 } from "../src/config/env.js";
 
@@ -163,5 +164,28 @@ describe("billing runtime configuration", () => {
     expect(readGooglePlayRtdnConfig("https://example.invalid/rtdn", "pubsub@example.invalid")).toEqual({
       audience: "https://example.invalid/rtdn", serviceAccountEmail: "pubsub@example.invalid",
     });
+  });
+});
+
+describe("reviewer access runtime configuration", () => {
+  it("accepts exactly one SHA-256 hex digest and normalizes its case", () => {
+    expect(readReviewerAccessConfig(" A" + "b".repeat(62) + "C ")).toEqual({
+      codeHashHex: "a" + "b".repeat(62) + "c",
+    });
+  });
+
+  it("keeps missing or blank reviewer configuration optional", () => {
+    expect(readReviewerAccessConfig(undefined)).toBeUndefined();
+    expect(readReviewerAccessConfig("")).toBeUndefined();
+    expect(readReviewerAccessConfig("   ")).toBeUndefined();
+  });
+
+  it.each([
+    "f".repeat(63),
+    "f".repeat(65),
+    "g".repeat(64),
+    "not-a-digest",
+  ])("isolates malformed configuration instead of stopping the backend (%s)", (value) => {
+    expect(readReviewerAccessConfig(value)).toBeUndefined();
   });
 });

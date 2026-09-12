@@ -6,6 +6,7 @@ import dagger.hilt.InstallIn
 import dagger.hilt.components.SingletonComponent
 import se.blick.app.scheduling.NotificationRecoveryCoordinator
 import se.blick.app.scheduling.NotificationRecoveryReporter
+import se.blick.app.scheduling.EntitlementChangeReconciler
 import se.blick.app.scheduling.RoutineScheduler
 import se.blick.app.scheduling.WorkManagerRoutineScheduler
 import se.blick.app.scheduling.OneTimeEventScheduler
@@ -33,4 +34,8 @@ abstract class SchedulingModule {
     @Binds
     @Singleton
     abstract fun bindNotificationRecoveryReporter(impl: NotificationRecoveryCoordinator): NotificationRecoveryReporter
+
+    @Binds
+    @Singleton
+    abstract fun bindEntitlementChangeReconciler(impl: NotificationRecoveryCoordinator): EntitlementChangeReconciler
 }

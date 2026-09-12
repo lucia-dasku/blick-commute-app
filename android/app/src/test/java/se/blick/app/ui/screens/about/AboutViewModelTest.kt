@@ -5,6 +5,7 @@ import androidx.appcompat.app.AppCompatDelegate
 import androidx.core.os.LocaleListCompat
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.ExperimentalCoroutinesApi
+import kotlinx.coroutines.CompletableDeferred
 import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
@@ -21,6 +22,7 @@ import org.robolectric.RobolectricTestRunner
 import org.robolectric.annotation.Config
 import se.blick.app.billing.EntitlementState
 import se.blick.app.billing.PremiumEntitlementRepository
+import se.blick.app.billing.ReviewerAccessActivationResult
 import se.blick.app.data.local.datastore.AppSettings
 import se.blick.app.data.local.datastore.AppSettingsDataStore
 import se.blick.app.domain.model.CommuteRoutine
@@ -28,6 +30,7 @@ import se.blick.app.domain.usecase.LiveDeparturesState
 import se.blick.app.notification.NotificationAvailability
 import se.blick.app.notification.NotificationAvailabilityChecker
 import se.blick.app.notification.PromotedNotificationChecker
+import se.blick.app.scheduling.EntitlementChangeReconciler
 import se.blick.app.ui.theme.AppearanceMode
 import se.blick.app.widget.RoutineWidgetUpdater
 import java.time.Instant
@@ -82,13 +85,39 @@ class AboutViewModelTest {
         fun current(): AppSettings = state.value
     }
 
-    private class FakePremiumRepository(initial: EntitlementState) : PremiumEntitlementRepository {
+    private class FakePremiumRepository(
+        initial: EntitlementState,
+        reviewerActive: Boolean = false,
+    ) : PremiumEntitlementRepository {
         private val state = MutableStateFlow(initial)
+        private val reviewerState = MutableStateFlow(reviewerActive)
         override val entitlement: StateFlow<EntitlementState> = state
         override val localizedPrice: StateFlow<String?> = MutableStateFlow(null)
+        override val reviewerAccessActive: StateFlow<Boolean> = reviewerState
+        var activationResult = ReviewerAccessActivationResult.Activated
+        var activationGate: CompletableDeferred<ReviewerAccessActivationResult>? = null
+        var throwOnDeactivate = false
+        val submittedCodes = mutableListOf<String>()
         override suspend fun refresh() = Unit
         override suspend fun restore() = Unit
+        override suspend fun activateReviewerAccess(code: String): ReviewerAccessActivationResult {
+            submittedCodes += code
+            val result = activationGate?.await() ?: activationResult
+            if (result == ReviewerAccessActivationResult.Activated) reviewerState.value = true
+            return result
+        }
+        override suspend fun deactivateReviewerAccess() {
+            if (throwOnDeactivate) throw IllegalStateException("simulated persistence failure")
+            reviewerState.value = false
+        }
         override fun launchPurchase(activity: Activity) = Unit
+    }
+
+    private class RecordingEntitlementChangeReconciler : EntitlementChangeReconciler {
+        var callCount = 0
+        override suspend fun reconcileAfterEntitlementChange() {
+            callCount++
+        }
     }
 
     private class FakeNotificationChecker(
@@ -105,14 +134,17 @@ class AboutViewModelTest {
         widgetUpdater: RecordingWidgetUpdater = RecordingWidgetUpdater(),
         settings: FakeSettingsDataStore = FakeSettingsDataStore(),
         entitlement: EntitlementState = EntitlementState.Free,
+        premiumRepository: FakePremiumRepository = FakePremiumRepository(entitlement),
         checker: FakeNotificationChecker = FakeNotificationChecker(),
         promotedChecker: FakePromotedNotificationChecker = FakePromotedNotificationChecker(),
+        entitlementChangeReconciler: EntitlementChangeReconciler = RecordingEntitlementChangeReconciler(),
     ) = AboutViewModel(
         routineWidgetUpdater = widgetUpdater,
         appSettingsDataStore = settings,
-        premiumEntitlementRepository = FakePremiumRepository(entitlement),
+        premiumEntitlementRepository = premiumRepository,
         notificationAvailabilityChecker = checker,
         promotedNotificationChecker = promotedChecker,
+        entitlementChangeReconciler = entitlementChangeReconciler,
     )
 
     @Test
@@ -222,6 +254,107 @@ class AboutViewModelTest {
     fun `premium display state is sourced from entitlement repository`() {
         assertEquals(EntitlementState.Premium, viewModel(entitlement = EntitlementState.Premium).uiState.value.entitlement)
         assertEquals(EntitlementState.Free, viewModel(entitlement = EntitlementState.Free).uiState.value.entitlement)
+    }
+
+    @Test
+    fun `reviewer access state is sourced independently from effective Premium`() {
+        val repository = FakePremiumRepository(EntitlementState.Premium, reviewerActive = true)
+        val viewModel = viewModel(premiumRepository = repository)
+
+        dispatcher.scheduler.runCurrent()
+
+        assertEquals(true, viewModel.uiState.value.reviewerAccessActive)
+        assertEquals(EntitlementState.Premium, viewModel.uiState.value.entitlement)
+    }
+
+    @Test
+    fun `reviewer activation exposes loading then success and reconciles routines once`() = runTest(dispatcher) {
+        val repository = FakePremiumRepository(EntitlementState.Free)
+        repository.activationGate = CompletableDeferred()
+        val reconciler = RecordingEntitlementChangeReconciler()
+        val viewModel = viewModel(
+            premiumRepository = repository,
+            entitlementChangeReconciler = reconciler,
+        )
+
+        viewModel.activateReviewerAccess("  pasted-code  ")
+        dispatcher.scheduler.runCurrent()
+        assertEquals(ReviewerAccessOperationState.Activating, viewModel.uiState.value.reviewerAccessOperation)
+        assertEquals(listOf("  pasted-code  "), repository.submittedCodes)
+
+        repository.activationGate?.complete(ReviewerAccessActivationResult.Activated)
+        dispatcher.scheduler.runCurrent()
+
+        assertEquals(ReviewerAccessOperationState.Activated, viewModel.uiState.value.reviewerAccessOperation)
+        assertEquals(true, viewModel.uiState.value.reviewerAccessActive)
+        assertEquals(1, reconciler.callCount)
+    }
+
+    @Test
+    fun `invalid or unavailable activation never reconciles or reports success`() = runTest(dispatcher) {
+        val reconciler = RecordingEntitlementChangeReconciler()
+        val repository = FakePremiumRepository(EntitlementState.Free).apply {
+            activationResult = ReviewerAccessActivationResult.InvalidCode
+        }
+        val viewModel = viewModel(
+            premiumRepository = repository,
+            entitlementChangeReconciler = reconciler,
+        )
+
+        viewModel.activateReviewerAccess("")
+        dispatcher.scheduler.runCurrent()
+        assertEquals(ReviewerAccessOperationState.InvalidCode, viewModel.uiState.value.reviewerAccessOperation)
+        assertEquals(false, viewModel.uiState.value.reviewerAccessActive)
+        assertEquals(0, reconciler.callCount)
+
+        repository.activationResult = ReviewerAccessActivationResult.TemporarilyUnavailable
+        viewModel.activateReviewerAccess("another-code")
+        dispatcher.scheduler.runCurrent()
+        assertEquals(
+            ReviewerAccessOperationState.TemporarilyUnavailable,
+            viewModel.uiState.value.reviewerAccessOperation,
+        )
+        assertEquals(false, viewModel.uiState.value.reviewerAccessActive)
+        assertEquals(0, reconciler.callCount)
+    }
+
+    @Test
+    fun `reviewer deactivation updates only reviewer state and reconciles routines once`() = runTest(dispatcher) {
+        val repository = FakePremiumRepository(EntitlementState.Premium, reviewerActive = true)
+        val reconciler = RecordingEntitlementChangeReconciler()
+        val viewModel = viewModel(
+            premiumRepository = repository,
+            entitlementChangeReconciler = reconciler,
+        )
+
+        viewModel.deactivateReviewerAccess()
+        dispatcher.scheduler.runCurrent()
+
+        assertEquals(ReviewerAccessOperationState.Deactivated, viewModel.uiState.value.reviewerAccessOperation)
+        assertEquals(false, viewModel.uiState.value.reviewerAccessActive)
+        assertEquals(1, reconciler.callCount)
+    }
+
+    @Test
+    fun `failed reviewer deactivation leaves access active and does not reconcile`() = runTest(dispatcher) {
+        val repository = FakePremiumRepository(EntitlementState.Premium, reviewerActive = true).apply {
+            throwOnDeactivate = true
+        }
+        val reconciler = RecordingEntitlementChangeReconciler()
+        val viewModel = viewModel(
+            premiumRepository = repository,
+            entitlementChangeReconciler = reconciler,
+        )
+
+        viewModel.deactivateReviewerAccess()
+        dispatcher.scheduler.runCurrent()
+
+        assertEquals(
+            ReviewerAccessOperationState.DeactivationFailed,
+            viewModel.uiState.value.reviewerAccessOperation,
+        )
+        assertEquals(true, viewModel.uiState.value.reviewerAccessActive)
+        assertEquals(0, reconciler.callCount)
     }
 
     @Test

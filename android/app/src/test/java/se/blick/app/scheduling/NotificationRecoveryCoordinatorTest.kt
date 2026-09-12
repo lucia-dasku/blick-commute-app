@@ -1,5 +1,6 @@
 package se.blick.app.scheduling
 
+import android.app.Activity
 import android.content.Context
 import androidx.work.Configuration
 import androidx.work.ListenableWorker
@@ -28,7 +29,11 @@ import org.robolectric.RobolectricTestRunner
 import org.robolectric.RuntimeEnvironment
 import org.robolectric.annotation.Config
 import se.blick.app.data.repository.RoutineRepository
+import se.blick.app.billing.EntitlementState
+import se.blick.app.billing.FreeRoutineSelectionStore
+import se.blick.app.billing.PremiumEntitlementRepository
 import se.blick.app.domain.model.CommuteRoutine
+import se.blick.app.domain.model.RoutineType
 import se.blick.app.domain.model.TransportMode
 import se.blick.app.domain.usecase.LiveDeparturesState
 import se.blick.app.domain.usecase.RoutineDurationValidationResult
@@ -167,6 +172,35 @@ class NotificationRecoveryCoordinatorTest {
         override suspend fun isActivationRunning(routineId: String): Boolean = isRunning
     }
 
+    private class PerRoutineRunningScheduler(
+        private val runningRoutineIds: Set<String>,
+        private val cancelFailures: Set<String> = emptySet(),
+    ) : RoutineScheduler {
+        val scheduledRoutineIds = mutableListOf<String>()
+        val cancelledRoutineIds = mutableListOf<String>()
+
+        override fun scheduleActivation(routine: CommuteRoutine) {
+            scheduledRoutineIds += routine.id
+        }
+
+        override fun cancelActivation(routineId: String) {
+            if (routineId in cancelFailures) throw RuntimeException("simulated cancellation failure")
+            cancelledRoutineIds += routineId
+        }
+
+        override suspend fun isActivationRunning(routineId: String): Boolean =
+            routineId in runningRoutineIds
+    }
+
+    private class FixedPremiumRepository(initial: EntitlementState) : PremiumEntitlementRepository {
+        private val state = MutableStateFlow(initial)
+        override val entitlement = state
+        override val localizedPrice = MutableStateFlow<String?>(null)
+        override suspend fun refresh() = Unit
+        override suspend fun restore() = Unit
+        override fun launchPurchase(activity: Activity) = Unit
+    }
+
     private class FakeNotificationAvailabilityChecker(
         private val available: Boolean,
     ) : NotificationAvailabilityChecker {
@@ -211,6 +245,8 @@ class NotificationRecoveryCoordinatorTest {
         available: Boolean,
         coordinatorClock: Clock = clock,
         widgetUpdater: RoutineWidgetUpdater = RecordingWidgetUpdater(),
+        entitlementRepository: PremiumEntitlementRepository = se.blick.app.billing.FreePremiumEntitlementRepository,
+        freeRoutineSelectionStore: FreeRoutineSelectionStore? = null,
         // Defaults to a REAL reconciler wired to the same fakes -- most tests here don't care
         // about onTimeZoneChanged at all; the dedicated tests for it override this with one
         // built against a gate/real WorkManager as needed.
@@ -224,7 +260,125 @@ class NotificationRecoveryCoordinatorTest {
         routineScheduleReconciler = routineScheduleReconciler,
         clock = coordinatorClock,
         deviceZoneProvider = zoneProvider,
+        entitlementRepository = entitlementRepository,
+        freeRoutineSelectionStore = freeRoutineSelectionStore,
     )
+
+    @Test
+    fun `entitlement activation schedules formerly locked routines without replacing allowed running work`() = runTest {
+        val selectedLine = routine(id = "line")
+        val formerlyLockedExact = routine(id = "exact").copy(
+            type = RoutineType.EXACT_DESTINATION,
+            startTime = LocalTime.of(10, 0),
+            endTime = LocalTime.of(11, 0),
+            journeyOriginId = "origin",
+            journeyOriginName = "Origin",
+            journeyDestinationId = "destination",
+            journeyDestinationName = "Destination",
+        )
+        val repository = FakeRoutineRepository(listOf(selectedLine, formerlyLockedExact))
+        val scheduler = PerRoutineRunningScheduler(runningRoutineIds = setOf(selectedLine.id))
+        val selectionStore = FreeRoutineSelectionStore(RuntimeEnvironment.getApplication()).apply {
+            select(selectedLine.id)
+        }
+        val widgetUpdater = RecordingWidgetUpdater()
+        val coordinator = buildCoordinator(
+            repository = repository,
+            scheduler = scheduler,
+            pendingStore = InMemoryRecoveryPendingStateStore(initiallyPending = false),
+            available = true,
+            widgetUpdater = widgetUpdater,
+            entitlementRepository = FixedPremiumRepository(EntitlementState.Premium),
+            freeRoutineSelectionStore = selectionStore,
+        )
+
+        coordinator.reconcileAfterEntitlementChange()
+
+        assertEquals(listOf(formerlyLockedExact.id), scheduler.scheduledRoutineIds)
+        assertTrue(scheduler.cancelledRoutineIds.isEmpty())
+        assertEquals(1, widgetUpdater.reconcileCallCount)
+    }
+
+    @Test
+    fun `entitlement deactivation cancels Premium routines without replacing selected running Free work`() = runTest {
+        val selectedLine = routine(id = "line")
+        val newlyLockedExact = routine(id = "exact").copy(
+            type = RoutineType.EXACT_DESTINATION,
+            startTime = LocalTime.of(10, 0),
+            endTime = LocalTime.of(11, 0),
+            journeyOriginId = "origin",
+            journeyOriginName = "Origin",
+            journeyDestinationId = "destination",
+            journeyDestinationName = "Destination",
+        )
+        val repository = FakeRoutineRepository(listOf(selectedLine, newlyLockedExact))
+        val scheduler = PerRoutineRunningScheduler(runningRoutineIds = setOf(selectedLine.id))
+        val selectionStore = FreeRoutineSelectionStore(RuntimeEnvironment.getApplication()).apply {
+            select(selectedLine.id)
+        }
+        val widgetUpdater = RecordingWidgetUpdater()
+        val coordinator = buildCoordinator(
+            repository = repository,
+            scheduler = scheduler,
+            pendingStore = InMemoryRecoveryPendingStateStore(initiallyPending = false),
+            available = true,
+            widgetUpdater = widgetUpdater,
+            entitlementRepository = FixedPremiumRepository(EntitlementState.Free),
+            freeRoutineSelectionStore = selectionStore,
+        )
+
+        coordinator.reconcileAfterEntitlementChange()
+
+        assertTrue(scheduler.scheduledRoutineIds.isEmpty())
+        assertEquals(listOf(newlyLockedExact.id), scheduler.cancelledRoutineIds)
+        assertEquals(1, widgetUpdater.reconcileCallCount)
+    }
+
+    @Test
+    fun `entitlement reconciliation continues after one routine cancellation fails`() = runTest {
+        val selectedLine = routine(id = "line")
+        val failingExact = routine(id = "exact-fails").copy(
+            type = RoutineType.EXACT_DESTINATION,
+            startTime = LocalTime.of(10, 0),
+            endTime = LocalTime.of(11, 0),
+            journeyOriginId = "origin-a",
+            journeyOriginName = "Origin A",
+            journeyDestinationId = "destination-a",
+            journeyDestinationName = "Destination A",
+        )
+        val remainingExact = routine(id = "exact-continues").copy(
+            type = RoutineType.EXACT_DESTINATION,
+            startTime = LocalTime.of(12, 0),
+            endTime = LocalTime.of(13, 0),
+            journeyOriginId = "origin-b",
+            journeyOriginName = "Origin B",
+            journeyDestinationId = "destination-b",
+            journeyDestinationName = "Destination B",
+        )
+        val repository = FakeRoutineRepository(listOf(selectedLine, failingExact, remainingExact))
+        val scheduler = PerRoutineRunningScheduler(
+            runningRoutineIds = emptySet(),
+            cancelFailures = setOf(failingExact.id),
+        )
+        val selectionStore = FreeRoutineSelectionStore(RuntimeEnvironment.getApplication()).apply {
+            select(selectedLine.id)
+        }
+        val widgetUpdater = RecordingWidgetUpdater()
+        val coordinator = buildCoordinator(
+            repository = repository,
+            scheduler = scheduler,
+            pendingStore = InMemoryRecoveryPendingStateStore(initiallyPending = false),
+            available = true,
+            widgetUpdater = widgetUpdater,
+            entitlementRepository = FixedPremiumRepository(EntitlementState.Free),
+            freeRoutineSelectionStore = selectionStore,
+        )
+
+        coordinator.reconcileAfterEntitlementChange()
+
+        assertEquals(listOf(remainingExact.id), scheduler.cancelledRoutineIds)
+        assertEquals(1, widgetUpdater.reconcileCallCount)
+    }
 
     @Test
     fun diagnosticRetainedGlobalOwnerDoesNotRevivePausedOrDeletedRoutineOrBlockRecovery() = runTest {

@@ -15,6 +15,7 @@ data class PremiumUiState(
     val localizedPrice: String?,
     val debugOverrideAvailable: Boolean = false,
     val debugOverrideEnabled: Boolean = false,
+    val reviewerAccessActive: Boolean = false,
     val isRestoring: Boolean = false,
 )
 
@@ -26,8 +27,15 @@ class PremiumViewModel @Inject constructor(
         repository.entitlement,
         repository.localizedPrice,
         repository.debugOverrideEnabled,
-    ) { entitlement, price, debugEnabled ->
-        PremiumUiState(entitlement, price, repository.debugOverrideAvailable, debugEnabled)
+        repository.reviewerAccessActive,
+    ) { entitlement, price, debugEnabled, reviewerAccessActive ->
+        PremiumUiState(
+            entitlement = entitlement,
+            localizedPrice = price,
+            debugOverrideAvailable = repository.debugOverrideAvailable,
+            debugOverrideEnabled = debugEnabled,
+            reviewerAccessActive = reviewerAccessActive,
+        )
     }.stateIn(
         viewModelScope,
         SharingStarted.WhileSubscribed(5_000),
@@ -36,6 +44,7 @@ class PremiumViewModel @Inject constructor(
             repository.localizedPrice.value,
             repository.debugOverrideAvailable,
             repository.debugOverrideEnabled.value,
+            repository.reviewerAccessActive.value,
         ),
     )
 

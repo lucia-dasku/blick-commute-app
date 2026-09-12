@@ -29,6 +29,9 @@ billing traffic. Raw purchase tokens are never stored; the database contains onl
 fingerprints and the lifecycle fields documented in `../docs/api-contract.md`. Authenticated RTDN
 is an optional enhanced mode: it requires both `GOOGLE_PLAY_RTDN_AUDIENCE` and
 `GOOGLE_PLAY_RTDN_SERVICE_ACCOUNT_EMAIL`, while leaving both unset disables only the RTDN route.
+Reviewer validation is likewise optional and independent: `REVIEWER_ACCESS_CODE_SHA256`
+enables only `/api/v1/reviewer-access/validate`; leaving it unset or malformed returns a
+sanitized unavailable response from that route without affecting billing, health, or transit.
 The shared Upstash
 Redis cache/lock that protects SL Deviations in production (see
 `../docs/api-contract.md`, "Caching and fair use") is **optional** here: with
@@ -42,10 +45,12 @@ for SL Transport/SL Deviations before returning `UPSTREAM_TIMEOUT` (504), `PORT`
 the optional exact-destination segment-parsing disruption-relevance enhancement; see
 `.env.example` and `../docs/api-contract.md`, "Segment-parsing relevance enhancement", for
 why setting it is necessary but not sufficient to trust that enhancement in a real
-deployment). All of these are validated eagerly at startup —
+deployment). Port, timeout, Redis, billing, and topology settings are validated eagerly at startup —
 a non-numeric, non-positive, out-of-range, or (for the Redis pair) partially-set value
 fails immediately with a clear error rather than silently coercing to `NaN`, an unusable
-value, or an unprotected fallback (see `src/config/env.ts`).
+value, or an unprotected fallback (see `src/config/env.ts`). Reviewer configuration is
+the deliberate exception: invalid configuration disables that isolated capability so it
+cannot take the ordinary backend down.
 
 ## Validation
 
@@ -53,11 +58,14 @@ value, or an unprotected fallback (see `src/config/env.ts`).
 npm run typecheck   # tsc --noEmit
 npm run lint        # eslint (flat config, eslint.config.js)
 npm run build       # tsc, emits to dist/
-npm test            # vitest — 1,087 tests
+npm test            # vitest — 1,125 tests
 npm audit           # dependency vulnerability scan
 ```
 
-Test coverage (1,087 tests across 48 files): DST resolver (including calendar validation
+Test coverage (1,125 tests across 49 files): reviewer-access digest comparison, whitespace
+handling, strict/body-byte validation, missing configuration, denied codes, reusable independent
+activation, dedicated rate-limit namespaces, dependency failures and timeouts; DST resolver
+(including calendar validation
 — rejecting impossible dates and the spring DST gap, and ISO round-trip consistency),
 cancellation derivation, search ranking, cache/dedup, `fetchedAt` semantics (fresh,
 cached, and deduplicated-concurrent requests — including concurrent requests with
@@ -119,7 +127,8 @@ code and a handful of unused derived TypeScript type aliases whose underlying Zo
 remained genuinely in use.
 
 All of the above passed clean in the authoring sandbox (0 type errors, 0 lint
-errors/warnings, 1,087/1,087 tests passing, `npm audit`: 0 vulnerabilities). A live smoke
+errors/warnings, 1,125/1,125 tests passing; the last recorded `npm audit` reported 0
+vulnerabilities). A live smoke
 test of the running server against the real SL endpoints could not be completed from
 that sandbox — its outbound network proxy blocks `transport.integration.sl.se` /
 `deviations.integration.sl.se` / `vercel.com` / `api.vercel.com` by allowlist. The
@@ -149,6 +158,64 @@ setup" immediately below. The upstream base URLs (`SL_TRANSPORT_BASE_URL`,
 `SL_DEVIATIONS_BASE_URL`) and `UPSTREAM_TIMEOUT_MS` remain optional and overridable via
 Vercel's Environment Variables settings if ever needed (e.g. pointing at a mock upstream
 for a preview environment).
+
+### Google Play reviewer access
+
+`POST /api/v1/reviewer-access/validate` accepts exactly this JSON shape:
+
+```json
+{ "code": "<REVIEWER_CODE>" }
+```
+
+Surrounding whitespace is trimmed. The code must contain 32–256 characters and the complete
+UTF-8 request body is limited to 1,024 bytes. The minimum prevents an accidentally short
+configured credential from authorizing even though the server stores only its digest. The
+endpoint rejects an oversized declared
+`Content-Length` before reading the body and also enforces the same byte limit while
+streaming when the length is absent. A valid request returns HTTP 200 with
+`data.authorized` set to `true` or `false`; a wrong code is a normal `false`, never an
+exception or a grant. Every success, denial, validation failure, rate-limit response, and
+dependency failure is non-cacheable (`Cache-Control: no-store`). Dependency work has a
+single two-second whole-handler deadline, covering streamed body reading, rate limiting,
+and authorization; a stalled body reader is cancelled when the runtime supports it. All
+failure responses are sanitized.
+
+Validation is a constant-time comparison of fixed-length SHA-256 digests. The raw submitted
+code is not logged, stored, placed in a URL, or passed to Google Play. Layered 60-second
+limits use a domain-separated submitted-code fingerprint (10 attempts), a keyed client
+fingerprint (30 attempts), and a much higher emergency global bound (10,000 attempts).
+On Vercel the client fingerprint is an HMAC of the trusted `x-vercel-forwarded-for`
+address, keyed by the server-only reviewer digest; the raw address is never placed in a
+Redis key. Local and unknown hosting environments deliberately share a conservative client
+bucket instead of trusting spoofable forwarding headers. All reviewer counters use their
+own `reviewer-access:validate:v2:*` namespace, wholly separate from purchase-token
+verification and transit protection. The backend is stateless with respect to successful
+grants, so the same code can be used on independent installations without a purchase or
+one-time activation record.
+
+Production uses exactly one reviewer-specific environment variable:
+`REVIEWER_ACCESS_CODE_SHA256`. Configure it as follows:
+
+1. Generate 32 random bytes with a trusted cryptographically secure password or secret
+   generator and encode them as 64 hexadecimal characters. This produces a 256-bit,
+   strictly alphanumeric raw code that can be entered directly in Play Console. Clearly
+   label it as the raw reviewer code so it is not confused with the separate digest below.
+2. Save the raw code only in the controlled password-manager record used to populate
+   Google Play Console's App access instructions. Do not put it in source, `.env.example`,
+   a command argument, a URL, a screenshot, analytics, or an issue tracker.
+3. In a trusted offline environment, compute SHA-256 over the exact UTF-8 code bytes with
+   no newline and encode the 32-byte result as 64 lowercase hexadecimal characters.
+   Independently verify the digest before rollout.
+4. Add only that digest as the sensitive Production value of
+   `REVIEWER_ACCESS_CODE_SHA256` in the backend project's Vercel Environment Variables.
+   Do not give Preview or Development the production value. Redeploy only through the
+   normal reviewed release process, then validate with a signed non-debuggable build.
+
+If the raw code is exposed, generate a replacement and update both the server digest and
+the controlled Play Console instructions. Rotation affects future validation only. The
+backend has no device registry and no remote-revocation channel; a reviewer grant already
+persisted by an app installation remains active until that installation deactivates it or
+clears its app data. Do not describe rotation as revoking grants that were already issued.
 
 ### Premium billing: initial zero-cost mode
 

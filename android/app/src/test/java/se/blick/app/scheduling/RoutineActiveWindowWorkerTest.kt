@@ -1,5 +1,6 @@
 package se.blick.app.scheduling
 
+import android.app.Activity
 import android.app.NotificationManager
 import android.content.Context
 import androidx.room.Room
@@ -16,6 +17,10 @@ import kotlinx.coroutines.cancelAndJoin
 import kotlinx.coroutines.currentCoroutineContext
 import kotlinx.coroutines.ensureActive
 import kotlinx.coroutines.delay
+import kotlinx.coroutines.flow.Flow
+import kotlinx.coroutines.flow.MutableStateFlow
+import kotlinx.coroutines.flow.StateFlow
+import kotlinx.coroutines.flow.flowOf
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.test.advanceUntilIdle
 import kotlinx.coroutines.test.currentTime
@@ -29,6 +34,9 @@ import org.junit.runner.RunWith
 import org.robolectric.RobolectricTestRunner
 import org.robolectric.RuntimeEnvironment
 import org.robolectric.annotation.Config
+import se.blick.app.billing.EntitlementState
+import se.blick.app.billing.FreeRoutineSelectionStore
+import se.blick.app.billing.PremiumEntitlementRepository
 import se.blick.app.data.repository.DepartureRepository
 import se.blick.app.data.repository.DisruptionRepository
 import se.blick.app.data.repository.JourneyRepository
@@ -264,6 +272,33 @@ class RoutineActiveWindowWorkerTest {
         override suspend fun clearPause(id: String) = throw NotImplementedError()
         override suspend fun setEnabled(id: String, enabled: Boolean) = throw NotImplementedError()
         override suspend fun hasAnyRoutine(): Boolean = throw NotImplementedError()
+    }
+
+    private class TierAwareRoutineRepository(
+        private val clock: TickingClock,
+        private val current: CommuteRoutine,
+        private val all: List<CommuteRoutine>,
+    ) : RoutineRepository {
+        override fun observeAll(): Flow<List<CommuteRoutine>> = flowOf(all)
+        override suspend fun getById(id: String): CommuteRoutine {
+            clock.instant = clock.instant.plusSeconds(30)
+            return current
+        }
+        override suspend fun save(routine: CommuteRoutine) = throw NotImplementedError()
+        override suspend fun delete(id: String) = throw NotImplementedError()
+        override suspend fun pauseForDate(id: String, date: LocalDate) = throw NotImplementedError()
+        override suspend fun clearPause(id: String) = throw NotImplementedError()
+        override suspend fun setEnabled(id: String, enabled: Boolean) = throw NotImplementedError()
+        override suspend fun hasAnyRoutine(): Boolean = throw NotImplementedError()
+    }
+
+    private class MutablePremiumEntitlement(initial: EntitlementState) : PremiumEntitlementRepository {
+        val state = MutableStateFlow(initial)
+        override val entitlement: StateFlow<EntitlementState> = state
+        override val localizedPrice: StateFlow<String?> = MutableStateFlow(null)
+        override suspend fun refresh() = Unit
+        override suspend fun restore() = Unit
+        override fun launchPurchase(activity: Activity) = Unit
     }
 
     private class FakeDepartureRepository(private val result: () -> DeparturesResult) : DepartureRepository {
@@ -633,6 +668,8 @@ class RoutineActiveWindowWorkerTest {
         bootCountProvider: BootCountProvider = FakeBootCountProvider(),
         getRankedJourneys: se.blick.app.domain.usecase.GetRankedJourneysUseCase? = null,
         getJourneyDisruptionRelevance: se.blick.app.domain.usecase.GetJourneyDisruptionRelevanceUseCase? = null,
+        entitlementRepository: PremiumEntitlementRepository = se.blick.app.billing.FreePremiumEntitlementRepository,
+        freeRoutineSelectionStore: FreeRoutineSelectionStore? = null,
         runAttemptCount: Int = 0,
     ): RoutineActiveWindowWorker =
         TestListenableWorkerBuilder<RoutineActiveWindowWorker>(context)
@@ -662,6 +699,8 @@ class RoutineActiveWindowWorkerTest {
                     deviceZoneProvider,
                     elapsedRealtimeProvider,
                     bootCountProvider,
+                    entitlementRepository = entitlementRepository,
+                    freeRoutineSelectionStore = freeRoutineSelectionStore,
                     getRankedJourneys = getRankedJourneys,
                     getJourneyDisruptionRelevance = getJourneyDisruptionRelevance,
                 )
@@ -1759,6 +1798,61 @@ class RoutineActiveWindowWorkerTest {
         assertEquals(1, notifier.shown.size) // only the one tick before being disabled
         assertEquals(1, notifier.removeCallCount)
         assertEquals(listOf(false), scheduler.scheduledRoutines.map { it.enabled })
+    }
+
+    @Test
+    fun `Premium-only routine stops on the next existing tick after reviewer access is deactivated`() = runTest {
+        val clock = TickingClock(Instant.parse("2026-07-27T05:00:00Z"), zone)
+        val premiumRoutine = routine(id = "premium-line")
+        val selectedFreeRoutine = routine(
+            id = "free-line",
+            startTime = LocalTime.of(9, 0),
+            endTime = LocalTime.of(9, 2),
+        )
+        val repository = TierAwareRoutineRepository(
+            clock = clock,
+            current = premiumRoutine,
+            all = listOf(premiumRoutine, selectedFreeRoutine),
+        )
+        val entitlement = MutablePremiumEntitlement(EntitlementState.Premium)
+        val selection = FreeRoutineSelectionStore(context).apply { select(selectedFreeRoutine.id) }
+        val notifier = RecordingNotifier()
+        val scheduler = RecordingScheduler()
+        val widgetUpdater = RecordingWidgetUpdater()
+        val departures = FakeDepartureRepository {
+            // The first tick began with effective Premium access. Model reviewer deactivation
+            // after its fetch; the next normal loop tick must observe Free before fetching again.
+            entitlement.state.value = EntitlementState.Free
+            DeparturesResult(clock.instant(), 9145, listOf(sampleDeparture()))
+        }
+
+        try {
+            val worker = buildWorker(
+                premiumRoutine.id,
+                repository,
+                GetLiveDeparturesUseCase(departures, clock),
+                notifier,
+                scheduler,
+                clock,
+                widgetUpdater = widgetUpdater,
+                entitlementRepository = entitlement,
+                freeRoutineSelectionStore = selection,
+            )
+
+            val result = worker.doWork()
+
+            assertTrue(result is ListenableWorker.Result.Success)
+            assertEquals(1, departures.callCount)
+            assertEquals(1, notifier.shown.size)
+            assertEquals(1, notifier.removeCallCount)
+            assertEquals(1, widgetUpdater.clearCallCount)
+            assertTrue(
+                "an ineligible routine must not enqueue a future activation",
+                scheduler.scheduledRoutines.isEmpty(),
+            )
+        } finally {
+            selection.select(null)
+        }
     }
 
     @Test

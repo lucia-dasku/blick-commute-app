@@ -3,11 +3,21 @@ package se.blick.app.ui.screens.about
 import androidx.activity.ComponentActivity
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.size
+import androidx.compose.runtime.CompositionLocalProvider
+import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableStateOf
+import androidx.compose.runtime.setValue
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.toPixelMap
+import androidx.compose.ui.platform.LocalDensity
+import androidx.compose.ui.semantics.LiveRegionMode
 import androidx.compose.ui.semantics.SemanticsActions
 import androidx.compose.ui.semantics.SemanticsProperties
+import androidx.compose.ui.test.SemanticsMatcher
+import androidx.compose.ui.test.assert
 import androidx.compose.ui.test.assertHasClickAction
+import androidx.compose.ui.test.assertIsDisplayed
+import androidx.compose.ui.test.assertIsNotEnabled
 import androidx.compose.ui.test.assertTextContains
 import androidx.compose.ui.test.captureToImage
 import androidx.compose.ui.test.hasScrollAction
@@ -19,6 +29,8 @@ import androidx.compose.ui.test.onRoot
 import androidx.compose.ui.test.performClick
 import androidx.compose.ui.test.performScrollTo
 import androidx.compose.ui.test.performSemanticsAction
+import androidx.compose.ui.test.performTextInput
+import androidx.compose.ui.unit.Density
 import androidx.compose.ui.unit.dp
 import androidx.test.ext.junit.runners.AndroidJUnit4
 import org.junit.Assert.assertEquals
@@ -201,6 +213,125 @@ class AboutScreenTest {
     }
 
     @Test
+    fun reviewerAccessRowOpensMaskedCodeEntryAndForwardsPastedWhitespace() {
+        var submitted: String? = null
+        composeRule.setContent {
+            AboutContent(
+                state = AboutUiState(reviewerAccessActive = false),
+                onBack = {},
+                onLanguageSelected = {},
+                onActivateReviewerAccess = { submitted = it },
+            )
+        }
+
+        composeRule.onNodeWithTag(REVIEWER_ACCESS_ROW_TAG)
+            .performScrollTo()
+            .assertTextContains(composeRule.activity.getString(R.string.settings_reviewer_access_status_inactive))
+            .performClick()
+        composeRule.onNodeWithTag(REVIEWER_ACCESS_CODE_TAG)
+            .assert(SemanticsMatcher.keyIsDefined(SemanticsProperties.Password))
+            .performTextInput("  pasted-code  ")
+        composeRule.onNodeWithTag(REVIEWER_ACCESS_ACTIVATE_TAG).performClick()
+
+        composeRule.runOnIdle { assertEquals("  pasted-code  ", submitted) }
+    }
+
+    @Test
+    fun reviewerActivationShowsLoadingErrorAndSuccessStates() {
+        var state by mutableStateOf(
+            AboutUiState(reviewerAccessOperation = ReviewerAccessOperationState.Activating),
+        )
+        composeRule.setContent {
+            AboutContent(
+                state = state,
+                onBack = {},
+                onLanguageSelected = {},
+            )
+        }
+
+        composeRule.onNodeWithTag(REVIEWER_ACCESS_ROW_TAG).performScrollTo().performClick()
+        composeRule.onNodeWithTag(REVIEWER_ACCESS_PROGRESS_TAG)
+            .assertIsDisplayed()
+            .assert(SemanticsMatcher.expectValue(SemanticsProperties.LiveRegion, LiveRegionMode.Polite))
+        composeRule.onNodeWithTag(REVIEWER_ACCESS_ACTIVATE_TAG).assertIsNotEnabled()
+
+        composeRule.runOnIdle {
+            state = AboutUiState(reviewerAccessOperation = ReviewerAccessOperationState.InvalidCode)
+        }
+        composeRule.onNodeWithText(composeRule.activity.getString(R.string.settings_reviewer_access_invalid_code))
+            .assertIsDisplayed()
+
+        composeRule.runOnIdle {
+            state = AboutUiState(
+                reviewerAccessOperation = ReviewerAccessOperationState.TemporarilyUnavailable,
+            )
+        }
+        composeRule.onNodeWithText(composeRule.activity.getString(R.string.settings_reviewer_access_unavailable))
+            .assertIsDisplayed()
+
+        composeRule.runOnIdle {
+            state = AboutUiState(
+                reviewerAccessActive = true,
+                reviewerAccessOperation = ReviewerAccessOperationState.Activated,
+            )
+        }
+        composeRule.onNodeWithText(
+            composeRule.activity.getString(R.string.settings_reviewer_access_activation_success),
+        ).assertIsDisplayed()
+    }
+
+    @Test
+    fun activeReviewerAccessHasExplicitDeactivationWithoutChangingPremiumPurchaseWording() {
+        var deactivated = false
+        composeRule.setContent {
+            AboutContent(
+                state = AboutUiState(
+                    entitlement = EntitlementState.Premium,
+                    reviewerAccessActive = true,
+                ),
+                onBack = {},
+                onLanguageSelected = {},
+                onDeactivateReviewerAccess = { deactivated = true },
+            )
+        }
+
+        composeRule.onNodeWithTag(REVIEWER_ACCESS_ROW_TAG)
+            .performScrollTo()
+            .assertTextContains(composeRule.activity.getString(R.string.settings_reviewer_access_status_active))
+            .performClick()
+        composeRule.onNodeWithText(composeRule.activity.getString(R.string.settings_reviewer_access_active_body))
+            .assertIsDisplayed()
+        composeRule.onNodeWithTag(REVIEWER_ACCESS_DEACTIVATE_TAG).performClick()
+
+        composeRule.runOnIdle { assertEquals(true, deactivated) }
+    }
+
+    @Test
+    fun reviewerDialogRemainsReachableAtTwoHundredPercentFontScale() {
+        composeRule.setContent {
+            val density = LocalDensity.current
+            CompositionLocalProvider(LocalDensity provides Density(density.density, fontScale = 2f)) {
+                Box(Modifier.size(width = 320.dp, height = 480.dp)) {
+                    AboutContent(
+                        state = AboutUiState(
+                            reviewerAccessOperation = ReviewerAccessOperationState.TemporarilyUnavailable,
+                        ),
+                        onBack = {},
+                        onLanguageSelected = {},
+                    )
+                }
+            }
+        }
+
+        composeRule.onNodeWithTag(REVIEWER_ACCESS_ROW_TAG).performScrollTo().performClick()
+        composeRule.onNodeWithTag(REVIEWER_ACCESS_CODE_TAG).assertIsDisplayed()
+        composeRule.onNodeWithText(composeRule.activity.getString(R.string.settings_reviewer_access_unavailable))
+            .performScrollTo()
+            .assertIsDisplayed()
+        composeRule.onNodeWithTag(REVIEWER_ACCESS_ACTIVATE_TAG).assertIsDisplayed()
+    }
+
+    @Test
     fun notificationPermissionStateIsShownAndSystemSettingsRowIsClickable() {
         var opened = false
         composeRule.setContent {
@@ -340,6 +471,8 @@ class AboutScreenTest {
 
         composeRule.onNodeWithText(composeRule.activity.getString(R.string.about_privacy_last_updated)).assertExists()
         composeRule.onNodeWithText(composeRule.activity.getString(R.string.about_privacy_no_account)).assertExists()
+        composeRule.onNodeWithText(composeRule.activity.getString(R.string.about_privacy_reviewer_access))
+            .performScrollTo().assertExists()
         composeRule.onNodeWithText(composeRule.activity.getString(R.string.about_privacy_advertising))
             .performScrollTo().assertExists()
         composeRule.onNodeWithText(composeRule.activity.getString(R.string.about_privacy_contact)).performScrollTo().assertExists()

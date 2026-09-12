@@ -1,83 +1,109 @@
 package se.blick.app.notification
 
 import androidx.datastore.preferences.core.PreferenceDataStoreFactory
-import androidx.datastore.preferences.preferencesDataStoreFile
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.SupervisorJob
-import kotlinx.coroutines.cancel
+import kotlinx.coroutines.cancelAndJoin
 import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.test.runTest
 import org.junit.Assert.assertEquals
 import org.junit.Test
 import org.junit.runner.RunWith
 import org.robolectric.RobolectricTestRunner
-import org.robolectric.RuntimeEnvironment
 import org.robolectric.annotation.Config
+import java.io.File
+import java.nio.file.Files
 
 /**
  * A direct test of the actual disk-backed persistence [se.blick.app.scheduling.NotificationRecoveryCoordinator]
  * relies on for surviving process recreation — see [RecoveryPendingStateStore]'s own doc for why
  * this must be durable rather than an in-memory field. Each [PreferencesRecoveryPendingStateStore]
- * instance below is backed by its own freshly-created [androidx.datastore.core.DataStore] pointed
- * at the SAME file (via [PreferenceDataStoreFactory.create], not the cached `by
+ * instance below is backed by its own freshly-created [androidx.datastore.core.DataStore]. Each
+ * test gets a unique temporary file, while all three instances in the recreation test point at
+ * that test's SAME file (via [PreferenceDataStoreFactory.create], not the cached `by
  * preferencesDataStore()` property delegate `DataStoreModule` uses in production, which memoizes
  * one instance per file name for the whole process). Each instance is given its OWN
- * [CoroutineScope], cancelled before the next instance opens the same file — DataStore itself
- * refuses to have two instances simultaneously active against one file (`IllegalStateException`),
- * so this scope hand-off is what actually simulates "the process was killed and a fresh one
- * reopened the same file", rather than two live instances racing each other. Same pattern as the
- * deleted `PreferencesNotificationAvailabilityStateStoreTest` this store replaces.
+ * [CoroutineScope] and job, cancelled and joined before the next instance opens the same file —
+ * DataStore itself refuses to have two instances simultaneously active against one file
+ * (`IllegalStateException`), so this scope hand-off is what actually simulates "the process was
+ * killed and a fresh one reopened the same file", rather than two live instances racing each
+ * other. Same pattern as the deleted `PreferencesNotificationAvailabilityStateStoreTest` this
+ * store replaces.
  */
 @RunWith(RobolectricTestRunner::class)
 @Config(sdk = [34], application = android.app.Application::class)
 class PreferencesRecoveryPendingStateStoreTest {
 
-    private fun newStore(scope: CoroutineScope): PreferencesRecoveryPendingStateStore {
-        val context = RuntimeEnvironment.getApplication()
+    private fun uniqueStoreFile(): File =
+        Files.createTempDirectory("test_recovery_pending_")
+            .resolve("state.preferences_pb")
+            .toFile()
+
+    private fun deleteStoreFile(storeFile: File) {
+        val storeDirectory = checkNotNull(storeFile.parentFile)
+        Files.deleteIfExists(storeFile.toPath())
+        Files.deleteIfExists(storeDirectory.toPath())
+    }
+
+    private fun newStore(
+        scope: CoroutineScope,
+        storeFile: File,
+    ): PreferencesRecoveryPendingStateStore {
         val dataStore = PreferenceDataStoreFactory.create(
             scope = scope,
-            produceFile = { context.preferencesDataStoreFile("test_recovery_pending") },
+            produceFile = { storeFile },
         )
         return PreferencesRecoveryPendingStateStore(dataStore)
     }
 
     @Test
     fun `recoveryPending defaults to false before anything has ever been recorded`() = runTest {
-        val scope = CoroutineScope(Dispatchers.IO + SupervisorJob())
+        val storeFile = uniqueStoreFile()
+        val storeJob = SupervisorJob()
+        val storeScope = CoroutineScope(Dispatchers.IO + storeJob)
         try {
-            assertEquals(false, newStore(scope).recoveryPending.first())
+            assertEquals(false, newStore(storeScope, storeFile).recoveryPending.first())
         } finally {
-            scope.cancel()
+            storeJob.cancelAndJoin()
+            deleteStoreFile(storeFile)
         }
     }
 
     @Test
     fun `a pending flag survives a fresh store instance backed by the same file, simulating process recreation`() =
         runTest {
-            val firstScope = CoroutineScope(Dispatchers.IO + SupervisorJob())
+            val storeFile = uniqueStoreFile()
             try {
-                // markRecoveryPending() suspends until durably persisted, so it is safe to
-                // cancel this scope immediately afterward -- the write is already complete.
-                newStore(firstScope).markRecoveryPending()
-            } finally {
-                firstScope.cancel()
-            }
+                val firstJob = SupervisorJob()
+                val firstScope = CoroutineScope(Dispatchers.IO + firstJob)
+                try {
+                    // markRecoveryPending() suspends until durably persisted, so it is safe to
+                    // stop this scope immediately afterward -- the write is already complete.
+                    newStore(firstScope, storeFile).markRecoveryPending()
+                } finally {
+                    firstJob.cancelAndJoin()
+                }
 
-            val secondScope = CoroutineScope(Dispatchers.IO + SupervisorJob())
-            try {
-                val afterRecreation = newStore(secondScope)
-                assertEquals(true, afterRecreation.recoveryPending.first())
-                afterRecreation.clearRecoveryPending()
-            } finally {
-                secondScope.cancel()
-            }
+                val secondJob = SupervisorJob()
+                val secondScope = CoroutineScope(Dispatchers.IO + secondJob)
+                try {
+                    val afterRecreation = newStore(secondScope, storeFile)
+                    assertEquals(true, afterRecreation.recoveryPending.first())
+                    afterRecreation.clearRecoveryPending()
+                } finally {
+                    secondJob.cancelAndJoin()
+                }
 
-            val thirdScope = CoroutineScope(Dispatchers.IO + SupervisorJob())
-            try {
-                assertEquals(false, newStore(thirdScope).recoveryPending.first())
+                val thirdJob = SupervisorJob()
+                val thirdScope = CoroutineScope(Dispatchers.IO + thirdJob)
+                try {
+                    assertEquals(false, newStore(thirdScope, storeFile).recoveryPending.first())
+                } finally {
+                    thirdJob.cancelAndJoin()
+                }
             } finally {
-                thirdScope.cancel()
+                deleteStoreFile(storeFile)
             }
         }
 }

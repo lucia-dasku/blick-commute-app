@@ -10,6 +10,8 @@ import se.blick.app.data.remote.dto.StopSearchResponseDto
 import se.blick.app.data.remote.dto.SuccessEnvelopeDto
 import se.blick.app.data.remote.dto.PurchaseVerificationRequestDto
 import se.blick.app.data.remote.dto.PurchaseVerificationResponseDto
+import se.blick.app.data.remote.dto.ReviewerAccessValidationRequestDto
+import se.blick.app.data.remote.dto.ReviewerAccessValidationResponseDto
 import se.blick.app.data.remote.dto.JourneyLocationSearchDto
 import se.blick.app.data.remote.dto.JourneysResponseDto
 import se.blick.app.data.remote.dto.JourneyDisruptionRelevanceRequestDto
@@ -42,6 +44,11 @@ interface RetrofitBlickApiService {
     suspend fun verifyPurchase(
         @Body request: PurchaseVerificationRequestDto,
     ): SuccessEnvelopeDto<PurchaseVerificationResponseDto>
+
+    @POST("api/v1/reviewer-access/validate")
+    suspend fun validateReviewerAccess(
+        @Body request: ReviewerAccessValidationRequestDto,
+    ): SuccessEnvelopeDto<ReviewerAccessValidationResponseDto>
 
     @GET("api/v1/journeys/locations/search")
     suspend fun searchJourneyLocations(@Query("query") query: String): SuccessEnvelopeDto<JourneyLocationSearchDto>
@@ -78,6 +85,8 @@ class RetrofitBlickApiClient(
         service.getDisruptions(siteId, lineId, transportMode).data
     override suspend fun verifyPurchase(productId: String, purchaseToken: String) =
         service.verifyPurchase(PurchaseVerificationRequestDto(productId, purchaseToken)).data
+    override suspend fun validateReviewerAccess(code: String) =
+        service.validateReviewerAccess(ReviewerAccessValidationRequestDto(code)).data
     override suspend fun searchJourneyLocations(query: String) = service.searchJourneyLocations(query).data
     override suspend fun getJourneys(
         originId: String,

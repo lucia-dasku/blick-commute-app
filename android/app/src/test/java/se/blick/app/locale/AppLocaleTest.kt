@@ -145,6 +145,11 @@ class AppLocaleTest {
 
         assertSame(context, wrapped)
         assertEquals("Språk", wrapped.getString(R.string.settings_language_label))
+        assertEquals("Granskaråtkomst", wrapped.getString(R.string.settings_reviewer_access_label))
+        assertEquals(
+            "Granskaråtkomst är aktiv på den här installationen.",
+            wrapped.getString(R.string.settings_reviewer_access_activation_success),
+        )
     }
 
     @Test
@@ -156,6 +161,11 @@ class AppLocaleTest {
 
         assertEquals("en", wrapped.resources.configuration.locales[0].language)
         assertEquals("Language", wrapped.getString(R.string.settings_language_label))
+        assertEquals("Reviewer access", wrapped.getString(R.string.settings_reviewer_access_label))
+        assertEquals(
+            "Reviewer access is active on this installation.",
+            wrapped.getString(R.string.settings_reviewer_access_activation_success),
+        )
     }
 
     /** Builds a [Context] whose [Configuration] carries a genuine, ordered, multi-entry system

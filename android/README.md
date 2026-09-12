@@ -181,7 +181,8 @@ separate Now Bar developer gate (see Known limitations below). A simple `ui/scre
 tagline, the version and build number, `R.string.attribution_text`, a link to
 Trafiklab.se, a non-affiliation disclaimer, the full privacy policy (last-updated date,
 what Blick does and does not collect, where routine/preference data is stored, what the
-backend receives, and a contact address for privacy questions), and a centered copyright
+backend receives, the transient reviewer-code validation and local grant, and a contact
+address for privacy questions), and a centered copyright
 line, closing the `../docs/api-contract.md` §9 attribution requirement and giving the app
 its first real privacy policy.
 `LiveDeparturesDirectionOptionsSource` now requests the `forecast` window at Blick's own

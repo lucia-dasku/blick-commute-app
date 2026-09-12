@@ -81,7 +81,13 @@ internal fun PremiumContent(
             PremiumBenefit(stringResource(R.string.premium_feature_ad_free))
         }
         when (state.entitlement) {
-            EntitlementState.Premium -> PremiumActiveStatus(state.debugOverrideEnabled)
+            EntitlementState.Premium -> {
+                if (state.reviewerAccessActive) {
+                    Text(stringResource(R.string.premium_reviewer_active))
+                } else {
+                    PremiumActiveStatus(state.debugOverrideEnabled)
+                }
+            }
             EntitlementState.Pending -> Text(stringResource(R.string.premium_pending))
             is EntitlementState.TemporarilyUnavailable -> Text(stringResource(R.string.premium_unavailable))
             else -> Unit

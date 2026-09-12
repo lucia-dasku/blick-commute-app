@@ -36,6 +36,13 @@ interface NotificationRecoveryReporter {
     suspend fun reportUnavailable()
 }
 
+/** One-shot reconciliation after the effective Premium source changes. This deliberately shares
+ * [NotificationRecoveryCoordinator]'s existing serialization and running-work protection rather
+ * than creating an entitlement-specific refresh loop. */
+interface EntitlementChangeReconciler {
+    suspend fun reconcileAfterEntitlementChange()
+}
+
 /**
  * The sole authority for startup reconciliation, timezone-change reconciliation, and
  * notification-availability recovery — replaces `BlickApplication`'s separate cold-start
@@ -123,7 +130,7 @@ class NotificationRecoveryCoordinator @Inject constructor(
     private val deviceZoneProvider: DeviceZoneProvider,
     private val entitlementRepository: PremiumEntitlementRepository = FreePremiumEntitlementRepository,
     private val freeRoutineSelectionStore: FreeRoutineSelectionStore? = null,
-) : NotificationRecoveryReporter {
+) : NotificationRecoveryReporter, EntitlementChangeReconciler {
     private val mutex = Mutex()
 
     /** Called once from `BlickApplication.onCreate` — covers reboot, an app update, and
@@ -198,6 +205,15 @@ class NotificationRecoveryCoordinator @Inject constructor(
     suspend fun onTimeZoneChanged() {
         mutex.withLock {
             routineScheduleReconciler.reconcileAll()
+        }
+    }
+
+    /** Re-evaluates every enabled routine immediately after activation or deactivation. Newly
+     * ineligible work is cancelled, formerly locked work is scheduled, and an allowed worker
+     * that is already running is preserved by [scheduleIfSafe]. */
+    override suspend fun reconcileAfterEntitlementChange() {
+        mutex.withLock {
+            reconcileAllRoutinesUnconditionally()
         }
     }
 
@@ -290,18 +306,18 @@ class NotificationRecoveryCoordinator @Inject constructor(
         }
         routines.forEach { routine ->
             if (!routine.enabled) return@forEach
-            if (safeRoutines.none { it.id == routine.id }) {
-                routineScheduler.cancelActivation(routine.id)
-                return@forEach
-            }
-            if (freeRoutineSelectionStore != null && !RoutineTierPolicy.canRun(
-                    routine, routines, entitlementRepository.entitlement.value,
-                    freeRoutineSelectionStore.selectedRoutineId.value,
-                )) {
-                routineScheduler.cancelActivation(routine.id)
-                return@forEach
-            }
             try {
+                if (safeRoutines.none { it.id == routine.id }) {
+                    routineScheduler.cancelActivation(routine.id)
+                    return@forEach
+                }
+                if (freeRoutineSelectionStore != null && !RoutineTierPolicy.canRun(
+                        routine, routines, entitlementRepository.entitlement.value,
+                        freeRoutineSelectionStore.selectedRoutineId.value,
+                    )) {
+                    routineScheduler.cancelActivation(routine.id)
+                    return@forEach
+                }
                 val occurrence = NextOccurrenceCalculator.nextOccurrence(routine, now, excludedDate = routine.pausedDate)
                 scheduleIfSafe(routine, occurrence)
             } catch (e: CancellationException) {

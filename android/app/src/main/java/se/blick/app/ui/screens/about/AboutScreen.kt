@@ -15,6 +15,7 @@ import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.heightIn
 import androidx.compose.foundation.layout.padding
+import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.selection.selectable
 import androidx.compose.foundation.selection.selectableGroup
@@ -22,16 +23,19 @@ import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.KeyboardArrowRight
 import androidx.compose.material3.AlertDialog
+import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.HorizontalDivider
 import androidx.compose.material3.Icon
 import androidx.compose.material3.MaterialTheme
+import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.RadioButton
 import androidx.compose.material3.Scaffold
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.DisposableEffect
+import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
@@ -41,7 +45,15 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.res.stringResource
+import androidx.compose.ui.semantics.LiveRegionMode
 import androidx.compose.ui.semantics.Role
+import androidx.compose.ui.semantics.liveRegion
+import androidx.compose.ui.semantics.semantics
+import androidx.compose.ui.text.input.ImeAction
+import androidx.compose.ui.text.input.KeyboardType
+import androidx.compose.ui.text.input.PasswordVisualTransformation
+import androidx.compose.foundation.text.KeyboardActions
+import androidx.compose.foundation.text.KeyboardOptions
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.unit.dp
 import androidx.core.net.toUri
@@ -68,6 +80,11 @@ private const val SUPPORT_EMAIL = "contactblicklabs@gmail.com"
 internal const val LANGUAGE_OPTION_EN_TAG = "settings-language-en"
 internal const val LANGUAGE_OPTION_SV_TAG = "settings-language-sv"
 internal const val PRIVACY_CHOICES_TAG = "settings-privacy-choices"
+internal const val REVIEWER_ACCESS_ROW_TAG = "settings-reviewer-access"
+internal const val REVIEWER_ACCESS_CODE_TAG = "settings-reviewer-access-code"
+internal const val REVIEWER_ACCESS_ACTIVATE_TAG = "settings-reviewer-access-activate"
+internal const val REVIEWER_ACCESS_DEACTIVATE_TAG = "settings-reviewer-access-deactivate"
+internal const val REVIEWER_ACCESS_PROGRESS_TAG = "settings-reviewer-access-progress"
 
 @Composable
 fun AboutScreen(
@@ -107,6 +124,9 @@ fun AboutScreen(
         onOpenOpenSourceLicences = onOpenOpenSourceLicences,
         privacyOptionsRequired = privacyOptionsRequired,
         onOpenPrivacyOptions = onOpenPrivacyOptions,
+        onActivateReviewerAccess = viewModel::activateReviewerAccess,
+        onDeactivateReviewerAccess = viewModel::deactivateReviewerAccess,
+        onClearReviewerAccessOperation = viewModel::clearReviewerAccessOperation,
     )
 }
 
@@ -131,9 +151,13 @@ internal fun AboutContent(
     onOpenOpenSourceLicences: () -> Unit = {},
     privacyOptionsRequired: Boolean = false,
     onOpenPrivacyOptions: () -> Unit = {},
+    onActivateReviewerAccess: (String) -> Unit = {},
+    onDeactivateReviewerAccess: () -> Unit = {},
+    onClearReviewerAccessOperation: () -> Unit = {},
 ) {
     var showLanguageDialog by remember { mutableStateOf(false) }
     var showAppearanceDialog by remember { mutableStateOf(false) }
+    var showReviewerAccessDialog by remember { mutableStateOf(false) }
     val currentLanguage = currentBlickLocale().language
     val scrollState = rememberScrollState()
 
@@ -216,6 +240,18 @@ internal fun AboutContent(
                 label = stringResource(R.string.about_section_open_source_licences),
                 onClick = onOpenOpenSourceLicences,
             )
+            SettingsRow(
+                label = stringResource(R.string.settings_reviewer_access_label),
+                value = stringResource(
+                    if (state.reviewerAccessActive) R.string.settings_reviewer_access_status_active
+                    else R.string.settings_reviewer_access_status_inactive,
+                ),
+                onClick = {
+                    onClearReviewerAccessOperation()
+                    showReviewerAccessDialog = true
+                },
+                modifier = Modifier.testTag(REVIEWER_ACCESS_ROW_TAG),
+            )
 
             Spacer(Modifier.height(24.dp))
             Text(
@@ -262,6 +298,182 @@ internal fun AboutContent(
             },
         )
     }
+    if (showReviewerAccessDialog) {
+        ReviewerAccessDialog(
+            state = state,
+            onDismiss = {
+                showReviewerAccessDialog = false
+                onClearReviewerAccessOperation()
+            },
+            onActivate = onActivateReviewerAccess,
+            onDeactivate = onDeactivateReviewerAccess,
+            onClearOperation = onClearReviewerAccessOperation,
+        )
+    }
+}
+
+@Composable
+private fun ReviewerAccessDialog(
+    state: AboutUiState,
+    onDismiss: () -> Unit,
+    onActivate: (String) -> Unit,
+    onDeactivate: () -> Unit,
+    onClearOperation: () -> Unit,
+) {
+    var code by remember { mutableStateOf("") }
+    val operation = state.reviewerAccessOperation
+    val inProgress = operation.isInProgress
+    val activationSucceeded = operation is ReviewerAccessOperationState.Activated
+    val deactivationSucceeded = operation is ReviewerAccessOperationState.Deactivated
+    val showActiveControls = when (operation) {
+        ReviewerAccessOperationState.Activating,
+        ReviewerAccessOperationState.Activated,
+        ReviewerAccessOperationState.Deactivated,
+        -> false
+        ReviewerAccessOperationState.Deactivating,
+        ReviewerAccessOperationState.DeactivationFailed,
+        -> true
+        else -> state.reviewerAccessActive
+    }
+
+    LaunchedEffect(operation) {
+        if (activationSucceeded || deactivationSucceeded) code = ""
+    }
+
+    AlertDialog(
+        onDismissRequest = { if (!inProgress) onDismiss() },
+        title = { Text(stringResource(R.string.settings_reviewer_access_label)) },
+        text = {
+            Column(
+                modifier = Modifier
+                    .heightIn(max = 280.dp)
+                    .verticalScroll(rememberScrollState()),
+                verticalArrangement = Arrangement.spacedBy(12.dp),
+            ) {
+                when {
+                    activationSucceeded -> ReviewerResultText(
+                        text = stringResource(R.string.settings_reviewer_access_activation_success),
+                    )
+                    deactivationSucceeded -> ReviewerResultText(
+                        text = stringResource(R.string.settings_reviewer_access_deactivation_success),
+                    )
+                    showActiveControls -> {
+                        Text(
+                            text = stringResource(R.string.settings_reviewer_access_active_body),
+                            style = MaterialTheme.typography.bodyMedium,
+                        )
+                        when (operation) {
+                            ReviewerAccessOperationState.Deactivating -> ReviewerProgress(
+                                stringResource(R.string.settings_reviewer_access_deactivating),
+                            )
+                            ReviewerAccessOperationState.DeactivationFailed -> ReviewerResultText(
+                                text = stringResource(R.string.settings_reviewer_access_deactivation_error),
+                                error = true,
+                            )
+                            else -> Unit
+                        }
+                    }
+                    else -> {
+                        Text(
+                            text = stringResource(R.string.settings_reviewer_access_instructions),
+                            style = MaterialTheme.typography.bodyMedium,
+                        )
+                        OutlinedTextField(
+                            value = code,
+                            onValueChange = {
+                                code = it
+                                if (
+                                    operation is ReviewerAccessOperationState.InvalidCode ||
+                                    operation is ReviewerAccessOperationState.TemporarilyUnavailable
+                                ) {
+                                    onClearOperation()
+                                }
+                            },
+                            enabled = !inProgress,
+                            isError = operation is ReviewerAccessOperationState.InvalidCode,
+                            singleLine = true,
+                            visualTransformation = PasswordVisualTransformation(),
+                            keyboardOptions = KeyboardOptions(
+                                keyboardType = KeyboardType.Password,
+                                imeAction = ImeAction.Done,
+                            ),
+                            keyboardActions = KeyboardActions(
+                                onDone = { if (!inProgress) onActivate(code) },
+                            ),
+                            label = { Text(stringResource(R.string.settings_reviewer_access_code_label)) },
+                            modifier = Modifier.fillMaxWidth().testTag(REVIEWER_ACCESS_CODE_TAG),
+                        )
+                        when (operation) {
+                            ReviewerAccessOperationState.Activating -> ReviewerProgress(
+                                stringResource(R.string.settings_reviewer_access_activating),
+                            )
+                            ReviewerAccessOperationState.InvalidCode -> ReviewerResultText(
+                                text = stringResource(R.string.settings_reviewer_access_invalid_code),
+                                error = true,
+                            )
+                            ReviewerAccessOperationState.TemporarilyUnavailable -> ReviewerResultText(
+                                text = stringResource(R.string.settings_reviewer_access_unavailable),
+                                error = true,
+                            )
+                            else -> Unit
+                        }
+                    }
+                }
+            }
+        },
+        confirmButton = {
+            when {
+                activationSucceeded || deactivationSucceeded -> TextButton(onClick = onDismiss) {
+                    Text(stringResource(R.string.settings_reviewer_access_close))
+                }
+                showActiveControls -> TextButton(
+                    onClick = onDeactivate,
+                    enabled = !inProgress,
+                    modifier = Modifier.testTag(REVIEWER_ACCESS_DEACTIVATE_TAG),
+                ) {
+                    Text(stringResource(R.string.settings_reviewer_access_deactivate))
+                }
+                else -> TextButton(
+                    onClick = { onActivate(code) },
+                    enabled = !inProgress,
+                    modifier = Modifier.testTag(REVIEWER_ACCESS_ACTIVATE_TAG),
+                ) {
+                    Text(stringResource(R.string.settings_reviewer_access_activate))
+                }
+            }
+        },
+        dismissButton = {
+            if (!activationSucceeded && !deactivationSucceeded) {
+                TextButton(onClick = onDismiss, enabled = !inProgress) {
+                    Text(stringResource(R.string.action_cancel))
+                }
+            }
+        },
+    )
+}
+
+@Composable
+private fun ReviewerProgress(label: String) {
+    Row(
+        verticalAlignment = Alignment.CenterVertically,
+        horizontalArrangement = Arrangement.spacedBy(10.dp),
+        modifier = Modifier
+            .testTag(REVIEWER_ACCESS_PROGRESS_TAG)
+            .semantics { liveRegion = LiveRegionMode.Polite },
+    ) {
+        CircularProgressIndicator(modifier = Modifier.size(18.dp), strokeWidth = 2.dp)
+        Text(label, style = MaterialTheme.typography.bodyMedium)
+    }
+}
+
+@Composable
+private fun ReviewerResultText(text: String, error: Boolean = false) {
+    Text(
+        text = text,
+        style = MaterialTheme.typography.bodyMedium,
+        color = if (error) MaterialTheme.colorScheme.error else MaterialTheme.colorScheme.onSurface,
+        modifier = Modifier.semantics { liveRegion = LiveRegionMode.Polite },
+    )
 }
 
 @Composable
@@ -278,9 +490,9 @@ private fun SettingsSectionTitle(@StringRes titleRes: Int) {
 @Composable
 private fun SettingsRow(
     label: String,
-    value: String? = null,
     onClick: () -> Unit,
     modifier: Modifier = Modifier,
+    value: String? = null,
 ) {
     Column {
         Row(

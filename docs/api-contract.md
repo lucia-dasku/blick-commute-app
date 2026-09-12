@@ -79,6 +79,47 @@ Future enhanced production mode can enable RTDN for near-real-time lifecycle cha
 Voided Purchases reconciliation process is another future option, but is not scheduled or
 implemented in the initial mode.
 
+### `POST /api/v1/reviewer-access/validate`
+
+Request JSON: `{ "code": "<REVIEWER_CODE>" }`. This transaction-free Google Play review
+path is independent of purchase verification: it creates no purchase token, order,
+acknowledgement, billing row, or backend account. The backend trims surrounding whitespace,
+accepts no extra fields, requires 32–256 code characters, and caps the complete UTF-8 body at
+1,024 bytes. The minimum prevents an accidentally short configured credential from authorizing
+even though only its digest is configured. The route rejects an oversized declared
+`Content-Length` early and enforces the same byte cap while streaming when the length is absent.
+
+Success data is `{ authorized }`. The configured code returns `true`; any other syntactically
+valid code returns HTTP 200 with `false`. Blank, malformed, or oversized requests return
+`VALIDATION_ERROR`; rate limiting returns `RATE_LIMITED`; missing reviewer configuration and
+dependency failures return a sanitized `UPSTREAM_ERROR`; and dependency timeouts return
+`UPSTREAM_TIMEOUT`. None of those failures can produce a grant. Every response carries
+`Cache-Control: no-store`. One two-second deadline bounds the entire handler, including
+streamed request-body reading, rate limiting, and authorization. On deadline expiry the
+handler fails closed and attempts to cancel a still-open body reader.
+
+Production configures only the code's 64-character SHA-256 hex digest in the server-only
+`REVIEWER_ACCESS_CODE_SHA256` environment value. The raw code remains outside the APK,
+repository, backend configuration, logs, URLs, screenshots, and stored backend data. Validation
+hashes the submitted UTF-8 code and uses a constant-time comparison between two fixed 32-byte
+digests. Missing, blank, or malformed reviewer configuration disables only this route and does
+not stop transit, health, purchase verification, acknowledgement, restore, or RTDN.
+
+Reviewer attempts use dedicated `reviewer-access:validate:v2:*` short-lived Redis counters,
+separate from `billing:verify:*` and every transit key. Layered fixed-window bounds apply per
+submitted-code fingerprint (10/minute), per keyed client fingerprint (30/minute), and at a much
+higher emergency global ceiling (10,000/minute). On Vercel, the client key is a domain-separated
+HMAC of the trusted `x-vercel-forwarded-for` address using the server-only reviewer digest; no
+raw network address is stored in Redis. Local and unknown hosting environments share a safe
+fallback client bucket rather than accepting spoofable forwarded-for headers. The stateless
+endpoint neither consumes the billing quota nor marks a code as used, so the same controlled
+credential can authorize independent installations. The app persists successful reviewer
+authorization locally and keeps it separate from purchase ownership. Rotating the server digest
+changes future activations only; because there is no device registry or remote-revocation channel,
+it does not revoke a grant already persisted on an installation. Full generation, storage,
+rotation, and environment-scope instructions are in `backend/README.md`, "Google Play reviewer
+access".
+
 ### `GET /api/v1/journeys/locations/search?query=`
 
 Resolves a user-entered stop/location through Journey Planner Stop Finder and returns supported
@@ -664,12 +705,13 @@ Every error response:
 { "schemaVersion": 1, "error": { "code": "VALIDATION_ERROR", "message": "..." } }
 ```
 
-`code` is one of: `VALIDATION_ERROR` (400), `NOT_FOUND` (404),
-`UPSTREAM_RATE_LIMITED` (503), `UPSTREAM_TIMEOUT` (504), `UPSTREAM_ERROR` (502),
-`INTERNAL_ERROR` (500). (A separate, self-imposed `RATE_LIMITED` code was previously
-reserved in this list but never actually produced by any code path — removed as dead code
-during an audit.) See §8, "Upstream networking, runtime validation, and error handling",
-for exactly what each error response does and does not contain.
+`code` is one of: `VALIDATION_ERROR` (400), `AUTHENTICATION_ERROR` (401),
+`NOT_FOUND` (404), `RATE_LIMITED` (429), `UPSTREAM_RATE_LIMITED` (503),
+`UPSTREAM_TIMEOUT` (504), `UPSTREAM_ERROR` (502), `INTERNAL_ERROR` (500).
+`RATE_LIMITED` is an application-owned quota such as billing verification or reviewer-code
+attempts; `UPSTREAM_RATE_LIMITED` means an external provider returned its own limit. See §8,
+"Upstream networking, runtime validation, and error handling", for exactly what each error
+response does and does not contain.
 
 ## 3. Endpoints
 
@@ -1309,7 +1351,8 @@ Full, exact deployment instructions (Root Directory setting, Node version pin, p
 vs. production commands, and the sandbox network limitation encountered while verifying
 this) live in `backend/README.md`, "Deploying to Vercel", so they stay next to the
 scripts and files they describe rather than duplicated here. In summary: no secrets are
-required, the upstream base URLs remain overridable via environment variables, the
+required for the transit upstreams; billing and reviewer access use optional server-only
+configuration; the upstream base URLs remain overridable via environment variables; the
 Node.js runtime major version is pinned to `22.x` via `package.json`'s `engines` field,
 and the Vercel project's **Root Directory must be set to `backend`** when importing this
 repository, since the repository root also contains the unrelated `android/` and `docs/`

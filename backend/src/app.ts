@@ -24,6 +24,15 @@ import { createJourneyDisruptionsRoute } from "./routes/journeyDisruptions.js";
 import { createSlJourneyPlannerClient } from "./services/slJourneyPlannerClient.js";
 import { createGtfsFeedSource, createGtfsStopIdResolver, createLineTopologyDirectory, type LineTopologyDirectory } from "./services/lineTopologyDirectory.js";
 import { createJourneyEndpointSiteResolver, type JourneyEndpointSiteResolver } from "./services/journeyEndpointSiteResolver.js";
+import {
+  HmacReviewerAccessClientFingerprinter,
+  Sha256ReviewerAccessAuthorizer,
+} from "./reviewerAccess/reviewerAccessAuthorizer.js";
+import {
+  InMemoryReviewerAccessRateLimiter,
+  RedisReviewerAccessRateLimiter,
+} from "./reviewerAccess/reviewerAccessRateLimiter.js";
+import { createReviewerAccessRoute } from "./routes/reviewerAccess.js";
 
 /**
  * Builds the Hono app with real (network-calling) service implementations. Kept as a
@@ -114,6 +123,18 @@ export function createApp() {
   const billingRateLimiter = redisClient
     ? new RedisBillingRateLimiter(redisClient)
     : new InMemoryBillingRateLimiter();
+  const reviewerAccessAuthorizer = config.reviewerAccess
+    ? new Sha256ReviewerAccessAuthorizer(config.reviewerAccess.codeHashHex)
+    : undefined;
+  const reviewerAccessClientFingerprinter = config.reviewerAccess
+    ? new HmacReviewerAccessClientFingerprinter(
+      config.reviewerAccess.codeHashHex,
+      config.isVercel,
+    )
+    : undefined;
+  const reviewerAccessRateLimiter = redisClient
+    ? new RedisReviewerAccessRateLimiter(redisClient)
+    : new InMemoryReviewerAccessRateLimiter();
   const rtdnHandler = config.googlePlayRtdn && config.googlePlay && purchaseStore
     ? createGooglePlayRtdnHandler(
       createGoogleRtdnAuthenticator(config.googlePlayRtdn),
@@ -122,6 +143,14 @@ export function createApp() {
     )
     : undefined;
   app.route("/billing", createBillingRoute(purchaseVerifier, billingRateLimiter, rtdnHandler));
+  app.route(
+    "/reviewer-access",
+    createReviewerAccessRoute(
+      reviewerAccessAuthorizer,
+      reviewerAccessRateLimiter,
+      reviewerAccessClientFingerprinter,
+    ),
+  );
   app.route("/journeys", createJourneyRoutes(slJourneyPlannerClient));
   // A separate top-level mount, not nested inside createJourneyRoutes -- see
   // createJourneyDisruptionsRoute's own doc for why this must stay a genuinely independent

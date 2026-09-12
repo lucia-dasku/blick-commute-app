@@ -1,8 +1,8 @@
 package se.blick.app.billing
 
 import android.app.Activity
-import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.MutableStateFlow
+import kotlinx.coroutines.flow.StateFlow
 
 const val PREMIUM_PRODUCT_ID = "blick_premium_lifetime"
 
@@ -21,17 +21,23 @@ val EntitlementState.hasPremiumAccess: Boolean
 interface PremiumEntitlementRepository {
     val entitlement: StateFlow<EntitlementState>
     val localizedPrice: StateFlow<String?>
+    /** Independently validated access for Play review; this is not purchase ownership. */
+    val reviewerAccessActive: StateFlow<Boolean> get() = NO_REVIEWER_ACCESS
     /** Debug builds can expose a local entitlement override for device UI testing without
      * weakening the Play-verified release path. Release implementations always return false. */
     val debugOverrideAvailable: Boolean get() = false
     val debugOverrideEnabled: StateFlow<Boolean> get() = NO_DEBUG_OVERRIDE
     suspend fun refresh()
     suspend fun restore()
+    suspend fun activateReviewerAccess(code: String): ReviewerAccessActivationResult =
+        ReviewerAccessActivationResult.TemporarilyUnavailable
+    suspend fun deactivateReviewerAccess() = Unit
     fun launchPurchase(activity: Activity)
     fun setDebugPremium(enabled: Boolean) = Unit
 }
 
 private val NO_DEBUG_OVERRIDE = MutableStateFlow(false)
+private val NO_REVIEWER_ACCESS = MutableStateFlow(false)
 
 object FreePremiumEntitlementRepository : PremiumEntitlementRepository {
     private val state = kotlinx.coroutines.flow.MutableStateFlow<EntitlementState>(EntitlementState.Free)

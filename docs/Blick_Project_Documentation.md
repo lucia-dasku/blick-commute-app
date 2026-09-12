@@ -5,7 +5,7 @@
 **Document status:** Android-first MVP specification — see "Current implementation
 status" immediately below for what already exists in this repository versus what the
 rest of this document specifies as still planned.  
-**Updated:** 8 September 2026 (privacy reconciliation only; implementation and test history below retains its original dates)
+**Updated:** 11 September 2026 (privacy and reviewer-access reconciliation only; implementation and test history below retains its original dates)
 
 ---
 
@@ -1959,7 +1959,7 @@ No TV, casting, pairing, or cloud-synchronization code is included now.
 
 ## 18. Privacy and security
 
-**Privacy reconciliation: 8 September 2026.** This section supersedes earlier
+**Privacy reconciliation: 11 September 2026.** This section supersedes earlier
 privacy descriptions that predate Premium billing and advertising. Historical test
 results elsewhere in this document are not new validation results.
 
@@ -1980,9 +1980,20 @@ notification handling that invokes verification, without an independent schedule
 Eligible records are deleted on the next successful cleanup, which can be later than the
 thresholds. Failed or unfinished notification claims are not covered by the 90-day rule.
 
+Reviewer activation sends the entered reviewer code to the backend over HTTPS solely to
+validate controlled, transaction-free Premium access. The raw code is processed transiently
+and is not written to the app's storage, application logs, or backend databases. Successful
+validation stores only a local reviewer-access flag, excluded from Android backup and device
+transfer. It persists across ordinary updates until local deactivation, app-data clearing, or
+uninstallation. Reviewer access creates no Google Play purchase or billing record.
+
 Redis also holds short-lived technical billing rate-limit counters associated with purchase-token
 fingerprints and an overall billing counter, configured to expire after a 60-second window.
-These are distinct from shared public-transport caches and contain no raw tokens or saved routines.
+Separate, layered reviewer-attempt counters use a one-way code fingerprint, a keyed one-way
+client-network-address fingerprint, and an emergency global bound with the same configured
+60-second window; they do not consume the billing quota. These are distinct from shared
+public-transport caches and contain no raw tokens, reviewer codes, network addresses, or saved
+routines.
 Database cleanup and counter expiry do not guarantee deletion of provider-held messages, logs
 or backups. Google Play/Pub/Sub delivery retention, retries and dead-letter handling depend on
 external service configuration.
@@ -1990,8 +2001,8 @@ external service configuration.
 The Basic tier uses Google Mobile Ads, which can process advertising/device identifiers,
 IP-derived approximate location, interactions and diagnostics for advertising, measurement
 and fraud prevention. There is no separate general-purpose analytics SDK; advertising SDK
-analytics still apply. UMP manages applicable privacy choices. Verified Premium access suppresses
-banner requests/display, while UMP may still refresh privacy-choice state. Blick does not send
+analytics still apply. UMP manages applicable privacy choices. Verified Google Play Premium or
+reviewer access suppresses banner requests/display, while UMP may still refresh privacy-choice state. Blick does not send
 saved routines or event titles for ad targeting. Google's advertising/consent retention is
 separate from Blick's database cleanup.
 
