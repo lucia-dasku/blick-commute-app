@@ -47,3 +47,45 @@ jobs:
 
       - name: Audit (fails on known vulnerabilities)
         run: npm audit --audit-level=moderate
+
+  postgres-integration:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    services:
+      postgres:
+        image: postgres:17
+        env:
+          POSTGRES_DB: blick_test
+          POSTGRES_USER: blick_test
+          POSTGRES_PASSWORD: blick_test_ci_only
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready --username=blick_test --dbname=blick_test"
+          --health-interval 10s
+          --health-timeout 5s
+          --health-retries 5
+          --health-start-period 10s
+    env:
+      LIVE_COMMUTE_TEST_DATABASE_URL: postgresql://blick_test:blick_test_ci_only@127.0.0.1:5432/blick_test
+      LIVE_COMMUTE_MIGRATION_DATABASE_URL: postgresql://blick_test:blick_test_ci_only@127.0.0.1:5432/blick_test
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+          cache: "npm"
+          cache-dependency-path: backend/package-lock.json
+
+      - name: Install dependencies
+        run: npm ci
+
+      - name: Apply live commute migration
+        run: npm run migrate:live-commute
+
+      - name: Verify live commute migration is idempotent
+        run: npm run migrate:live-commute
+
+      - name: Test live commute PostgreSQL integration
+        run: npm run test:live-commute-postgres

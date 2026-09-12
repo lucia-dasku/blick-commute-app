@@ -1,5 +1,4 @@
 import { randomUUID } from "node:crypto";
-import { readFile } from "node:fs/promises";
 import postgres from "postgres";
 import {
   afterAll,
@@ -9,6 +8,7 @@ import {
   expect,
   it,
 } from "vitest";
+import { runLiveCommuteMigration } from "../scripts/migrateLiveCommute.js";
 import {
   createLiveCommuteInstallationService,
   LiveCommuteSessionServiceError,
@@ -26,12 +26,20 @@ const describeWithPostgres = RAW_TEST_DATABASE_URL == null ? describe.skip : des
 const TEST_SCHEMA_PREFIX = "blick_live_commute_test_";
 
 function checkedLocalTestDatabaseUrl(raw: string): string {
-  const url = new URL(raw);
+  let url: URL;
+  try {
+    url = new URL(raw);
+  } catch {
+    throw new Error("LIVE_COMMUTE_TEST_DATABASE_URL must be a valid PostgreSQL URL");
+  }
   if (url.protocol !== "postgres:" && url.protocol !== "postgresql:") {
     throw new Error("LIVE_COMMUTE_TEST_DATABASE_URL must use PostgreSQL");
   }
   const database = decodeURIComponent(url.pathname.replace(/^\/+/, ""));
-  if (!/(^|[-_])test([-_]|$)/i.test(database)) {
+  if (
+    !/(^|[-_])test([-_]|$)/i.test(database) ||
+    /(^|[-_])(prod|production)([-_]|$)/i.test(database)
+  ) {
     throw new Error("LIVE_COMMUTE_TEST_DATABASE_URL must name a dedicated test database");
   }
   if (!["localhost", "127.0.0.1", "[::1]"].includes(url.hostname)) {
@@ -45,6 +53,41 @@ function schemaConnectionUrl(connectionString: string, schema: string): string {
   url.searchParams.set("search_path", schema);
   return url.toString();
 }
+
+describe("PostgreSQL live commute test safeguards", () => {
+  it.each([
+    [
+      "a non-PostgreSQL protocol",
+      "https://blick_test:blick_test_ci_only@127.0.0.1:5432/blick_test",
+    ],
+    [
+      "a database without a test marker",
+      "postgresql://blick_test:blick_test_ci_only@127.0.0.1:5432/blick",
+    ],
+    [
+      "a production-marked database",
+      "postgresql://blick_test:blick_test_ci_only@127.0.0.1:5432/blick_prod_test",
+    ],
+    [
+      "a non-loopback host",
+      "postgresql://blick_test:blick_test_ci_only@database.example.invalid:5432/blick_test",
+    ],
+  ])("rejects %s", (_description, connectionString) => {
+    expect(() => checkedLocalTestDatabaseUrl(connectionString)).toThrow();
+  });
+
+  it("accepts a dedicated loopback test database", () => {
+    const checked = checkedLocalTestDatabaseUrl(
+      "postgresql://blick_test:blick_test_ci_only@127.0.0.1:5432/blick_test",
+    );
+
+    expect(new URL(checked)).toMatchObject({
+      hostname: "127.0.0.1",
+      pathname: "/blick_test",
+      protocol: "postgresql:",
+    });
+  });
+});
 
 function sessionInput(
   sessionId: string,
@@ -75,6 +118,28 @@ describeWithPostgres("PostgreSQL live commute session store", () => {
   let secondStore: PostgresLiveCommuteSessionStore;
   const schema = `${TEST_SCHEMA_PREFIX}${randomUUID().replaceAll("-", "")}`;
 
+  async function assertIndependentScopedConnections(): Promise<void> {
+    const [firstScope, secondScope] = await Promise.all([
+      firstSql!<{ current_schema: string | null; backend_pid: number }[]>`
+        SELECT current_schema() AS current_schema,
+               pg_backend_pid()::integer AS backend_pid
+      `,
+      secondSql!<{ current_schema: string | null; backend_pid: number }[]>`
+        SELECT current_schema() AS current_schema,
+               pg_backend_pid()::integer AS backend_pid
+      `,
+    ]);
+    if (
+      firstScope[0]?.current_schema !== schema ||
+      secondScope[0]?.current_schema !== schema
+    ) {
+      throw new Error("refusing to run outside the randomized live commute test schema");
+    }
+    if (firstScope[0]?.backend_pid === secondScope[0]?.backend_pid) {
+      throw new Error("PostgreSQL integration stores must use independent connections");
+    }
+  }
+
   beforeAll(async () => {
     const connectionString = checkedLocalTestDatabaseUrl(RAW_TEST_DATABASE_URL!);
     adminSql = postgres(connectionString, {
@@ -95,32 +160,15 @@ describeWithPostgres("PostgreSQL live commute session store", () => {
       prepare: false,
       connection: { application_name: "blick_live_commute_test_second" },
     });
-    const [firstScope, secondScope] = await Promise.all([
-      firstSql<{ current_schema: string | null }[]>`
-        SELECT current_schema() AS current_schema
-      `,
-      secondSql<{ current_schema: string | null }[]>`
-        SELECT current_schema() AS current_schema
-      `,
-    ]);
-    if (
-      firstScope[0]?.current_schema !== schema ||
-      secondScope[0]?.current_schema !== schema
-    ) {
-      throw new Error("refusing to run outside the randomized live commute test schema");
-    }
-    const migration = await readFile(
-      new URL("../migrations/002_live_commute_sessions.sql", import.meta.url),
-      "utf8",
-    );
-    await firstSql.begin(async (transaction) => {
-      await transaction.unsafe(migration);
-    });
+    await assertIndependentScopedConnections();
+    await runLiveCommuteMigration(scopedConnectionString);
+    await runLiveCommuteMigration(scopedConnectionString);
     firstStore = new PostgresLiveCommuteSessionStore(firstSql);
     secondStore = new PostgresLiveCommuteSessionStore(secondSql);
   });
 
   beforeEach(async () => {
+    await assertIndependentScopedConnections();
     await firstSql!`
       TRUNCATE live_commute_sessions, live_commute_installations
     `;
@@ -220,6 +268,27 @@ describeWithPostgres("PostgreSQL live commute session store", () => {
       status: "ALREADY_CANCELLED",
       session: { lifecycle: "CANCELLED", revision: 1 },
     });
+    const repeatedCancellation = await reloadedService.cancelSession(authentication, {
+      sessionId: input.sessionId,
+      expectedRevision: 1,
+    });
+    expect(repeatedCancellation).toMatchObject({
+      status: "UNCHANGED",
+      session: { lifecycle: "CANCELLED", revision: 1 },
+    });
+    await expect(
+      reloadedService.replaceSession(authentication, {
+        ...input,
+        expectedRevision: 1,
+        query: {
+          kind: "LINE_DIRECTION",
+          siteId: 9192,
+          transportMode: "BUS",
+          lineId: 3,
+          directionCode: 2,
+        },
+      }),
+    ).rejects.toMatchObject({ code: "SESSION_CANCELLED" });
     expect(await reloadedService.listSessions(authentication)).toMatchObject([
       { lifecycle: "CANCELLED", revision: 1 },
     ]);
@@ -274,6 +343,82 @@ describeWithPostgres("PostgreSQL live commute session store", () => {
     expect(results.map(({ status }) => status).sort()).toEqual([
       "REGISTERED",
       "REGISTERED",
+    ]);
+  });
+
+  it("allows cross-installation overlap while isolating ownership", async () => {
+    const now = new Date("2026-09-12T06:30:00.000Z");
+    const firstService = createLiveCommuteInstallationService(firstStore, {
+      now: () => now,
+    });
+    const secondService = createLiveCommuteInstallationService(secondStore, {
+      now: () => now,
+    });
+    const [firstInstallation, secondInstallation] = await Promise.all([
+      firstService.registerInstallation(),
+      secondService.registerInstallation(),
+    ]);
+    const firstAuthentication = {
+      installationId: firstInstallation.installationId,
+      bearerCredential: firstInstallation.bearerCredential,
+    };
+    const secondAuthentication = {
+      installationId: secondInstallation.installationId,
+      bearerCredential: secondInstallation.bearerCredential,
+    };
+
+    const registrations = await Promise.all([
+      firstService.registerSession(
+        firstAuthentication,
+        sessionInput(
+          "first-installation-occurrence",
+          "2026-09-12T06:00:00.000Z",
+          "2026-09-12T07:00:00.000Z",
+          9192,
+        ),
+      ),
+      secondService.registerSession(
+        secondAuthentication,
+        sessionInput(
+          "second-installation-occurrence",
+          "2026-09-12T06:00:00.000Z",
+          "2026-09-12T07:00:00.000Z",
+          9700,
+        ),
+      ),
+    ]);
+    expect(registrations.map(({ status }) => status)).toEqual([
+      "REGISTERED",
+      "REGISTERED",
+    ]);
+    expect(await firstStore.listEligibleSessions(now)).toHaveLength(2);
+
+    const crossInstallationProof = {
+      installationId: secondInstallation.installationId,
+      bearerCredential: firstInstallation.bearerCredential,
+    };
+    await expect(
+      firstService.listSessions(crossInstallationProof),
+    ).rejects.toMatchObject({ code: "INSTALLATION_AUTHENTICATION_FAILED" });
+    await expect(
+      firstService.cancelSession(crossInstallationProof, {
+        sessionId: "second-installation-occurrence",
+        expectedRevision: 1,
+      }),
+    ).rejects.toMatchObject({ code: "INSTALLATION_AUTHENTICATION_FAILED" });
+    await expect(
+      firstStore.withInstallationTransaction(
+        firstInstallation.installationId,
+        async (transaction) =>
+          await transaction.getSession("second-installation-occurrence"),
+      ),
+    ).resolves.toBeUndefined();
+    expect(await secondService.listSessions(secondAuthentication)).toMatchObject([
+      {
+        lifecycle: "REGISTERED",
+        revision: 1,
+        session: { sessionId: "second-installation-occurrence" },
+      },
     ]);
   });
 
@@ -344,29 +489,36 @@ describeWithPostgres("PostgreSQL live commute session store", () => {
     );
     await firstService.registerSession(authentication, initial);
 
+    const firstReplacement = {
+      ...initial,
+      expectedRevision: 1,
+      startsAt: new Date("2026-09-12T05:45:00.000Z"),
+      endsAt: new Date("2026-09-12T06:45:00.000Z"),
+      query: {
+        kind: "LINE_DIRECTION" as const,
+        siteId: 9192,
+        transportMode: "BUS" as const,
+        lineId: 3,
+        directionCode: 2,
+      },
+    };
+    const secondReplacement = {
+      ...initial,
+      expectedRevision: 1,
+      startsAt: new Date("2026-09-12T06:15:00.000Z"),
+      endsAt: new Date("2026-09-12T07:15:00.000Z"),
+      query: {
+        kind: "LINE_DIRECTION" as const,
+        siteId: 9192,
+        transportMode: "BUS" as const,
+        lineId: 4,
+        directionCode: 2,
+      },
+    };
+
     const attempts = await Promise.allSettled([
-      firstService.replaceSession(authentication, {
-        ...initial,
-        expectedRevision: 1,
-        query: {
-          kind: "LINE_DIRECTION",
-          siteId: 9192,
-          transportMode: "BUS",
-          lineId: 3,
-          directionCode: 2,
-        },
-      }),
-      secondService.replaceSession(authentication, {
-        ...initial,
-        expectedRevision: 1,
-        query: {
-          kind: "LINE_DIRECTION",
-          siteId: 9192,
-          transportMode: "BUS",
-          lineId: 4,
-          directionCode: 2,
-        },
-      }),
+      firstService.replaceSession(authentication, firstReplacement),
+      secondService.replaceSession(authentication, secondReplacement),
     ]);
 
     expect(attempts.filter(({ status }) => status === "fulfilled")).toHaveLength(1);
@@ -374,14 +526,14 @@ describeWithPostgres("PostgreSQL live commute session store", () => {
       status: "rejected",
       reason: expect.objectContaining({ code: "SESSION_REVISION_CONFLICT" }),
     });
+    const successfulAttempt = attempts.find(({ status }) => status === "fulfilled");
+    if (successfulAttempt?.status !== "fulfilled") {
+      throw new Error("expected one successful replacement");
+    }
     const stored = await firstService.listSessions(authentication);
     expect(stored).toHaveLength(1);
     expect(stored[0]?.revision).toBe(2);
-    expect(stored[0]?.session.query.kind).toBe("LINE_DIRECTION");
-    if (stored[0]?.session.query.kind !== "LINE_DIRECTION") {
-      throw new Error("expected a stored line query");
-    }
-    expect([3, 4]).toContain(stored[0].session.query.lineId);
+    expect(stored[0]?.session).toEqual(successfulAttempt.value.session.session);
   });
 
   it("leaves no authorized session after concurrent registration and revocation", async () => {
@@ -481,6 +633,149 @@ describeWithPostgres("PostgreSQL live commute session store", () => {
     expect(rows[0]?.revision).toBeGreaterThanOrEqual(1);
   });
 
+  it("installs the expected objects and enforces ownership state constraints", async () => {
+    const tables = await firstSql!<{ table_name: string }[]>`
+      SELECT table_name
+      FROM information_schema.tables
+      WHERE table_schema = current_schema()
+        AND table_name LIKE 'live_commute_%'
+      ORDER BY table_name
+    `;
+    expect(tables.map(({ table_name }) => table_name)).toEqual([
+      "live_commute_installations",
+      "live_commute_sessions",
+    ]);
+
+    const indexes = await firstSql!<{ indexname: string; indexdef: string }[]>`
+      SELECT indexname, indexdef
+      FROM pg_indexes
+      WHERE schemaname = current_schema()
+        AND tablename IN ('live_commute_installations', 'live_commute_sessions')
+    `;
+    const indexDefinitions = new Map(
+      indexes.map(({ indexname, indexdef }) => [indexname, indexdef]),
+    );
+    expect([...indexDefinitions.keys()]).toEqual(
+      expect.arrayContaining([
+        "live_commute_installations_pkey",
+        "live_commute_installations_credential_digest_key",
+        "live_commute_sessions_pkey",
+        "live_commute_sessions_installation_window_idx",
+        "live_commute_sessions_eligible_window_idx",
+      ]),
+    );
+    expect(indexDefinitions.get("live_commute_sessions_installation_window_idx")).toMatch(
+      /WHERE .*lifecycle.*REGISTERED/i,
+    );
+    expect(indexDefinitions.get("live_commute_sessions_eligible_window_idx")).toMatch(
+      /WHERE .*lifecycle.*REGISTERED/i,
+    );
+
+    const constraints = await firstSql!<{ conname: string; contype: string }[]>`
+      SELECT constraint_row.conname, constraint_row.contype
+      FROM pg_constraint AS constraint_row
+      INNER JOIN pg_class AS relation
+        ON relation.oid = constraint_row.conrelid
+      WHERE relation.relnamespace = current_schema()::regnamespace
+        AND relation.relname IN ('live_commute_installations', 'live_commute_sessions')
+    `;
+    expect(constraints).toEqual(
+      expect.arrayContaining([
+        { conname: "live_commute_installations_pkey", contype: "p" },
+        {
+          conname: "live_commute_installations_credential_digest_key",
+          contype: "u",
+        },
+        { conname: "live_commute_sessions_pkey", contype: "p" },
+        { conname: "live_commute_sessions_installation_fk", contype: "f" },
+      ]),
+    );
+
+    const createdAt = new Date("2026-09-12T06:00:00.000Z");
+    const firstInstallationId = randomUUID();
+    const secondInstallationId = randomUUID();
+    const missingInstallationId = randomUUID();
+    const insertInstallation = async (
+      installationId: string,
+      credentialDigest: string,
+    ): Promise<void> => {
+      await firstSql!`
+        INSERT INTO live_commute_installations (
+          installation_id, credential_digest, revoked_at, created_at, updated_at
+        ) VALUES (
+          ${installationId}, ${credentialDigest}, NULL, ${createdAt}, ${createdAt}
+        )
+      `;
+    };
+    const insertSession = async (input: {
+      installationId: string;
+      sessionId: string;
+      lifecycle?: string;
+      revision?: number;
+      cancelledAt?: Date | null;
+    }): Promise<void> => {
+      await firstSql!`
+        INSERT INTO live_commute_sessions (
+          installation_id, session_id, routine_id, starts_at, ends_at, query,
+          lifecycle, revision, created_at, updated_at, cancelled_at
+        ) VALUES (
+          ${input.installationId}, ${input.sessionId}, 'routine-constraint-test',
+          ${createdAt}, ${new Date("2026-09-12T07:00:00.000Z")},
+          ${firstSql!.json({ kind: "LINE_DIRECTION" })},
+          ${input.lifecycle ?? "REGISTERED"}, ${input.revision ?? 1},
+          ${createdAt}, ${createdAt}, ${input.cancelledAt ?? null}
+        )
+      `;
+    };
+
+    await Promise.all([
+      insertInstallation(firstInstallationId, "1".repeat(64)),
+      insertInstallation(secondInstallationId, "2".repeat(64)),
+    ]);
+    await expect(
+      insertSession({
+        installationId: missingInstallationId,
+        sessionId: "missing-owner",
+      }),
+    ).rejects.toMatchObject({ code: "23503" });
+    await expect(
+      insertSession({
+        installationId: firstInstallationId,
+        sessionId: "invalid-revision",
+        revision: 0,
+      }),
+    ).rejects.toMatchObject({ code: "23514" });
+    await expect(
+      insertSession({
+        installationId: firstInstallationId,
+        sessionId: "invalid-lifecycle",
+        lifecycle: "PAUSED",
+      }),
+    ).rejects.toMatchObject({ code: "23514" });
+    await expect(
+      insertSession({
+        installationId: firstInstallationId,
+        sessionId: "missing-cancelled-at",
+        lifecycle: "CANCELLED",
+      }),
+    ).rejects.toMatchObject({ code: "23514" });
+
+    await insertSession({
+      installationId: firstInstallationId,
+      sessionId: "shared-occurrence",
+    });
+    await insertSession({
+      installationId: secondInstallationId,
+      sessionId: "shared-occurrence",
+    });
+    await expect(
+      insertSession({
+        installationId: firstInstallationId,
+        sessionId: "shared-occurrence",
+      }),
+    ).rejects.toMatchObject({ code: "23505" });
+  });
+
   it("enforces time constraints and rejects malformed stored queries on read", async () => {
     const now = new Date("2026-09-12T06:30:00.000Z");
     const service = createLiveCommuteInstallationService(firstStore, {
@@ -535,6 +830,48 @@ describeWithPostgres("PostgreSQL live commute session store", () => {
     expect(lifecycleRows).toMatchObject([
       { lifecycle: "CANCELLED", revoked_at: expect.any(Date) },
     ]);
+  });
+
+  it("rolls back a failed transaction and releases its connection", async () => {
+    const now = new Date("2026-09-12T06:30:00.000Z");
+    const firstService = createLiveCommuteInstallationService(firstStore, {
+      now: () => now,
+    });
+    const secondService = createLiveCommuteInstallationService(secondStore, {
+      now: () => now,
+    });
+    const issued = await firstService.registerInstallation();
+    const authentication = {
+      installationId: issued.installationId,
+      bearerCredential: issued.bearerCredential,
+    };
+
+    await expect(
+      firstStore.withInstallationTransaction(
+        issued.installationId,
+        async (transaction) => {
+          await transaction.revokeInstallation(now);
+          throw new Error("forced transaction rollback");
+        },
+      ),
+    ).rejects.toThrow("forced transaction rollback");
+
+    await expect(
+      secondService.authenticateInstallation(authentication),
+    ).resolves.toMatchObject({
+      installationId: issued.installationId,
+      state: "ACTIVE",
+    });
+    await expect(
+      firstService.registerSession(
+        authentication,
+        sessionInput(
+          "after-rollback",
+          "2026-09-12T06:00:00.000Z",
+          "2026-09-12T07:00:00.000Z",
+        ),
+      ),
+    ).resolves.toMatchObject({ status: "REGISTERED" });
   });
 
   it("returns a sanitized authentication error for a malformed installation id", async () => {
