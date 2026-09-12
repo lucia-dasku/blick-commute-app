@@ -54,6 +54,12 @@ describe("live commute module import safety", () => {
       memoryDeliveryStore,
       postgresDeliveryStore,
       deliveryMigrationRunner,
+      liveActivityWireContract,
+      activityKitPayload,
+      apnsProtocol,
+      apnsProviderToken,
+      apnsTransport,
+      deliveryPlan,
     ] =
       await Promise.all([
         import("../src/liveCommute/engine.js"),
@@ -68,6 +74,12 @@ describe("live commute module import safety", () => {
         import("../src/liveCommute/apple/inMemoryLiveActivityDeliveryStore.js"),
         import("../src/liveCommute/apple/postgresLiveActivityDeliveryStore.js"),
         import("../scripts/migrateLiveActivityDelivery.js"),
+        import("../src/liveCommute/apple/liveActivityWireContract.js"),
+        import("../src/liveCommute/apple/activityKitPayload.js"),
+        import("../src/liveCommute/apple/apnsProtocol.js"),
+        import("../src/liveCommute/apple/apnsProviderToken.js"),
+        import("../src/liveCommute/apple/apnsTransport.js"),
+        import("../src/liveCommute/apple/deliveryPlan.js"),
       ]);
 
     expect(engine.runLiveCommuteTick).toBeTypeOf("function");
@@ -90,6 +102,18 @@ describe("live commute module import safety", () => {
     expect(deliveryMigrationRunner.runLiveActivityDeliveryMigration).toBeTypeOf(
       "function",
     );
+    expect(liveActivityWireContract.mapLiveCommuteSnapshotToContentState).toBeTypeOf(
+      "function",
+    );
+    expect(activityKitPayload.buildActivityKitStartPayload).toBeTypeOf("function");
+    expect(apnsProtocol.createDirectLiveActivityRequestDescription).toBeTypeOf(
+      "function",
+    );
+    expect(apnsProviderToken.createEs256ApnsProviderTokenSigner).toBeTypeOf(
+      "function",
+    );
+    expect(apnsTransport.DeterministicFakeApnsTransport).toBeTypeOf("function");
+    expect(deliveryPlan.buildLiveActivityStartPlan).toBeTypeOf("function");
     await expect(migrationRunner.runLiveCommuteMigration("")).rejects.toThrow(
       "LIVE_COMMUTE_MIGRATION_DATABASE_URL is required",
     );

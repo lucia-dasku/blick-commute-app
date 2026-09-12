@@ -1,20 +1,21 @@
 # iOS Live Activity architecture
 
-Status: Phase 3B backend foundation, implemented locally 2026-09-12. In addition to the
-accepted Phase 3A ownership/session authority, it provides protected ActivityKit token
-registries, exact-session-revision delivery bindings, and an authority-revalidating internal
-delivery-target seam. It remains callable internal code: no production caller, public route,
-timer, worker, scheduler, or APNs client invokes it.
+Status: Phase 4A backend protocol foundation, implemented locally 2026-09-12. In addition to
+the accepted Phase 3A ownership/session authority and Phase 3B protected-token delivery
+targets, it provides the versioned Blick/Swift wire contract, ActivityKit payload builders,
+APNs request/response descriptions, ES256 provider-token signing primitive, and an injected
+fake transport boundary. It remains callable internal code: no production caller, public
+route, timer, worker, scheduler, or real APNs client invokes it.
 
 The implemented boundary includes immutable session planning and grouping, direct SL
 acquisition, authoritative exact-journey role reuse, one final-clock projection, fresh/stale
 fallback projection, semantic comparison, persistent ownership and lifecycle records,
 revision-controlled mutations, and an authoritative post-acquisition store check. Snapshot
-history persistence, public enrollment, scheduling, publication, push delivery, and client
-rendering remain deferred. There is no iOS target, Apple credential, APNs sender integration,
-or production migration wiring. All Apple behavior described below is derived from Apple's
-public documentation and has not been verified with an iOS target, physical device, or APNs
-setup.
+history persistence, public enrollment, scheduling, real push delivery, and client rendering
+remain deferred. There is no iOS target, Apple credential, network transport, APNs sender
+integration, or production migration wiring. All Apple behavior described below is derived
+from Apple's public documentation and has not been verified with an iOS target, physical
+device, or APNs setup.
 
 ## Intended system shape
 
@@ -460,9 +461,9 @@ a later APNs channel-management phase.
 
 - iOS/ActivityKit code that obtains, observes, and uploads real tokens
 - physical-device and real Apple-environment verification
-- Apple Developer account, APNs credentials, signing JWTs, and network requests
+- Apple Developer account, APNs credentials, production provider-token configuration, and
+  network requests
 - broadcast-channel creation and real channel identifiers
-- ActivityKit start/update/end payload schemas and APNs response handling
 - public enrollment/token/binding routes, their rate limits, and abuse controls
 - production key management, rotation, retention, deletion, and operational access policy
 - stale-date, freshness-heartbeat, scheduler, dispatcher, queue/outbox, and check-to-send
@@ -473,13 +474,138 @@ APNs delivery remains best effort and distinct from backend session authority. A
 authority lookup is a point-in-time check, not a lease across a later network request. None
 of the Apple behavior or token shapes above has been exercised on a real device.
 
+## Phase 4A APNs payload and protocol foundation
+
+The Phase 4A contract was rechecked against Apple's current
+[ActivityKit push payload guide](https://developer.apple.com/documentation/activitykit/starting-and-updating-live-activities-with-activitykit-push-notifications),
+[direct request contract](https://developer.apple.com/documentation/usernotifications/sending-notification-requests-to-apns),
+[broadcast request contract](https://developer.apple.com/documentation/usernotifications/sending-broadcast-push-notification-requests-to-apns),
+[channel-management contract](https://developer.apple.com/documentation/usernotifications/sending-channel-management-requests-to-apns),
+[provider-token requirements](https://developer.apple.com/documentation/usernotifications/establishing-a-token-based-connection-to-apns),
+and [response contract](https://developer.apple.com/documentation/usernotifications/handling-notification-responses-from-apns).
+
+### Implemented
+
+- `BlickLiveActivityAttributes` is fixed at wire schema version `1` with exactly
+  `schemaVersion`, `bindingId`, `sessionRevision`, and `commuteKind`. Mutable transit data,
+  installation identity and credentials, ActivityKit tokens, encryption metadata, purchase
+  state, and complete routines are excluded. The attributes type string is exactly
+  `BlickLiveActivityAttributes`.
+- Content state is also versioned and discriminated by `commuteKind`. Both variants carry
+  `freshness` and integer `sourceFetchedAt` UNIX seconds. The LINE variant carries at most two
+  presentation rows—the current and next useful departures—with identity, line/direction/
+  destination, scheduled/expected/effective epoch seconds, cancellation, and current
+  operational state. This two-row policy is an explicit Live Activity presentation bound;
+  rows are never dropped dynamically to make an oversized payload pass.
+- The EXACT variant carries compact journey summaries with the backend-assigned `PRIMARY`,
+  `NEXT`, or `ALTERNATIVE` role, overall and effective departure epoch seconds, arrival,
+  origin/destination, transfer count, and first useful public-transport-leg presentation.
+  It does not copy full leg arrays or invent cancellation state that the current authoritative
+  snapshot does not provide. Roles are neither inferred from position nor promoted after an
+  earlier journey expires.
+- Snapshot mapping is pure and takes an explicit projection instant. It filters expired LINE
+  rows by `effectiveTime` and EXACT rows by `effectiveDepartureTime` before reducing time to
+  whole seconds, preserves future cancellations and FRESH/STALE state, copies and freezes its
+  result, and never generates countdown strings. Swift must calculate countdowns from the
+  absolute values and must independently reject data that is expired when displayed.
+- Pure ActivityKit builders produce start, update, and end JSON. Every builder requires an
+  explicit event-generation instant and emits whole epoch seconds without reading an ambient
+  clock. Start requires caller-supplied alert title/body and supports three deliberate modes:
+  legacy direct start with neither input field, iOS 18+ direct start with
+  `input-push-token: 1`, or iOS 18+ channel subscription with one caller-supplied
+  `input-push-channel`. The two input mechanisms cannot be combined. Update supports an
+  optional caller-chosen `stale-date`; end requires final state and supports an optional
+  caller-chosen `dismissal-date`, including a past instant for immediate dismissal.
+- The exact final serialized payload is counted in UTF-8 bytes and rejected above 4,096 bytes
+  both while building and at the APNs request boundary. Update/end builders also require the
+  normalized static attributes as non-wire sizing context, so the combined static attributes
+  plus dynamic state cannot exceed 4,096 bytes merely because those events do not resend the
+  attributes. The version-1 ceiling reserves the largest valid session revision so one shared
+  broadcast update cannot fit a low-revision subscriber while exceeding the ActivityKit limit
+  for another subscriber. Strings and rows are not silently truncated or removed. The same
+  conservative limit is used for direct and broadcast ActivityKit bodies even though Apple's
+  broadcast transport currently documents a larger transport envelope.
+- Pure APNs descriptions cover direct device requests, broadcast update/end publication, and
+  CREATE/READ/DELETE/LIST channel-management operations. Direct requests target the selected
+  sandbox or production host, use `/3/device/<activity-token>`, set the
+  `<bundle-id>.push-type.liveactivity` topic, and accept only priority 5 or 10. Broadcast
+  requests use `/4/broadcasts/apps/<bundle-id>`, require a caller-supplied APNs channel ID and
+  expiration, accept Apple-documented priority 1, 5, or 10, and accept update/end payloads
+  only. Channel creation requires the caller to choose documented message-storage policy `0`
+  or `1`; only APNs may return a channel ID.
+- Sensitive paths, authorization headers, channel headers, and bodies live behind a private
+  request representation. Ordinary JSON, string conversion, inspection, fake-transport
+  recording, and errors expose only bounded redacted diagnostics. Raw transport material is
+  available only through the explicit future transport boundary.
+- The provider-token primitive validates a caller-supplied private P-256 key and explicit Team
+  ID, Key ID, and issued-at instant. It emits an ES256 JWT with `iss`/`iat` and a 64-byte JOSE
+  R||S signature using Node's IEEE-P1363 encoding. The token wrapper is redacted from ordinary
+  serialization and inspection. No key is read from an environment variable or file.
+- Pure response handling normalizes bounded APNs metadata and independently classifies device,
+  broadcast, and channel-management responses. Direct terminal token outcomes retain APNs'
+  millisecond invalidation timestamp for a later generation-specific mutation decision.
+  Authentication, throttling, invalid request, retryable server, channel-invalid, and unknown
+  protocol outcomes remain distinct. A direct or broadcast HTTP 200 is `ACCEPTED`, never
+  proof of display or device delivery.
+- `DeterministicFakeApnsTransport` returns scripted normalized responses and records redacted
+  diagnostics only. It never materializes a request and contains no HTTP, TLS, retry, timer,
+  or connection code.
+- The delivery-plan seam matches each Phase 3B target to the exact authoritative publication
+  key and session revision, performs one last expiry projection, and builds start, direct or
+  broadcast update, and direct or broadcast end request descriptions. Device plans retain the
+  exact token client generation/server revision as safe correlation metadata. Planning does
+  not send, create a channel, rotate/invalidate a token, or move a binding to ACTIVE/ENDED.
+
+### Protocol and ordering boundaries
+
+ActivityKit `timestamp`, optional `stale-date`/`dismissal-date`, and APNs transport expiration
+are separate clocks. The builders validate their shape and the sensible stale-date ordering,
+but choose no global freshness, dismissal, heartbeat, or expiration policy. Apple may reorder,
+delay, group, throttle, or omit best-effort updates. A caller must use persistently coordinated
+per-activity ordering; a process-local counter or wall-clock assumption is not a cross-process
+ordering guarantee.
+
+The Phase 3B resolver check and Phase 4A publication match are point-in-time checks, not a
+lease. A future dispatcher still owns the outstanding check-to-send race, durable ordering,
+retry/idempotency policy, and generation-specific token invalidation. Constructing an `end`
+payload is separate from terminalizing backend storage, and neither action alone proves the
+device ended the Live Activity.
+
+Apple's current broadcast documentation has inconsistent host examples versus its connection
+table. Blick keeps the broadcast endpoint mapping centralized and currently models the
+dedicated sandbox/production broadcast hosts shown in Apple's examples and troubleshooting
+material. That choice must be confirmed against a real Apple environment before launch; it
+is not evidence of a successful connection.
+
+Before any real push is attempted, the future Swift `ActivityAttributes` and nested
+`ContentState` synthesized `Codable` types must match the version-1 JSON names, nullability,
+integer timestamp units, and discriminated LINE/EXACT shapes exactly. Swift/client capability
+code must also choose legacy direct, iOS 18+ direct update-token, or iOS 18+ channel start; it
+must not infer capability from token shape. Caller-supplied start alert localization remains a
+future English/Swedish client/product integration decision.
+
+### Still deferred
+
+- real APNs HTTP/2/TLS transport, connection pooling, retries, backoff, and delivery telemetry
+- a real Apple `.p8`, Team ID/Key ID configuration, finalized bundle ID, and signing-key
+  lifecycle
+- provider-token cache/reuse/refresh policy; Apple rejects tokens older than one hour and
+  rejects excessive regeneration, so a future connection layer must reuse tokens deliberately
+- transactional mutation from APNs results, including exact-generation token invalidation
+- broadcast channel creation execution, persistence, replacement, deletion, subscriber
+  coordination, and final message-storage policy
+- scheduler, dispatcher, queue/outbox, persistent send ordering, heartbeat, and stale-date
+  policy
+- iOS/Swift implementation, push-to-start/update token upload integration, localization,
+  entitlements, App Store configuration, and physical-device validation
+
 Ordinary WidgetKit widgets are not the 30-second live engine. Widget extensions are not
 continuously active, reloads are budgeted and scheduled by the system, and Apple recommends
 timeline entries at least about five minutes apart. See [Keeping a widget up to date](https://developer.apple.com/documentation/widgetkit/keeping-a-widget-up-to-date).
 
 ## Freshness and authoritative state
 
-Future live payloads must carry absolute departure/journey timestamps. Countdown rendering
+Phase 4A live payloads carry absolute departure/journey timestamps. Countdown rendering
 should derive from those timestamps and the current device/system time; a push should not be
 sent merely to turn “4 min” into “3 min”. Before acquisition results are published, expired
 departures and journeys must be filtered again against the publication instant. The future
@@ -596,7 +722,8 @@ passed.
 
 - Swift/SwiftUI, ActivityKit and WidgetKit client code
 - real token acquisition/upload and physical-device validation
-- APNs credentials, channel management, signing, payloads, and network requests
+- APNs credentials, real channel-management execution/persistence, provider-token operational
+  configuration/caching, and network requests
 - public installation enrollment/authentication routes and any user-account system
 - production application of the migration, database-pool wiring, and provider configuration
 - persistent snapshot history

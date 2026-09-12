@@ -365,7 +365,11 @@ describe("push-to-start token authority", () => {
         installationId: authentication.installationId,
         bindingId: binding.binding.bindingId,
       }),
-    ).toMatchObject({ kind: "START", pushToStartToken: PUSH_TOKEN_A });
+    ).toMatchObject({
+      kind: "START",
+      pushToStartToken: PUSH_TOKEN_A,
+      tokenGeneration: { clientGeneration: 1, serverRevision: 1 },
+    });
     expect(value.unprotectCalls).toHaveLength(1);
 
     await value.deliveryService.invalidatePushToStartToken(authentication, {
@@ -806,6 +810,7 @@ describe("update targets and terminal state", () => {
       strategy: "DIRECT_TOKEN",
       environment: "PRODUCTION",
       updateToken: UPDATE_TOKEN_B,
+      tokenGeneration: { clientGeneration: 8, serverRevision: 2 },
       sessionVersion: {
         installationId: authentication.installationId,
         sessionId: "occurrence-1",
@@ -961,6 +966,7 @@ describe("update targets and terminal state", () => {
       strategy: "BROADCAST_CHANNEL",
       broadcastChannelRequirement: "APNS_CHANNEL_REQUIRED",
       pushToStartToken: PUSH_TOKEN_A,
+      tokenGeneration: { clientGeneration: 1, serverRevision: 1 },
     });
     expect(value.unprotectCalls).toHaveLength(1);
     expect(

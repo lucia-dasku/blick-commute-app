@@ -36,6 +36,11 @@ export interface InternalLiveActivityStartTarget
   readonly kind: "START";
   readonly environment: ApplePushEnvironment;
   readonly pushToStartToken: Buffer;
+  /** Safe correlation for a future generation-specific terminal APNs response. */
+  readonly tokenGeneration: {
+    readonly clientGeneration: number;
+    readonly serverRevision: number;
+  };
   readonly broadcastChannelRequirement: "NONE" | "APNS_CHANNEL_REQUIRED";
 }
 
@@ -46,6 +51,11 @@ export interface InternalDirectLiveActivityUpdateTarget
   readonly strategy: "DIRECT_TOKEN";
   readonly environment: ApplePushEnvironment;
   readonly updateToken: Buffer;
+  /** Safe correlation for a future generation-specific terminal APNs response. */
+  readonly tokenGeneration: {
+    readonly clientGeneration: number;
+    readonly serverRevision: number;
+  };
 }
 
 export interface InternalBroadcastLiveActivityUpdateTarget
@@ -119,6 +129,10 @@ export class LiveActivityDeliveryResolver {
       resolvedAt: authority.resolvedAt,
       environment: stored.environment,
       pushToStartToken: plaintext,
+      tokenGeneration: Object.freeze({
+        clientGeneration: stored.clientGeneration,
+        serverRevision: stored.serverRevision,
+      }),
       broadcastChannelRequirement:
         authority.binding.strategy === "BROADCAST_CHANNEL"
           ? "APNS_CHANNEL_REQUIRED"
@@ -161,6 +175,10 @@ export class LiveActivityDeliveryResolver {
       strategy: "DIRECT_TOKEN",
       environment: stored.environment,
       updateToken: plaintext,
+      tokenGeneration: Object.freeze({
+        clientGeneration: stored.clientGeneration,
+        serverRevision: stored.serverRevision,
+      }),
     });
   }
 
