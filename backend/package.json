@@ -15,6 +15,8 @@
     "test": "vitest run",
     "test:watch": "vitest",
     "migrate:billing": "tsx scripts/migrateBilling.ts",
+    "migrate:live-commute": "tsx scripts/migrateLiveCommute.ts",
+    "test:live-commute-postgres": "vitest run tests/liveCommutePostgres.integration.test.ts",
     "verify:gtfs-bridge": "tsx scripts/verifyGtfsStopIdentityBridge.ts"
   },
   "dependencies": {

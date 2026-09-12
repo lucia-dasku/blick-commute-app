@@ -33,7 +33,22 @@ export interface RunLiveCommuteTickInput {
   readonly transportClient: SlTransportClient;
   readonly journeyClient: SlJourneyPlannerClient;
   readonly previousSnapshots?: LiveCommutePreviousSnapshotSource;
+  /**
+   * Optional authoritative lifecycle check. It runs once after every acquisition settles and
+   * before the final publication clock is read. Only identities from the original plan are
+   * retained; returning a different session specification can never retarget acquired state.
+   */
+  readonly revalidateSessions?: LiveCommuteSessionRevalidator;
 }
+
+export interface LiveCommuteSessionIdentity {
+  readonly installationId: string;
+  readonly sessionId: string;
+}
+
+export type LiveCommuteSessionRevalidator = (
+  sessions: readonly LiveCommuteSession[],
+) => Promise<readonly LiveCommuteSessionIdentity[]>;
 
 export interface AcquiredLiveCommuteGroup {
   readonly status: "ACQUIRED";
@@ -113,6 +128,20 @@ function publicationKeys(group: LiveCommuteAcquisitionGroup): readonly Publicati
   return Object.freeze(group.publicationGroups.map((publication) => publication.key));
 }
 
+function sessionIdentityKey(session: LiveCommuteSessionIdentity): string {
+  return JSON.stringify([session.installationId, session.sessionId]);
+}
+
+function retainRevalidatedSessions(
+  sessions: readonly LiveCommuteSession[],
+  retainedSessionKeys: ReadonlySet<string> | undefined,
+): readonly LiveCommuteSession[] {
+  if (retainedSessionKeys == null) return sessions;
+  return Object.freeze(
+    sessions.filter((session) => retainedSessionKeys.has(sessionIdentityKey(session))),
+  );
+}
+
 function previousSnapshot(
   source: LiveCommutePreviousSnapshotSource | undefined,
   key: PublicationKey,
@@ -150,10 +179,14 @@ function readyPublications(
   state: AcquiredTransitState,
   publicationAt: Date,
   previousSnapshots: LiveCommutePreviousSnapshotSource | undefined,
+  retainedSessionKeys: ReadonlySet<string> | undefined,
 ): readonly LiveCommutePublicationOutcome[] {
   const publications: LiveCommutePublicationOutcome[] = [];
   for (const planned of group.publicationGroups) {
-    const ready = prepareLiveCommutePublicationGroup(publicationAt, planned);
+    const ready = prepareLiveCommutePublicationGroup(publicationAt, {
+      ...planned,
+      sessions: retainRevalidatedSessions(planned.sessions, retainedSessionKeys),
+    });
     if (ready == null) continue;
 
     try {
@@ -184,10 +217,14 @@ function failedPublications(
   group: LiveCommuteAcquisitionGroup,
   publicationAt: Date,
   previousSnapshots: LiveCommutePreviousSnapshotSource | undefined,
+  retainedSessionKeys: ReadonlySet<string> | undefined,
 ): readonly LiveCommutePublicationOutcome[] {
   const publications: LiveCommutePublicationOutcome[] = [];
   for (const planned of group.publicationGroups) {
-    const ready = prepareLiveCommutePublicationGroup(publicationAt, planned);
+    const ready = prepareLiveCommutePublicationGroup(publicationAt, {
+      ...planned,
+      sessions: retainRevalidatedSessions(planned.sessions, retainedSessionKeys),
+    });
     if (ready == null) continue;
 
     try {
@@ -300,6 +337,11 @@ export async function runLiveCommuteTick(
   const executed = await Promise.all(
     plan.acquisitionGroups.map((group) => acquireGroup(group, planningAt, input)),
   );
+  let retainedSessionKeys: ReadonlySet<string> | undefined;
+  if (input.revalidateSessions != null && plan.activeSessions.length > 0) {
+    const revalidatedSessions = await input.revalidateSessions(plan.activeSessions);
+    retainedSessionKeys = new Set(revalidatedSessions.map(sessionIdentityKey));
+  }
   const publicationAt = executed.length === 0 ? planningAt : readClock(input.now);
   const publications = executed.flatMap((result) =>
     "state" in result
@@ -308,8 +350,14 @@ export async function runLiveCommuteTick(
           result.state,
           publicationAt,
           input.previousSnapshots,
+          retainedSessionKeys,
         )
-      : failedPublications(result.group, publicationAt, input.previousSnapshots),
+      : failedPublications(
+          result.group,
+          publicationAt,
+          input.previousSnapshots,
+          retainedSessionKeys,
+        ),
   );
 
   return Object.freeze({
