@@ -148,6 +148,28 @@ function booleanValue(value: unknown, field: string): boolean {
   return value;
 }
 
+function copiedDenseWireArray<T>(
+  value: readonly T[],
+  field: string,
+): readonly T[] {
+  if (Reflect.ownKeys(value).length !== value.length + 1) {
+    throw new TypeError(`${field} must be a dense array`);
+  }
+  const copied: T[] = [];
+  for (let index = 0; index < value.length; index += 1) {
+    const descriptor = Object.getOwnPropertyDescriptor(value, String(index));
+    if (
+      descriptor == null ||
+      !descriptor.enumerable ||
+      !("value" in descriptor)
+    ) {
+      throw new TypeError(`${field} must be a dense array`);
+    }
+    copied.push(descriptor.value as T);
+  }
+  return copied;
+}
+
 function normalizedAlert(value: ActivityKitAlert, field: string): ActivityKitAlert {
   if (value == null || typeof value !== "object") {
     throw new TypeError(`${field} is required`);
@@ -254,7 +276,11 @@ function copiedWireState(
     if (!Array.isArray(contentState.departures)) {
       throw new TypeError("contentState.departures must be an array");
     }
-    if (contentState.departures.length > BLICK_LIVE_ACTIVITY_LINE_DEPARTURE_LIMIT) {
+    const departures = copiedDenseWireArray(
+      contentState.departures,
+      "contentState.departures",
+    );
+    if (departures.length > BLICK_LIVE_ACTIVITY_LINE_DEPARTURE_LIMIT) {
       throw new RangeError("contentState exceeds the LINE departure presentation bound");
     }
     return {
@@ -262,7 +288,7 @@ function copiedWireState(
       commuteKind: contentState.commuteKind,
       freshness: contentState.freshness,
       sourceFetchedAt,
-      departures: contentState.departures.map((departure, index) => {
+      departures: departures.map((departure, index) => {
         if (departure == null || typeof departure !== "object") {
           throw new TypeError(`contentState.departures[${index}] must be an object`);
         }
@@ -318,11 +344,15 @@ function copiedWireState(
   if (!Array.isArray(contentState.journeys)) {
     throw new TypeError("contentState.journeys must be an array");
   }
-  if (contentState.journeys.length > 3) {
+  const journeys = copiedDenseWireArray(
+    contentState.journeys,
+    "contentState.journeys",
+  );
+  if (journeys.length > 3) {
     throw new RangeError("contentState exceeds the EXACT journey role bound");
   }
-  const roles = new Set(contentState.journeys.map((journey) => journey?.role));
-  if (roles.size !== contentState.journeys.length) {
+  const roles = new Set(journeys.map((journey) => journey?.role));
+  if (roles.size !== journeys.length) {
     throw new RangeError("contentState EXACT journey roles must be unique");
   }
   return {
@@ -330,7 +360,7 @@ function copiedWireState(
     commuteKind: contentState.commuteKind,
     freshness: contentState.freshness,
     sourceFetchedAt,
-    journeys: contentState.journeys.map((journey, index) => {
+    journeys: journeys.map((journey, index) => {
       if (journey == null || typeof journey !== "object") {
         throw new TypeError(`contentState.journeys[${index}] must be an object`);
       }

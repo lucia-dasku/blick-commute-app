@@ -144,7 +144,7 @@ describe("Blick Live Activity static attributes", () => {
 });
 
 describe("Blick Live Activity LINE_DIRECTION content state", () => {
-  it("removes expired rows, preserves cancellation and stale state, then presents current plus next", () => {
+  it("removes expired rows, preserves realtime and stale state, then presents current plus next useful", () => {
     const expectedTime = "2026-09-12T08:01:00.987Z";
     const snapshot = lineSnapshot([
       lineDeparture("expired", "2026-09-12T08:00:00.499Z"),
@@ -186,15 +186,15 @@ describe("Blick Live Activity LINE_DIRECTION content state", () => {
           predictionState: "REALTIME",
         },
         {
-          departureId: "cancelled",
+          departureId: "presentation-reserve",
           lineDesignation: "14",
           direction: "Northbound",
           destination: "Mörby centrum",
-          scheduledAt: epochSeconds("2026-09-12T08:02:00.000Z"),
+          scheduledAt: epochSeconds("2026-09-12T08:03:00.000Z"),
           expectedAt: null,
-          effectiveAt: epochSeconds("2026-09-12T08:02:00.000Z"),
-          isCancelled: true,
-          departureState: "CANCELLED",
+          effectiveAt: epochSeconds("2026-09-12T08:03:00.000Z"),
+          isCancelled: false,
+          departureState: "EXPECTED",
           journeyState: "NORMALPROGRESS",
           predictionState: null,
         },
@@ -221,6 +221,36 @@ describe("Blick Live Activity LINE_DIRECTION content state", () => {
       "at-boundary",
     ]);
     expect(Number.isInteger(contentState.departures[0]?.effectiveAt)).toBe(true);
+  });
+
+  it("keeps the leading cancellation while selecting the next boardable departure", () => {
+    const snapshot = lineSnapshot([
+      lineDeparture("cancelled-current", "2026-09-12T08:01:00.000Z", {
+        isCancelled: true,
+        state: "CANCELLED",
+      }),
+      lineDeparture("cancelled-next", "2026-09-12T08:02:00.000Z", {
+        isCancelled: true,
+        state: "CANCELLED",
+      }),
+      lineDeparture("next-boardable", "2026-09-12T08:03:00.000Z"),
+    ]);
+
+    const contentState = mapLiveCommuteSnapshotToContentState(
+      snapshot,
+      PROJECTION_AT,
+    );
+
+    expect(contentState.commuteKind).toBe("LINE_DIRECTION");
+    if (contentState.commuteKind !== "LINE_DIRECTION") {
+      throw new Error("unexpected content-state kind");
+    }
+    expect(contentState.departures.map(({ departureId }) => departureId)).toEqual([
+      "cancelled-current",
+      "next-boardable",
+    ]);
+    expect(contentState.departures[0]?.isCancelled).toBe(true);
+    expect(contentState.departures[1]?.isCancelled).toBe(false);
   });
 });
 

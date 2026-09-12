@@ -169,6 +169,19 @@ function mapLineDeparture(
   });
 }
 
+function selectLinePresentationDepartures(
+  departures: readonly LiveCommuteLineDeparture[],
+): readonly LiveCommuteLineDeparture[] {
+  const first = departures[0];
+  if (first == null) return [];
+  const nextBoardable = departures
+    .slice(1)
+    .find((departure) => !departure.isCancelled);
+  return nextBoardable == null
+    ? departures.slice(0, BLICK_LIVE_ACTIVITY_LINE_DEPARTURE_LIMIT)
+    : [first, nextBoardable];
+}
+
 function mapJourneyLeg(
   leg: LiveCommuteJourneyLeg,
 ): BlickLiveActivityJourneyLegV1 {
@@ -238,14 +251,14 @@ export function mapLiveCommuteSnapshotToContentState(
   );
 
   if (snapshot.kind === "LINE_DIRECTION") {
-    const departures = snapshot.departures
-      .filter(
-        (departure) =>
-          timestampMillis(departure.effectiveTime, "departure.effectiveTime") >=
-          projectionMillis,
-      )
-      .slice(0, BLICK_LIVE_ACTIVITY_LINE_DEPARTURE_LIMIT)
-      .map(mapLineDeparture);
+    const futureDepartures = snapshot.departures.filter(
+      (departure) =>
+        timestampMillis(departure.effectiveTime, "departure.effectiveTime") >=
+        projectionMillis,
+    );
+    const departures = selectLinePresentationDepartures(futureDepartures).map(
+      mapLineDeparture,
+    );
 
     return Object.freeze({
       schemaVersion: BLICK_LIVE_ACTIVITY_SCHEMA_VERSION,

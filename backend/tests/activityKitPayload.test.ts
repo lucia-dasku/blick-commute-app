@@ -1,4 +1,4 @@
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 import {
   ACTIVITYKIT_PAYLOAD_MAX_UTF8_BYTES,
   activityKitEpochSeconds,
@@ -11,6 +11,7 @@ import {
 import {
   BLICK_LIVE_ACTIVITY_ATTRIBUTES_TYPE,
   createBlickLiveActivityAttributes,
+  type BlickLiveActivityExactContentStateV1,
   type BlickLiveActivityLineContentStateV1,
 } from "../src/liveCommute/apple/liveActivityWireContract.js";
 
@@ -172,6 +173,113 @@ describe("ActivityKit payload builders", () => {
         },
       }),
     ).toThrow("LINE departure presentation bound");
+  });
+
+  it("rejects sparse LINE and EXACT row arrays instead of serializing null rows", () => {
+    const sparseLineState: BlickLiveActivityLineContentStateV1 = {
+      ...lineState(),
+      departures: new Array(1) as BlickLiveActivityLineContentStateV1["departures"],
+    };
+    expect(() =>
+      buildActivityKitUpdatePayload({
+        generatedAt: EVENT_AT,
+        attributes: attributes(),
+        contentState: sparseLineState,
+      }),
+    ).toThrow("contentState.departures must be a dense array");
+
+    const sparseExactState: BlickLiveActivityExactContentStateV1 = {
+      schemaVersion: 1,
+      commuteKind: "EXACT_DESTINATION",
+      freshness: "FRESH",
+      sourceFetchedAt: 1_789_207_190,
+      journeys: new Array(1) as BlickLiveActivityExactContentStateV1["journeys"],
+    };
+    expect(() =>
+      buildActivityKitUpdatePayload({
+        generatedAt: EVENT_AT,
+        attributes: createBlickLiveActivityAttributes({
+          bindingId: BINDING_ID,
+          sessionRevision: 7,
+          commuteKind: "EXACT_DESTINATION",
+        }),
+        contentState: sparseExactState,
+      }),
+    ).toThrow("contentState.journeys must be a dense array");
+  });
+
+  it("rejects extended row arrays without invoking caller-defined array methods", () => {
+    const lineRows = [...lineState().departures];
+    const lineMap = vi.fn(() => []);
+    Object.defineProperty(lineRows, "map", {
+      value: lineMap,
+      enumerable: false,
+    });
+    expect(() =>
+      buildActivityKitUpdatePayload({
+        generatedAt: EVENT_AT,
+        attributes: attributes(),
+        contentState: { ...lineState(), departures: lineRows },
+      }),
+    ).toThrow("contentState.departures must be a dense array");
+    expect(lineMap).not.toHaveBeenCalled();
+
+    const exactRows: BlickLiveActivityExactContentStateV1["journeys"] = [];
+    const exactMap = vi.fn();
+    Object.defineProperty(exactRows, "map", {
+      get: exactMap,
+      enumerable: false,
+    });
+    expect(() =>
+      buildActivityKitUpdatePayload({
+        generatedAt: EVENT_AT,
+        attributes: createBlickLiveActivityAttributes({
+          bindingId: BINDING_ID,
+          sessionRevision: 7,
+          commuteKind: "EXACT_DESTINATION",
+        }),
+        contentState: {
+          schemaVersion: 1,
+          commuteKind: "EXACT_DESTINATION",
+          freshness: "FRESH",
+          sourceFetchedAt: 1_789_207_190,
+          journeys: exactRows,
+        },
+      }),
+    ).toThrow("contentState.journeys must be a dense array");
+    expect(exactMap).not.toHaveBeenCalled();
+
+    const extendedLineRows = Object.assign([...lineState().departures], {
+      diagnostic: "must-not-cross-wire-boundary",
+    });
+    expect(() =>
+      buildActivityKitUpdatePayload({
+        generatedAt: EVENT_AT,
+        attributes: attributes(),
+        contentState: { ...lineState(), departures: extendedLineRows },
+      }),
+    ).toThrow("contentState.departures must be a dense array");
+
+    const extendedExactRows = Object.assign([], {
+      diagnostic: "must-not-cross-wire-boundary",
+    }) as unknown as BlickLiveActivityExactContentStateV1["journeys"];
+    expect(() =>
+      buildActivityKitUpdatePayload({
+        generatedAt: EVENT_AT,
+        attributes: createBlickLiveActivityAttributes({
+          bindingId: BINDING_ID,
+          sessionRevision: 7,
+          commuteKind: "EXACT_DESTINATION",
+        }),
+        contentState: {
+          schemaVersion: 1,
+          commuteKind: "EXACT_DESTINATION",
+          freshness: "FRESH",
+          sourceFetchedAt: 1_789_207_190,
+          journeys: extendedExactRows,
+        },
+      }),
+    ).toThrow("contentState.journeys must be a dense array");
   });
 
   it("builds update state with an explicit optional stale date and no automatic alert", () => {

@@ -493,10 +493,12 @@ and [response contract](https://developer.apple.com/documentation/usernotificati
   `BlickLiveActivityAttributes`.
 - Content state is also versioned and discriminated by `commuteKind`. Both variants carry
   `freshness` and integer `sourceFetchedAt` UNIX seconds. The LINE variant carries at most two
-  presentation rows—the current and next useful departures—with identity, line/direction/
-  destination, scheduled/expected/effective epoch seconds, cancellation, and current
-  operational state. This two-row policy is an explicit Live Activity presentation bound;
-  rows are never dropped dynamically to make an oversized payload pass.
+  presentation rows: the leading future departure (including its cancellation state) and the
+  first later non-cancelled boarding opportunity when available, otherwise the second future
+  row. Each carries identity, line/direction/destination, scheduled/expected/effective epoch
+  seconds, cancellation, and current operational state. This two-row policy is an explicit
+  Live Activity presentation bound; rows are never dropped dynamically to make an oversized
+  payload pass.
 - The EXACT variant carries compact journey summaries with the backend-assigned `PRIMARY`,
   `NEXT`, or `ALTERNATIVE` role, overall and effective departure epoch seconds, arrival,
   origin/destination, transfer count, and first useful public-transport-leg presentation.
@@ -571,11 +573,17 @@ retry/idempotency policy, and generation-specific token invalidation. Constructi
 payload is separate from terminalizing backend storage, and neither action alone proves the
 device ended the Live Activity.
 
-Apple's current broadcast documentation has inconsistent host examples versus its connection
-table. Blick keeps the broadcast endpoint mapping centralized and currently models the
-dedicated sandbox/production broadcast hosts shown in Apple's examples and troubleshooting
-material. That choice must be confirmed against a real Apple environment before launch; it
-is not evidence of a successful connection.
+Apple's current broadcast documentation is internally inconsistent. The connection table in
+[Sending broadcast push notification requests to APNs](https://developer.apple.com/documentation/usernotifications/sending-broadcast-push-notification-requests-to-apns)
+and Apple's [command-line broadcast examples](https://developer.apple.com/documentation/usernotifications/sending-push-notifications-using-command-line-tools)
+use the ordinary `api[.sandbox].push.apple.com` hosts. Development examples on the broadcast
+request page itself and Apple's [push troubleshooting guide](https://developer.apple.com/documentation/usernotifications/troubleshooting-push-notifications)
+instead use dedicated `api-broadcast[.sandbox].push.apple.com` hosts. Blick keeps this mapping
+centralized and currently models the dedicated hosts; the documentation alone cannot resolve
+the conflict. Similarly, the ActivityKit guide lists broadcast priority 5 or 10 while the
+dedicated broadcast transport page lists 1, 5, or 10; the protocol model follows the latter.
+Both choices require confirmation in a real Apple environment before launch and are not
+evidence of a successful connection.
 
 Before any real push is attempted, the future Swift `ActivityAttributes` and nested
 `ContentState` synthesized `Codable` types must match the version-1 JSON names, nullability,
@@ -590,7 +598,8 @@ future English/Swedish client/product integration decision.
 - a real Apple `.p8`, Team ID/Key ID configuration, finalized bundle ID, and signing-key
   lifecycle
 - provider-token cache/reuse/refresh policy; Apple rejects tokens older than one hour and
-  rejects excessive regeneration, so a future connection layer must reuse tokens deliberately
+  advises refresh no more often than every 20 minutes and no less often than every 60 minutes,
+  so a future connection layer must reuse tokens deliberately
 - transactional mutation from APNs results, including exact-generation token invalidation
 - broadcast channel creation execution, persistence, replacement, deletion, subscriber
   coordination, and final message-storage policy
