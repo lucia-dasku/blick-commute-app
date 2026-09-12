@@ -86,7 +86,7 @@ describeWithPostgres("PostgreSQL Live Activity delivery store", () => {
   let firstDeliveryStore: PostgresLiveActivityDeliveryStore;
   let secondDeliveryStore: PostgresLiveActivityDeliveryStore;
   let tokenProtector: ActivityKitTokenProtector;
-  const schema = `${LIVE_COMMUTE_TEST_SCHEMA_PREFIX}live_activity_${randomUUID().replaceAll("-", "")}`;
+  const schema = `${LIVE_COMMUTE_TEST_SCHEMA_PREFIX}la_${randomUUID().replaceAll("-", "")}`;
 
   function coreService(store: PostgresLiveCommuteSessionStore) {
     return createLiveCommuteInstallationService(store, { now: () => new Date(NOW) });
