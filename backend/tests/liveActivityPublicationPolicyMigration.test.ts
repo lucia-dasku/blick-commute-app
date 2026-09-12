@@ -36,6 +36,25 @@ describe("live activity publication policy migration", () => {
     expect(migration).toContain("visible_content_fingerprint ~ '^[0-9a-f]{64}$'");
   });
 
+  it("keeps declared PostgreSQL identifiers within the 63-byte limit", async () => {
+    const migration = await readFile(
+      new URL("../migrations/005_live_activity_publication_policy.sql", import.meta.url),
+      "utf8",
+    );
+    const identifiers = [
+      ...migration.matchAll(
+        /\b(?:CONSTRAINT|INDEX IF NOT EXISTS)\s+([a-z][a-z0-9_]*)/g,
+      ),
+    ].map((match) => match[1] as string);
+
+    expect(identifiers.length).toBeGreaterThan(0);
+    for (const identifier of identifiers) {
+      expect(Buffer.byteLength(identifier, "utf8"), identifier).toBeLessThanOrEqual(
+        63,
+      );
+    }
+  });
+
   it("uses an explicit import-safe runner scoped only to migration 005", async () => {
     const runner = await readFile(
       new URL("../scripts/migrateLiveActivityPublicationPolicy.ts", import.meta.url),

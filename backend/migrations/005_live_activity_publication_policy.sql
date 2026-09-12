@@ -9,10 +9,10 @@ BEGIN
     SELECT 1
     FROM pg_constraint
     WHERE conrelid = 'live_activity_direct_dispatch_attempts'::regclass
-      AND conname = 'live_activity_direct_dispatch_attempts_publication_metadata_check'
+      AND conname = 'live_activity_direct_dispatch_attempts_publication_metadata_che'
   ) THEN
     ALTER TABLE live_activity_direct_dispatch_attempts
-      ADD CONSTRAINT live_activity_direct_dispatch_attempts_publication_metadata_check
+      ADD CONSTRAINT live_activity_direct_dispatch_attempts_publication_metadata_che
       CHECK (
         (
           visible_content_fingerprint IS NULL

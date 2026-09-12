@@ -49,6 +49,13 @@ const BINDING_IDS = Object.freeze([
   "31e40315-30a9-42f7-88c8-634374de2a66",
   "a6cc7ad1-a2f9-4fc1-9a80-24a5d70c9ce8",
   "78792115-1210-4c75-b15f-09f757abb6fb",
+  "82b44a32-5f74-4265-8991-058a5f7502e6",
+  "27fda16b-ddd4-43eb-a232-b502d9741e74",
+  "9b8d84e4-2c61-4e41-b99f-eaf618b987a2",
+  "43f112bb-2c53-42ec-9eb6-62fa2a09571f",
+  "147ca646-f5d4-4489-b2a6-b948bc026eee",
+  "dd54ca7c-c2fe-4cba-af55-2564528961cb",
+  "d63cf334-bb33-4c81-9b76-829f39fae3a5",
 ]);
 
 interface Deferred<T> {
@@ -475,27 +482,29 @@ describe("one-shot Live Activity publication cycle", () => {
   });
 
   it("enforces the injected dispatch concurrency bound without a timer or global mutex", async () => {
-    const references = Object.freeze([
-      ...REFERENCES,
-      Object.freeze({ installationId: "installation-3", sessionId: "session-3", revision: 3 }),
-    ]);
+    const references = Object.freeze(
+      Array.from({ length: 10 }, (_, index) =>
+        Object.freeze({
+          installationId: `installation-${index + 1}`,
+          sessionId: `session-${index + 1}`,
+          revision: index + 1,
+        }),
+      ),
+    );
     const current = publication(references);
     const targets = references.map((reference, index) => binding(reference, index));
-    const twoStarted = deferred<void>();
-    const thirdStarted = deferred<void>();
-    const releases: Array<() => void> = [];
+    const startedSignals = references.map(() => deferred<void>());
+    const releaseSignals = references.map(() => deferred<void>());
     let active = 0;
     let maximumActive = 0;
     let started = 0;
     const dispatch = vi.fn(async (_request: LiveActivityDirectDispatchInput) => {
+      const dispatchIndex = started;
       active += 1;
       started += 1;
       maximumActive = Math.max(maximumActive, active);
-      const gate = deferred<void>();
-      releases.push(() => gate.resolve());
-      if (started === 2) twoStarted.resolve();
-      if (started === 3) thirdStarted.resolve();
-      await gate.promise;
+      startedSignals[dispatchIndex]?.resolve();
+      await releaseSignals[dispatchIndex]?.promise;
       active -= 1;
       return recordedAccepted();
     });
@@ -508,17 +517,15 @@ describe("one-shot Live Activity publication cycle", () => {
         concurrency: 2,
       }),
     );
-    await twoStarted.promise;
-    expect(dispatch).toHaveBeenCalledTimes(2);
-    expect(maximumActive).toBe(2);
-    releases[0]?.();
-    releases[1]?.();
-    await thirdStarted.promise;
-    expect(maximumActive).toBe(2);
-    releases[2]?.();
+    for (let index = 0; index < references.length; index += 1) {
+      await startedSignals[index]?.promise;
+      expect(active).toBeLessThanOrEqual(2);
+      releaseSignals[index]?.resolve();
+    }
 
     const summary = await cycle;
-    expect(summary.bindingCount).toBe(3);
-    expect(dispatch).toHaveBeenCalledTimes(3);
+    expect(maximumActive).toBe(2);
+    expect(summary.bindingCount).toBe(10);
+    expect(dispatch).toHaveBeenCalledTimes(10);
   });
 });
