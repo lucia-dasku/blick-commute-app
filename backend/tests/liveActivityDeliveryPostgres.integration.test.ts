@@ -179,10 +179,9 @@ describeWithPostgres("PostgreSQL Live Activity delivery store", () => {
     await firstSql!`
       TRUNCATE live_activity_update_tokens,
                live_activity_delivery_bindings,
-               live_activity_push_to_start_tokens
-    `;
-    await firstSql!`
-      TRUNCATE live_commute_sessions, live_commute_installations
+               live_activity_push_to_start_tokens,
+               live_commute_sessions,
+               live_commute_installations
     `;
     tokenProtector = createAes256GcmActivityKitTokenProtector(TEST_PROTECTION_KEY);
   });
