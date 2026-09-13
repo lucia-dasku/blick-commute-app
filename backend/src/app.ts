@@ -1,5 +1,6 @@
 import { Hono } from "hono";
 import { Redis } from "@upstash/redis";
+import postgres from "postgres";
 import { onError, notFoundHandler } from "./middleware/errorHandler.js";
 import { healthRoute } from "./routes/health.js";
 import { createStopsRoute } from "./routes/stops.js";
@@ -33,6 +34,16 @@ import {
   RedisReviewerAccessRateLimiter,
 } from "./reviewerAccess/reviewerAccessRateLimiter.js";
 import { createReviewerAccessRoute } from "./routes/reviewerAccess.js";
+import { createLiveCommuteRoute } from "./routes/liveCommute.js";
+import { PostgresLiveCommuteSessionStore } from "./liveCommute/postgresLiveCommuteSessionStore.js";
+import { createLiveCommuteInstallationService } from "./liveCommute/installationService.js";
+import { PostgresLiveActivityDeliveryStore } from "./liveCommute/apple/postgresLiveActivityDeliveryStore.js";
+import { createLiveActivityDeliveryService } from "./liveCommute/apple/deliveryService.js";
+import { createAes256GcmActivityKitTokenProtector } from "./liveCommute/apple/tokenProtection.js";
+import {
+  LiveActivityClientPublicationStateService,
+} from "./liveCommute/apple/clientPublicationState.js";
+import { PostgresLiveActivityClientPublicationStateStore } from "./liveCommute/apple/postgresLiveActivityClientPublicationStateStore.js";
 
 /**
  * Builds the Hono app with real (network-calling) service implementations. Kept as a
@@ -152,6 +163,42 @@ export function createApp() {
     ),
   );
   app.route("/journeys", createJourneyRoutes(slJourneyPlannerClient));
+  const liveCommuteSql = config.database
+    ? postgres(config.database.connectionString, { prepare: false })
+    : undefined;
+  const liveCommuteSessionStore = liveCommuteSql
+    ? new PostgresLiveCommuteSessionStore(liveCommuteSql)
+    : undefined;
+  const liveActivityDeliveryStore = liveCommuteSql
+    ? new PostgresLiveActivityDeliveryStore(liveCommuteSql)
+    : undefined;
+  const liveActivityClientStateStore = liveCommuteSql
+    ? new PostgresLiveActivityClientPublicationStateStore(liveCommuteSql)
+    : undefined;
+  app.route(
+    "/live-commute",
+    createLiveCommuteRoute({
+      installationService: liveCommuteSessionStore
+        ? createLiveCommuteInstallationService(liveCommuteSessionStore)
+        : undefined,
+      deliveryService:
+        liveActivityDeliveryStore && config.activityKitTokenProtectionKey
+          ? createLiveActivityDeliveryService(
+              liveActivityDeliveryStore,
+              createAes256GcmActivityKitTokenProtector(
+                config.activityKitTokenProtectionKey,
+              ),
+            )
+          : undefined,
+      clientStateService: liveActivityClientStateStore
+        ? new LiveActivityClientPublicationStateService(
+            liveActivityClientStateStore,
+          )
+        : undefined,
+      // Queue seeding remains deliberately absent until the production cycle runtime
+      // replaces the private consumer's unconfigured trigger.
+    }),
+  );
   // A separate top-level mount, not nested inside createJourneyRoutes -- see
   // createJourneyDisruptionsRoute's own doc for why this must stay a genuinely independent
   // route/HTTP call rather than a field on /api/v1/journeys itself. Reuses the SAME

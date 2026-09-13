@@ -111,6 +111,12 @@ jobs:
       - name: Verify live activity publication cycle migration is idempotent
         run: npm run migrate:live-activity-publication-cycles
 
+      - name: Apply live activity client state migration
+        run: npm run migrate:live-activity-client-state
+
+      - name: Verify live activity client state migration is idempotent
+        run: npm run migrate:live-activity-client-state
+
       - name: Test live commute PostgreSQL integration
         run: npm run test:live-commute-postgres
 

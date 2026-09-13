@@ -34,11 +34,13 @@ export type TransportMode = z.infer<typeof TransportModeSchema>;
 export const ErrorCodeSchema = z.enum([
   "VALIDATION_ERROR",
   "AUTHENTICATION_ERROR",
+  "CONFLICT",
   "RATE_LIMITED",
   "UPSTREAM_ERROR",
   "UPSTREAM_TIMEOUT",
   "UPSTREAM_RATE_LIMITED",
   "NOT_FOUND",
+  "SERVICE_UNAVAILABLE",
   "INTERNAL_ERROR",
 ]);
 export type ErrorCode = z.infer<typeof ErrorCodeSchema>;

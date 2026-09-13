@@ -51,6 +51,25 @@ export interface DatabaseConfig { connectionString: string }
 export interface GooglePlayRtdnConfig { audience: string; serviceAccountEmail: string }
 export interface ReviewerAccessConfig { codeHashHex: string }
 
+export function readActivityKitTokenProtectionKey(
+  raw: string | undefined,
+): Buffer | undefined {
+  const encoded = raw?.trim();
+  if (!encoded) return undefined;
+  if (!/^[A-Za-z0-9_-]{43}$/.test(encoded)) {
+    throw new Error(
+      "ACTIVITY_KIT_TOKEN_PROTECTION_KEY_BASE64URL must encode exactly 32 bytes",
+    );
+  }
+  const key = Buffer.from(encoded, "base64url");
+  if (key.length !== 32 || key.toString("base64url") !== encoded) {
+    throw new Error(
+      "ACTIVITY_KIT_TOKEN_PROTECTION_KEY_BASE64URL must encode exactly 32 bytes",
+    );
+  }
+  return key;
+}
+
 /**
  * Reviewer access is deliberately optional and isolated. Missing, blank, or malformed
  * configuration disables only reviewer validation; it must never prevent health,
@@ -194,6 +213,9 @@ export const config = {
     process.env.GOOGLE_PLAY_SERVICE_ACCOUNT_PRIVATE_KEY,
   ),
   database: readDatabaseConfig(process.env.DATABASE_URL),
+  activityKitTokenProtectionKey: readActivityKitTokenProtectionKey(
+    process.env.ACTIVITY_KIT_TOKEN_PROTECTION_KEY_BASE64URL,
+  ),
   googlePlayRtdn: readGooglePlayRtdnConfig(
     process.env.GOOGLE_PLAY_RTDN_AUDIENCE,
     process.env.GOOGLE_PLAY_RTDN_SERVICE_ACCOUNT_EMAIL,
