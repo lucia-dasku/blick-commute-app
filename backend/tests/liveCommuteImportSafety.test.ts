@@ -78,6 +78,11 @@ describe("live commute module import safety", () => {
       publicationCycleCoordinator,
       publicationCycleTrigger,
       publicationCycleMigrationRunner,
+      clientPublicationState,
+      memoryClientPublicationStateStore,
+      postgresClientPublicationStateStore,
+      clientPublicationStateMigrationRunner,
+      liveCommuteRoute,
     ] =
       await Promise.all([
         import("../src/liveCommute/engine.js"),
@@ -116,6 +121,11 @@ describe("live commute module import safety", () => {
         import("../src/liveCommute/apple/publicationCycleCoordinator.js"),
         import("../src/liveCommute/apple/publicationCycleTrigger.js"),
         import("../scripts/migrateLiveActivityPublicationCycles.js"),
+        import("../src/liveCommute/apple/clientPublicationState.js"),
+        import("../src/liveCommute/apple/inMemoryLiveActivityClientPublicationStateStore.js"),
+        import("../src/liveCommute/apple/postgresLiveActivityClientPublicationStateStore.js"),
+        import("../scripts/migrateLiveActivityClientPublicationState.js"),
+        import("../src/routes/liveCommute.js"),
       ]);
 
     expect(engine.runLiveCommuteTick).toBeTypeOf("function");
@@ -196,6 +206,16 @@ describe("live commute module import safety", () => {
     expect(
       publicationCycleMigrationRunner.runLiveActivityPublicationCyclesMigration,
     ).toBeTypeOf("function");
+    expect(
+      clientPublicationState.LiveActivityClientPublicationStateService,
+    ).toBeTypeOf("function");
+    expect(
+      memoryClientPublicationStateStore.InMemoryLiveActivityClientPublicationStateStore,
+    ).toBeTypeOf("function");
+    expect(
+      postgresClientPublicationStateStore.PostgresLiveActivityClientPublicationStateStore,
+    ).toBeTypeOf("function");
+    expect(liveCommuteRoute.createLiveCommuteRoute).toBeTypeOf("function");
     await expect(migrationRunner.runLiveCommuteMigration("")).rejects.toThrow(
       "LIVE_COMMUTE_MIGRATION_DATABASE_URL is required",
     );
@@ -210,6 +230,11 @@ describe("live commute module import safety", () => {
     ).rejects.toThrow("LIVE_COMMUTE_MIGRATION_DATABASE_URL is required");
     await expect(
       publicationCycleMigrationRunner.runLiveActivityPublicationCyclesMigration(""),
+    ).rejects.toThrow("LIVE_COMMUTE_MIGRATION_DATABASE_URL is required");
+    await expect(
+      clientPublicationStateMigrationRunner.runLiveActivityClientPublicationStateMigration(
+        "",
+      ),
     ).rejects.toThrow("LIVE_COMMUTE_MIGRATION_DATABASE_URL is required");
   });
 });

@@ -1,5 +1,6 @@
 import { describe, expect, it } from "vitest";
 import {
+  readActivityKitTokenProtectionKey,
   readDatabaseConfig,
   readGooglePlayConfig,
   readGooglePlayRtdnConfig,
@@ -8,6 +9,19 @@ import {
   readReviewerAccessConfig,
   readUpstreamTimeoutMs,
 } from "../src/config/env.js";
+
+describe("ActivityKit token protection configuration", () => {
+  it("accepts only canonical base64url encoding of 32 bytes", () => {
+    const encoded = Buffer.alloc(32, 0x51).toString("base64url");
+    expect(readActivityKitTokenProtectionKey(encoded)).toEqual(
+      Buffer.alloc(32, 0x51),
+    );
+    expect(readActivityKitTokenProtectionKey(undefined)).toBeUndefined();
+    expect(() => readActivityKitTokenProtectionKey("short")).toThrow(
+      "must encode exactly 32 bytes",
+    );
+  });
+});
 
 describe("readPort", () => {
   it("defaults to 8787 when unset", () => {
