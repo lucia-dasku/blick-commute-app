@@ -30,6 +30,12 @@ import type {
   LiveActivityDirectDispatchHistory,
 } from "./dispatchModel.js";
 import type { LiveActivityDispatchStore } from "./dispatchStore.js";
+import type {
+  BeginLiveActivityPublicationCycleAuthorizedSend,
+  LiveActivityPublicationCycleAuthority,
+  LiveActivityPublicationCycleAuthorityStatus,
+  LiveActivityPublicationCycleAuthorityStopReason,
+} from "./publicationCycleAuthority.js";
 import {
   decideLiveActivityPublication,
   prepareLiveActivityPublication,
@@ -86,6 +92,8 @@ interface LiveActivityPublicationCycleDependencies {
   readonly policyConfig: LiveActivityPublicationPolicyConfig;
   /** Explicit maximum number of recipient pipelines active at once. */
   readonly dispatchConcurrency: number;
+  /** Optional global-cycle fence. Activated callers supply it; legacy one-shot callers omit it. */
+  readonly cycleAuthority?: LiveActivityPublicationCycleAuthority;
   /** Test seam; production callers omit it and use the accepted stored coordinator. */
   readonly runStoredTick?: (
     input: RunStoredLiveCommuteTickInput,
@@ -99,7 +107,9 @@ export interface RunLiveActivityPublicationCycleInput
 export type LiveActivityPublicationWorkerDecisionKind =
   | LiveActivityPublicationDecision["kind"]
   | "DEFER_CLIENT_STATE_UNAVAILABLE"
-  | "DEFER_PRIORITY_POLICY_UNAVAILABLE";
+  | "DEFER_PRIORITY_POLICY_UNAVAILABLE"
+  | "DEFER_CYCLE_AUTHORITY_LOST"
+  | "DEFER_CYCLE_AUTHORITY_UNAVAILABLE";
 
 export type SafeLiveActivityDispatchResult =
   | {
@@ -161,9 +171,20 @@ export interface LiveActivityPublicationCycleSummary {
   readonly bindingCount: number;
   readonly sessionVersionWithoutBindingCount: number;
   readonly historyLookupFailed: boolean;
+  readonly cycleAuthorityStatus:
+    | "NOT_REQUIRED"
+    | LiveActivityPublicationCycleAuthorityStatus;
   readonly decisionCounts: readonly LiveActivityPublicationCount[];
   readonly dispatchOutcomeCounts: readonly LiveActivityPublicationCount[];
   readonly bindings: readonly LiveActivityPublicationBindingOutcome[];
+}
+
+interface WorkerCycleAuthority {
+  readonly authority: LiveActivityPublicationCycleAuthority | undefined;
+  status(): LiveActivityPublicationCycleSummary["cycleAuthorityStatus"];
+  stop(
+    reason: LiveActivityPublicationCycleAuthorityStopReason,
+  ): LiveActivityPublicationCycleAuthorityStopReason;
 }
 
 interface PublicationRecipient {
@@ -185,6 +206,82 @@ function positiveConcurrency(value: number): number {
     throw new RangeError("dispatchConcurrency must be a positive safe integer");
   }
   return value;
+}
+
+function createWorkerCycleAuthority(
+  configured: LiveActivityPublicationCycleAuthority | undefined,
+): WorkerCycleAuthority {
+  if (configured == null) {
+    return Object.freeze({
+      authority: undefined,
+      status: () => "NOT_REQUIRED" as const,
+      stop: (reason: LiveActivityPublicationCycleAuthorityStopReason) => reason,
+    });
+  }
+
+  let stopped: LiveActivityPublicationCycleAuthorityStopReason | null = null;
+  const latch = (
+    reason: LiveActivityPublicationCycleAuthorityStopReason,
+  ): LiveActivityPublicationCycleAuthorityStopReason => {
+    stopped ??= reason;
+    return stopped;
+  };
+  const configuredStopReason = (): LiveActivityPublicationCycleAuthorityStopReason | null => {
+    if (stopped != null) return stopped;
+    try {
+      const reason = configured.stopReason();
+      return reason == null ? null : latch(reason);
+    } catch {
+      return latch("CYCLE_AUTHORITY_UNAVAILABLE");
+    }
+  };
+  const authority: LiveActivityPublicationCycleAuthority = Object.freeze({
+    stopReason: configuredStopReason,
+    confirmCurrent: async () => {
+      const existing = configuredStopReason();
+      if (existing != null) return existing;
+      try {
+        const status = await configured.confirmCurrent();
+        return status === "CURRENT" ? status : latch(status);
+      } catch {
+        return latch("CYCLE_AUTHORITY_UNAVAILABLE");
+      }
+    },
+    beginSendIfCurrent: async <T>(
+      start: () => Promise<T>,
+    ): Promise<BeginLiveActivityPublicationCycleAuthorizedSend<T>> => {
+      const existing = configuredStopReason();
+      if (existing != null) {
+        return Object.freeze({ status: "STOPPED", reason: existing });
+      }
+      try {
+        const result = await configured.beginSendIfCurrent(start);
+        if (result.status === "STOPPED") latch(result.reason);
+        return result;
+      } catch {
+        return Object.freeze({
+          status: "STOPPED",
+          reason: latch("CYCLE_AUTHORITY_UNAVAILABLE"),
+        });
+      }
+    },
+  });
+  return Object.freeze({
+    authority,
+    status: () => stopped ?? configuredStopReason() ?? "CURRENT",
+    stop: latch,
+  });
+}
+
+function authorityDeferralDecision(
+  reason: LiveActivityPublicationCycleAuthorityStopReason,
+): Extract<
+  LiveActivityPublicationWorkerDecisionKind,
+  "DEFER_CYCLE_AUTHORITY_LOST" | "DEFER_CYCLE_AUTHORITY_UNAVAILABLE"
+> {
+  return reason === "CYCLE_AUTHORITY_LOST"
+    ? "DEFER_CYCLE_AUTHORITY_LOST"
+    : "DEFER_CYCLE_AUTHORITY_UNAVAILABLE";
 }
 
 function bindingHistoryKey(input: {
@@ -292,6 +389,7 @@ function directDispatchInput(
   generatedAt: Date,
   alert: ActivityKitAlert | undefined,
   dispatchPriority: ApnsDirectLiveActivityPriority,
+  cycleAuthority: LiveActivityPublicationCycleAuthority | undefined,
 ): LiveActivityDirectDispatchInput {
   const common = {
     installationId: recipient.binding.installationId,
@@ -301,6 +399,7 @@ function directDispatchInput(
     generatedAt,
     preparedPublication: recipient.prepared,
     priority: dispatchPriority,
+    cycleAuthority,
   } as const;
   if (decision.kind === "START") {
     if (alert == null) throw new Error("start alert disappeared after policy decision");
@@ -358,11 +457,20 @@ async function processRecipient(
   history: LiveActivityDirectDispatchHistory | undefined,
   generatedAt: Date,
   input: RunLiveActivityPublicationCycleInput,
+  workerAuthority: WorkerCycleAuthority,
 ): Promise<LiveActivityPublicationBindingOutcome> {
   const base = {
     bindingId: recipient.binding.bindingId,
     sessionRevision: recipient.binding.sessionRevision,
   } as const;
+  const stopped = workerAuthority.authority?.stopReason();
+  if (stopped != null) {
+    return Object.freeze({
+      ...base,
+      decision: authorityDeferralDecision(stopped),
+      dispatch: null,
+    });
+  }
   if (recipient.binding.lifecycle !== "PENDING_START") {
     return Object.freeze({
       ...base,
@@ -452,6 +560,17 @@ async function processRecipient(
     });
   }
 
+  if (workerAuthority.authority != null) {
+    const authorityStatus = await workerAuthority.authority.confirmCurrent();
+    if (authorityStatus !== "CURRENT") {
+      return Object.freeze({
+        ...base,
+        decision: authorityDeferralDecision(authorityStatus),
+        dispatch: null,
+      });
+    }
+  }
+
   try {
     const result = await input.dispatcher.dispatch(
       directDispatchInput(
@@ -460,8 +579,16 @@ async function processRecipient(
         generatedAt,
         alert,
         dispatchPriority,
+        workerAuthority.authority,
       ),
     );
+    if (
+      result.outcome === "NOT_SENT" &&
+      (result.reason === "CYCLE_AUTHORITY_LOST" ||
+        result.reason === "CYCLE_AUTHORITY_UNAVAILABLE")
+    ) {
+      workerAuthority.stop(result.reason);
+    }
     return Object.freeze({
       ...base,
       decision: decision.kind,
@@ -487,6 +614,7 @@ export async function runLiveActivityPublicationCycle(
   input: RunLiveActivityPublicationCycleInput,
 ): Promise<LiveActivityPublicationCycleSummary> {
   const dispatchConcurrency = positiveConcurrency(input.dispatchConcurrency);
+  const workerAuthority = createWorkerCycleAuthority(input.cycleAuthority);
   const executeStoredTick = input.runStoredTick ?? runStoredLiveCommuteTick;
   const tick = await executeStoredTick({
     sessionStore: input.sessionStore,
@@ -500,6 +628,25 @@ export async function runLiveActivityPublicationCycle(
     (publication): publication is AuthoritativeReadyLiveCommutePublication =>
       publication.status === "READY" || publication.status === "READY_STALE",
   );
+  if (workerAuthority.authority != null) {
+    const authorityStatus = await workerAuthority.authority.confirmCurrent();
+    if (authorityStatus !== "CURRENT") {
+      return Object.freeze({
+        plannedAt: tick.plannedAt,
+        generatedAt: generatedAt.toISOString(),
+        acquisitionCount: tick.acquisitions.length,
+        publicationOutcomeCount: tick.publications.length,
+        readyPublicationGroupCount: ready.length,
+        bindingCount: 0,
+        sessionVersionWithoutBindingCount: 0,
+        historyLookupFailed: false,
+        cycleAuthorityStatus: authorityStatus,
+        decisionCounts: Object.freeze([]),
+        dispatchOutcomeCounts: Object.freeze([]),
+        bindings: Object.freeze([]),
+      });
+    }
+  }
   const prepared: readonly PreparedLiveActivityPublication[] = Object.freeze(
     ready.map((publication) =>
       prepareLiveActivityPublication({
@@ -581,6 +728,7 @@ export async function runLiveActivityPublicationCycle(
           : historiesByBinding.get(bindingHistoryKey(recipient.binding)),
         generatedAt,
         input,
+        workerAuthority,
       ),
   );
 
@@ -593,6 +741,7 @@ export async function runLiveActivityPublicationCycle(
     bindingCount: outcomes.length,
     sessionVersionWithoutBindingCount,
     historyLookupFailed,
+    cycleAuthorityStatus: workerAuthority.status(),
     decisionCounts: counts(outcomes.map(({ decision }) => decision)),
     dispatchOutcomeCounts: counts(
       outcomes.map(({ dispatch }) => dispatch?.outcome ?? "NOT_REQUESTED"),

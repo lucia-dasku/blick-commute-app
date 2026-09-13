@@ -34,6 +34,10 @@ import {
   assertPreparedLiveActivityPublication,
   type PreparedLiveActivityPublication,
 } from "./publicationPolicy.js";
+import type {
+  LiveActivityPublicationCycleAuthority,
+  LiveActivityPublicationCycleAuthorityStopReason,
+} from "./publicationCycleAuthority.js";
 import {
   normalizedLiveActivityDispatchUuid,
   sameLiveActivityDispatchTokenGeneration,
@@ -61,6 +65,8 @@ interface LiveActivityDirectDispatchInputBase {
   readonly generatedAt: Date;
   /** Opaque group-level mapping/fingerprint reused across recipient bindings. */
   readonly preparedPublication?: PreparedLiveActivityPublication;
+  /** Optional authority gate for scheduler-owned publication cycles. */
+  readonly cycleAuthority?: LiveActivityPublicationCycleAuthority;
   readonly priority: ApnsDirectLiveActivityPriority;
   readonly expiration?: number;
   readonly collapseId?: string;
@@ -120,6 +126,7 @@ export type LiveActivityDirectDispatchResult =
         | "ABORTED_AT_CLAIM"
         | "SUPERSEDED_AT_CLAIM"
         | "MISSING_AT_CLAIM"
+        | LiveActivityPublicationCycleAuthorityStopReason
         | ApnsTransportNotAttemptedReason;
       readonly attempt: LiveActivityDirectDispatchAttempt | null;
       readonly abortRecorded: boolean;
@@ -501,13 +508,41 @@ export class LiveActivityDirectDispatcher {
     }
 
     let transportResult: ApnsTransportResult;
-    try {
-      transportResult = await this.#transport.send(plan.request);
-    } catch {
-      transportResult = Object.freeze({
-        outcome: "OUTCOME_UNKNOWN",
-        reason: "SESSION_ERROR",
-      });
+    if (input.cycleAuthority == null) {
+      try {
+        transportResult = await this.#transport.send(plan.request);
+      } catch {
+        transportResult = Object.freeze({
+          outcome: "OUTCOME_UNKNOWN",
+          reason: "SESSION_ERROR",
+        });
+      }
+    } else {
+      let authorizedSend;
+      try {
+        authorizedSend = await input.cycleAuthority.beginSendIfCurrent(
+          () => this.#transport.send(plan.request),
+        );
+      } catch {
+        return await this.#notSentAfterClaim(
+          claim.attempt,
+          "CYCLE_AUTHORITY_UNAVAILABLE",
+        );
+      }
+      if (authorizedSend.status === "STOPPED") {
+        return await this.#notSentAfterClaim(
+          claim.attempt,
+          authorizedSend.reason,
+        );
+      }
+      try {
+        transportResult = await authorizedSend.completion;
+      } catch {
+        transportResult = Object.freeze({
+          outcome: "OUTCOME_UNKNOWN",
+          reason: "SESSION_ERROR",
+        });
+      }
     }
     let completedAt: Date;
     let completion: CompletionDecision;
@@ -664,6 +699,36 @@ export class LiveActivityDirectDispatcher {
       reason,
       attempt: aborted ?? attempt,
       abortRecorded: aborted?.state === "ABORTED",
+      networkAttempted: false,
+    });
+  }
+
+  async #notSentAfterClaim(
+    attempt: LiveActivityDirectDispatchAttempt,
+    reason: LiveActivityPublicationCycleAuthorityStopReason,
+  ): Promise<LiveActivityDirectDispatchResult> {
+    let completed: LiveActivityDirectDispatchAttempt | null = null;
+    try {
+      const result = await this.#store.completeDirectDispatch({
+        installationId: attempt.installationId,
+        dispatchId: attempt.dispatchId,
+        completedAt: validInstant(this.#now(), "now()"),
+        state: "ABORTED",
+        apnsStatus: null,
+        apnsReason: null,
+        retryAdvice: "NO_RETRY",
+        retryNotBefore: null,
+        invalidateExactTokenGeneration: false,
+      });
+      completed = result.attempt;
+    } catch {
+      // The send was proven not to start; expose only whether cleanup was durable.
+    }
+    return Object.freeze({
+      outcome: "NOT_SENT",
+      reason,
+      attempt: completed ?? attempt,
+      abortRecorded: completed?.state === "ABORTED",
       networkAttempted: false,
     });
   }

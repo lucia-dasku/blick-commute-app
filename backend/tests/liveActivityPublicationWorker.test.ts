@@ -20,6 +20,7 @@ import {
   runLiveActivityPublicationCycle,
   type RunLiveActivityPublicationCycleInput,
 } from "../src/liveCommute/apple/publicationWorker.js";
+import type { LiveActivityPublicationCycleAuthority } from "../src/liveCommute/apple/publicationCycleAuthority.js";
 
 const GENERATED_AT = new Date("2026-09-12T10:00:00.000Z");
 const SOURCE_AT = new Date("2026-09-12T09:59:30.000Z");
@@ -227,6 +228,7 @@ function baseInput(options: {
   readonly concurrency?: number;
   readonly failHistory?: boolean;
   readonly updateTokenHistoryBindingIds?: readonly string[];
+  readonly cycleAuthority?: LiveActivityPublicationCycleAuthority;
 }): RunLiveActivityPublicationCycleInput {
   return {
     sessionStore: {} as never,
@@ -281,10 +283,137 @@ function baseInput(options: {
     },
     policyConfig: POLICY_CONFIG,
     dispatchConcurrency: options.concurrency ?? 2,
+    cycleAuthority: options.cycleAuthority,
   };
 }
 
 describe("one-shot Live Activity publication cycle", () => {
+  it("stops after acquisition when the global cycle fence is no longer current", async () => {
+    const current = publication();
+    const targets = REFERENCES.map((reference, index) => binding(reference, index));
+    const cycleAuthority: LiveActivityPublicationCycleAuthority = {
+      confirmCurrent: vi.fn(async () => "CYCLE_AUTHORITY_LOST" as const),
+      stopReason: () => null,
+      beginSendIfCurrent: async <T>(_start: () => Promise<T>) => ({
+        status: "STOPPED",
+        reason: "CYCLE_AUTHORITY_LOST",
+      }),
+    };
+    const input = baseInput({
+      publications: [current],
+      bindings: targets,
+      cycleAuthority,
+    });
+
+    const summary = await runLiveActivityPublicationCycle(input);
+
+    expect(input.runStoredTick).toHaveBeenCalledOnce();
+    expect(cycleAuthority.confirmCurrent).toHaveBeenCalledOnce();
+    expect(input.deliveryStore.listDeliveryBindingsForSessionVersions).not.toHaveBeenCalled();
+    expect(input.dispatchStore.listDirectDispatchHistoryForBindings).not.toHaveBeenCalled();
+    expect(input.dispatcher.dispatch).not.toHaveBeenCalled();
+    expect(summary).toMatchObject({
+      acquisitionCount: 0,
+      publicationOutcomeCount: 1,
+      readyPublicationGroupCount: 1,
+      bindingCount: 0,
+      cycleAuthorityStatus: "CYCLE_AUTHORITY_LOST",
+    });
+  });
+
+  it("latches final send-gate loss and keeps later recipients out of the dispatcher", async () => {
+    const references = Object.freeze(REFERENCES.concat([
+      Object.freeze({ installationId: "installation-3", sessionId: "session-3", revision: 3 }),
+      Object.freeze({ installationId: "installation-4", sessionId: "session-4", revision: 4 }),
+    ]));
+    const current = publication(references);
+    const targets = references.map((reference, index) => binding(reference, index));
+    let stopped = false;
+    const cycleAuthority: LiveActivityPublicationCycleAuthority = {
+      confirmCurrent: vi.fn(async () =>
+        stopped
+          ? ("CYCLE_AUTHORITY_LOST" as const)
+          : ("CURRENT" as const),
+      ),
+      stopReason: () => (stopped ? "CYCLE_AUTHORITY_LOST" : null),
+      beginSendIfCurrent: async <T>(_start: () => Promise<T>) => {
+        stopped = true;
+        return {
+          status: "STOPPED",
+          reason: "CYCLE_AUTHORITY_LOST",
+        } as const;
+      },
+    };
+    const dispatch = vi.fn(async (request: LiveActivityDirectDispatchInput) => {
+      const gate = await request.cycleAuthority!.beginSendIfCurrent(
+        async () => recordedAccepted(),
+      );
+      return gate.status === "STARTED"
+        ? await gate.completion
+        : {
+            outcome: "NOT_SENT" as const,
+            reason: gate.reason,
+            attempt: null,
+            abortRecorded: true,
+            networkAttempted: false as const,
+          };
+    });
+
+    const summary = await runLiveActivityPublicationCycle(
+      baseInput({
+        publications: [current],
+        bindings: targets,
+        dispatch,
+        concurrency: 1,
+        cycleAuthority,
+      }),
+    );
+
+    expect(dispatch).toHaveBeenCalledOnce();
+    expect(summary.cycleAuthorityStatus).toBe("CYCLE_AUTHORITY_LOST");
+    expect(summary.bindings.map(({ decision }) => decision)).toEqual([
+      "START",
+      "DEFER_CYCLE_AUTHORITY_LOST",
+      "DEFER_CYCLE_AUTHORITY_LOST",
+      "DEFER_CYCLE_AUTHORITY_LOST",
+    ]);
+    expect(summary.bindings[0]?.dispatch).toMatchObject({
+      outcome: "NOT_SENT",
+      reason: "CYCLE_AUTHORITY_LOST",
+      networkAttempted: false,
+    });
+  });
+
+  it("fails closed without leaking an unavailable authority diagnostic", async () => {
+    const sensitive = "postgresql://synthetic:secret@db.invalid/live";
+    const current = publication([REFERENCES[0] as LiveCommuteSessionVersionRef]);
+    const target = binding(REFERENCES[0] as LiveCommuteSessionVersionRef, 0);
+    const cycleAuthority: LiveActivityPublicationCycleAuthority = {
+      confirmCurrent: async () => {
+        throw new Error(sensitive);
+      },
+      stopReason: () => null,
+      beginSendIfCurrent: async <T>(_start: () => Promise<T>) => {
+        throw new Error(sensitive);
+      },
+    };
+
+    const summary = await runLiveActivityPublicationCycle(
+      baseInput({
+        publications: [current],
+        bindings: [target],
+        cycleAuthority,
+      }),
+    );
+
+    expect(summary.cycleAuthorityStatus).toBe(
+      "CYCLE_AUTHORITY_UNAVAILABLE",
+    );
+    expect(summary.bindings).toEqual([]);
+    expect(JSON.stringify(summary)).not.toContain(sensitive);
+    expect(JSON.stringify(summary)).not.toContain("secret");
+  });
+
   it("runs the stored tick once and reuses one mapped/fingerprinted group state across direct starts", async () => {
     const current = publication();
     const targets = REFERENCES.map((reference, index) => binding(reference, index));

@@ -71,6 +71,13 @@ describe("live commute module import safety", () => {
       publicationPolicy,
       publicationWorker,
       publicationPolicyMigrationRunner,
+      publicationCycleModel,
+      publicationCycleStore,
+      memoryPublicationCycleStore,
+      postgresPublicationCycleStore,
+      publicationCycleCoordinator,
+      publicationCycleTrigger,
+      publicationCycleMigrationRunner,
     ] =
       await Promise.all([
         import("../src/liveCommute/engine.js"),
@@ -102,6 +109,13 @@ describe("live commute module import safety", () => {
         import("../src/liveCommute/apple/publicationPolicy.js"),
         import("../src/liveCommute/apple/publicationWorker.js"),
         import("../scripts/migrateLiveActivityPublicationPolicy.js"),
+        import("../src/liveCommute/apple/publicationCycleModel.js"),
+        import("../src/liveCommute/apple/publicationCycleStore.js"),
+        import("../src/liveCommute/apple/inMemoryLiveActivityPublicationCycleStore.js"),
+        import("../src/liveCommute/apple/postgresLiveActivityPublicationCycleStore.js"),
+        import("../src/liveCommute/apple/publicationCycleCoordinator.js"),
+        import("../src/liveCommute/apple/publicationCycleTrigger.js"),
+        import("../scripts/migrateLiveActivityPublicationCycles.js"),
       ]);
 
     expect(engine.runLiveCommuteTick).toBeTypeOf("function");
@@ -163,6 +177,25 @@ describe("live commute module import safety", () => {
     expect(
       publicationPolicyMigrationRunner.runLiveActivityPublicationPolicyMigration,
     ).toBeTypeOf("function");
+    expect(
+      publicationCycleModel.liveActivityPublicationCycleSlotAt,
+    ).toBeTypeOf("function");
+    expect(publicationCycleStore).toBeTypeOf("object");
+    expect(
+      memoryPublicationCycleStore.InMemoryLiveActivityPublicationCycleStore,
+    ).toBeTypeOf("function");
+    expect(
+      postgresPublicationCycleStore.PostgresLiveActivityPublicationCycleStore,
+    ).toBeTypeOf("function");
+    expect(
+      publicationCycleCoordinator.runClaimedLiveActivityPublicationCycle,
+    ).toBeTypeOf("function");
+    expect(publicationCycleTrigger.createLiveActivityCycleTrigger).toBeTypeOf(
+      "function",
+    );
+    expect(
+      publicationCycleMigrationRunner.runLiveActivityPublicationCyclesMigration,
+    ).toBeTypeOf("function");
     await expect(migrationRunner.runLiveCommuteMigration("")).rejects.toThrow(
       "LIVE_COMMUTE_MIGRATION_DATABASE_URL is required",
     );
@@ -174,6 +207,9 @@ describe("live commute module import safety", () => {
     ).rejects.toThrow("LIVE_COMMUTE_MIGRATION_DATABASE_URL is required");
     await expect(
       publicationPolicyMigrationRunner.runLiveActivityPublicationPolicyMigration(""),
+    ).rejects.toThrow("LIVE_COMMUTE_MIGRATION_DATABASE_URL is required");
+    await expect(
+      publicationCycleMigrationRunner.runLiveActivityPublicationCyclesMigration(""),
     ).rejects.toThrow("LIVE_COMMUTE_MIGRATION_DATABASE_URL is required");
   });
 });

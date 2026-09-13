@@ -33,6 +33,7 @@ import {
   createLiveActivityPublicationPolicyConfig,
   prepareLiveActivityPublication,
 } from "../src/liveCommute/apple/publicationPolicy.js";
+import type { LiveActivityPublicationCycleAuthority } from "../src/liveCommute/apple/publicationCycleAuthority.js";
 
 const INITIAL_NOW = new Date("2026-09-12T06:00:00.000Z");
 const ACTIVE_AT = new Date("2026-09-12T07:30:00.000Z");
@@ -304,7 +305,207 @@ function commonInput(
   } as Omit<LiveActivityDirectDispatchInput, "operation">;
 }
 
+function currentCycleAuthority(
+  events: string[] = [],
+): LiveActivityPublicationCycleAuthority {
+  return {
+    confirmCurrent: async () => "CURRENT",
+    stopReason: () => null,
+    beginSendIfCurrent: async <T>(start: () => Promise<T>) => {
+      events.push("authority");
+      let completion: Promise<T>;
+      try {
+        completion = start();
+      } catch (error) {
+        completion = Promise.reject(error);
+      }
+      return { status: "STARTED", completion } as const;
+    },
+  };
+}
+
 describe("one-shot Live Activity direct dispatcher", () => {
+  it("checks cycle authority after the durable claim and immediately before APNs", async () => {
+    const value = harness();
+    const { authentication } = await establish(value);
+    await addUpdateToken(value, authentication, BINDING_ID, 1);
+    const events: string[] = [];
+    const originalClaim = value.dispatchStore.claimDirectDispatch.bind(
+      value.dispatchStore,
+    );
+    vi.spyOn(value.dispatchStore, "claimDirectDispatch").mockImplementation(
+      async (input) => {
+        const result = await originalClaim(input);
+        events.push("claim");
+        return result;
+      },
+    );
+    const transport = new RecordingTransport([successfulResponse()], async () => {
+      events.push("send");
+    });
+    const dispatcher = createDispatcher(
+      value,
+      value.resolver,
+      transport,
+      new ProviderCacheStub(),
+    );
+
+    const result = await dispatcher.dispatch({
+      ...commonInput(authentication.installationId, "DIRECT_UPDATE", ACTIVE_AT),
+      operation: "DIRECT_UPDATE",
+      cycleAuthority: currentCycleAuthority(events),
+    });
+
+    expect(result).toMatchObject({
+      outcome: "RECORDED",
+      networkAttempted: true,
+      attempt: { state: "ACCEPTED" },
+    });
+    expect(events).toEqual(["claim", "authority", "send"]);
+    expect(transport.sendCount).toBe(1);
+  });
+
+  it("durably aborts an already-claimed send when cycle authority is lost", async () => {
+    const value = harness();
+    const { authentication } = await establish(value);
+    const transport = new RecordingTransport([successfulResponse()]);
+    const claim = vi.spyOn(value.dispatchStore, "claimDirectDispatch");
+    const dispatcher = createDispatcher(
+      value,
+      value.resolver,
+      transport,
+      new ProviderCacheStub(),
+    );
+    const cycleAuthority: LiveActivityPublicationCycleAuthority = {
+      confirmCurrent: async () => "CYCLE_AUTHORITY_LOST",
+      stopReason: () => "CYCLE_AUTHORITY_LOST",
+      beginSendIfCurrent: async <T>(_start: () => Promise<T>) => ({
+        status: "STOPPED",
+        reason: "CYCLE_AUTHORITY_LOST",
+      }),
+    };
+
+    const result = await dispatcher.dispatch({
+      ...commonInput(authentication.installationId, "START", ACTIVE_AT),
+      operation: "START",
+      mode: { kind: "DIRECT_LEGACY" },
+      alert: { title: "Commute", body: "Live commute started" },
+      cycleAuthority,
+    });
+    const stored = await value.dispatchStore.getDirectDispatchAttempt(
+      authentication.installationId,
+      DISPATCH_IDS[0],
+    );
+
+    expect(claim).toHaveBeenCalledOnce();
+    expect(result).toMatchObject({
+      outcome: "NOT_SENT",
+      reason: "CYCLE_AUTHORITY_LOST",
+      networkAttempted: false,
+      abortRecorded: true,
+      attempt: { state: "ABORTED", retryAdvice: "NO_RETRY" },
+    });
+    expect(stored).toMatchObject({ state: "ABORTED", retryAdvice: "NO_RETRY" });
+    expect(transport.sendCount).toBe(0);
+
+    const legacy = await dispatcher.dispatch({
+      ...commonInput(
+        authentication.installationId,
+        "START",
+        new Date(ACTIVE_AT.getTime() + 1_000),
+      ),
+      operation: "START",
+      mode: { kind: "DIRECT_LEGACY" },
+      alert: { title: "Commute", body: "Live commute started" },
+    });
+    expect(legacy).toMatchObject({
+      outcome: "RECORDED",
+      networkAttempted: true,
+      attempt: { state: "ACCEPTED" },
+    });
+    expect(transport.sendCount).toBe(1);
+  });
+
+  it("fails closed and sanitizes a cycle-authority validation error", async () => {
+    const value = harness();
+    const { authentication } = await establish(value);
+    await addUpdateToken(value, authentication, BINDING_ID, 1);
+    const transport = new RecordingTransport([successfulResponse()]);
+    const dispatcher = createDispatcher(
+      value,
+      value.resolver,
+      transport,
+      new ProviderCacheStub(),
+    );
+    const sensitiveDiagnostic =
+      "postgres://synthetic-user:synthetic-secret@db.invalid/live-commute";
+    const cycleAuthority: LiveActivityPublicationCycleAuthority = {
+      confirmCurrent: async () => "CYCLE_AUTHORITY_UNAVAILABLE",
+      stopReason: () => "CYCLE_AUTHORITY_UNAVAILABLE",
+      beginSendIfCurrent: async <T>(_start: () => Promise<T>) => {
+        throw new Error(sensitiveDiagnostic);
+      },
+    };
+
+    const result = await dispatcher.dispatch({
+      ...commonInput(authentication.installationId, "DIRECT_UPDATE", ACTIVE_AT),
+      operation: "DIRECT_UPDATE",
+      cycleAuthority,
+    });
+    const stored = await value.dispatchStore.getDirectDispatchAttempt(
+      authentication.installationId,
+      DISPATCH_IDS[0],
+    );
+
+    expect(result).toMatchObject({
+      outcome: "NOT_SENT",
+      reason: "CYCLE_AUTHORITY_UNAVAILABLE",
+      networkAttempted: false,
+      abortRecorded: true,
+      attempt: { state: "ABORTED", retryAdvice: "NO_RETRY" },
+    });
+    expect(stored).toMatchObject({ state: "ABORTED", retryAdvice: "NO_RETRY" });
+    expect(transport.sendCount).toBe(0);
+    expect(JSON.stringify(result)).not.toContain(sensitiveDiagnostic);
+    expect(JSON.stringify(result)).not.toContain("synthetic-secret");
+  });
+
+  it("durably aborts when cycle authority explicitly reports unavailable", async () => {
+    const value = harness();
+    const { authentication } = await establish(value);
+    await addUpdateToken(value, authentication, BINDING_ID, 1);
+    const transport = new RecordingTransport([]);
+    const dispatcher = createDispatcher(
+      value,
+      value.resolver,
+      transport,
+      new ProviderCacheStub(),
+    );
+    const cycleAuthority: LiveActivityPublicationCycleAuthority = {
+      confirmCurrent: async () => "CYCLE_AUTHORITY_UNAVAILABLE",
+      stopReason: () => "CYCLE_AUTHORITY_UNAVAILABLE",
+      beginSendIfCurrent: async <T>(_start: () => Promise<T>) => ({
+        status: "STOPPED",
+        reason: "CYCLE_AUTHORITY_UNAVAILABLE",
+      }),
+    };
+
+    const result = await dispatcher.dispatch({
+      ...commonInput(authentication.installationId, "DIRECT_UPDATE", ACTIVE_AT),
+      operation: "DIRECT_UPDATE",
+      cycleAuthority,
+    });
+
+    expect(result).toMatchObject({
+      outcome: "NOT_SENT",
+      reason: "CYCLE_AUTHORITY_UNAVAILABLE",
+      networkAttempted: false,
+      abortRecorded: true,
+      attempt: { state: "ABORTED", retryAdvice: "NO_RETRY" },
+    });
+    expect(transport.sendCount).toBe(0);
+  });
+
   it("forwards an opaque reusable wire state and persists metadata matching START", async () => {
     const value = harness();
     const { authentication } = await establish(value);
@@ -430,7 +631,7 @@ describe("one-shot Live Activity direct dispatcher", () => {
     );
   });
 
-  it("sends START, UPDATE, and END exactly once with durable safe correlations", async () => {
+  it("sends START, UPDATE, and END exactly once when cycle authority is omitted", async () => {
     const value = harness();
     const { authentication } = await establish(value);
     const cache = new ProviderCacheStub();

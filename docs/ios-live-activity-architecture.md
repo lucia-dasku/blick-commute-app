@@ -1,23 +1,26 @@
 # iOS Live Activity architecture
 
-Status: Phase 5A publication-policy and scheduler-independent one-shot cycle foundation,
-implemented locally 2026-09-12. In addition to the accepted Phase 3A ownership/session
+Status: Phase 5B global publication-cycle coordination and activation foundation,
+ implemented locally 2026-09-13. In addition to the accepted Phase 3A ownership/session
 authority, Phase 3B protected-token delivery targets, Phase 4A payload/protocol contract,
-and Phase 4B direct dispatcher, it decides whether an authoritative snapshot warrants a
-START, material UPDATE, freshness heartbeat, no push, or deferral. It remains callable
-internal code: no production caller, public route, timer, recurring worker, scheduler, or
-application-startup path invokes it.
+Phase 4B direct dispatcher, and Phase 5A publication policy, it gives one current logical
+cycle a durable global lease and monotonically increasing fencing generation. Duplicate
+triggers are harmless, adjacent slots cannot run overlapping global ticks, and cycle
+authority is revalidated at publication and final APNs-send boundaries. It remains callable
+internal code: no production caller, public route, timer, recurring worker, scheduler,
+Workflow run, queue, or application-startup path invokes it.
 
 The implemented boundary includes immutable session planning and grouping, direct SL
 acquisition, authoritative exact-journey role reuse, one final-clock projection, fresh/stale
-fallback projection, semantic comparison, persistent ownership and lifecycle records,
-revision-controlled mutations, and an authoritative post-acquisition store check. Snapshot
-history persistence, public enrollment, recurring scheduling, broadcast-channel
-orchestration, and client rendering remain deferred. Accepted publication metadata is now
-durable in the dispatch history, but the larger transit snapshot is not. There is no iOS target, Apple
-credential, production APNs configuration, production caller, or production migration
-wiring. All Apple behavior described below is derived from Apple's public documentation and
-has not been verified with an iOS target, physical device, or real APNs environment.
+fallback projection, semantic comparison, persistent session and dispatch authority,
+revision-controlled mutations, an authoritative post-acquisition store check, and additive
+publication-cycle coordination metadata. Snapshot history persistence, public enrollment,
+recurring scheduling, broadcast-channel orchestration, and client rendering remain deferred.
+Accepted publication metadata is durable in dispatch history, but the larger transit snapshot
+is not. There is no iOS target, Apple credential, production APNs configuration, production
+caller, or production migration wiring. All Apple behavior described below is derived from
+Apple's public documentation and has not been verified with an iOS target, physical device,
+or real APNs environment.
 
 ## Intended system shape
 
@@ -29,28 +32,37 @@ and partitions it by time; future and expired sessions never enter an acquisitio
 Cancelled records remain durable tombstones rather than being presented as active work.
 
 ```text
+future scheduler-provider trigger
+             |
+             v
+ canonical current cadence slot
+             |
+             v
+ PostgreSQL global claim + lease + fence
+             |
+             v
 installation credential + persistent session records
-                    |
-                    v
+             |
+             v
  active installation + REGISTERED + [start, end)
-                    |
-                    v
-            lifecycle planner
-                    |
-                    v
-       site/request acquisition groups
-                    |
-                    v
-       one transit acquisition per group
-                    |
-                    v
+             |
+             v
+       lifecycle planner
+             |
+             v
+  site/request acquisition groups
+             |
+             v
+  one transit acquisition per group
+             |
+             v
  batch ownership/lifecycle/revision revalidation
-                    |
-                    v
-     final clock + full-query projection
-                    |
-                    v
- snapshots + publication outcomes + session versions
+             |
+             v
+ final clock + full-query projection
+             |
+             v
+ Phase 5A decision -> Phase 4B fenced direct dispatch
 ```
 
 Acquisition and publication are deliberately separate scaling boundaries. An
@@ -862,13 +874,172 @@ while still checking publication key, session version, commute kind, and source 
 no token, JWT, private key, APNs body, or raw transit response enters cycle summaries.
 
 The cycle performs no recurrence and is not connected to Vercel, application startup, an
-HTTP route, a queue, or a timer. Two overlapping invocations can still duplicate upstream
-transit acquisition before Phase 4B ordering is reached. A global cross-process schedule
-lease is required before recurring activation; a process-local mutex would not provide that
-guarantee. Automatic END is also not added: cancelled, expired, and replaced sessions are
-absent from the active tick, while the ordinary Phase 3B resolver intentionally requires
-current session authority. A later security design needs a narrow END-only cleanup resolver,
-including the START-before-update-token gap, informed by real client/device evidence.
+HTTP route, a queue, or a timer. When called directly without the Phase 5B wrapper, overlapping
+invocations still have no global cycle ownership. Automatic END is also not added: cancelled,
+expired, and replaced sessions are absent from the active tick, while the ordinary Phase 3B
+resolver intentionally requires current session authority. A later security design needs a
+narrow END-only cleanup resolver, including the START-before-update-token gap, informed by
+real client/device evidence.
+
+## Phase 5B global publication-cycle coordination
+
+Phase 5B wraps the accepted Phase 5A one-shot worker in
+`runClaimedLiveActivityPublicationCycle`. One explicit call attempts one logical cycle and
+returns; the function contains no recurrence, sleep, self-invocation, background callback,
+route registration, queue publication, timer, or scheduler-provider dependency. The small
+`LiveActivityCycleTrigger` interface is the future activation boundary: an adapter may ask
+for one current attempt, but the coordinator remains independent of Cron, Workflow, queues,
+HTTP, and application startup.
+
+The product target is fresh transit acquisition approximately every 30 seconds while at
+least one commute routine is active. It is not an exact 30-second APNs delivery promise.
+Every authoritative cycle still passes through Phase 5A, which alone chooses START, material
+UPDATE, freshness UPDATE, reconciliation, no push, or deferral; countdown-only changes stay
+suppressed. Phase 5B does not alter LINE site-level acquisition sharing, the canonical EXACT
+request identity or backend-authoritative journey roles, and no installation, binding, or
+cycle identity enters an `AcquisitionKey` or `PublicationKey`.
+
+### Canonical current slots and global overlap policy
+
+Cadence is an injected positive whole-second duration of at least one second. Tests exercise
+the intended 30-second value. For an absolute nonnegative UNIX instant, the slot identity is
+the pair `{ startEpochSeconds, cadenceSeconds }`, where `startEpochSeconds` is the UNIX second
+floored to the cadence boundary. Identity therefore does not depend on process startup,
+scheduler jitter, a random ID, or local timezone. A cadence change at the same absolute slot
+start is rejected as `CADENCE_CONFLICT` rather than silently describing the same instant two
+ways.
+
+Only the slot containing the trigger instant may be claimed. A trigger after a five-minute
+gap calculates the then-current slot once; it never enumerates or queues the ten missed
+30-second slots. The store rejects non-current claims as `STALE_SLOT`, surfaced by the
+coordinator as `STALE_TRIGGER`. This is a deliberate freshness policy: perishable transit
+work is not replayed as backlog.
+
+Coordination scope is the single `GLOBAL` live-commute engine because one stored tick already
+batches all eligible sessions and shares upstream acquisition. Concurrent claims for the
+same slot produce one owner; duplicates return `ALREADY_RUNNING` or `ALREADY_COMPLETED`
+without invoking the Phase 5A worker. A still-leased slot N also blocks slot N+1, even though
+their slot identities differ. The next accepted trigger evaluates whatever slot is current
+after the active cycle finishes; it does not queue N+1 behind N. When the claimed worker's
+initial stored-session selection finds no eligible session, existing tick behavior performs
+zero SL and zero APNs requests and the cycle finalizes as durable `NO_WORK` with zero counters.
+
+### Migration 006, leases, fences, and recovery
+
+Migration `006_live_activity_publication_cycles.sql` is additive and leaves migrations
+001–005 unchanged. It persists coordination and diagnostic metadata only:
+
+- `live_activity_publication_cycle_control` is the singleton `GLOBAL` control row, holding
+  the last allocated fence and the newest slot identity;
+- `live_activity_publication_cycles` preserves server-generated cycle IDs, canonical slot
+  identity, fence generation, `CLAIMED`/`RUNNING`/`COMPLETED`/`NO_WORK`/`FAILED`/`ABANDONED`
+  state, claim/start/lease/final timestamps, bounded failure codes, and safe aggregate
+  counters; and
+- a partial unique index permits only one `CLAIMED` or `RUNNING` row for the global scope.
+
+The schema stores no ActivityKit token, provider JWT, Apple key, APNs payload, transit
+snapshot, route or destination content, or raw SL response. Claiming uses a short PostgreSQL
+transaction that locks the singleton control row, evaluates the active row, allocates the
+next monotonically increasing fence, and inserts history. It releases the transaction and
+connection before SL or APNs work. Renewals and finalization are likewise short transactions;
+no row, advisory, transaction, or connection-level lock spans network work.
+
+PostgreSQL's `clock_timestamp()` is authoritative for persisted claim, expiry, abandonment,
+renewal, and finalization time. Caller clocks still propose a canonical current slot and are
+validated at the API boundary, but the locked claim transaction rechecks that slot against
+database time. A materially skewed process therefore fails closed with a non-current slot;
+it cannot expire another process's lease early or extend its own lease into the future.
+
+Lease duration is an injected duration of at least one second rather than a hidden production
+constant. There is no renewal timer. Ownership is renewed or confirmed at explicit work
+boundaries: immediately after claim and before acquisition, after acquisition before
+publication fan-out, before each requested recipient dispatch, and at the dispatcher's final
+send boundary. Every renewal and final mutation must match cycle ID, slot identity, current
+positive fence generation, active state, and an unexpired lease. A stale owner therefore
+cannot renew or finalize a newer claimant's cycle.
+
+When a current trigger encounters an expired active lease, the expired history is marked
+`ABANDONED` with `LEASE_EXPIRED`, a higher fence is allocated, and current work may proceed.
+An abandoned record does not assert that its side effects did not happen. If the expired
+record belongs to a historical slot, the next current trigger abandons it but claims only the
+new current slot; it does not replay the old acquisition. Phase 4B's durable per-binding
+attempt state remains authoritative for any send already attempted, so recovery never
+blindly retries an unknown START or bypasses direct-dispatch ordering and ambiguity rules.
+
+### Fenced publication and honest residuals
+
+Authority loss or coordination-store failure is latched. Phase 5A suppresses further
+recipient dispatch and represents recipients that reach the boundary as safe authority
+deferrals. After Phase 4B has made its own durable per-binding claim, the dispatcher performs
+one final cycle-fence confirmation immediately before calling the APNs transport. A failed
+confirmation returns a safe not-sent outcome, attempts to close the claimed Phase 4B attempt
+as aborted, and performs no transport call. Once loss is observed, the stale worker does not
+continue sending because most of its work is already complete, and its global finalization is
+rejected by the fence.
+
+This is deliberately not described as exactly-once network execution. A process can lose its
+lease while an SL request is already in flight; a recovery owner may then start another
+acquisition for the current slot. Phase 5B prevents normal overlapping scheduler invocations,
+but it does not globally coalesce every crash/recovery overlap in upstream HTTP. Similarly,
+the final guard cannot retract an APNs request whose transport call began while the fence was
+current and whose lease expires during that call. The resulting Phase 4B attempt can be
+accepted, rejected, retryable, or outcome-unknown independently of whether the old global
+cycle can finalize. Shared cross-process acquisition coordination and any narrower residual
+check-to-send compensation remain separate work.
+
+Systemic stored-tick exceptions finalize as `FAILED` with `WORKER_FAILED` when the fence is
+still owned. A systemic dispatch-history batch-read failure finalizes with
+`PUBLICATION_HISTORY_UNAVAILABLE`; it is not converted into per-binding sends or stale
+guesses. Once valid batch state exists, existing per-recipient isolation remains: one token,
+session, reservation, or APNs failure does not fail unrelated recipients.
+
+Cycle results and stored summaries are deliberately aggregate-only. Public-safe outcomes are
+`CLAIMED_AND_COMPLETED`, `NO_ACTIVE_SESSIONS`, `ALREADY_RUNNING`, `ALREADY_COMPLETED`,
+`STALE_TRIGGER`, `CADENCE_CONFLICT`, `LOST_LEASE`, `WORKER_FAILED`, and
+`COORDINATION_FAILED`. Completed/no-work rows may include counts for acquisitions,
+publication outcomes, ready groups, bindings, send/no-push/deferral decisions, dispatches
+requested, actual network attempts, and the bounded dispatch result classes. They contain no
+session, installation, binding, route, destination, token, credential, payload, request body,
+or raw upstream result.
+
+### Activation-provider feasibility
+
+Recurring activation remains deliberately unselected and unwired:
+
+- **Vercel Cron is not a 30-second provider.** Its documented expression has five fields
+  beginning with minutes, with no seconds field. Pro and Enterprise have a minimum interval
+  of once per minute and per-minute precision; Hobby is limited to once per day with
+  per-hour precision. See Vercel's [Cron expression format](https://vercel.com/docs/cron-jobs#cron-expressions),
+  [usage and plan limits](https://vercel.com/docs/cron-jobs/usage-and-pricing), and
+  [accuracy guidance](https://vercel.com/docs/cron-jobs/manage-cron-jobs#cron-jobs-accuracy).
+  Two overlapping minute jobs, an in-function delayed second call, or competing loops would
+  violate the single global update flow. Cron also invokes a production HTTP path, which this
+  phase intentionally does not add.
+- **Vercel Workflow is a later candidate, not an adopted dependency.** Current Workflow
+  documentation supports durable sleeps from seconds to months and resumable execution. Its
+  durable `sleep` must run inside a compiled `"use workflow"` function, with external
+  side effects placed at Workflow step boundaries; it is not an ordinary in-process timeout.
+  The official [Hono setup guide](https://github.com/vercel/workflow/blob/main/docs/content/docs/v5/getting-started/hono.mdx)
+  requires the Workflow, Nitro, and Rollup packages, the `workflow/nitro` build module, and
+  Nitro development/build scripts. Blick currently uses a small Hono Vercel entry point,
+  TypeScript build, and simple `framework: null` rewrite configuration. No Workflow SDK,
+  generated handler, Nitro configuration, route, or deployment change is adopted here; that
+  build/runtime impact and production database connection behavior require a separate
+  acceptance slice. See Vercel's [Workflow overview](https://vercel.com/docs/workflows).
+- **A long Vercel Function is not a scheduler.** Node.js and Python functions on Pro and
+  Enterprise can opt into up to 30 minutes under current Fluid-compute limits, but an
+  invocation containing `while` plus a 30-second sleep remains bounded to one function
+  lifecycle and is not durable across termination or deployment. See Vercel's
+  [30-minute Functions announcement](https://vercel.com/changelog/vercel-functions-can-now-run-up-to-30-minutes)
+  and [duration configuration](https://vercel.com/docs/functions/configuring-functions/duration).
+  `waitUntil` only lets a promise continue after the response within that same invocation;
+  it has the function's timeout and is cancelled when the function times out. It is not a
+  durable recurrence primitive. See the [`waitUntil` reference](https://vercel.com/docs/functions/functions-api-reference/vercel-functions-package#waituntil).
+
+Production selection must separately verify scheduler delivery semantics, authentication and
+rate limiting for any activation entry point, production PostgreSQL/pool topology, Function
+region and duration settings, deployment transitions, observability, and cost. Phase 5B adds
+no provider configuration or production traffic.
 
 ## Freshness and authoritative state
 
@@ -906,7 +1077,8 @@ move role selection to a client.
 The Phase 3B tables store encrypted push-to-start and per-activity update-token generations,
 plus comparison-only digests and lifecycle metadata. The Phase 4B/5A dispatch history adds
 only safe correlation, ordering, result fields, a visible-state digest, and source/stale
-timestamps. Neither layer stores token
+timestamps. Phase 5B cycle history adds only global ownership timestamps, opaque cycle/fence
+identity, bounded failure codes, and validated aggregate counters. These layers do not store token
 plaintext, provider JWTs, Apple signing keys, raw installation bearer credentials, complete
 payload bodies, purchase tokens, copied billing credentials, or user-account data.
 ActivityKit tokens are installation-linked delivery identifiers and must be treated as
@@ -998,6 +1170,21 @@ That runner applies only `005_live_activity_publication_policy.sql`. It does not
 connect on import. Migration 005 is additive and idempotent; its nullable attempt metadata
 keeps Phase 4B rows valid while making incomplete accepted history explicit.
 
+After migration 005, apply the independent publication-cycle migration to the same reviewed
+non-production target:
+
+```powershell
+$env:LIVE_COMMUTE_MIGRATION_DATABASE_URL = 'postgresql://localhost/blick_live_commute_dev'
+npm run migrate:live-activity-publication-cycles
+Remove-Item Env:LIVE_COMMUTE_MIGRATION_DATABASE_URL
+```
+
+That runner applies only `006_live_activity_publication_cycles.sql`. It does not inspect
+`DATABASE_URL`, run migrations 001–005, construct a cycle store or dispatcher, load Apple
+material, or connect on import. Migration 006 is additive and idempotent. It adds only the
+singleton global control row, cycle history, safe result counters, constraints, and indexes
+needed for cross-process ownership, recovery, and diagnostics.
+
 Real PostgreSQL adapter and concurrency verification uses a separate setting and command:
 
 ```powershell
@@ -1010,13 +1197,21 @@ Remove-Item Env:LIVE_COMMUTE_TEST_DATABASE_URL
 The PostgreSQL integration suites share one fail-closed URL guard: they refuse non-local
 hosts and database names without a distinct `test` segment. Each creates its own random
 `blick_live_commute_test_*` schema, applies its required checked-in migrations twice,
-exercises independent connections, and drops only that prefixed schema. The synthetic
-PostgreSQL 17 CI job also invokes migrations 004 and 005 twice before running the combined
-delivery, dispatch, and publication-history suite. Use an explicitly disposable local test database;
-never substitute a real `.env` or production `DATABASE_URL`. When
-`LIVE_COMMUTE_TEST_DATABASE_URL` is absent, the database-backed suites are guarded and skip.
-A skipped run, unit test, or SQL-text assertion is not evidence that real PostgreSQL
-transactions, constraints, migration execution, or cross-connection locking passed.
+exercises independent connections, and drops only that prefixed schema. The publication-cycle
+suite proves distinct backend PIDs from independent `max: 1` connections before exercising
+same-slot concurrent claims, one authoritative claimant, fence renewal/finalization, stale
+owner rejection, expiry/reclaim, adjacent-slot exclusion, current-slot-only recovery,
+rollback, no-work state, and schema constraints. The PostgreSQL 17 CI job invokes migrations
+002–006 twice before running the previously accepted database-backed suites plus the Phase 5B
+cases.
+
+Use an explicitly disposable local test database; never substitute a real `.env` or
+production `DATABASE_URL`. When `LIVE_COMMUTE_TEST_DATABASE_URL` is absent, the
+database-backed suites are guarded and skip. No real local PostgreSQL execution is claimed
+for Phase 5B in this document. A skipped run, unit test, or SQL-text assertion is not evidence
+that real PostgreSQL transactions, constraints, migration execution, cross-connection
+locking, or fencing passed; that evidence must come from the configured PostgreSQL 17 CI job
+or an explicitly configured disposable local database run.
 
 ## Explicitly deferred
 
@@ -1027,8 +1222,8 @@ transactions, constraints, migration execution, or cross-connection locking pass
 - broadcast channel registry, creation/deletion execution, publication-group mapping, and
   real-environment validation of Apple's documented host behavior
 - public installation enrollment/authentication routes and any user-account system
-- production application of migrations 002–005, database-pool wiring, and dispatcher
-  construction/configuration
+- production application of migrations 002–006, database-pool wiring, cycle-store wiring,
+  and dispatcher construction/configuration
 - persistent snapshot history
 - recurrence and timezone calculation
 - GPS or location tracking
@@ -1043,18 +1238,27 @@ transactions, constraints, migration execution, or cross-connection locking pass
 - initial stale-deadline establishment for an unchanged accepted START, plus device validation
   of the resulting ActivityKit stale-state transition
 - localized English/Swedish START alerts and finalized START priority policy
-- global cross-process publication-cycle lease, queue/outbox recovery, and recurring
+- a selected, authenticated, observable production scheduler provider and recurring
   approximately 30-second activation
 - narrow END cleanup authority, including the START-before-update-token gap
 
-No timer, sleep loop, recurring worker, self-HTTP callback, or Vercel Cron configuration is added here.
-Vercel Cron uses minute-granularity expressions and, even on paid plans, schedules within
-the selected minute; it is not an exact 30-second scheduler. See Vercel's current
-[Cron usage limits](https://vercel.com/docs/cron-jobs/usage-and-pricing) and
-[accuracy guidance](https://vercel.com/docs/cron-jobs/manage-cron-jobs#cron-jobs-accuracy).
-The existing Android active-window worker, notifications, widgets, and approximately
-30-second loop remain unchanged, as do `/departures`, `/journeys`, journey-role selection,
-Google Play billing, and English/Swedish presentation behavior. No public route invokes the
-store-backed coordinator, snapshot engine, or direct dispatcher. Import and application
-startup therefore open no production database or APNs connection and perform no production
-SL or Apple request until a future execution mechanism is deliberately reviewed and wired.
+No timer, sleep loop, recurring worker, self-HTTP callback, Workflow integration, or Vercel
+Cron configuration is added here. The existing Android active-window worker, notifications,
+widgets, and approximately 30-second loop remain unchanged, as do `/departures`, `/journeys`,
+journey-role selection, Google Play billing, and English/Swedish presentation behavior. No
+public route invokes the claimed-cycle coordinator, store-backed tick, snapshot engine, or
+direct dispatcher. Import and application startup therefore open no production database or
+APNs connection and perform no production SL or Apple request until a future execution
+mechanism is deliberately reviewed and wired.
+
+Phase 5B also does not resolve inherited Apple/client blockers. An accepted START still has
+no server-selected stale deadline, so an unchanged activity cannot enter the normal freshness
+heartbeat path until an accepted material UPDATE establishes one. Unknown START outcomes
+remain non-retryable without reconciliation evidence. Cancelled, expired, and replaced
+sessions still cannot use ordinary active-session authority for automatic END, and the
+START-before-update-token cleanup gap remains open. `BROADCAST_CHANNEL` bindings, channel
+registry/mapping, and broadcast scheduling remain deferred. Finally, there is still no Swift
+target, ActivityKit entitlement/configuration, real token upload, English/Swedish client
+rendering, device-side expired-date rejection, physical-device validation, Apple credential,
+or real APNs verification. Global cadence coordination does not weaken or hide any of these
+production blockers.
