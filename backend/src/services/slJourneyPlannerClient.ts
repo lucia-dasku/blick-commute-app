@@ -2,6 +2,10 @@ import { z } from "zod";
 import { config } from "../config/env.js";
 import { fetchUpstreamJson } from "../lib/upstreamFetch.js";
 import { toItdDateTime } from "../lib/stockholmTime.js";
+import { journeyTransportModes, type JourneyTransportMode } from "../models/common.js";
+
+export { journeyTransportModes };
+export type { JourneyTransportMode };
 
 const LocationSchema = z.object({
   id: z.string().min(1),
@@ -126,9 +130,6 @@ const TripsSchema = z.object({ journeys: z.array(JourneySchema).optional() }).pa
 export type RawJourneyPlannerLocation = z.infer<typeof LocationSchema>;
 export type RawJourneyPlannerJourney = z.infer<typeof JourneySchema>;
 export type RawJourneyPlannerPlace = RawPlace;
-export const journeyTransportModes = ["METRO", "TRAIN", "BUS", "TRAM", "FERRY"] as const;
-export type JourneyTransportMode = (typeof journeyTransportModes)[number];
-
 export type JourneyRouteType = "leasttime" | "leastinterchange" | "leastwalking";
 export type JourneyDateTimeMode = "DEPARTURE" | "ARRIVAL";
 

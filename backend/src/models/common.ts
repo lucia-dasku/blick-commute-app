@@ -15,6 +15,10 @@ export const SCHEMA_VERSION = 1 as const;
  */
 export const KNOWN_TRANSPORT_MODES = ["BUS", "METRO", "TRAIN", "TRAM", "SHIP", "FERRY", "TAXI"] as const;
 
+/** The closed allow-list supported by SL Journey Planner request flags. */
+export const journeyTransportModes = ["METRO", "TRAIN", "BUS", "TRAM", "FERRY"] as const;
+export type JourneyTransportMode = (typeof journeyTransportModes)[number];
+
 /** Strict — used only to validate an incoming request's `transportMode` filter value. */
 export const RequestTransportModeSchema = z.enum(KNOWN_TRANSPORT_MODES);
 
