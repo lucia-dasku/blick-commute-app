@@ -15,6 +15,16 @@ describe("Vercel entry point (api/index.ts)", () => {
     expect(vercelConfig.rewrites).toEqual([
       { source: "/api/(.*)", destination: "/api/index" },
     ]);
+    expect(vercelConfig.functions).toEqual({
+      "api/live-activity-cycle.ts": {
+        experimentalTriggers: [
+          {
+            type: "queue/v2beta",
+            topic: "live-activity-cycle-wakeup",
+          },
+        ],
+      },
+    });
   });
 
   it("exports a Hono app (default export) that responds to GET /api/v1/health", async () => {
